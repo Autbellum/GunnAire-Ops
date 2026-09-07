@@ -66,6 +66,8 @@ jobs:
               testExistingQuickBooksLinkReviewCancelsAndReturnsToManagement \
               testExistingQuickBooksLinkReviewRecoversConfirmedDecisionWithoutAnotherPost \
               testExistingQuickBooksLinkReviewCancelsAfterReconnection \
+              testNativeBillingReviewCancelsUnsentProposalAndReturnsToOriginalInvoice \
+              testNativeBillingReviewRecoversAcceptedInvoiceWithoutPublishingAgain \
               testBillingIdentityReviewKeepsReportsSafeAndHandsOffToInvoices \
               testCatalogPublicationReviewCancelsOnlyAnUnsentProposalAndReturnsToCatalog \
               testScheduleDeletionRetainsTheConfirmedTargetAndProtectsBilledJobs \
