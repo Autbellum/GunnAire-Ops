@@ -10,6 +10,9 @@ build/
 !default.perspectivev3
 project.xcworkspace/
 xcshareddata/
+!GunnAire Ops.xcodeproj/xcshareddata/
+GunnAire Ops.xcodeproj/xcshareddata/*
+!GunnAire Ops.xcodeproj/xcshareddata/xcschemes/
 .idea/
 *.moved-aside
 
