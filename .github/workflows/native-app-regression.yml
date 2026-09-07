@@ -55,6 +55,7 @@ jobs:
               testCustomerAccountStatementGeneratesFromTheExistingFilesWorkspace \
               testBillingIdentityReviewKeepsReportsSafeAndHandsOffToInvoices \
               testCatalogPublicationReviewCancelsOnlyAnUnsentProposalAndReturnsToCatalog \
+              testScheduleDeletionRetainsTheConfirmedTargetAndProtectsBilledJobs \
               testUnreconciledStatementExplainsReviewAndHandsOffToInvoices; do
               selectors+=("-only-testing:GunnAire OpsUITests/GunnAire_OpsUITests/$test")
             done
