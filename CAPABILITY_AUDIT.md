@@ -1,3 +1,13 @@
+Billing engine stage, September 7, 2026: candidate 2026.09.07.25 implements
+encrypted immutable invoice/estimate proposals, server role/exact-draft approval,
+one-time dispatch, original-attempt recovery, invoice/payment exclusion and
+explicit save-versus-send separation. **It is not exposed by HTTP or used by
+native billing yet.** Final local acceptance is 60 focused tests, 276 Backend
+and 37 Tools. Native assignment/approval/recovery handoffs, scalable legacy
+migration and provider acceptance remain required; see
+[QBO_SERVER_BILLING_ENGINE.md](QBO_SERVER_BILLING_ENGINE.md). This does not
+close the full-suite or signed CloudKit goal.
+
 Customer publication follow-up, September 7, 2026: production customer create
 and recovery now use the server-owned encrypted journal and one-to-one mapping
 in [QBO_SERVER_CUSTOMER_PUBLICATION.md](QBO_SERVER_CUSTOMER_PUBLICATION.md).

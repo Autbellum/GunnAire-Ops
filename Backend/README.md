@@ -2,6 +2,14 @@
 
 This is a small backend for sharing app users, roles, uploaded field receipts, and field payment records across iPads.
 
+Candidate **2026.09.07.25** stages the shared billing engine, adapter and additive
+tables, with invoice/payment reservation exclusion. **There is no new billing
+HTTP route and native invoice/estimate publication is not migrated yet.**
+The complete local Backend suite passes 276 tests; Tools passes 37. Read
+[the staged billing engine](../QBO_SERVER_BILLING_ENGINE.md) for permissions,
+delivery separation, performance limits and required native integration.
+No deployment or full-suite readiness is implied.
+
 Candidate **2026.09.07.24** adds the administrator-only, encrypted shared customer
 publication journal and scoped customer mappings. The native customer publisher
 requires these routes; it never falls back to direct QBO creation. Review

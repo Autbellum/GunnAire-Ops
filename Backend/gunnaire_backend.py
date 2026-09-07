@@ -32,15 +32,16 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 
 try:
-    from Backend import payment_attempts, catalog_publications, customer_publications
+    from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications
 except ModuleNotFoundError:
     import payment_attempts  # Direct launch from the Backend directory.
     import catalog_publications
     import customer_publications
+    import billing_publications
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.07.24"
+SERVICE_VERSION = "2026.09.07.25"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -2452,6 +2453,7 @@ def initialize_database() -> None:
         payment_attempts.initialize_schema(connection)
         catalog_publications.initialize_schema(connection)
         customer_publications.initialize_schema(connection)
+        billing_publications.initialize_schema(connection)
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS customer_communications (

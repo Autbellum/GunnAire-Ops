@@ -1,3 +1,12 @@
+Staged billing engine checkpoint, 2026-09-07: **60/60 focused engine/adapter,
+276/276 Backend and 37/37 Tools tests pass**. A fixture round trip exercises
+the shared publisher, actual fixed-origin adapter, confirmation and replay;
+backup/restore and concurrent invoice/payment reservation tests also pass.
+This engine has **no HTTP/native billing entry point yet**. Existing app billing
+continues using direct transport. There are no new native/UI/device acceptance
+claims. Scope, retained evidence and integration requirements:
+[QBO_SERVER_BILLING_ENGINE.md](QBO_SERVER_BILLING_ENGINE.md).
+
 Customer publication checkpoint, 2026-09-07: **1100/1100 logic tests pass on each
 native platform, 10/10 selected iPad journeys, 216/216 Backend and 37/37 Tools**.
 The unsigned optimized universal Mac Release passes; both architectures are

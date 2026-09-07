@@ -16,6 +16,23 @@ credential rotation, production restores, or customer communications.
 - Proposed recovery time objective: 4 hours. This is not proven until a timed
   restore drill is completed by the deployment owner.
 
+## 2026-09-07 staged billing engine
+
+Candidate **2026.09.07.25** adds `billing_publications`,
+`billing_entity_mappings`, `billing_draft_grants` and indexes. The engine/adapter
+are not exposed over HTTP or connected to native billing yet. The existing
+payment journal checks billing reservations before reserving/dispatching a
+payment. Current local acceptance: 276 Backend tests and 37 Tools tests.
+See `QBO_SERVER_BILLING_ENGINE.md` for the exact stage and remaining integration.
+
+Preserve these tables and the encryption key in backups; fixture backup/restore
+recovery retains the original attempt and never resends. Do not remove uncertain
+attempts or restore older data to enable a retry. Once billing intents are in
+use, older code ignoring their locks is not a safe financial rollback. Suspend
+publishing/collection and resolve original outcomes before rolling back that
+boundary. One authoritative transactional store is required. No deployment,
+native cutover, provider write or customer delivery occurred in this checkpoint.
+
 ## 2026-09-07 customer publication candidate
 
 Candidate **2026.09.07.24** adds `customer_publications`,

@@ -296,6 +296,7 @@ class PaymentAttemptJournal:
                     raise AttemptError("identity_conflict", "This payment identity already has different details.")
                 self.authorize(connection, session_id, existing, ownership=True)
                 return self.public(existing)
+            self.billing_publication_boundary(connection, intent)
             scope = (intent["company_id"], intent["realm_id"], intent["environment"], intent["invoice_qbo_id"])
             active = connection.execute(
                 """SELECT id FROM payment_attempts WHERE company_id = ? AND realm_id = ?
@@ -335,6 +336,20 @@ class PaymentAttemptJournal:
             )
             self.event(connection, actor, "reserve", intent["id"])
             return self.public(self.row(connection, intent["id"]))
+
+    @staticmethod
+    def billing_publication_boundary(connection, intent):
+        # Both journals acquire BEGIN IMMEDIATE before checking and reserving.
+        # Match provider identity too: a duplicate native UUID must not bypass
+        # the invoice-update/collection exclusion. No provider call holds a lock.
+        active = connection.execute("""SELECT 1 FROM billing_publications b
+            LEFT JOIN billing_entity_mappings m ON m.company_id=b.company_id AND m.realm_id=b.realm_id
+                AND m.environment=b.environment AND m.document_type=b.document_type AND m.local_document_id=b.local_document_id
+            WHERE b.company_id=? AND b.realm_id=? AND b.environment=? AND b.document_type='Invoice'
+                AND (b.local_document_id=? OR m.provider_id=?) AND b.state IN ('reserved','sending','unknown') LIMIT 1""",
+            (intent["company_id"], intent["realm_id"], intent["environment"], intent["invoice_id"], intent["invoice_qbo_id"])).fetchone()
+        if active:
+            raise AttemptError("billing_needs_review", "Finish or review the original invoice sync before collecting or refunding payment.")
 
     def verify_refund_source(self, context, intent):
         source = self.read_transaction(context, "charge", intent["rail"], None, intent["source_provider_id"])
@@ -386,6 +401,7 @@ class PaymentAttemptJournal:
             self.connection_context(connection, row, require_grant=True)
             if row["state"] != "reserved":
                 raise AttemptError("dispatch_already_started", "This payment may already have been sent. Reconcile the original attempt; do not send it again.")
+            self.billing_publication_boundary(connection, row)
             if row["kind"] == "charge" and row["amount_cents"] > balance:
                 raise AttemptError("balance_exceeded", "The invoice balance changed before collection. Refresh the invoice.")
             if source_amount is not None:
