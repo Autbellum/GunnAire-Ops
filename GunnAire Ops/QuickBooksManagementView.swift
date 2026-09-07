@@ -3341,7 +3341,6 @@ struct QuickBooksManagementView: View {
             }
 
             guard await run(id: "estimates", required: true, fetch: liveAPI.fetchEstimates, apply: { records in estimates = records }) else { finishQuickBooksResourceSync(with: failures); return }
-            guard await run(id: "invoices", required: true, fetch: liveAPI.fetchInvoices, apply: { records in invoices = records }) else { finishQuickBooksResourceSync(with: failures); return }
             guard await run(id: "bills", required: true, fetch: liveAPI.fetchBills, apply: { records in bills = records }) else { finishQuickBooksResourceSync(with: failures); return }
             guard await run(id: "vendorCredits", required: true, fetch: liveAPI.fetchVendorCredits, apply: { records in vendorCredits = records }) else { finishQuickBooksResourceSync(with: failures); return }
             guard await run(id: "purchases", required: true, fetch: liveAPI.fetchPurchases, apply: { records in purchases = records }) else { finishQuickBooksResourceSync(with: failures); return }
@@ -3351,6 +3350,9 @@ struct QuickBooksManagementView: View {
             }) else { finishQuickBooksResourceSync(with: failures); return }
 
             guard await run(id: "payments", required: true, fetch: liveAPI.fetchPayments, apply: { records in payments = records }) else { finishQuickBooksResourceSync(with: failures); return }
+            // Read balances after payment activity, rather than replacing them
+            // with arithmetic over an earlier or incomplete payment response.
+            guard await run(id: "invoices", required: true, fetch: liveAPI.fetchInvoices, apply: { records in invoices = records }) else { finishQuickBooksResourceSync(with: failures); return }
 
             guard await run(id: "paymentMethods", required: true, fetch: liveAPI.fetchPaymentMethods, apply: { records in
                 paymentMethods = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
@@ -5381,14 +5383,15 @@ struct QuickBooksManagementView: View {
         }
 
         var completedFailures = failures
+        let successfulResources = Set(syncResourceStatuses.filter { $0.state == .success }.map(\.id))
         do {
             try QuickBooksLocalSync.importSnapshot(
-                customers: customers,
-                items: items,
-                estimates: estimates,
-                invoices: invoices,
-                payments: payments,
-                vendors: vendors,
+                customers: QuickBooksSnapshotImportPolicy.records(customers, resource: "customers", successfulResourceIDs: successfulResources),
+                items: QuickBooksSnapshotImportPolicy.records(items, resource: "catalog", successfulResourceIDs: successfulResources),
+                estimates: QuickBooksSnapshotImportPolicy.records(estimates, resource: "estimates", successfulResourceIDs: successfulResources),
+                invoices: QuickBooksSnapshotImportPolicy.records(invoices, resource: "invoices", successfulResourceIDs: successfulResources),
+                payments: QuickBooksSnapshotImportPolicy.records(payments, resource: "payments", successfulResourceIDs: successfulResources),
+                vendors: QuickBooksSnapshotImportPolicy.records(vendors, resource: "vendors", successfulResourceIDs: successfulResources),
                 into: modelContext
             )
         } catch {

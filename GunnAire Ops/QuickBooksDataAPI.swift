@@ -23,6 +23,7 @@ enum QuickBooksProviderResponseError: LocalizedError, Equatable {
     case missingIdentifier(entity: String)
     case missingAttachment
     case queryPageLimitExceeded(entity: String, maximumRecords: Int)
+    case repeatedQueryIdentifier(entity: String)
 
     var errorDescription: String? {
         switch self {
@@ -30,6 +31,8 @@ enum QuickBooksProviderResponseError: LocalizedError, Equatable {
             return "QuickBooks returned \(entity) without a provider identifier. The operation remains unresolved and must be reconciled before retrying."
         case .missingAttachment:
             return "QuickBooks did not confirm an uploaded attachment. The file remains pending and can be retried after reconciliation."
+        case .repeatedQueryIdentifier(let entity):
+            return "QuickBooks repeated a \(entity) identity while loading query pages. The snapshot was not imported. Refresh again to obtain a consistent result."
         case .queryPageLimitExceeded(let entity, let maximumRecords):
             return "QuickBooks returned more than \(maximumRecords) \(entity) records. Narrow the reconciliation scope before retrying so no records are silently omitted."
         }
@@ -813,9 +816,10 @@ final class QuickBooksDataAPI: ObservableObject {
                                 identifier(entity),
                                 entity: entityName
                             )
-                            if seenIdentifiers.insert(providerID).inserted {
-                                accumulated.append(entity)
+                            guard seenIdentifiers.insert(providerID).inserted else {
+                                throw QuickBooksProviderResponseError.repeatedQueryIdentifier(entity: entityName)
                             }
+                            accumulated.append(entity)
                         }
                     } catch {
                         completion(.failure(error))
@@ -3354,7 +3358,12 @@ struct QuickBooksInvoice: Codable, Identifiable {
         DocNumber = try container.decodeIfPresent(String.self, forKey: .DocNumber)
         CustomerRef = try container.decodeIfPresent(QuickBooksReference.self, forKey: .CustomerRef)
             ?? QuickBooksReference(value: "", name: "Unknown Customer")
-        TotalAmt = Self.decodeFlexibleDouble(container, key: .TotalAmt) ?? 0
+        guard let total = Self.decodeFlexibleDouble(container, key: .TotalAmt),
+              total.isFinite, total >= 0 else {
+            throw DecodingError.dataCorruptedError(forKey: .TotalAmt, in: container,
+                debugDescription: "Invoice requires a finite, nonnegative reported TotalAmt.")
+        }
+        TotalAmt = total
         Balance = Self.decodeFlexibleDouble(container, key: .Balance)
         TxnDate = try container.decodeIfPresent(String.self, forKey: .TxnDate)
         DueDate = try container.decodeIfPresent(String.self, forKey: .DueDate)

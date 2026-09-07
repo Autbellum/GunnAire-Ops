@@ -78,7 +78,14 @@ The margin follows the QR originator's
 
 ## Remaining limitations
 
-This is not complete reconciliation or production release readiness:
+This is not complete reconciliation or production release readiness.
+The later [QBO balance checkpoint](QBO_BALANCE_RECONCILIATION.md) adds
+authoritative balance gates, complete-query pagination, duplicate-payment
+preservation and native ACH/capture continuity. Its 849-test acceptance
+supersedes the corresponding initial gaps below; dated ledger evidence and
+the other explicitly listed limitations remain.
+
+Initial remaining work at this identity checkpoint:
 - Payment-only or incomplete snapshots still need authoritative balance and
   pagination-completeness rules; imported subsets cannot prove a full balance.
 - Duplicate payment identity, native ACH method preservation, dated payment

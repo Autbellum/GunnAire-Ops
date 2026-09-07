@@ -4722,6 +4722,34 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testUnconfirmedInvoiceBalanceUsesTheExistingReviewFlow() throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin", "-uiTestSeedCollectibleJob", "-uiTestUnconfirmedInvoiceBalance"
+        ]
+        app.launch()
+        revealSidebarDestination("Reports", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Business Reports"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Billing needs review"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["Export CSV"].isEnabled)
+        app.buttons["Review Invoices"].tap()
+        XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 5))
+        let invoice = app.buttons["InvoiceDisclosure-\(screenshotInvoiceID)"]
+        for _ in 0..<4 where !invoice.exists || !invoice.isHittable { app.swipeUp() }
+        XCTAssertTrue(invoice.waitForExistence(timeout: 3))
+        XCTAssertTrue(invoice.label.contains("Review needed"))
+        invoice.tap()
+        XCTAssertFalse(app.buttons["Collect Payment"].isEnabled)
+        let review = app.buttons["Review in QuickBooks"]
+        XCTAssertTrue(review.waitForExistence(timeout: 3), app.debugDescription)
+        review.tap()
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 2))
+    }
+
+    @MainActor
     func testAdministratorResolvesDoNotServiceFromCustomerRecordAndRestoresJobStart() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()

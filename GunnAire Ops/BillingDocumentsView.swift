@@ -3584,6 +3584,18 @@ GunnAire
                                         Text(invoice.lineItemSummary)
                                             .font(.caption)
                                             .foregroundColor(.secondary)
+                                        if let review = invoice.quickBooksReconciliationReviewMessage {
+                                            Text(review)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                            if AppAccess.canAccessSidebarItem(.quickBooksManagement, email: currentUserEmail, users: users) {
+                                                Button("Review in QuickBooks") {
+                                                    GunnAireAppIntentRouter.store(.quickBooks)
+                                                }
+                                                .buttonStyle(.bordered)
+                                                .accessibilityIdentifier("ReviewInvoiceAccounting-\(invoice.id.uuidString)")
+                                            }
+                                        }
                                         if let documentationStatus {
                                             Label(
                                                 documentationStatus.sendReadinessLabel,
@@ -3635,7 +3647,7 @@ GunnAire
                                             .buttonStyle(.borderedProminent)
                                             .tint(Color.brandGold)
                                             .foregroundStyle(Color.primaryBlack)
-                                            .disabled(isInvoicePaid(invoice))
+                                            .disabled(isInvoicePaid(invoice) || !invoice.isReadyForPaymentCollection)
                                         }
 
                                         Button("Generate Invoice PDF") {
@@ -8198,6 +8210,7 @@ GunnAire
     }
 
     private func invoiceDisplayStatus(for invoice: Invoice) -> String {
+        if invoice.quickBooksReconciliationReviewMessage != nil { return "Review needed" }
         if isInvoicePaid(invoice) { return "Paid" }
         if isInvoiceOverdue(invoice) { return "Overdue" }
         let balance = invoiceBalanceDue(for: invoice)
@@ -10906,7 +10919,7 @@ enum CatalogVendorSelection {
 
 enum BillingInvoiceMutationPolicy {
     static func blockedMessage(for invoice: Invoice, payments: [Payment]) -> String? {
-        if let message = invoice.quickBooksIdentityReviewMessage { return message }
+        if let message = invoice.quickBooksReconciliationReviewMessage { return message }
         if invoice.isProjectProgressInvoice {
             return "Progress-invoice lines are locked to the approved milestone allocation. Correct the project plan before invoicing, or create a separate approved adjustment."
         }

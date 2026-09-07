@@ -82,14 +82,15 @@ enum QuickBooksLocalSync {
         var estimatesByQBID = QuickBooksBillingIdentity.uniqueCache(existingEstimates.filter {
             !estimateUUIDConflicts.contains($0.id.uuidString)
         }) { QuickBooksBillingIdentity.identifier($0.quickBooksID) }
-        var paymentsBySyncKey: [String: Payment] = [:]
-        for payment in existingPayments {
-            guard let quickBooksID = payment.quickBooksID?.nilIfEmpty,
-                  let invoiceQuickBooksID = payment.invoice?.quickBooksID?.nilIfEmpty else { continue }
-            let key = paymentSyncKey(paymentID: quickBooksID, invoiceID: invoiceQuickBooksID)
-            paymentsBySyncKey[key] = paymentsBySyncKey[key] ?? payment
+        let keyedPayments = existingPayments.compactMap { payment -> (String, Payment)? in
+            guard let paymentID = QuickBooksBillingIdentity.identifier(payment.quickBooksID),
+                  let invoiceID = QuickBooksBillingIdentity.identifier(payment.invoice?.quickBooksID) else { return nil }
+            return (paymentSyncKey(paymentID: paymentID, invoiceID: invoiceID), payment)
         }
-        let importedPaymentTotalsByInvoiceID = paymentTotalsByInvoiceID(from: payments)
+        let paymentGroups = Dictionary(grouping: keyedPayments, by: { $0.0 })
+        let conflictingPaymentKeys = Set(paymentGroups.filter { $0.value.count > 1 }.keys)
+        var paymentsBySyncKey = paymentGroups.filter { $0.value.count == 1 }.mapValues { $0[0].1 }
+        let remotePaymentConflicts = QuickBooksBillingIdentity.conflictingKeys(payments) { $0.Id }
 
         for quickBooksCustomer in customers {
             guard !customerConflicts.contains(quickBooksCustomer.Id) else {
@@ -258,13 +259,17 @@ enum QuickBooksLocalSync {
                 continue
             }
             let existingInvoice = candidates.first ?? invoicesByQBID[quickBooksInvoice.Id]
+            guard quickBooksInvoice.TotalAmt.isFinite, quickBooksInvoice.TotalAmt >= 0 else {
+                if let existingInvoice { QuickBooksBalanceReconciliation.markForRefresh(existingInvoice) }
+                reviewReasons.insert("An invoice response has an invalid total; its saved financial values were preserved.")
+                continue
+            }
             let invoice = existingInvoice ?? Invoice(id: lineageID ?? UUID(), customer: customer)
             let isNewQuickBooksImport = existingInvoice == nil
             if invoice.modelContext == nil {
                 modelContext.insert(invoice)
             }
             invoice.quickBooksID = quickBooksInvoice.Id
-            invoice.quickBooksLastSyncedAt = Date()
             invoice.customer = customer
             let taxIssue = invoice.applyQuickBooksTaxResult(
                 total: quickBooksInvoice.TotalAmt,
@@ -285,22 +290,32 @@ enum QuickBooksLocalSync {
             if invoice.siteAddress?.nilIfEmpty == nil {
                 invoice.siteAddress = quickBooksInvoice.ShipAddr?.Line1
             }
-            let balance = quickBooksInvoice.Balance
-                ?? max(quickBooksInvoice.TotalAmt - (importedPaymentTotalsByInvoiceID[quickBooksInvoice.Id] ?? 0), 0)
-            invoice.quickBooksBalanceDue = balance
-            if balance <= 0.009 {
-                invoice.status = "paid"
-            } else if balance < quickBooksInvoice.TotalAmt - 0.009 {
-                invoice.status = "partial"
+            if QuickBooksBalanceReconciliation.apply(quickBooksInvoice, to: invoice) {
+                refreshedInvoiceQuickBooksIDs.insert(quickBooksInvoice.Id)
             } else {
-                invoice.status = "unpaid"
+                reviewReasons.insert("An invoice response did not include a valid accounting balance. Refresh QuickBooks before collecting.")
             }
             invoicesByQBID[quickBooksInvoice.Id] = invoice
-            refreshedInvoiceQuickBooksIDs.insert(quickBooksInvoice.Id)
         }
 
+        for key in conflictingPaymentKeys {
+            let records = paymentGroups[key, default: []].map { $0.1 }
+            QuickBooksBillingIdentity.markForReview(records.compactMap(\.invoice))
+            for payment in records {
+                payment.quickBooksAccountingSyncStatus = "needs_attention"
+                payment.quickBooksAccountingSyncDetail = "Multiple saved payments claim the same QuickBooks invoice allocation. No payment history was changed."
+            }
+            reviewReasons.insert("Multiple saved payments claim one QuickBooks allocation.")
+        }
         var invoicesAffectedByImportedPayments: [UUID: Invoice] = [:]
         for quickBooksPayment in payments {
+            guard !remotePaymentConflicts.contains(quickBooksPayment.Id) else {
+                let linkedIDs = Set(QuickBooksPaymentAllocation.amountsByInvoiceID(for: quickBooksPayment).keys)
+                let related = invoicesByQBID.filter { linkedIDs.contains($0.key) }.map { $0.value }
+                QuickBooksBillingIdentity.markForReview(related)
+                reviewReasons.insert("The payment snapshot repeats a QuickBooks payment identity; no repeated payment was imported.")
+                continue
+            }
             for (linkedInvoiceID, appliedAmount) in QuickBooksPaymentAllocation
                 .amountsByInvoiceID(for: quickBooksPayment)
                 .sorted(by: { $0.key < $1.key }) {
@@ -316,6 +331,14 @@ enum QuickBooksLocalSync {
                     invoiceID: linkedInvoiceID
                 )
                 let existingPayment = paymentsBySyncKey[key]
+                if let existingPayment, existingPayment.hasNativeCollectionEvidence,
+                   abs(existingPayment.amount - appliedAmount) > 0.009 {
+                    existingPayment.quickBooksAccountingSyncStatus = "needs_attention"
+                    existingPayment.quickBooksAccountingSyncDetail = "QuickBooks allocation differs from the original collected amount. Review the payment without changing capture history."
+                    QuickBooksBillingIdentity.markForReview([invoice])
+                    reviewReasons.insert("An accounting payment amount differs from its original capture.")
+                    continue
+                }
                 let payment = existingPayment
                     ?? Payment(
                         invoice: invoice,
@@ -327,9 +350,11 @@ enum QuickBooksLocalSync {
                 }
                 payment.quickBooksID = quickBooksPayment.Id
                 payment.invoice = invoice
-                payment.amount = appliedAmount
+                if !payment.hasNativeCollectionEvidence {
+                    payment.amount = appliedAmount
+                    payment.date = parseQuickBooksDate(quickBooksPayment.TxnDate) ?? payment.date
+                }
                 payment.method = resolvedImportedPaymentMethod(existing: payment, quickBooksPayment: quickBooksPayment)
-                payment.date = parseQuickBooksDate(quickBooksPayment.TxnDate) ?? payment.date
                 if payment.notes?.nilIfEmpty == nil {
                     payment.notes = quickBooksPayment.PrivateNote
                 }
@@ -349,18 +374,8 @@ enum QuickBooksLocalSync {
                   !refreshedInvoiceQuickBooksIDs.contains(quickBooksID) else {
                 continue
             }
-            let balance = max(
-                invoice.amount - (importedPaymentTotalsByInvoiceID[quickBooksID] ?? 0),
-                0
-            )
-            invoice.quickBooksBalanceDue = balance
-            if balance <= 0.009 {
-                invoice.status = "paid"
-            } else if balance < invoice.amount - 0.009 {
-                invoice.status = "partial"
-            } else if invoice.normalizedStatus != "overdue" {
-                invoice.status = "unpaid"
-            }
+            QuickBooksBalanceReconciliation.markForRefresh(invoice)
+            reviewReasons.insert("Payments refreshed without a current invoice balance. Refresh QuickBooks to finish reconciliation.")
         }
 
         let reconciledEstimates = try modelContext.fetch(FetchDescriptor<Estimate>()).filter {
@@ -483,16 +498,6 @@ enum QuickBooksLocalSync {
         value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
-    private static func paymentTotalsByInvoiceID(from payments: [QuickBooksPayment]) -> [String: Double] {
-        var totals: [String: Double] = [:]
-        for payment in payments {
-            for (invoiceID, amount) in QuickBooksPaymentAllocation.amountsByInvoiceID(for: payment) {
-                totals[invoiceID, default: 0] += amount
-            }
-        }
-        return totals
-    }
-
     private static func paymentSyncKey(paymentID: String, invoiceID: String) -> String {
         "\(paymentID)\u{1f}\(invoiceID)"
     }
@@ -504,19 +509,16 @@ enum QuickBooksLocalSync {
         if isQuickBooksACHPayment(quickBooksPayment) {
             return "ach"
         }
+        let method = quickBooksPayment.PaymentMethodRef?.name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if method == "check" || method == "cheque" { return "check" }
+        if method == "cash" { return "cash" }
         return "quickbooks"
     }
 
     private static func resolvedImportedPaymentMethod(existing payment: Payment, quickBooksPayment: QuickBooksPayment) -> String {
-        if let processor = payment.processor,
-           processor == OnsitePaymentProcessor.quickBooksPayments.rawValue || payment.quickBooksChargeID?.nilIfEmpty != nil {
-            return "card"
-        }
-
-        if payment.method == "card" || payment.method.hasPrefix("card ") {
-            return payment.method
-        }
-        if payment.method == "ach" || payment.method.hasPrefix("ach ") {
+        // A processor/charge ID can describe card OR ACH. The original rail
+        // determines settlement and refund behavior and must not be relabeled.
+        if payment.hasNativeCollectionEvidence, payment.backendCollectionMethod != nil {
             return payment.method
         }
 
@@ -548,7 +550,7 @@ enum QuickBooksLocalSync {
         guard let methodName = quickBooksPayment.PaymentMethodRef?.name?.lowercased() else {
             return false
         }
-        return methodName.contains("ach") || methodName.contains("bank") || methodName.contains("echeck") || methodName.contains("check")
+        return methodName.contains("ach") || methodName.contains("bank") || methodName.contains("echeck")
     }
 
     private static func parseQuickBooksDate(_ value: String?) -> Date? {

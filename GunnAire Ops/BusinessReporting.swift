@@ -467,10 +467,10 @@ enum BusinessReporting {
             interval: interval,
             generatedAt: now,
             billingIdentityReviewMessage: (
-                invoices.contains { $0.quickBooksIdentityReviewMessage != nil } ||
+                invoices.contains { $0.quickBooksReconciliationReviewMessage != nil } ||
                 QuickBooksBillingIdentity.hasAmbiguousMapping(invoices.map { ($0.id, $0.customer?.id, $0.quickBooksID) }) ||
                 QuickBooksBillingIdentity.hasAmbiguousMapping(estimates.map { ($0.id, $0.customer?.id, $0.quickBooksID) })
-            ) ? "Billing records have conflicting identities. Financial totals and CSV export are unavailable until the linked invoices or estimates are reviewed. Operational counts remain available." : nil,
+            ) ? "Billing records need reconciliation. Refresh QuickBooks and review the affected invoices or estimates before using financial totals or CSV export. Operational counts remain available." : nil,
             invoicedRevenue: invoicedRevenue,
             collectedRevenue: collectedRevenue,
             openBalance: openBalance,

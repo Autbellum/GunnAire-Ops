@@ -928,6 +928,12 @@ private enum GunnAireUITestFixtures {
             invoice.quickBooksID = "FIXTURE-IDENTITY-REVIEW"
             QuickBooksBillingIdentity.markForReview([invoice])
         }
+        if arguments.contains("-uiTestUnconfirmedInvoiceBalance") {
+            invoice.quickBooksID = "FIXTURE-BALANCE-REVIEW"
+            invoice.quickBooksBalanceDue = 0
+            invoice.status = "paid"
+            QuickBooksBalanceReconciliation.markForRefresh(invoice)
+        }
         let maintenanceDueDate = isScheduleAuthorizationFixture
             ? scheduledDate.addingTimeInterval(60 * 60)
             : ((isMaintenanceReportingFixture || isAgreementBillingFixture)

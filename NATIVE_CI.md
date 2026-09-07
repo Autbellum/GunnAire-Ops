@@ -67,3 +67,20 @@ the input executable before the architecture list. Source QR margin tests and
 software rendering address the observed label issue; fresh hosted verification
 is still required. See [BILLING_IDENTITY_RECONCILIATION.md](BILLING_IDENTITY_RECONCILIATION.md)
 for reproduced failures, local acceptance, and remaining scope.
+
+At `61df19b`, [native run 34088303506](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34088303506)
+completed: Mac logic, universal Release and architecture verification passed.
+All five iPad UI journeys passed, but the original Vision QR decode assertion
+still returned no payload. The hosted log reports that inference compilation
+inside the VM supports CPU only. The simulator test now selects supported CPU
+devices explicitly using Apple's
+[compute-stage API](https://developer.apple.com/documentation/vision/vnrequest/setcomputedevice(_:for:)).
+Explicit CPU selection also reproduced an empty result locally. In simulator
+tests only, an empty result or the known inference error now falls back to
+Core Image's [software QR detector](https://developer.apple.com/documentation/coreimage/cidetectortypeqrcode).
+It decodes the actual image; it never returns a supplied expected payload.
+Exact payload/customer-match assertions remain, and a blank-image test requires
+no decoded value. Native device scanner behavior is unchanged; no test is
+skipped. Both hosted failing payloads and the local CPU failing payload are
+deterministic software-decoder fixtures. This change requires a fresh hosted
+run and does not prove physical camera/Vision scanning.

@@ -1,3 +1,22 @@
+QBO balance checkpoint, 2026-09-07: **849/849 logic tests pass on iPad and
+Mac Catalyst; 6/6 focused iPad interface journeys pass; universal optimized
+Mac Release succeeds**. Imported payment subsets no longer invent an invoice
+balance or replace original native capture evidence. Missing/invalid balances,
+duplicate payment identities, invalid totals and incomplete query pagination
+require reconciliation; failed resources cannot import retained screen arrays
+as fresh data. The existing review flow gates payment collection, invoice
+edits, statements and financial CSV export. The simulator QR contract test
+now independently decodes the actual image if VM Vision inference is unavailable
+or empty; blank-image rejection and deterministic payload fixtures remain.
+See [QBO_BALANCE_RECONCILIATION.md](QBO_BALANCE_RECONCILIATION.md) for retained
+results, exact scope and remaining gaps. Prior hosted head `61df19b` passes
+Mac and all five selected iPad UI journeys but fails that earlier QR assertion;
+fresh hosted acceptance is not inferred from these local passes. Historical
+ledger/statement evidence, changed/deleted payment reconciliation, settlement,
+administrator resolution, whole-sync workspace retention, signed CloudKit and
+platform/provider acceptance remain open. No merge, deployment, signing change
+or live business mutation occurred.
+
 Billing identity checkpoint, 2026-09-07: **829/829 logic tests pass on iPad
 and Mac Catalyst; 5/5 focused iPad interface journeys pass**. Independent
 invoice/estimate UUIDs remain visible; exact QBO/customer/lineage evidence

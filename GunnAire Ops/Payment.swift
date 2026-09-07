@@ -92,6 +92,13 @@ final class Payment {
 }
 
 extension Payment {
+    /// Native capture evidence is distinct from a date-only accounting entry.
+    var hasNativeCollectionEvidence: Bool {
+        collectionAttemptID != nil || hasProcessorCapture ||
+            QuickBooksBillingIdentity.identifier(quickBooksClientTransID) != nil ||
+            QuickBooksBillingIdentity.identifier(processor) != nil
+    }
+
     var isProviderSettlementPending: Bool {
         backendCollectionMethod == "ach" && providerPaymentStatus?.uppercased() == "PENDING"
     }

@@ -8,6 +8,7 @@
 import Testing
 @testable import GunnAire_Ops
 import CoreImage
+import CoreML
 import Foundation
 import PDFKit
 import SwiftData
@@ -975,29 +976,48 @@ struct GunnAire_OpsTests {
         request.symbologies = [.qr]
 
         do {
+            #if targetEnvironment(simulator)
+            for (stage, devices) in try request.supportedComputeStageDevices {
+                if let cpu = devices.first(where: { if case .cpu = $0 { return true }; return false }) {
+                    request.setComputeDevice(cpu, for: stage)
+                }
+            }
+            #endif
             try VNImageRequestHandler(cgImage: image).perform([request])
-            return request.results?.compactMap(\.payloadStringValue).first
+            if let payload = request.results?.compactMap(\.payloadStringValue).first {
+                return payload
+            }
         } catch let error as NSError {
             #if targetEnvironment(simulator)
-            // Current iOS simulators can reject Vision barcode requests before decoding
-            // with an unavailable inference context. Keep real devices on the production
-            // Vision path while still proving the generated QR payload in simulator CI.
-            guard error.domain == "com.apple.Vision", error.code == 9 else {
-                throw error
-            }
-            let detector = CIDetector(
-                ofType: CIDetectorTypeQRCode,
-                context: CIContext(),
-                options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]
-            )
-            return detector?
-                .features(in: CIImage(cgImage: image))
-                .compactMap { ($0 as? CIQRCodeFeature)?.messageString }
-                .first
+            guard error.domain == "com.apple.Vision", error.code == 9 else { throw error }
             #else
             throw error
             #endif
         }
+        #if targetEnvironment(simulator)
+        // Vision in a VM can return no observations as well as inference error 9.
+        // Independently decode the actual image; never substitute the expected
+        // payload. Physical camera/Vision acceptance remains a separate gate.
+        print("QR fixture: simulator Vision unavailable or empty; verifying with software QR decoding.")
+        let detector = CIDetector(
+            ofType: CIDetectorTypeQRCode,
+            context: CIContext(options: [.useSoftwareRenderer: true]),
+            options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]
+        )
+        return detector?
+            .features(in: CIImage(cgImage: image))
+            .compactMap { ($0 as? CIQRCodeFeature)?.messageString }
+            .first
+        #else
+        return nil
+        #endif
+    }
+
+    @Test func equipmentQRCodeDecoderRejectsAnImageWithoutACode() throws {
+        let blank = CIImage(color: .white).cropped(to: CGRect(x: 0, y: 0, width: 128, height: 128))
+        let image = try #require(CIContext(options: [.useSoftwareRenderer: true])
+            .createCGImage(blank, from: blank.extent))
+        #expect(try decodedQRCodePayload(from: image) == nil)
     }
 
     @Test func equipmentAssetLabelExportsAReadableSinglePagePDF() throws {
@@ -1657,25 +1677,27 @@ struct GunnAire_OpsTests {
             )
         )
 
-        try QuickBooksLocalSync.importSnapshot(
-            customers: [],
-            items: [],
-            estimates: [],
-            invoices: [],
-            payments: [remotePayment],
-            vendors: [],
-            into: context
-        )
+        #expect(throws: QuickBooksBillingImportReview.self) {
+            try QuickBooksLocalSync.importSnapshot(
+                customers: [],
+                items: [],
+                estimates: [],
+                invoices: [],
+                payments: [remotePayment],
+                vendors: [],
+                into: context
+            )
+        }
 
         let imported = try context.fetch(FetchDescriptor<Payment>())
         #expect(imported.count == 2)
         #expect(imported.first { $0.invoice.id == firstInvoice.id }?.amount == 100)
         #expect(imported.first { $0.invoice.id == secondInvoice.id }?.amount == 200)
         #expect(Set(imported.compactMap(\.quickBooksID)) == ["payment-300"])
-        #expect(firstInvoice.quickBooksBalanceDue == 0)
-        #expect(secondInvoice.quickBooksBalanceDue == 0)
-        #expect(firstInvoice.status == "paid")
-        #expect(secondInvoice.status == "paid")
+        #expect(firstInvoice.quickBooksBalanceDue == nil)
+        #expect(secondInvoice.quickBooksBalanceDue == nil)
+        #expect(!firstInvoice.isReadyForPaymentCollection)
+        #expect(!secondInvoice.isReadyForPaymentCollection)
     }
 
     @Test func invoicePaymentTermsProvideOneDeterministicOverdueBoundary() throws {
@@ -17147,7 +17169,7 @@ struct GunnAire_OpsTests {
     }
 
     @MainActor
-    @Test func quickBooksLocalSyncReconcilesInvoiceStatusFromImportedPaymentOnlySnapshot() async throws {
+    @Test func quickBooksLocalSyncRequiresInvoiceRefreshAfterPaymentOnlySnapshot() async throws {
         let schema = GunnAireModelSchema.schema
         let container = try ModelContainer(
             for: schema,
@@ -17185,27 +17207,29 @@ struct GunnAire_OpsTests {
         }
         """.utf8))
 
-        try QuickBooksLocalSync.importSnapshot(
-            customers: [],
-            items: [],
-            estimates: [],
-            invoices: [],
-            payments: [quickBooksPayment],
-            vendors: [],
-            into: context
-        )
+        #expect(throws: QuickBooksBillingImportReview.self) {
+            try QuickBooksLocalSync.importSnapshot(
+                customers: [],
+                items: [],
+                estimates: [],
+                invoices: [],
+                payments: [quickBooksPayment],
+                vendors: [],
+                into: context
+            )
+        }
 
         let payments = try context.fetch(FetchDescriptor<Payment>())
         let importedPayment = try #require(payments.first { $0.quickBooksID == "QB-PAY-1" })
 
         #expect(importedPayment.invoice.id == invoice.id)
         #expect(importedPayment.method == "card")
-        #expect(invoice.status == "paid")
-        #expect(Invoice.resolvedStatus(for: invoice, payments: payments) == "paid")
+        #expect(invoice.status == "unpaid")
+        #expect(Invoice.resolvedStatus(for: invoice, payments: payments) == "review")
     }
 
     @MainActor
-    @Test func quickBooksLocalSyncReconcilesStaleQuickBooksBalanceFromPaymentOnlySnapshot() async throws {
+    @Test func quickBooksLocalSyncPreservesLastBalanceUntilInvoiceRefresh() async throws {
         let schema = GunnAireModelSchema.schema
         let container = try ModelContainer(
             for: schema,
@@ -17244,21 +17268,23 @@ struct GunnAire_OpsTests {
         }
         """.utf8))
 
-        try QuickBooksLocalSync.importSnapshot(
-            customers: [],
-            items: [],
-            estimates: [],
-            invoices: [],
-            payments: [quickBooksPayment],
-            vendors: [],
-            into: context
-        )
+        #expect(throws: QuickBooksBillingImportReview.self) {
+            try QuickBooksLocalSync.importSnapshot(
+                customers: [],
+                items: [],
+                estimates: [],
+                invoices: [],
+                payments: [quickBooksPayment],
+                vendors: [],
+                into: context
+            )
+        }
 
         let payments = try context.fetch(FetchDescriptor<Payment>())
 
-        #expect(invoice.quickBooksBalanceDue == 0)
-        #expect(invoice.status == "paid")
-        #expect(Invoice.outstandingBalance(for: invoice, payments: payments) == 0)
+        #expect(invoice.quickBooksBalanceDue == 500)
+        #expect(invoice.status == "unpaid")
+        #expect(Invoice.outstandingBalance(for: invoice, payments: payments) == 500)
     }
 
     @MainActor

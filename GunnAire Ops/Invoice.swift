@@ -295,8 +295,17 @@ final class Invoice {
             ? QuickBooksBillingIdentity.invoiceReviewMessage : nil
     }
 
+    var quickBooksBalanceReviewMessage: String? {
+        quickBooksSyncState == QuickBooksBalanceReconciliation.reviewState
+            ? (quickBooksSyncDetail ?? QuickBooksBalanceReconciliation.refreshMessage) : nil
+    }
+
+    var quickBooksReconciliationReviewMessage: String? {
+        quickBooksIdentityReviewMessage ?? quickBooksBalanceReviewMessage
+    }
+
     var paymentCollectionBlockedMessage: String? {
-        if let message = quickBooksIdentityReviewMessage { return message }
+        if let message = quickBooksReconciliationReviewMessage { return message }
         return BillingTaxPolicy.customerCommitmentBlockedMessage(
             status: taxCalculationStatus,
             documentName: "invoice"
@@ -400,7 +409,7 @@ final class Invoice {
     }
 
     var needsQuickBooksAttention: Bool {
-        quickBooksSyncState == "needs_attention" || quickBooksIdentityReviewMessage != nil
+        quickBooksSyncState == "needs_attention" || quickBooksReconciliationReviewMessage != nil
     }
 
     static func outstandingBalance(for invoice: Invoice, payments: [Payment]) -> Double {
@@ -420,6 +429,7 @@ final class Invoice {
     }
 
     static func isPaid(_ invoice: Invoice, payments: [Payment]) -> Bool {
+        guard invoice.quickBooksReconciliationReviewMessage == nil else { return false }
         if invoice.hasQuickBooksBalance {
             return outstandingBalance(for: invoice, payments: payments) <= 0.009
         }
@@ -428,6 +438,7 @@ final class Invoice {
     }
 
     static func resolvedStatus(for invoice: Invoice, payments: [Payment]) -> String {
+        guard invoice.quickBooksReconciliationReviewMessage == nil else { return "review" }
         let balance = outstandingBalance(for: invoice, payments: payments)
         if balance <= 0.009 {
             return "paid"
