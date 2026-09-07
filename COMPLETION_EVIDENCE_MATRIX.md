@@ -1,3 +1,14 @@
+Server Google connection checkpoint, 2026-09-07: backend candidate
+**2026.09.07.30** implements single-use, company/user-bound web OAuth, encrypted
+offline credentials, stable Google subject binding, scope-aware server-only
+token use and original-grant refresh/disconnect coordination. 35 focused tests,
+both complete Backend runs (401 each) and Tools (37) pass. Native Google
+requests still use their existing device credentials; shared Mail dispatch,
+native connection/recovery UI and production provider acceptance remain open.
+The exact contract, final evidence and rollout boundaries are recorded in
+[GOOGLE_SERVER_CONNECTION.md](GOOGLE_SERVER_CONNECTION.md). This does not
+complete the full-suite, CloudKit, QBO, Tap to Pay or release requirements.
+
 Mail draft-recovery checkpoint, 2026-09-07: **1219 logic tests per native
 platform, ten selected iPad journeys, unsigned universal Mac Release, Backend
 366 and Tools 37 pass**. The existing composer and generated-document send

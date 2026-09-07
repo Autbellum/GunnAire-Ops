@@ -2,6 +2,14 @@
 
 This is a small backend for sharing app users, roles, uploaded field receipts, and field payment records across iPads.
 
+Candidate **2026.09.07.30** implements user/company-bound server Google OAuth,
+encrypted offline credentials, single-use code exchanges, coordinated refresh,
+partial-scope handling and metadata-only connection APIs. This is the server
+foundation, not native Google credential cutover or a shared Mail outbox.
+Existing native sign-in is unchanged. Read [the connection contract](../GOOGLE_SERVER_CONNECTION.md)
+for separate web-client/key configuration, rollback/backup, verification and
+remaining rollout requirements. No deployment or live authorization is implied.
+
 Candidate **2026.09.07.28** adds administrator-reviewed adoption of existing
 Customer/Item/Invoice/Estimate links. The native QuickBooks setup page reads
 exact provider records, retains the original review, and requires explicit

@@ -34,6 +34,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 try:
     from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications, billing_native, qbo_link_adoption
     from Backend.billing_provider import BillingQBOProvider
+    from Backend import google_connections
 except ModuleNotFoundError:
     import payment_attempts  # Direct launch from the Backend directory.
     import catalog_publications
@@ -42,10 +43,11 @@ except ModuleNotFoundError:
     import billing_native
     import qbo_link_adoption
     from billing_provider import BillingQBOProvider
+    import google_connections
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.07.29"
+SERVICE_VERSION = "2026.09.07.30"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -54,6 +56,10 @@ AUTH_MODE = os.environ.get("GUNNAIRE_BACKEND_AUTH_MODE", "api-token").strip().lo
 PRIMARY_ADMIN_EMAIL = os.environ.get("GUNNAIRE_PRIMARY_ADMIN_EMAIL", "eric.gunn@gunnaire.com").strip().lower()
 GOOGLE_CLIENT_ID = os.environ.get("GUNNAIRE_GOOGLE_CLIENT_ID", "").strip()
 GOOGLE_ALLOWED_DOMAIN = os.environ.get("GUNNAIRE_GOOGLE_ALLOWED_DOMAIN", "gunnaire.com").strip().lower()
+GOOGLE_WEB_CLIENT_ID = os.environ.get("GUNNAIRE_GOOGLE_WEB_CLIENT_ID", "").strip()
+GOOGLE_WEB_CLIENT_SECRET = os.environ.get("GUNNAIRE_GOOGLE_WEB_CLIENT_SECRET", "").strip()
+GOOGLE_WEB_REDIRECT_URI = os.environ.get("GUNNAIRE_GOOGLE_WEB_REDIRECT_URI", "").strip()
+GOOGLE_TOKEN_ENCRYPTION_KEY = os.environ.get("GUNNAIRE_GOOGLE_TOKEN_ENCRYPTION_KEY", "").strip()
 APPLE_CLIENT_ID = os.environ.get("GUNNAIRE_APPLE_CLIENT_ID", "com.gunnaire.businesssuite").strip()
 APPLE_ISSUER = "https://appleid.apple.com"
 APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys"
@@ -716,6 +722,8 @@ def portal_url(token: str) -> str | None:
 
 def redact_capability_tokens(value: str) -> str:
     """Keep bearer-style portal secrets out of ordinary HTTP access logs."""
+    # OAuth codes, states and returned scope/account hints must not enter logs.
+    value = re.sub(r"(?i)(/api/google/oauth/callback)\?[^\s\"]*", r"\1?[REDACTED]", value)
     return re.sub(
         r"(?i)(/portal/)[A-Za-z0-9_-]{32,128}",
         r"\1[REDACTED]",
@@ -2459,6 +2467,7 @@ def initialize_database() -> None:
         customer_publications.initialize_schema(connection)
         billing_publications.initialize_schema(connection)
         qbo_link_adoption.initialize_schema(connection)
+        google_connections.initialize_schema(connection)
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS customer_communications (
@@ -3483,6 +3492,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == google_connections.CALLBACK_PATH:
+            self.handle_google_callback(parsed)
+            return
         if parsed.path == "/health":
             self.write_json(
                 {"status": "ok", "serviceVersion": SERVICE_VERSION, "time": utc_now()},
@@ -3498,6 +3510,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/session":
             self.write_json({"user": self.principal()})
+            return
+        if parsed.path == "/api/google/connection" or parsed.path.startswith("/api/google/authorizations/"):
+            self.handle_google_connection(parsed, method="GET")
             return
         if parsed.path == "/api/payment-attempts" or parsed.path.startswith("/api/payment-attempts/"):
             self.handle_payment_attempt(parsed, method="GET")
@@ -3703,6 +3718,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/auth/logout":
             self.revoke_application_session()
+            return
+        if parsed.path == "/api/google/authorizations" or parsed.path.startswith("/api/google/authorizations/") or parsed.path == "/api/google/connection/disconnect":
+            self.handle_google_connection(parsed, method="POST")
             return
         if parsed.path == "/api/payment-attempts" or parsed.path.startswith("/api/payment-attempts/"):
             self.handle_payment_attempt(parsed, method="POST")
@@ -5908,6 +5926,66 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         except (sqlite3.Error, RuntimeError):
             self.write_json({"error": "Billing storage is unavailable. Keep the original draft and attempt for review.",
                              "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+
+    def google_connection_service(self):
+        return google_connections.GoogleConnections(db, record_audit_event,
+            client_id=GOOGLE_WEB_CLIENT_ID, client_secret=GOOGLE_WEB_CLIENT_SECRET,
+            redirect_uri=GOOGLE_WEB_REDIRECT_URI, encryption_key=GOOGLE_TOKEN_ENCRYPTION_KEY,
+            allowed_domain=GOOGLE_ALLOWED_DOMAIN)
+
+    def handle_google_connection(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        service, session_id = self.google_connection_service(), self._application_session_id
+        try:
+            if method == "GET" and parsed.path == "/api/google/connection":
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, max_num_fields=2)
+                if set(query) != {"companyID"} or len(query["companyID"]) != 1:
+                    raise google_connections.invalid()
+                result = service.status(session_id, query["companyID"][0])
+            elif method == "GET" and not parsed.query:
+                result = service.attempt_status(session_id, parsed.path.removeprefix("/api/google/authorizations/"))
+            elif method == "POST" and not parsed.query:
+                payload = google_connections.strict_json(self.read_limited_body(4096).decode("utf-8"))
+                if parsed.path == "/api/google/authorizations":
+                    result = service.start(session_id, payload)
+                elif parsed.path == "/api/google/connection/disconnect" and isinstance(payload, dict) and set(payload) == {"companyID", "grantID"}:
+                    result = service.disconnect(session_id, payload["companyID"], payload["grantID"])
+                elif parsed.path.startswith("/api/google/authorizations/") and parsed.path.endswith("/cancel") and payload == {}:
+                    result = service.cancel(session_id, parsed.path.removeprefix("/api/google/authorizations/").removesuffix("/cancel"))
+                else:
+                    raise google_connections.invalid()
+            else:
+                raise google_connections.invalid()
+            self.write_json(result)
+        except google_connections.ConnectionError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, TypeError, UnicodeDecodeError):
+            self.write_json({"error": "Invalid Google connection request", "code": "invalid_request"}, status=400)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Google connection storage is unavailable", "code": "storage_unavailable"}, status=503)
+
+    def handle_google_callback(self, parsed):
+        # The state binds this public callback to the initiating approved session.
+        # No provider errors, tokens, scope strings, emails or codes are rendered.
+        try:
+            result = self.google_connection_service().callback(parsed.query)
+            message = "Google connection saved. Close this tab and return to GunnAire Ops." if result["state"] == "connected" else "Google connection was not approved. Return to GunnAire Ops to continue."
+            status = 200
+        except google_connections.ConnectionError as error:
+            message, status = "Google connection could not be completed. Return to GunnAire Ops to check the original request.", error.status
+        except Exception:
+            message, status = "Google connection could not be confirmed. Return to GunnAire Ops to check the original request.", 503
+        data = ("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>GunnAire Ops Google connection</title><main><h1>Google connection</h1><p>" + message + "</p></main></html>").encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+        self.end_headers()
+        self.wfile.write(data)
 
     def handle_customer_publication(self, parsed, *, method):
         if not self.require_application_session():
