@@ -1,3 +1,33 @@
+Shared catalog checkpoint, 2026-09-07: **953/953 logic tests pass on each
+of iPad Simulator and Mac Catalyst; 7/7 selected iPad journeys, 173/173
+Backend tests and 37/37 Tools tests pass**. Backend candidate
+`2026.09.07.23` now owns the migrated shared-pricebook create/update sends.
+Encrypted immutable proposals, transactional one-time dispatch, current
+server administrator access, company/realm/grant checks, scoped item mappings,
+inactive-item pagination and uncertain-result recovery are covered by 49 new
+backend regressions. The native approval/retry path has no direct QBO fallback;
+14 new logic tests retain original identity, reviewed proposals and local-save
+recovery. The focused Catalog publication review sheet recovers original links
+or cancels only never-sent proposals, then returns to the catalog. Existing
+technician item entry, invoice prices, Invoice launch, simple Mail and catalog
+review journeys remain green. The final iPad screenshot was visually checked:
+clear item context and actions, no clipping or visible email footer.
+See [QBO_SERVER_CATALOG_PUBLICATION.md](QBO_SERVER_CATALOG_PUBLICATION.md)
+for retained results and the intermediate failures that were corrected.
+The final unsigned optimized universal Mac Release succeeds; both arm64 and
+x86_64 are verified. The actor-isolation warning found during optimization
+was corrected and complete native acceptance was rerun. Only the pre-existing
+external Metal-toolchain search-path warning remains.
+All four hosted jobs passed at the preceding `6ded36c` head; this candidate
+requires its own new-head hosted acceptance. Server-owned customer/invoice/
+estimate/payment dispatch, new-job assignment authority, credential containment,
+reconnected-grant/outcome resolution, attachment recovery, full ledger/settlement,
+remaining Google workflows, signed CloudKit/offline multi-device convergence,
+vendor onboarding and approved embedded Tap to Pay/provider/platform acceptance
+remain open. This is not full-suite production readiness. No merge, deployment,
+signing/entitlement change, physical install or live business mutation occurred.
+
+
 Billing publication checkpoint, 2026-09-07: **939/939 logic tests pass on each
 of iPad Simulator and Mac Catalyst; 6/6 selected iPad journeys pass**.
 Billing Documents and the Management retry queue now share one captured

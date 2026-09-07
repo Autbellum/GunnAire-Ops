@@ -6269,6 +6269,46 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testCatalogPublicationReviewCancelsOnlyAnUnsentProposalAndReturnsToCatalog() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob", "-uiTestSeedCatalogReconciliation", "-uiTestForceQuickBooksConnected",
+            "-uiTestCatalogPublicationReview", "-GunnAirePendingAppRoute", "quickBooksManagement"
+        ]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
+        app.segmentedControls["QuickBooksWorkspacePicker"].buttons["Sales"].tap()
+        let review = app.buttons["Catalog publication review"].firstMatch
+        for _ in 0..<12 where !review.isHittable { app.swipeUp() }
+        XCTAssertTrue(review.waitForExistence(timeout: 3))
+        review.tap()
+        XCTAssertTrue(app.navigationBars["Catalog publication review"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Not sent"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Recover original link"].exists)
+        let cancel = app.buttons["Cancel unsent proposal"].firstMatch
+        XCTAssertTrue(cancel.isEnabled)
+        cancel.tap()
+        let confirmationSheet = app.sheets["Cancel this unsent proposal?"]
+        XCTAssertTrue(confirmationSheet.waitForExistence(timeout: 3))
+        let confirmation = confirmationSheet.buttons["Cancel unsent proposal"]
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 2))
+        confirmation.tap()
+        XCTAssertTrue(app.staticTexts["Cancelled before sending"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["Recover original link"].exists)
+        XCTAssertFalse(app.buttons["Cancel unsent proposal"].exists)
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "Catalog publication review - retained unsent proposal"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        app.buttons["Close"].tap()
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["HVAC Diagnostic Service"].exists)
+    }
+
+
+    @MainActor
     func testAdministratorReviewsLinkedCatalogDifferencesBeforeChoosingAQuickBooksDirection() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()

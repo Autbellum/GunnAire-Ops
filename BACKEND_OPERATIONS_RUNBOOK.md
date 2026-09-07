@@ -1,6 +1,6 @@
 # GunnAire backend operations runbook
 
-Last source verification: 2026-09-06 (production observations below retain their original dates)
+Last source verification: 2026-09-07 (production observations below retain their original dates)
 
 This runbook covers the shared GunnAire service at
 `https://gunnaire-api.onrender.com`. It does not authorize accounting changes,
@@ -15,6 +15,30 @@ credential rotation, production restores, or customer communications.
   automated off-host backup schedule is configured and observed.
 - Proposed recovery time objective: 4 hours. This is not proven until a timed
   restore drill is completed by the deployment owner.
+
+## 2026-09-07 catalog publication candidate
+
+Candidate `2026.09.07.23` adds the server-owned catalog publisher required by
+the current native approval/retry workflow. Backend 173/173 and Tools 37/37
+tests pass; native acceptance is tracked separately in
+`QBO_SERVER_CATALOG_PUBLICATION.md`. This does not represent a deployment.
+
+Back up the entire SQLite database and preserve its existing encryption key
+before promotion. The three additive catalog tables and indexes hold immutable
+encrypted proposals, open publication locks and durable item mappings. Keep
+them during code rollback. Do not delete an unknown/sending attempt or restore
+an older database to make a retry available: the provider may have accepted it.
+Use one persistent authoritative database; independent per-instance SQLite
+copies do not coordinate dispatch and are not an approved scale-out configuration.
+Use the application's **Catalog publication review** for read-only recovery or
+explicit cancellation of an unsent proposal. Replaced-grant/unknown-outcome
+resolution still requires further implementation and approved evidence.
+
+This native candidate must not be distributed against an older backend lacking
+these routes. Provider requests in local tests are fixtures only. Older clients
+and externally issued accounting credentials remain a bypass boundary until
+broader server-authority migration is complete. Review PR #17 overlap before
+any merge; Render follows `main`.
 
 ## 2026-09-06 source review follow-up
 

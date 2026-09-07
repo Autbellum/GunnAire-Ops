@@ -138,6 +138,9 @@ final class QuickBooksDataAPI: ObservableObject {
     private var connectionGeneration = UUID()
     private let requestTransport: WorkspaceProviderOperation.Transport
     private let persistsCredentials: Bool
+    let catalogPublicationTransport: CatalogPublicationBoundary.Transport?
+    let catalogRecoveryTransport: (UUID) async throws -> CatalogPublicationResponse
+    private let catalogFixtureCompanyID: UUID?
     private struct WorkflowScope: Sendable {
         let owner: ObjectIdentifier
         let operation: WorkspaceProviderOperation
@@ -154,6 +157,9 @@ final class QuickBooksDataAPI: ObservableObject {
     private init() {
         requestTransport = { try await URLSession.shared.data(for: $0) }
         persistsCredentials = true
+        catalogPublicationTransport = GunnAireBackendService.publishCatalog
+        catalogRecoveryTransport = GunnAireBackendService.recoverCatalogPublication
+        catalogFixtureCompanyID = nil
         loadTokens()
         startAutomaticTokenRefresh()
     }
@@ -162,10 +168,16 @@ final class QuickBooksDataAPI: ObservableObject {
     /// Isolated provider tests never read/write real credentials or start a
     /// refresh timer. Requests must use the explicitly supplied transport.
     init(testTokens: QuickBooksOAuthTokens, realmID: String, environment: String,
+         catalogCompanyID: UUID? = nil,
+         catalogPublisher: CatalogPublicationBoundary.Transport? = nil,
+         catalogRecovery: @escaping (UUID) async throws -> CatalogPublicationResponse = { _ in throw CatalogPublicationError.unavailable },
          transport: @escaping WorkspaceProviderOperation.Transport) {
         precondition(GunnAireCloudKit.usesTestDatabase)
         requestTransport = transport
         persistsCredentials = false
+        catalogPublicationTransport = catalogPublisher
+        catalogRecoveryTransport = catalogRecovery
+        catalogFixtureCompanyID = catalogCompanyID
         tokens = testTokens
         storedRealmID = realmID
         storedEnvironment = environment
@@ -726,7 +738,7 @@ final class QuickBooksDataAPI: ObservableObject {
         let operation = isCurrent.map { WorkspaceProviderOperation(parent: original, isCurrent: $0) } ?? original
         return CapturedWorkspaceWorkflow(api: self, operation: operation,
                                   realmID: realmID, environment: currentEnvironment,
-                                  companyID: CompanyWorkspaceAccessController.shared.verifiedCompanyID)
+                                  companyID: persistsCredentials ? CompanyWorkspaceAccessController.shared.verifiedCompanyID : catalogFixtureCompanyID)
     }
 
     private func performCapturedWorkspaceOperation<T>(
@@ -1124,6 +1136,10 @@ final class QuickBooksDataAPI: ObservableObject {
         requestID: String? = nil,
         completion: @escaping (Result<QuickBooksItem, Error>) -> Void
     ) {
+        guard !persistsCredentials else {
+            completion(.failure(CatalogPublicationError.needsReview))
+            return
+        }
         let body = try? JSONEncoder().encode(item)
         let normalizedRequestID = requestID?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1153,6 +1169,10 @@ final class QuickBooksDataAPI: ObservableObject {
     }
 
     func updateItem(_ item: QuickBooksItemUpdate, completion: @escaping (Result<QuickBooksItem, Error>) -> Void) {
+        guard !persistsCredentials else {
+            completion(.failure(CatalogPublicationError.needsReview))
+            return
+        }
         let body = try? JSONEncoder().encode(item)
         let requestID = UUID().uuidString
         performAuthorizedDecodingRequest(

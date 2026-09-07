@@ -80,7 +80,7 @@ struct QuickBooksCatalogItemRevision: Equatable {
 /// identity checks and local saves belong to the original run and context.
 @MainActor
 final class QuickBooksCatalogWorkflow {
-    enum Mode { case publish, compare, update(QuickBooksItem), useProvider(QuickBooksItem) }
+    enum Mode { case publish, compare, update(QuickBooksItem), useProvider(QuickBooksItem), recover(UUID) }
     struct Outcome {
         let remote: QuickBooksItem
         let link: ApprovedPricebookLinkOutcome
@@ -122,6 +122,8 @@ final class QuickBooksCatalogWorkflow {
         if case .publish = mode {
             guard item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
                   !item.isCatalogArchived else { throw QuickBooksCatalogWorkflowError.invalidItem }
+        } else if case .recover = mode {
+            // The server verifies this exact local UUID and original attempt.
         } else {
             guard item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
                 throw QuickBooksCatalogWorkflowError.remoteIdentity
@@ -134,9 +136,16 @@ final class QuickBooksCatalogWorkflow {
         guard !item.requiresPricebookReview,
               CatalogItemType(rawValue: item.itemTypeRawValue) != nil,
               !item.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              item.name == item.name.trimmingCharacters(in: .whitespacesAndNewlines),
+              !item.name.contains(where: { ":\t\r\n".contains($0) }),
               item.name.count <= 100,
+              (item.sku?.count ?? 0) <= 100,
+              (item.itemDescription?.count ?? 0) <= 4000,
+              (item.purchaseDescription ?? item.itemDescription ?? "").count <= 1000,
               item.unitPrice.isFinite, item.unitPrice >= 0,
-              (item.purchaseCost ?? 0).isFinite, (item.purchaseCost ?? 0) >= 0 else {
+              item.unitPrice <= 99_999_999_999,
+              (item.purchaseCost ?? 0).isFinite, (item.purchaseCost ?? 0) >= 0,
+              (item.purchaseCost ?? 0) <= 99_999_999_999 else {
             throw QuickBooksCatalogWorkflowError.invalidItem
         }
     }
@@ -157,6 +166,16 @@ final class QuickBooksCatalogWorkflow {
             try self.checkItem()
             switch self.mode {
             case .publish:
+                if self.api.catalogPublicationTransport != nil {
+                    guard let configuration = configuration ?? self.configuration,
+                          configuration.matches(realmID: self.run.workflow.realmID, environment: self.run.workflow.environment),
+                          let income = QuickBooksItemAccountResolver.configuredIncomeAccountRef(configuration: configuration) else {
+                        throw QuickBooksDataAPI.QBError.missingDefaultIncomeAccountRef
+                    }
+                    let payload = QuickBooksCatalogCreateOperation.payload(for: self.item, incomeAccountRef: income,
+                        expenseAccountRef: QuickBooksItemAccountResolver.configuredExpenseAccountRef(configuration: configuration))
+                    return try await self.publishOnServer(.create(payload))
+                }
                 let remoteItems = try await self.run.receive(self.api.fetchItems)
                 try self.checkItem()
                 if let existing = try PricebookReviewPublication.matchingRemoteItem(for: self.item, in: remoteItems) {
@@ -177,6 +196,15 @@ final class QuickBooksCatalogWorkflow {
                                         completion: completion)
                 }
                 return (created, true)
+            case .recover(let identifier):
+                let expected = try CatalogPublicationBoundary.request(workflow: self.run.workflow, itemID: self.revision.id,
+                    payload: .create(self.revision.values))
+                let response = try await self.api.catalogRecoveryTransport(identifier)
+                try self.checkItem()
+                try response.validate(companyID: expected.companyID, realmID: expected.realmID,
+                    environment: expected.environment, itemID: expected.localItemID)
+                guard response.publication.id == identifier else { throw CatalogPublicationError.invalidResponse }
+                return (response.item, false)
             case .compare, .update, .useProvider:
                 guard let identifier = self.revision.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
                       !identifier.isEmpty else { throw QuickBooksCatalogWorkflowError.remoteIdentity }
@@ -195,6 +223,9 @@ final class QuickBooksCatalogWorkflow {
                 if case .update = self.mode,
                    !QuickBooksCatalogReconciliation.differences(localItem: self.item, remoteItem: current).isEmpty {
                     let payload = try QuickBooksCatalogReconciliation.updatePayload(localItem: self.item, currentRemoteItem: current)
+                    if self.api.catalogPublicationTransport != nil {
+                        return try await self.publishOnServer(.update(payload))
+                    }
                     self.attemptedWrite = true
                     let updated: QuickBooksItem = try await self.run.receive { self.api.updateItem(payload, completion: $0) }
                     guard updated.Id == identifier else { throw QuickBooksCatalogWorkflowError.remoteIdentity }
@@ -205,6 +236,10 @@ final class QuickBooksCatalogWorkflow {
         }
         try checkItem()
         let remote = evidence.0
+        if let originalID = revision.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !originalID.isEmpty, remote.Id != originalID {
+            throw QuickBooksCatalogWorkflowError.remoteIdentity
+        }
         if case .publish = mode {
             guard try PricebookReviewPublication.matchingRemoteItem(for: item, in: [remote]) != nil else {
                 throw QuickBooksCatalogWorkflowError.remoteIdentity
@@ -244,6 +279,19 @@ final class QuickBooksCatalogWorkflow {
             ? "QuickBooks may have accepted the request. Review the original item before retrying. "
             : "Catalog action stopped. Saved work has been retained. "
         return prefix + error.localizedDescription
+    }
+
+    private func publishOnServer(_ payload: CatalogPublicationRequest.Payload) async throws -> (QuickBooksItem, Bool) {
+        try checkItem()
+        guard let transport = api.catalogPublicationTransport else { throw CatalogPublicationError.unavailable }
+        let request = try CatalogPublicationBoundary.request(workflow: run.workflow, itemID: revision.id, payload: payload)
+        attemptedWrite = true
+        let response = try await transport(request)
+        try checkItem()
+        try response.validate(companyID: request.companyID, realmID: request.realmID,
+            environment: request.environment, itemID: request.localItemID)
+        guard response.publication.operation == request.operation else { throw CatalogPublicationError.invalidResponse }
+        return (response.item, response.created ?? false)
     }
 
     /// Never stamp an old workspace or a concurrently edited item with a late

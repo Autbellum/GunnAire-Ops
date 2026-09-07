@@ -1239,6 +1239,7 @@ struct QuickBooksManagementView: View {
     @State private var catalogPublicationConfirmation: QuickBooksCatalogPublicationConfirmation?
     @State private var catalogMappingResolutionCandidateID: UUID?
     @State private var catalogItemBeingEdited: Item?
+    @State private var catalogPublicationBeingReviewed: Item?
     @State private var paymentToRefund: Payment?
     @State private var quickBooksReconnectRequired = false
     @State private var showCustomersList = false
@@ -2049,6 +2050,7 @@ struct QuickBooksManagementView: View {
                                                 : "Retry publication for \(item.name)"
                                         )
                                         .accessibilityIdentifier("RetryCatalogPublication-\(item.id.uuidString)")
+                                        catalogPublicationReviewButton(item)
                                     }
                                     .padding(.vertical, 3)
                                 }
@@ -3128,6 +3130,12 @@ struct QuickBooksManagementView: View {
                     .presentationDetents([.large])
                     .presentationSizing(.page)
                 }
+                .sheet(item: $catalogPublicationBeingReviewed) { item in
+                    CatalogPublicationReviewSheet(item: item, context: modelContext, api: catalogAPIForCurrentContext(),
+                                                  client: catalogReviewClient()) { identifier in
+                        startCatalogWorkflow(item, mode: .recover(identifier))
+                    }
+                }
                 .sheet(isPresented: $showingNewEstimateSheet) {
                     QuickBooksEstimateComposeView(customers: customers) { customer, amount, note, email, sendAfterCreate in
                         createEstimate(
@@ -3775,7 +3783,8 @@ struct QuickBooksManagementView: View {
             let fixtureItems = linkedPricebookReviewFixtureRequested
                 ? Self.linkedPricebookReviewFixtureItems : Self.catalogReconciliationFixtureItems
             return QuickBooksDataAPI(testTokens: .init(accessToken: "catalog-ui-fixture", expiration: .distantFuture),
-                realmID: "catalog-ui-fixture", environment: Config.QuickBooks.environment) { request in
+                realmID: "catalog-ui-fixture", environment: Config.QuickBooks.environment,
+                catalogCompanyID: UUID(uuidString: "10000000-0000-4000-8000-000000000001")) { request in
                 // UI previews exercise the real lifecycle with isolated GETs.
                 // They never use saved credentials or dispatch provider writes.
                 guard request.httpMethod == "GET", let remote = fixtureItems.first else {
@@ -3787,6 +3796,15 @@ struct QuickBooksManagementView: View {
         }
         #endif
         return quickBooksDataAPI
+    }
+
+    private func catalogReviewClient() -> CatalogPublicationReviewClient {
+        #if DEBUG
+        if GunnAireCloudKit.usesTestDatabase && ProcessInfo.processInfo.arguments.contains("-uiTestCatalogPublicationReview") {
+            return .fixture(environment: Config.QuickBooks.environment)
+        }
+        #endif
+        return .live
     }
 
     private func startCatalogWorkflow(_ item: Item, mode: QuickBooksCatalogWorkflow.Mode) {
@@ -3828,7 +3846,7 @@ struct QuickBooksManagementView: View {
             catalogSnapshotWorkflow = nil
         }
         switch mode {
-        case .publish: activeCatalogPublicationID = item.id
+        case .publish, .recover: activeCatalogPublicationID = item.id
         case .compare: activePricebookReviewID = item.id
         case .update, .useProvider: activeCatalogReconciliationID = item.id
         }
@@ -3861,6 +3879,7 @@ struct QuickBooksManagementView: View {
                     case .useProvider: message = "Applied the reviewed QuickBooks version of \(item.name) to GunnAire."
                     case .update: message = "Published and reconciled \(item.name) with QuickBooks."
                     case .compare: message = "Approved and linked \(item.name). Its QuickBooks catalog values already match."
+                    case .recover: message = "Recovered the original QuickBooks link for \(item.name). No new item was sent."
                     case .publish: message = outcome.created
                         ? "Approved and published \(item.name) to QuickBooks."
                         : "Approved and linked \(item.name). Its QuickBooks catalog values already match."
@@ -4739,6 +4758,7 @@ struct QuickBooksManagementView: View {
 
     @ViewBuilder
     private func catalogReconciliationButtons(for entry: QuickBooksCatalogReconciliationEntry) -> some View {
+        catalogPublicationReviewButton(entry.localItem)
         Button("Edit Staged Changes") {
             catalogItemBeingEdited = entry.localItem
         }
@@ -4766,6 +4786,13 @@ struct QuickBooksManagementView: View {
             )
         )
         .accessibilityIdentifier("PublishGunnAireCatalogVersion-\(entry.localItem.id.uuidString)")
+    }
+
+    private func catalogPublicationReviewButton(_ item: Item) -> some View {
+        Button("Catalog publication review") { catalogPublicationBeingReviewed = item }
+            .buttonStyle(.bordered)
+            .disabled(!isAuthenticated || catalogLifecycle.activeID != nil)
+            .accessibilityIdentifier("ReviewCatalogPublications-\(item.id.uuidString)")
     }
 
     private func catalogPublishBlockedReason(for entry: QuickBooksCatalogReconciliationEntry) -> String? {

@@ -32,13 +32,14 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 
 try:
-    from Backend import payment_attempts
+    from Backend import payment_attempts, catalog_publications
 except ModuleNotFoundError:
     import payment_attempts  # Direct launch from the Backend directory.
+    import catalog_publications
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.06.22"
+SERVICE_VERSION = "2026.09.07.23"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -975,23 +976,11 @@ def qbo_payment_read_transport(request):
         ) from None
 
 
-def read_payment_provider_record(context, category, record_id, *, kind="charge", rail="card", source_id=None):
-    """Read from a fixed Intuit resource, using only the exact saved grant.
-
-    This boundary does not send financial mutations. Its refresh is serialized
-    within this process and compare-and-set against other grant writers. The
-    journal reauthorizes the session after every read before accepting evidence.
-    """
-    payment_attempts.reference(record_id)
-    payment_attempts.reference(context["realm_id"])
-    if category not in ("invoice", "accounting", "transaction") or kind not in ("charge", "refund") or rail not in ("card", "ach"):
-        raise payment_attempts.AttemptError("invalid_resource", "Unsupported provider verification resource.", 400)
-    if category == "transaction" and kind == "refund":
-        payment_attempts.reference(source_id)
+def qbo_authorized_bearer(context, audit_actor="system:payment-verification"):
     environment = context["environment"]
+    expected_grant = context["grant_fingerprint"]
     if environment not in ("sandbox", "production") or environment != QBO_ENVIRONMENT:
         raise payment_attempts.AttemptError("provider_changed", "The original QuickBooks environment is not available.")
-    expected_grant = context["grant_fingerprint"]
     with QBO_PAYMENT_READ_LOCK:
         with db() as connection:
             current = connection.execute("SELECT * FROM qbo_connections WHERE id=1").fetchone()
@@ -1017,9 +1006,29 @@ def read_payment_provider_record(context, category, record_id, *, kind="charge",
             )
             if changed.rowcount != 1:
                 raise payment_attempts.AttemptError("grant_changed", "The QuickBooks connection changed during verification.")
-            record_audit_event("system:payment-verification", "refresh", "qbo-connection",
+            record_audit_event(audit_actor, "refresh", "qbo-connection",
                                current["realm_id"], connection=connection)
-        bearer = result["accessToken"]
+        return result["accessToken"]
+
+
+def read_payment_provider_record(context, category, record_id, *, kind="charge", rail="card", source_id=None):
+    """Read from a fixed Intuit resource, using only the exact saved grant.
+
+    This boundary does not send financial mutations. Its refresh is serialized
+    within this process and compare-and-set against other grant writers. The
+    journal reauthorizes the session after every read before accepting evidence.
+    """
+    payment_attempts.reference(record_id)
+    payment_attempts.reference(context["realm_id"])
+    if category not in ("invoice", "accounting", "transaction") or kind not in ("charge", "refund") or rail not in ("card", "ach"):
+        raise payment_attempts.AttemptError("invalid_resource", "Unsupported provider verification resource.", 400)
+    if category == "transaction" and kind == "refund":
+        payment_attempts.reference(source_id)
+    environment = context["environment"]
+    if environment not in ("sandbox", "production") or environment != QBO_ENVIRONMENT:
+        raise payment_attempts.AttemptError("provider_changed", "The original QuickBooks environment is not available.")
+    expected_grant = context["grant_fingerprint"]
+    bearer = qbo_authorized_bearer(context)
     if category in ("invoice", "accounting"):
         entity = "invoice" if category == "invoice" else ("payment" if kind == "charge" else "refundreceipt")
         base = "https://sandbox-quickbooks.api.intuit.com" if environment == "sandbox" else "https://quickbooks.api.intuit.com"
@@ -1048,6 +1057,125 @@ def read_payment_provider_record(context, category, record_id, *, kind="charge",
     if not isinstance(value, dict):
         raise payment_attempts.AttemptError("provider_unconfirmed", "The provider record was incomplete.")
     return value
+
+
+def qbo_catalog_transport(request):
+    """Bounded fixed-resource transport, no redirect or arbitrary accounting proxy."""
+    try:
+        parsed = urllib.parse.urlsplit(request.full_url)
+        if (parsed.scheme != "https" or parsed.hostname not in
+            {"quickbooks.api.intuit.com", "sandbox-quickbooks.api.intuit.com"}
+            or parsed.username is not None or parsed.password is not None
+            or parsed.port not in (None, 443) or parsed.fragment):
+            raise ValueError("unsupported origin")
+        if not re.fullmatch(r"/v3/company/[A-Za-z0-9._:-]+/(?:query|item(?:/[A-Za-z0-9._:-]+)?|vendor/[A-Za-z0-9._:-]+)", parsed.path):
+            raise ValueError("unsupported resource")
+        if request.get_method() not in ("GET", "POST") or (request.get_method() == "POST" and not parsed.path.endswith("/item")):
+            raise ValueError("unsupported method")
+        with urllib.request.build_opener(QBOReadNoRedirect()).open(request, timeout=20) as response:
+            raw = response.read(1024 * 1024 + 1)
+            if len(raw) > 1024 * 1024:
+                raise ValueError("oversized response")
+            payload = json.loads(raw.decode("utf-8"))
+            if not isinstance(payload, dict) or not 200 <= response.status < 300:
+                raise ValueError("unconfirmed response")
+            return payload
+    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError):
+        raise payment_attempts.AttemptError(
+            "provider_unavailable", "QuickBooks could not confirm the catalog request. Review the original attempt before retrying.", 502,
+        ) from None
+
+
+class CatalogQBOProvider:
+    def __init__(self, context, authorize):
+        self.context, self.authorize, self.bearer = context, authorize, None
+
+    def request(self, resource, query=None, item=None, before_send=None):
+        self.authorize()
+        if self.bearer is None:
+            self.bearer = qbo_authorized_bearer(self.context, "system:catalog-publication")
+        self.authorize()
+        origin = "https://sandbox-quickbooks.api.intuit.com" if self.context["environment"] == "sandbox" else "https://quickbooks.api.intuit.com"
+        url = origin + "/v3/company/" + urllib.parse.quote(self.context["realm_id"], safe="") + "/" + resource
+        url += "?" + urllib.parse.urlencode({"minorversion": "75", **(query or {})})
+        request = urllib.request.Request(
+            url, method="POST" if item is not None else "GET",
+            data=catalog_publications.canonical(item).encode() if item is not None else None,
+            headers={"Authorization": "Bearer " + self.bearer, "Accept": "application/json", "Content-Type": "application/json"},
+        )
+        if item is not None:
+            if resource != "item" or before_send is None:
+                raise payment_attempts.AttemptError("invalid_resource", "Unsupported catalog publication.", 400)
+            # Last operation before network dispatch: atomically reauthorize and
+            # consume the one-time permit. Refresh failures cannot consume it.
+            before_send()
+        result = qbo_catalog_transport(request)
+        self.authorize()
+        return result
+
+    def read(self, entity, identifier):
+        if entity not in ("item", "vendor"):
+            raise payment_attempts.AttemptError("invalid_resource", "Unsupported catalog read.", 400)
+        payment_attempts.reference(identifier)
+        result = self.request(entity + "/" + urllib.parse.quote(identifier, safe="")).get(entity.title())
+        if not isinstance(result, dict):
+            raise payment_attempts.AttemptError("provider_unconfirmed", "QuickBooks returned incomplete catalog evidence.")
+        return result
+
+    def items(self):
+        predicate = " FROM Item WHERE Active IN (true, false)"
+        def count():
+            result = self.request("query", {"query": "SELECT COUNT(*)" + predicate}).get("QueryResponse")
+            value = result.get("totalCount") if isinstance(result, dict) else None
+            if type(value) is not int or not 0 <= value <= 100000:
+                raise payment_attempts.AttemptError("catalog_incomplete", "The complete QuickBooks catalog could not be counted.")
+            return value
+        expected = count()
+        items, identities = [], set()
+        for start in range(1, expected + 1, 1000):
+            query = "SELECT *" + predicate + " ORDERBY Name STARTPOSITION " + str(start) + " MAXRESULTS 1000"
+            page = self.request("query", {"query": query}).get("QueryResponse")
+            values = page.get("Item") if isinstance(page, dict) else None
+            size = min(1000, expected - start + 1)
+            if (not isinstance(values, list) or len(values) != size
+                or page.get("startPosition", start) != start or page.get("maxResults", size) != size):
+                raise payment_attempts.AttemptError("catalog_incomplete", "QuickBooks catalog pages changed or were incomplete. Refresh before publishing.")
+            for value in values:
+                identifier = value.get("Id") if isinstance(value, dict) else None
+                payment_attempts.reference(identifier)
+                if identifier in identities:
+                    raise payment_attempts.AttemptError("catalog_incomplete", "QuickBooks repeated an item across catalog pages.")
+                identities.add(identifier)
+                items.append(value)
+        if count() != expected:
+            raise payment_attempts.AttemptError("catalog_incomplete", "The QuickBooks catalog changed during comparison. Refresh before publishing.")
+        return items
+
+    def write(self, item, request_id, before_send):
+        if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9-]{1,50}", request_id):
+            raise payment_attempts.AttemptError("invalid_request", "The catalog request identity is invalid.", 400)
+        result = self.request("item", {"requestid": request_id}, item, before_send).get("Item")
+        if not isinstance(result, dict):
+            raise payment_attempts.AttemptError("provider_unconfirmed", "QuickBooks returned incomplete publication evidence.")
+        return result
+
+
+def encrypt_catalog_payload(raw):
+    encryptor = qbo_token_store()
+    if encryptor is None:
+        raise RuntimeError("Catalog encryption is not configured")
+    return encryptor.encrypt(raw.encode()).decode()
+
+
+def decrypt_catalog_payload(ciphertext):
+    encryptor = qbo_token_store()
+    if encryptor is None:
+        return None
+    try:
+        return encryptor.decrypt(ciphertext.encode()).decode()
+    except Exception:
+        return None
+
 
 
 def qbo_token_response(payload: dict[str, object]) -> dict[str, object] | None:
@@ -2223,6 +2351,7 @@ def initialize_database() -> None:
         ensure_column(connection, "field_payment_assignments", "completed_by", "TEXT")
         ensure_column(connection, "field_payment_assignments", "completion_payment_id", "TEXT")
         payment_attempts.initialize_schema(connection)
+        catalog_publications.initialize_schema(connection)
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS customer_communications (
@@ -3266,6 +3395,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/payment-attempts" or parsed.path.startswith("/api/payment-attempts/"):
             self.handle_payment_attempt(parsed, method="GET")
             return
+        if parsed.path == "/api/catalog-publications" or parsed.path.startswith("/api/catalog-publications/"):
+            self.handle_catalog_publication(parsed, method="GET")
+            return
         if parsed.path == "/api/workspace":
             if not self.require_application_session():
                 return
@@ -3458,6 +3590,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/payment-attempts" or parsed.path.startswith("/api/payment-attempts/"):
             self.handle_payment_attempt(parsed, method="POST")
+            return
+        if parsed.path == "/api/catalog-publications" or parsed.path.startswith("/api/catalog-publications/"):
+            self.handle_catalog_publication(parsed, method="POST")
             return
         if parsed.path == "/api/workspace/bind":
             if not self.require_application_session() or not self.require_admin():
@@ -5525,6 +5660,47 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 ).fetchone()
         record_audit_event(actor, "cancel", "field-payment", assignment_id)
         self.write_json({"assignment": field_payment_assignment_record(row)})
+
+    def handle_catalog_publication(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        publisher = catalog_publications.CatalogPublisher(
+            db, CatalogQBOProvider, encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
+        )
+        session_id = self._application_session_id
+        suffix = parsed.path.removeprefix("/api/catalog-publications")
+        parts = suffix.strip("/").split("/") if suffix else []
+        try:
+            if method == "GET" and not parts:
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                if set(query) != {"companyID", "localItemID"} or any(len(value) != 1 for value in query.values()):
+                    raise payment_attempts.AttemptError("invalid_query", "Choose one business catalog item.", 400)
+                result = {"publications": publisher.list_for_item(session_id, query["companyID"][0], query["localItemID"][0])}
+            elif method == "POST" and not parsed.query:
+                payload = json.loads(self.read_limited_body(32768).decode("utf-8"))
+                if not parts:
+                    result = publisher.publish(session_id, payload)
+                elif len(parts) == 2 and isinstance(payload, dict) and not payload:
+                    identifier, action = parts
+                    if action == "recover":
+                        result = publisher.run(session_id, identifier)
+                    elif action == "cancel":
+                        result = publisher.cancel(session_id, identifier)
+                    else:
+                        raise payment_attempts.AttemptError("invalid_action", "Choose recover or cancel for this catalog attempt.", 400)
+                else:
+                    raise payment_attempts.AttemptError("invalid_request", "Use the supported catalog publication fields only.", 400)
+            else:
+                raise payment_attempts.AttemptError("not_found", "Catalog action not found.", 404)
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError):
+            self.write_json({"error": "Invalid catalog publication request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Catalog publication storage is unavailable. Review the original attempt before retrying.",
+                             "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+
 
     def handle_payment_attempt(self, parsed, *, method):
         if not self.require_application_session():

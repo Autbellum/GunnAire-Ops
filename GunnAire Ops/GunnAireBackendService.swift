@@ -762,6 +762,51 @@ enum GunnAireBackendService {
     }
 
 
+    private struct CatalogPublicationList: Decodable { let publications: [CatalogPublicationRecord] }
+
+    static func publishCatalog(_ request: CatalogPublicationRequest) async throws -> CatalogPublicationResponse {
+        do {
+            let data = try await send(path: "/api/catalog-publications", method: "POST", body: JSONEncoder().encode(request))
+            let result = try JSONDecoder().decode(CatalogPublicationResponse.self, from: data)
+            try result.validate(companyID: request.companyID, realmID: request.realmID,
+                                environment: request.environment, itemID: request.localItemID)
+            return result
+        } catch { throw catalogError(error) }
+    }
+
+    static func catalogPublications(companyID: UUID, itemID: UUID) async throws -> [CatalogPublicationRecord] {
+        do {
+            let path = "/api/catalog-publications?companyID=\(companyID.uuidString.lowercased())&localItemID=\(itemID.uuidString.lowercased())"
+            return try JSONDecoder().decode(CatalogPublicationList.self, from: await send(path: path, method: "GET")).publications
+        } catch { throw catalogError(error) }
+    }
+
+    static func recoverCatalogPublication(_ id: UUID) async throws -> CatalogPublicationResponse {
+        do {
+            return try JSONDecoder().decode(CatalogPublicationResponse.self,
+                from: await send(path: "/api/catalog-publications/\(id.uuidString.lowercased())/recover",
+                                 method: "POST", body: Data("{}".utf8)))
+        } catch { throw catalogError(error) }
+    }
+
+    static func cancelCatalogPublication(_ id: UUID) async throws {
+        do {
+            _ = try await send(path: "/api/catalog-publications/\(id.uuidString.lowercased())/cancel",
+                               method: "POST", body: Data("{}".utf8))
+        } catch { throw catalogError(error) }
+    }
+
+    private static func catalogError(_ error: Error) -> CatalogPublicationError {
+        if let error = error as? CatalogPublicationError { return error }
+        if case GunnAireBackendError.server(let status, _) = error {
+            if status == 400 { return .invalidProposal }
+            if status == 409 { return .needsReview }
+            if status == 401 || status == 403 { return .accessRequired }
+        }
+        return .unavailable
+    }
+
+
     private struct PaymentAttemptEnvelope: Decodable { let attempt: PaymentAttemptRecord }
     private struct PaymentAttemptListEnvelope: Decodable { let attempts: [PaymentAttemptRecord] }
 
