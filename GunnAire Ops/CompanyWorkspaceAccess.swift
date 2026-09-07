@@ -221,6 +221,11 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         return container
     }
 
+    var operationStamp: CompanyWorkspaceOperationStamp? {
+        guard authorizedContainer != nil, let lease = activeLease else { return nil }
+        return CompanyWorkspaceOperationStamp(generation: generation, session: lease.session)
+    }
+
     func invalidate(accountChanged: Bool = false, reason: CompanyWorkspaceFailure = .signIn, preserveCachedLease: Bool = false) {
         generation = UUID()
         refreshTask?.task.cancel()

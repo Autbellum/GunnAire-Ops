@@ -1,4 +1,17 @@
-2026-09-06 workspace-access candidate: **743/743 iPad logic tests, 6/6 focused
+2026-09-06 provider-request checkpoint: **765/765 logic tests on both iPad and
+Mac Catalyst, 6/6 focused iPad UI journeys, and a successful universal Mac
+Release build**. Direct QBO/Google requests now retain the verified workspace
+and initiating provider identity across refresh, retries, pages and Drive
+upload recovery; late responses cannot clear replacement credentials. The
+transport tests also exposed and corrected the QBO nested attachment-response
+decoder. See [PROVIDER_WORKSPACE_LIFECYCLE.md](PROVIDER_WORKSPACE_LIFECYCLE.md)
+for exact evidence and scope. Higher-level retained-context workflows, durable
+uncertain-payment attempts, legacy raw-response diagnostics, role enforcement,
+historical statements and signed CloudKit/production acceptance remain open.
+This is verified progress, not full application or payment readiness. No merge,
+deployment, signing change, production approval or physical install occurred.
+
+Prior 2026-09-06 workspace-access candidate: **743/743 iPad logic tests, 6/6 focused
 iPad UI journeys, and successful Mac Catalyst Debug/Release builds**. Startup,
 login, Shortcuts and own-backend business requests now require company/store
 proof; existing unregistered data needs explicit fresh-admin approval. Leases

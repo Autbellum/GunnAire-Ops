@@ -403,4 +403,24 @@ struct CompanyWorkspaceAccessTests {
         #expect(controller.generation != original && controller.authorizedContainer == nil)
         #expect(h.lease == nil && h.registration != nil && h.clearedContinuations == 1)
     }
+
+    @Test func providerStampTracksApprovedSessionRoleAndExpiration() async throws {
+        let h = try Harness(); h.register()
+        let controller = h.controller()
+        #expect(controller.operationStamp == nil)
+        await controller.refresh()
+        let stamp = try #require(controller.operationStamp)
+        let operation = WorkspaceProviderOperation { controller.operationStamp == stamp }
+        #expect(operation.failure == nil)
+        await controller.refresh()
+        #expect(operation.failure == nil)
+        h.user = BackendAppUserRecord(email: h.user.email, role: "Standard", isActive: true, createdAt: nil)
+        await controller.refresh()
+        #expect(operation.failure == .changed(mayHaveReachedProvider: false))
+        let renewed = try #require(controller.operationStamp)
+        let next = WorkspaceProviderOperation { controller.operationStamp == renewed }
+        h.now = h.now.addingTimeInterval(86_400)
+        #expect(next.failure == .changed(mayHaveReachedProvider: false))
+        #expect(controller.operationStamp == nil)
+    }
 }

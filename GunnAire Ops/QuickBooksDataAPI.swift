@@ -104,7 +104,12 @@ enum QuickBooksUploadResponsePolicy {
             throw QuickBooksProviderResponseError.missingAttachment
         }
         let response = try JSONDecoder().decode(QuickBooksUploadResponse.self, from: data)
-        guard let attachment = response.AttachableResponse.first else {
+        // This endpoint sends exactly one file. Each upload result wraps an
+        // Attachable or a Fault; HTTP success alone does not confirm the file.
+        guard response.AttachableResponse.count == 1,
+              let result = response.AttachableResponse.first,
+              result.Fault == nil,
+              let attachment = result.Attachable else {
             throw QuickBooksProviderResponseError.missingAttachment
         }
         return try QuickBooksProviderResponsePolicy.requiredIdentifier(
@@ -127,6 +132,9 @@ final class QuickBooksDataAPI: ObservableObject {
     @Published private(set) var lastRejectedEnvironment: String?
 
     private var tokenRefreshTimer: AnyCancellable?
+    private var connectionGeneration = UUID()
+    private let requestTransport: WorkspaceProviderOperation.Transport
+    private let persistsCredentials: Bool
     private let clientId = Config.QuickBooks.clientID
     private let realmIDKey = "QuickBooksRealmID"
     // Legacy builds stored a long-lived refresh token in this UserDefaults key.
@@ -136,9 +144,26 @@ final class QuickBooksDataAPI: ObservableObject {
     private let minorVersion = "75"
 
     private init() {
+        requestTransport = { try await URLSession.shared.data(for: $0) }
+        persistsCredentials = true
         loadTokens()
         startAutomaticTokenRefresh()
     }
+
+    #if DEBUG
+    /// Isolated provider tests never read/write real credentials or start a
+    /// refresh timer. Requests must use the explicitly supplied transport.
+    init(testTokens: QuickBooksOAuthTokens, realmID: String, environment: String,
+         transport: @escaping WorkspaceProviderOperation.Transport) {
+        precondition(GunnAireCloudKit.usesTestDatabase)
+        requestTransport = transport
+        persistsCredentials = false
+        tokens = testTokens
+        storedRealmID = realmID
+        storedEnvironment = environment
+        storedScopeSignature = "com.intuit.quickbooks.accounting com.intuit.quickbooks.payment"
+    }
+    #endif
 
     private var baseURL: String {
         let env = (storedEnvironment ?? Config.QuickBooks.environment).lowercased()
@@ -283,6 +308,7 @@ final class QuickBooksDataAPI: ObservableObject {
     }
 
     func storeTokens(_ tokens: QuickBooksOAuthTokens, realmID: String) {
+        connectionGeneration = UUID()
         storeTokens(tokens, realmID: realmID, authorizedScopeSignature: QuickBooksDataAPI.currentScopeSignature)
     }
 
@@ -292,6 +318,7 @@ final class QuickBooksDataAPI: ObservableObject {
         self.storedRealmID = normalizedRealmID.isEmpty ? nil : normalizedRealmID
         self.storedEnvironment = Config.QuickBooks.environment
         self.storedScopeSignature = authorizedScopeSignature
+        guard persistsCredentials else { return }
         guard !normalizedRealmID.isEmpty else {
             UserDefaults.standard.removeObject(forKey: realmIDKey)
             return
@@ -312,6 +339,8 @@ final class QuickBooksDataAPI: ObservableObject {
     }
 
     func loadTokens() {
+        connectionGeneration = UUID()
+        guard persistsCredentials else { return }
         if let payload = try? KeychainStore.loadCodable(QuickBooksKeychainPayload.self, account: keychainAccount) {
             guard savedPayloadMatchesCurrentConfiguration(payload) else {
                 lastAuthorizationFailureDetail = "Saved QuickBooks session was created by a different Intuit client, redirect URI, or sandbox/production environment. Reconnect once with the production Intuit app settings in this build."
@@ -343,6 +372,7 @@ final class QuickBooksDataAPI: ObservableObject {
     }
 
     func clearTokens(clearAuthorizationFailure: Bool = true) {
+        connectionGeneration = UUID()
         tokens = nil
         storedRealmID = nil
         storedEnvironment = nil
@@ -353,6 +383,7 @@ final class QuickBooksDataAPI: ObservableObject {
             lastRejectedRealmID = nil
             lastRejectedEnvironment = nil
         }
+        guard persistsCredentials else { return }
         try? KeychainStore.remove(account: keychainAccount)
         UserDefaults.standard.removeObject(forKey: legacyTokenStorageKey)
         UserDefaults.standard.removeObject(forKey: realmIDKey)
@@ -390,8 +421,14 @@ final class QuickBooksDataAPI: ObservableObject {
     }
 
     private func refreshAccessToken(completion: @escaping (Bool) -> Void) {
+        let generation = connectionGeneration
+        let context = retryContext
         Task { @MainActor in
             do {
+                let operation = try captureProviderOperation()
+                guard connectionGeneration == generation, retryContext == context else {
+                    throw WorkspaceProviderAccessError.changed(mayHaveReachedProvider: false)
+                }
                 guard let realmID = self.realmID else {
                     self.lastRefreshFailureDetail = "QuickBooks token refresh succeeded, but the app could not read the saved company realm. Reconnect QuickBooks."
                     self.clearTokens(clearAuthorizationFailure: false)
@@ -402,11 +439,14 @@ final class QuickBooksDataAPI: ObservableObject {
                     realmID: realmID,
                     environment: self.currentEnvironment
                 )
+                try operation.check()
                 self.lastRefreshFailureDetail = nil
                 self.storeTokens(refreshed, realmID: realmID, authorizedScopeSignature: self.storedScopeSignature)
                 self.completeOnMain(completion, value: true)
             } catch {
-                self.lastRefreshFailureDetail = "QuickBooks token refresh through the secure backend failed: \(error.localizedDescription)"
+                if self.connectionGeneration == generation, self.retryContext == context {
+                    self.lastRefreshFailureDetail = "QuickBooks token refresh through the secure backend failed: \(error.localizedDescription)"
+                }
                 self.completeOnMain(completion, value: false)
             }
         }
@@ -663,6 +703,14 @@ final class QuickBooksDataAPI: ObservableObject {
         QuickBooksRetryContext(realmID: realmID, environment: currentEnvironment)
     }
 
+    private func captureProviderOperation() throws -> WorkspaceProviderOperation {
+        let generation = connectionGeneration
+        let context = retryContext
+        return try WorkspaceProviderOperation.capture {
+            self.isAuthenticated && self.connectionGeneration == generation && self.retryContext == context
+        }
+    }
+
     private func requestWithCurrentAuthorization(
         _ request: URLRequest?,
         originalContext: QuickBooksRetryContext
@@ -682,10 +730,15 @@ final class QuickBooksDataAPI: ObservableObject {
         completion: @escaping (Result<T, Error>) -> Void,
         attempt: Int = 0,
         preparedRequest: URLRequest? = nil,
-        originalContext: QuickBooksRetryContext? = nil
+        originalContext: QuickBooksRetryContext? = nil,
+        operation: WorkspaceProviderOperation? = nil
     ) {
+        let access: WorkspaceProviderOperation
+        do { access = try operation ?? captureProviderOperation(); try access.check() }
+        catch { completion(.failure(error)); return }
         let typeBox = DecodableTypeBox(type: type)
         refreshTokensIfNeeded { ok in
+            if let error = access.failure { completion(.failure(error)); return }
             let context = originalContext ?? self.retryContext
             guard ok, let request = self.requestWithCurrentAuthorization(
                 preparedRequest ?? requestBuilder(), originalContext: context
@@ -694,22 +747,24 @@ final class QuickBooksDataAPI: ObservableObject {
                 return
             }
 
-            URLSession.shared.dataTask(with: request) { data, response, error in
+            access.send(request, transport: self.requestTransport) { data, response, error in
                 if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
-                    DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                         self.performAuthorizedDecodingRequest(
                             requestBuilder,
                             decode: typeBox.type,
                             completion: completion,
                             attempt: attempt + 1,
                             preparedRequest: request,
-                            originalContext: context
+                            originalContext: context,
+                            operation: access
                         )
                     }
                     return
                 }
 
                 Task { @MainActor in
+                    if let error = access.failure { completion(.failure(error)); return }
                     if let error {
                         completion(.failure(error))
                         return
@@ -733,7 +788,7 @@ final class QuickBooksDataAPI: ObservableObject {
                         completion(.failure(QBError.decodingDetail("\(error.localizedDescription). Raw response: \(sample)")))
                     }
                 }
-            }.resume()
+            }
         }
     }
 
@@ -745,6 +800,9 @@ final class QuickBooksDataAPI: ObservableObject {
         identifier: @escaping (Entity) -> String,
         completion: @escaping (Result<[Entity], Error>) -> Void
     ) {
+        let operation: WorkspaceProviderOperation
+        do { operation = try captureProviderOperation() }
+        catch { completion(.failure(error)); return }
         var accumulated: [Entity] = []
         var seenIdentifiers: Set<String> = []
 
@@ -755,8 +813,8 @@ final class QuickBooksDataAPI: ObservableObject {
             )
             performAuthorizedDecodingRequest(
                 { self.makeQueryRequest(query) },
-                decode: type
-            ) { result in
+                decode: type,
+                completion: { result in
                 switch result {
                 case .failure(let error):
                     completion(.failure(error))
@@ -793,7 +851,7 @@ final class QuickBooksDataAPI: ObservableObject {
                     }
                     fetchPage(startPosition: nextStart, pageNumber: pageNumber + 1)
                 }
-            }
+            }, operation: operation)
         }
 
         fetchPage(startPosition: 1, pageNumber: 1)
@@ -805,14 +863,19 @@ final class QuickBooksDataAPI: ObservableObject {
         completion: @escaping (Result<T, Error>) -> Void,
         attempt: Int = 0,
         preparedRequest: URLRequest? = nil,
-        originalContext: QuickBooksRetryContext? = nil
+        originalContext: QuickBooksRetryContext? = nil,
+        operation: WorkspaceProviderOperation? = nil
     ) {
+        let access: WorkspaceProviderOperation
+        do { access = try operation ?? captureProviderOperation(); try access.check() }
+        catch { completion(.failure(error)); return }
         if let scopeError = paymentsScopeReadinessError() {
             completion(.failure(scopeError))
             return
         }
         let typeBox = DecodableTypeBox(type: type)
         refreshTokensIfNeeded { ok in
+            if let error = access.failure { completion(.failure(error)); return }
             let context = originalContext ?? self.retryContext
             guard ok, let request = self.requestWithCurrentAuthorization(
                 preparedRequest ?? requestBuilder(), originalContext: context
@@ -821,22 +884,24 @@ final class QuickBooksDataAPI: ObservableObject {
                 return
             }
 
-            URLSession.shared.dataTask(with: request) { data, response, error in
+            access.send(request, transport: self.requestTransport) { data, response, error in
                 if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
-                    DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                         self.performPaymentsDecodingRequest(
                             requestBuilder,
                             decode: typeBox.type,
                             completion: completion,
                             attempt: attempt + 1,
                             preparedRequest: request,
-                            originalContext: context
+                            originalContext: context,
+                            operation: access
                         )
                     }
                     return
                 }
 
                 Task { @MainActor in
+                    if let error = access.failure { completion(.failure(error)); return }
                     if let error {
                         completion(.failure(error))
                         return
@@ -860,7 +925,7 @@ final class QuickBooksDataAPI: ObservableObject {
                         completion(.failure(QBError.decodingDetail("\(error.localizedDescription). Raw response: \(sample)")))
                     }
                 }
-            }.resume()
+            }
         }
     }
 
@@ -1826,7 +1891,12 @@ final class QuickBooksDataAPI: ObservableObject {
         attachableReferences: [QuickBooksAttachableReference],
         completion: @escaping (Result<String, Error>) -> Void
     ) {
+        let operation: WorkspaceProviderOperation
+        do { operation = try captureProviderOperation() }
+        catch { completion(.failure(error)); return }
+        let context = retryContext
         refreshTokensIfNeeded { ok in
+            if let error = operation.failure { completion(.failure(error)); return }
             guard ok else {
                 completion(.failure(QBError.unauthorized))
                 return
@@ -1870,7 +1940,7 @@ final class QuickBooksDataAPI: ObservableObject {
                 return
             }
 
-            self.performUploadDocumentRequest(request, completion: completion, originalContext: self.retryContext)
+            self.performUploadDocumentRequest(request, completion: completion, originalContext: context, operation: operation)
         }
     }
 
@@ -1878,28 +1948,35 @@ final class QuickBooksDataAPI: ObservableObject {
         _ preparedRequest: URLRequest,
         completion: @escaping (Result<String, Error>) -> Void,
         attempt: Int = 0,
-        originalContext: QuickBooksRetryContext
+        originalContext: QuickBooksRetryContext,
+        operation: WorkspaceProviderOperation? = nil
     ) {
+        let access: WorkspaceProviderOperation
+        do { access = try operation ?? captureProviderOperation(); try access.check() }
+        catch { completion(.failure(error)); return }
         refreshTokensIfNeeded { ok in
+            if let error = access.failure { completion(.failure(error)); return }
             guard ok, let request = self.requestWithCurrentAuthorization(
                 preparedRequest, originalContext: originalContext
             ) else {
                 completion(.failure(QBError.unauthorized))
                 return
             }
-            URLSession.shared.dataTask(with: request) { data, response, error in
+            access.send(request, transport: self.requestTransport) { data, response, error in
                 if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
-                    DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                         self.performUploadDocumentRequest(
                             request,
                             completion: completion,
                             attempt: attempt + 1,
-                            originalContext: originalContext
+                            originalContext: originalContext,
+                            operation: access
                         )
                     }
                     return
                 }
                 Task { @MainActor in
+                    if let error = access.failure { completion(.failure(error)); return }
                     if let error {
                         completion(.failure(error))
                         return
@@ -1921,7 +1998,7 @@ final class QuickBooksDataAPI: ObservableObject {
                         )))
                     }
                 }
-            }.resume()
+            }
         }
     }
 
@@ -2042,13 +2119,18 @@ private extension QuickBooksDataAPI {
         completion: @escaping (Result<QuickBooksPaymentsTokenResponse, Error>) -> Void,
         attempt: Int = 0,
         preparedRequest: URLRequest? = nil,
-        originalContext: QuickBooksRetryContext? = nil
+        originalContext: QuickBooksRetryContext? = nil,
+        operation: WorkspaceProviderOperation? = nil
     ) {
+        let access: WorkspaceProviderOperation
+        do { access = try operation ?? captureProviderOperation(); try access.check() }
+        catch { completion(.failure(error)); return }
         if let scopeError = paymentsScopeReadinessError() {
             completion(.failure(scopeError))
             return
         }
         refreshTokensIfNeeded { ok in
+            if let error = access.failure { completion(.failure(error)); return }
             let context = originalContext ?? self.retryContext
             guard ok, let request = self.requestWithCurrentAuthorization(
                 preparedRequest ?? requestBuilder(), originalContext: context
@@ -2057,20 +2139,22 @@ private extension QuickBooksDataAPI {
                 return
             }
 
-            URLSession.shared.dataTask(with: request) { data, response, error in
+            access.send(request, transport: self.requestTransport) { data, response, error in
                 if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
-                    DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                         self.performPaymentsTokenRequest(
                             requestBuilder,
                             completion: completion,
                             attempt: attempt + 1,
                             preparedRequest: request,
-                            originalContext: context
+                            originalContext: context,
+                            operation: access
                         )
                     }
                     return
                 }
                 Task { @MainActor in
+                    if let error = access.failure { completion(.failure(error)); return }
                     if let error {
                         completion(.failure(error))
                         return
@@ -2096,7 +2180,7 @@ private extension QuickBooksDataAPI {
                     }
                     completion(.failure(QBError.decodingDetail("Unable to find a token value in QuickBooks Payments response. Raw response: \(raw.prefix(8000))")))
                 }
-            }.resume()
+            }
         }
     }
 
@@ -2105,13 +2189,18 @@ private extension QuickBooksDataAPI {
         completion: @escaping (Result<QuickBooksPaymentsChargeResponse, Error>) -> Void,
         attempt: Int = 0,
         preparedRequest: URLRequest? = nil,
-        originalContext: QuickBooksRetryContext? = nil
+        originalContext: QuickBooksRetryContext? = nil,
+        operation: WorkspaceProviderOperation? = nil
     ) {
+        let access: WorkspaceProviderOperation
+        do { access = try operation ?? captureProviderOperation(); try access.check() }
+        catch { completion(.failure(error)); return }
         if let scopeError = paymentsScopeReadinessError() {
             completion(.failure(scopeError))
             return
         }
         refreshTokensIfNeeded { ok in
+            if let error = access.failure { completion(.failure(error)); return }
             let context = originalContext ?? self.retryContext
             guard ok, let request = self.requestWithCurrentAuthorization(
                 preparedRequest ?? requestBuilder(), originalContext: context
@@ -2120,20 +2209,22 @@ private extension QuickBooksDataAPI {
                 return
             }
 
-            URLSession.shared.dataTask(with: request) { data, response, error in
+            access.send(request, transport: self.requestTransport) { data, response, error in
                 if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
-                    DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                         self.performPaymentsChargeRequest(
                             requestBuilder,
                             completion: completion,
                             attempt: attempt + 1,
                             preparedRequest: request,
-                            originalContext: context
+                            originalContext: context,
+                            operation: access
                         )
                     }
                     return
                 }
                 Task { @MainActor in
+                    if let error = access.failure { completion(.failure(error)); return }
                     if let error {
                         completion(.failure(error))
                         return
@@ -2166,7 +2257,7 @@ private extension QuickBooksDataAPI {
 
                     completion(.failure(QBError.decodingDetail("Unable to parse QuickBooks Payments charge response. Raw response: \(raw.prefix(8000)). Headers: \(Self.headerSummary(response))")))
                 }
-            }.resume()
+            }
         }
     }
 
@@ -4935,12 +5026,17 @@ struct QuickBooksAttachableEntityRef: Codable {
     let value: String
 }
 
-struct QuickBooksUploadResponse: Codable {
-    let AttachableResponse: [QuickBooksAttachable]
+struct QuickBooksUploadResponse: Decodable {
+    let AttachableResponse: [QuickBooksUploadResult]
+}
+
+struct QuickBooksUploadResult: Decodable {
+    let Attachable: QuickBooksAttachable?
+    let Fault: QuickBooksFault?
 }
 
 struct QuickBooksAttachable: Codable {
-    let Id: String
+    let Id: String?
 }
 
 private extension Data {

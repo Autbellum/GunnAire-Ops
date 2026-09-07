@@ -1743,7 +1743,7 @@ struct PaymentsAndReceiptsView: View {
                 resetPaymentForm()
                 showingRecordPaymentSheet = false
             } catch {
-                actionMessage = "QuickBooks payment failed: \(error.localizedDescription)"
+                actionMessage = "QuickBooks payment needs review: \(error.localizedDescription)"
             }
             return
         }
@@ -1793,7 +1793,7 @@ struct PaymentsAndReceiptsView: View {
                 resetPaymentForm()
                 showingRecordPaymentSheet = false
             } catch {
-                actionMessage = "QuickBooks ACH payment failed: \(error.localizedDescription)"
+                actionMessage = "QuickBooks ACH payment needs review: \(error.localizedDescription)"
             }
             return
         }

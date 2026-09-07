@@ -2,6 +2,9 @@
 
 Status: server contract, native startup/store gate, explicit onboarding,
 Shortcuts gate, backend-request checks and bounded offline lease implemented.
+Direct-provider request checks are now implemented and verified separately in
+[PROVIDER_WORKSPACE_LIFECYCLE.md](PROVIDER_WORKSPACE_LIFECYCLE.md); the remaining
+higher-level retained-context and payment-recovery boundaries are explicit there.
 **End-to-end company isolation and signed-device acceptance remain open.**
 Nothing has been deployed, rebound, or migrated in production. Deploy and verify
 backend `2026.09.06.20` before distributing this native candidate; older backends
@@ -128,9 +131,11 @@ the API, so a configured URL path prefix does not turn login into a gated call.
 
 ## Remaining isolation and operational acceptance
 
-- Audit direct Google/QuickBooks request callbacks, retries and retained model
-  contexts against the same access generation. The own-backend request gate is
-  implemented; it is not proof that every direct provider callback is covered.
+- Audit higher-level Google/QuickBooks workflows and retained model contexts
+  across callback/async delivery. The direct transport, pagination, retry and
+  upload boundaries are now guarded, but they do not prove that an old retained
+  model cannot start a new operation after a session change. Durable unconfirmed
+  payment-attempt recovery also remains open.
 - Prove the lifetime of SwiftData/Core Data mirroring after an account change
   and queued writes on a physical device. Removing UI/container references does
   not by itself prove that internal mirroring has drained or detached.
@@ -171,7 +176,7 @@ and admin, retained legacy data and explicit confirmation, empty approved-device
 creation, account/origin/company mismatch, SQLite metadata stability, offline
 lease boundaries, HTTP-denial behavior, concurrent checks, late-session results,
 clock rollback, expiry without navigation, permission changes and revocation.
-Current-source local verification: **743/743 logic tests and 6/6 UI journeys**
+Entry-boundary checkpoint verification: **743/743 logic tests and 6/6 UI journeys**
 on the 13-inch M5 iPad Simulator (iOS 26.2), zero failures or skipped tests.
 The six journeys cover the mismatched-workspace gate and sign-out recovery,
 all primary admin destinations, existing-invoice line-item editing, direct

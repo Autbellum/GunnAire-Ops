@@ -25991,7 +25991,7 @@ struct GunnAire_OpsTests {
     }
 
     @Test func quickBooksAttachmentUploadRequiresConfirmedAttachableIdentifier() throws {
-        let confirmed = Data(#"{"AttachableResponse":[{"Id":"  attachment-42  "}]}"#.utf8)
+        let confirmed = Data(#"{"AttachableResponse":[{"Attachable":{"Id":"  attachment-42  "}}]}"#.utf8)
         #expect(try QuickBooksUploadResponsePolicy.attachmentID(from: confirmed) == "attachment-42")
 
         #expect(throws: QuickBooksProviderResponseError.self) {
@@ -26001,7 +26001,7 @@ struct GunnAire_OpsTests {
         }
         #expect(throws: QuickBooksProviderResponseError.self) {
             try QuickBooksUploadResponsePolicy.attachmentID(
-                from: Data(#"{"AttachableResponse":[{"Id":" "}]}"#.utf8)
+                from: Data(#"{"AttachableResponse":[{"Attachable":{"Id":" "}}]}"#.utf8)
             )
         }
     }

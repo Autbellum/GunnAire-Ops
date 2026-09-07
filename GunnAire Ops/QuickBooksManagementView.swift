@@ -4325,7 +4325,7 @@ struct QuickBooksManagementView: View {
                     }
                 } catch {
                     await MainActor.run {
-                        actionMessage = "QuickBooks card charge failed: \(error.localizedDescription)"
+                        actionMessage = "QuickBooks card charge needs review: \(error.localizedDescription)"
                         isLoading = false
                     }
                 }

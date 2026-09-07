@@ -356,20 +356,42 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     private var activePresentationContext: ASWebAuthenticationPresentationContextProviding?
     private var pendingOAuthState: String?
     private var pendingCodeVerifier: String?
+    private var connectionGeneration = UUID()
+    private let requestTransport: WorkspaceProviderOperation.Transport
+    private let persistsCredentials: Bool
+    private let businessEmailProvider: () -> String?
 
     private let tokenStorageKey = "GoogleOAuthTokens"
     private let keychainAccount = "GoogleOAuthTokens"
     private let applicationSessionKeychainAccount = "GunnAireGoogleApplicationSession"
 
     private override init() {
+        requestTransport = { try await URLSession.shared.data(for: $0) }
+        persistsCredentials = true
+        businessEmailProvider = { AppIdentity.currentEmail }
         super.init()
         loadTokens()
         loadApplicationSession()
     }
 
+#if DEBUG
+    /// Isolated request-handler fixtures never load or modify real credentials.
+    init(testTokens: GoogleOAuthTokens, email: String,
+         businessEmail: @escaping () -> String?,
+         transport: @escaping WorkspaceProviderOperation.Transport) {
+        precondition(GunnAireCloudKit.usesTestDatabase)
+        requestTransport = transport
+        persistsCredentials = false
+        businessEmailProvider = businessEmail
+        super.init()
+        signedInEmail = email
+        applyTokens(testTokens)
+    }
+#endif
+
     var canUseCurrentBusinessIdentity: Bool {
         isAuthenticated && GoogleAccountLinkPolicy.canUseIntegration(
-            primaryBusinessEmail: AppIdentity.currentEmail,
+            primaryBusinessEmail: businessEmailProvider(),
             googleEmail: signedInEmail
         )
     }
@@ -388,7 +410,17 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         canUseCurrentBusinessIdentity ? nil : .businessAccountMismatch
     }
 
+    func captureProviderOperation(requiresWorkspace: Bool = true) throws -> WorkspaceProviderOperation {
+        let generation = connectionGeneration
+        return try WorkspaceProviderOperation.capture(requiresWorkspace: requiresWorkspace) {
+            self.isAuthenticated && self.connectionGeneration == generation &&
+            (!requiresWorkspace || self.canUseCurrentBusinessIdentity)
+        }
+    }
+
     func signOut() {
+        connectionGeneration = UUID()
+        activeAuthSession?.cancel()
         let tokenToRevoke = applicationSessionToken
         isAuthenticated = false
         accessToken = nil
@@ -400,9 +432,11 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         pendingOAuthState = nil
         activeAuthSession = nil
         activePresentationContext = nil
-        try? KeychainStore.remove(account: keychainAccount)
-        UserDefaults.standard.removeObject(forKey: tokenStorageKey)
-        UserDefaults.standard.removeObject(forKey: Self.signedInEmailStorageKey)
+        if persistsCredentials {
+            try? KeychainStore.remove(account: keychainAccount)
+            UserDefaults.standard.removeObject(forKey: tokenStorageKey)
+            UserDefaults.standard.removeObject(forKey: Self.signedInEmailStorageKey)
+        }
         clearApplicationSession()
         if let tokenToRevoke, !tokenToRevoke.isEmpty {
             Task {
@@ -415,12 +449,17 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     func establishBusinessApplicationSession(
         for profile: GoogleUserProfile
     ) async throws -> BackendAppUserRecord {
+        let generation = connectionGeneration
         guard let identityToken = idToken, !identityToken.isEmpty else {
             throw GoogleAuthError.missingIdentityToken
         }
         let response = try await GunnAireBackendService.exchangeGoogleIdentity(
             identityToken: identityToken
         )
+        guard self.connectionGeneration == generation, self.idToken == identityToken else {
+            try? await GunnAireBackendService.revokeApplicationSession(response.sessionToken)
+            throw WorkspaceProviderAccessError.changed(mayHaveReachedProvider: false)
+        }
         let profileEmail = AppAccess.normalizedEmail(profile.email)
         let responseEmail = AppAccess.normalizedEmail(response.user.email)
         guard response.providerSubject == profile.sub,
@@ -446,6 +485,9 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     }
 
     func startSignIn(presentationContext: ASWebAuthenticationPresentationContextProviding, completion: @escaping (Result<Void, Error>) -> Void) {
+        connectionGeneration = UUID()
+        let generation = connectionGeneration
+        activeAuthSession?.cancel()
         guard !Config.Google.clientID.hasPrefix("YOUR_") else {
             completion(.failure(GoogleAuthError.missingConfiguration))
             return
@@ -471,16 +513,20 @@ final class GoogleAuthManager: NSObject, ObservableObject {
             url: authURL,
             callbackURLScheme: Self.callbackScheme
         ) { [weak self] callbackURL, error in
+            guard let self, self.connectionGeneration == generation else {
+                completion(.failure(WorkspaceProviderAccessError.changed(mayHaveReachedProvider: false)))
+                return
+            }
             defer {
-                self?.activeAuthSession = nil
-                self?.activePresentationContext = nil
+                self.activeAuthSession = nil
+                self.activePresentationContext = nil
             }
             if let error = error as? ASWebAuthenticationSessionError,
                error.code == .canceledLogin {
                 completion(.failure(GoogleAuthError.authenticationSessionCanceled))
                 return
             }
-            guard let self = self, let callbackURL = callbackURL else {
+            guard let callbackURL = callbackURL else {
                 completion(.failure(error ?? GoogleAuthError.unknown))
                 return
             }
@@ -550,8 +596,13 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         }
         pendingCodeVerifier = nil
 
+        let generation = connectionGeneration
         exchangeAuthorizationCode(code: code, codeVerifier: codeVerifier) { result in
             DispatchQueue.main.async {
+                guard self.connectionGeneration == generation else {
+                    completion(.failure(WorkspaceProviderAccessError.changed(mayHaveReachedProvider: false)))
+                    return
+                }
                 switch result {
                 case .success(let tokens):
                     self.storeTokens(tokens)
@@ -581,7 +632,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         ]
         request.httpBody = params.percentEncoded().data(using: .utf8)
 
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        sendOAuthRequest(request) { data, response, error in
             Task { @MainActor in
                 if let error {
                     completion(.failure(error))
@@ -616,7 +667,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                 )
                 completion(.success(tokens))
             }
-        }.resume()
+        }
     }
 
     func refreshTokensIfNeeded(completion: @escaping (Result<Void, Error>) -> Void) {
@@ -636,6 +687,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     }
 
     private func refreshAccessToken(refreshToken: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        let generation = connectionGeneration
         guard let url = URL(string: Config.Google.tokenEndpoint) else {
             completion(.failure(GoogleAuthError.invalidEndpoint))
             return
@@ -649,8 +701,12 @@ final class GoogleAuthManager: NSObject, ObservableObject {
             "grant_type": "refresh_token"
         ].percentEncoded().data(using: .utf8)
 
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        sendOAuthRequest(request) { data, response, error in
             Task { @MainActor in
+                guard self.connectionGeneration == generation, self.refreshToken == refreshToken else {
+                    completion(.failure(WorkspaceProviderAccessError.changed(mayHaveReachedProvider: false)))
+                    return
+                }
                 if let error {
                     completion(.failure(error))
                     return
@@ -684,14 +740,30 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                 self.storeTokens(merged)
                 completion(.success(()))
             }
-        }.resume()
+        }
+    }
+
+    /// OAuth remains available before workspace proof. Only its initiating
+    /// connection may send or receive the result, including after cancellation.
+    private func sendOAuthRequest(
+        _ request: URLRequest,
+        completion: @escaping (Data?, URLResponse?, Error?) -> Void
+    ) {
+        let generation = connectionGeneration
+        let operation = WorkspaceProviderOperation { self.connectionGeneration == generation }
+        operation.send(request, transport: requestTransport, completion: completion)
     }
 
     func fetchUserProfile(completion: @escaping (Result<GoogleUserProfile, Error>) -> Void) {
-        authorizedGET("https://www.googleapis.com/oauth2/v3/userinfo") { (result: Result<GoogleUserProfile, Error>) in
+        let generation = connectionGeneration
+        authorizedGET("https://www.googleapis.com/oauth2/v3/userinfo", identityBootstrap: true) { (result: Result<GoogleUserProfile, Error>) in
             switch result {
             case .success(let profile):
                 DispatchQueue.main.async {
+                    guard self.connectionGeneration == generation else {
+                        completion(.failure(WorkspaceProviderAccessError.changed(mayHaveReachedProvider: false)))
+                        return
+                    }
                     self.rememberSignedInEmail(profile.email)
                     completion(.success(profile))
                 }
@@ -702,8 +774,13 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     }
 
     func validateSignedInDomain(completion: @escaping (Result<GoogleUserProfile, Error>) -> Void) {
+        let generation = connectionGeneration
         fetchUserProfile { result in
             DispatchQueue.main.async {
+                guard self.connectionGeneration == generation else {
+                    completion(.failure(WorkspaceProviderAccessError.changed(mayHaveReachedProvider: false)))
+                    return
+                }
                 switch result {
                 case .success(let profile):
                     guard self.isAllowed(profile: profile) else {
@@ -713,7 +790,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                     }
                     self.rememberSignedInEmail(profile.email)
                     guard GoogleAccountLinkPolicy.canUseIntegration(
-                        primaryBusinessEmail: AppIdentity.currentEmail,
+                        primaryBusinessEmail: self.businessEmailProvider(),
                         googleEmail: profile.email
                     ) else {
                         self.signOut()
@@ -786,9 +863,13 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         accumulated: [GoogleCalendar],
         seenPageTokens: Set<String>,
         completedPageCount: Int,
+        existingOperation: WorkspaceProviderOperation? = nil,
         completion: @escaping (Result<[GoogleCalendar], Error>) -> Void
     ) {
-        authorizedGET(url.absoluteString) { (result: Result<GoogleCalendarListResponse, Error>) in
+        let operation: WorkspaceProviderOperation
+        do { operation = try existingOperation ?? captureProviderOperation(); try operation.check() }
+        catch { completion(.failure(error)); return }
+        authorizedGET(url.absoluteString, existingOperation: operation) { (result: Result<GoogleCalendarListResponse, Error>) in
             switch result {
             case .failure(let error):
                 completion(.failure(error))
@@ -810,6 +891,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                         accumulated: calendars,
                         seenPageTokens: nextSeenTokens,
                         completedPageCount: completedPageCount + 1,
+                        existingOperation: operation,
                         completion: completion
                     )
                 } catch {
@@ -824,9 +906,13 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         accumulated: [GoogleCalendarEvent],
         seenPageTokens: Set<String>,
         completedPageCount: Int,
+        existingOperation: WorkspaceProviderOperation? = nil,
         completion: @escaping (Result<[GoogleCalendarEvent], Error>) -> Void
     ) {
-        authorizedGET(url.absoluteString) { (result: Result<GoogleCalendarEventsResponse, Error>) in
+        let operation: WorkspaceProviderOperation
+        do { operation = try existingOperation ?? captureProviderOperation(); try operation.check() }
+        catch { completion(.failure(error)); return }
+        authorizedGET(url.absoluteString, existingOperation: operation) { (result: Result<GoogleCalendarEventsResponse, Error>) in
             switch result {
             case .failure(let error):
                 completion(.failure(error))
@@ -848,6 +934,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                         accumulated: events,
                         seenPageTokens: nextSeenTokens,
                         completedPageCount: completedPageCount + 1,
+                        existingOperation: operation,
                         completion: completion
                     )
                 } catch {
@@ -932,6 +1019,9 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     }
 
     func fetchGmailMessages(maxResults: Int = 25, query: String? = nil, completion: @escaping (Result<[GmailMessageDetail], Error>) -> Void) {
+        let operation: WorkspaceProviderOperation
+        do { operation = try captureProviderOperation() }
+        catch { completion(.failure(error)); return }
         if let businessAccountLinkError {
             completion(.failure(businessAccountLinkError))
             return
@@ -947,13 +1037,13 @@ final class GoogleAuthManager: NSObject, ObservableObject {
             return
         }
 
-        authorizedGET(url.absoluteString) { (result: Result<GmailMessageListResponse, Error>) in
+        authorizedGET(url.absoluteString, existingOperation: operation) { (result: Result<GmailMessageListResponse, Error>) in
             switch result {
             case .failure(let error):
                 completion(.failure(error))
             case .success(let response):
                 let references = response.messages ?? []
-                self.fetchGmailMessageDetails(references: references, completion: completion)
+                self.fetchGmailMessageDetails(references: references, operation: operation, completion: completion)
             }
         }
     }
@@ -1101,8 +1191,15 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         return lines.joined(separator: "\r\n")
     }
 
-    private func authorizedGET<T: Decodable>(_ absoluteURL: String, completion: @escaping (Result<T, Error>) -> Void) {
+    private func authorizedGET<T: Decodable>(_ absoluteURL: String, identityBootstrap: Bool = false, existingOperation: WorkspaceProviderOperation? = nil, completion: @escaping (Result<T, Error>) -> Void) {
+        guard !identityBootstrap || absoluteURL == "https://www.googleapis.com/oauth2/v3/userinfo" else {
+            completion(.failure(GoogleAuthError.invalidEndpoint)); return
+        }
+        let operation: WorkspaceProviderOperation
+        do { operation = try existingOperation ?? captureProviderOperation(requiresWorkspace: !identityBootstrap); try operation.check() }
+        catch { completion(.failure(error)); return }
         refreshTokensIfNeeded { result in
+            if let error = operation.failure { completion(.failure(error)); return }
             switch result {
             case .failure(let error):
                 completion(.failure(error))
@@ -1115,7 +1212,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                 request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
                 request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-                URLSession.shared.dataTask(with: request) { data, response, error in
+                operation.send(request, transport: self.requestTransport) { data, response, error in
                     if let error {
                         completion(.failure(error))
                         return
@@ -1137,19 +1234,19 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                         return
                     }
                     completion(.success(decoded))
-                }.resume()
+                }
             }
         }
     }
 
-    private func fetchGmailMessageDetails(references: [GmailMessageReference], completion: @escaping (Result<[GmailMessageDetail], Error>) -> Void) {
+    private func fetchGmailMessageDetails(references: [GmailMessageReference], operation: WorkspaceProviderOperation, completion: @escaping (Result<[GmailMessageDetail], Error>) -> Void) {
+        if let error = operation.failure { completion(.failure(error)); return }
         guard !references.isEmpty else {
             completion(.success([]))
             return
         }
 
         let group = DispatchGroup()
-        let queue = DispatchQueue(label: "GmailMessageDetails")
         var details: [GmailMessageDetail] = []
         var firstError: Error?
 
@@ -1157,22 +1254,20 @@ final class GoogleAuthManager: NSObject, ObservableObject {
             group.enter()
             let escapedID = reference.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? reference.id
             let url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/\(escapedID)?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date&metadataHeaders=To"
-            authorizedGET(url) { (result: Result<GmailMessageDetail, Error>) in
-                queue.async {
-                    switch result {
-                    case .success(let detail):
-                        details.append(detail)
-                    case .failure(let error):
-                        if firstError == nil {
-                            firstError = error
-                        }
-                    }
-                    group.leave()
+            authorizedGET(url, existingOperation: operation) { (result: Result<GmailMessageDetail, Error>) in
+                // All authorized request callbacks are delivered on MainActor.
+                switch result {
+                case .success(let detail):
+                    details.append(detail)
+                case .failure(let error):
+                    if firstError == nil { firstError = error }
                 }
+                group.leave()
             }
         }
 
         group.notify(queue: .main) {
+            if let error = operation.failure { completion(.failure(error)); return }
             if let firstError {
                 completion(.failure(firstError))
             } else {
@@ -1188,7 +1283,11 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         body: Body,
         completion: @escaping (Result<T, Error>) -> Void
     ) {
+        let operation: WorkspaceProviderOperation
+        do { operation = try captureProviderOperation() }
+        catch { completion(.failure(error)); return }
         refreshTokensIfNeeded { result in
+            if let error = operation.failure { completion(.failure(error)); return }
             switch result {
             case .failure(let error):
                 completion(.failure(error))
@@ -1208,7 +1307,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                 }
                 request.httpBody = data
 
-                URLSession.shared.dataTask(with: request) { data, response, error in
+                operation.send(request, transport: self.requestTransport) { data, response, error in
                     if let error {
                         completion(.failure(error))
                         return
@@ -1230,7 +1329,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                         return
                     }
                     completion(.success(decoded))
-                }.resume()
+                }
             }
         }
     }
@@ -1241,7 +1340,11 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         body: Data,
         completion: @escaping (Result<T, Error>) -> Void
     ) {
+        let operation: WorkspaceProviderOperation
+        do { operation = try captureProviderOperation() }
+        catch { completion(.failure(error)); return }
         refreshTokensIfNeeded { result in
+            if let error = operation.failure { completion(.failure(error)); return }
             switch result {
             case .failure(let error):
                 completion(.failure(error))
@@ -1257,7 +1360,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                 request.httpBody = body
 
-                URLSession.shared.dataTask(with: request) { data, response, error in
+                operation.send(request, transport: self.requestTransport) { data, response, error in
                     if let error {
                         completion(.failure(error))
                         return
@@ -1279,7 +1382,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                         return
                     }
                     completion(.success(decoded))
-                }.resume()
+                }
             }
         }
     }
@@ -1289,7 +1392,11 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         method: String,
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
+        let operation: WorkspaceProviderOperation
+        do { operation = try captureProviderOperation() }
+        catch { completion(.failure(error)); return }
         refreshTokensIfNeeded { result in
+            if let error = operation.failure { completion(.failure(error)); return }
             switch result {
             case .failure(let error):
                 completion(.failure(error))
@@ -1303,7 +1410,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                 request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
                 request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-                URLSession.shared.dataTask(with: request) { data, response, error in
+                operation.send(request, transport: self.requestTransport) { data, response, error in
                     if let error {
                         completion(.failure(error))
                         return
@@ -1317,7 +1424,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                         return
                     }
                     completion(.success(()))
-                }.resume()
+                }
             }
         }
     }
@@ -1350,7 +1457,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
 
     private func clearApplicationSession() {
         applicationSessionToken = nil
-        try? KeychainStore.remove(account: applicationSessionKeychainAccount)
+        if persistsCredentials { try? KeychainStore.remove(account: applicationSessionKeychainAccount) }
     }
 
     private static func isFutureApplicationSession(_ value: String) -> Bool {
@@ -1361,9 +1468,11 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     }
 
     private func storeTokens(_ tokens: GoogleOAuthTokens) {
-        try? KeychainStore.saveCodable(tokens, account: keychainAccount)
-        if let encoded = try? JSONEncoder().encode(tokens) {
-            UserDefaults.standard.set(encoded, forKey: tokenStorageKey)
+        if persistsCredentials {
+            try? KeychainStore.saveCodable(tokens, account: keychainAccount)
+            if let encoded = try? JSONEncoder().encode(tokens) {
+                UserDefaults.standard.set(encoded, forKey: tokenStorageKey)
+            }
         }
         applyTokens(tokens)
     }
@@ -1375,7 +1484,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         tokenExpiry = tokens.expiration
         grantedScopeSignature = tokens.scopeSignature
         isAuthenticated = true
-        let restoredEmail = UserDefaults.standard.string(forKey: Self.signedInEmailStorageKey)
+        let restoredEmail = (persistsCredentials ? UserDefaults.standard.string(forKey: Self.signedInEmailStorageKey) : signedInEmail)
             ?? Self.extractEmail(fromIDToken: tokens.idToken)
         rememberSignedInEmail(restoredEmail)
     }
@@ -1383,6 +1492,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     private func rememberSignedInEmail(_ email: String?) {
         let normalizedEmail = email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         signedInEmail = normalizedEmail
+        guard persistsCredentials else { return }
         if let normalizedEmail, !normalizedEmail.isEmpty {
             UserDefaults.standard.set(normalizedEmail, forKey: Self.signedInEmailStorageKey)
         } else {
