@@ -1,0 +1,104 @@
+name: Native app regression
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-app-regression-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.platform }} native tests
+    runs-on: macos-26
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [iPad, Mac]
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      CI_PLATFORM: ${{ matrix.platform }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Verify pinned Xcode and shared scheme
+        run: |
+          mkdir -p "$RUNNER_TEMP/native-results"
+          xcodebuild -version
+          xcodebuild -list -json -project "GunnAire Ops.xcodeproj" |
+            tee "$RUNNER_TEMP/native-results/project.json" |
+            jq -e '.project.schemes | index("GunnAire Ops") != null'
+
+      - name: Run app logic and selected iPad interface regressions
+        run: |
+          selectors=(-only-testing:"GunnAire OpsTests")
+          if [[ "$CI_PLATFORM" == "iPad" ]]; then
+            destination="platform=iOS Simulator,name=iPad Pro 13-inch (M5),OS=26.2"
+            for test in \
+              testInvoiceWorkspaceOpensWithoutTerminating \
+              testMailWorkspaceUsesASimpleInboxInterface \
+              testCustomerAccountStatementGeneratesFromTheExistingFilesWorkspace \
+              testUnreconciledStatementExplainsReviewAndHandsOffToInvoices; do
+              selectors+=("-only-testing:GunnAire OpsUITests/GunnAire_OpsUITests/$test")
+            done
+          else
+            destination="platform=macOS,variant=Mac Catalyst,arch=arm64"
+          fi
+
+          xcodebuild \
+            -project "GunnAire Ops.xcodeproj" \
+            -scheme "GunnAire Ops" \
+            -configuration Debug \
+            -destination "$destination" \
+            -destination-timeout 120 \
+            -derivedDataPath "$RUNNER_TEMP/native-derived" \
+            -resultBundlePath "$RUNNER_TEMP/native-results/$CI_PLATFORM.xcresult" \
+            -parallel-testing-enabled NO \
+            "${selectors[@]}" \
+            CODE_SIGNING_ALLOWED=NO test 2>&1 |
+            tee "$RUNNER_TEMP/native-results/test.log"
+
+          xcrun xcresulttool get test-results summary \
+            --path "$RUNNER_TEMP/native-results/$CI_PLATFORM.xcresult" |
+            tee "$RUNNER_TEMP/native-results/summary.json" |
+            jq -e '.failedTests == 0 and .passedTests > 0'
+
+      - name: Build universal Mac Release
+        if: matrix.platform == 'Mac'
+        run: |
+          xcodebuild \
+            -project "GunnAire Ops.xcodeproj" \
+            -scheme "GunnAire Ops" \
+            -configuration Release \
+            -destination "generic/platform=macOS,variant=Mac Catalyst" \
+            -derivedDataPath "$RUNNER_TEMP/native-derived" \
+            ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO build 2>&1 |
+            tee "$RUNNER_TEMP/native-results/release.log"
+          xcrun lipo -verify_arch arm64 x86_64 \
+            "$RUNNER_TEMP/native-derived/Build/Products/Release-maccatalyst/GunnAire Ops.app/Contents/MacOS/GunnAire Ops"
+
+      - name: Retain native test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.platform }}-native-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-results/
+          if-no-files-found: warn
+          retention-days: 7
+
