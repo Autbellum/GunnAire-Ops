@@ -4,6 +4,12 @@ Status: source implementation and final local fixture acceptance passed.
 The new PR head requires its own hosted checks. This is not a production
 deployment or proof of signed-device / live Google acceptance.
 
+Published source: `6f56db0`. Workflow commit `b1ad814` adds the exact-target
+schedule deletion/billed-job retention journey to the existing six hosted UI
+journeys on [PR #18](https://github.com/Autbellum/GunnAire-Ops/pull/18).
+The fetched GitHub workflow matches the locally linted one-line change.
+No merge or deployment is part of this checkpoint.
+
 ## Findings corrected
 
 The prior active export path fetched nearby events and imported them before

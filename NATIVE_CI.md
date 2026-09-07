@@ -32,11 +32,12 @@ The published resource-sync checkpoint 529fe26 passes all four hosted jobs:
 [Backend](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34093728884).
 This is exact-head evidence for that checkpoint, not subsequent catalog work.
 
-- **iPad native tests**: the complete `GunnAire OpsTests` target plus six
+- **iPad native tests**: the complete `GunnAire OpsTests` target plus seven
   serial interface journeys: direct Invoice launch, simple Mail actions,
   current customer statement generation, statement review-to-Invoices,
   billing-identity review-to-Invoices with safe report export controls,
-  and shared catalog recovery with cancellation of only an unsent proposal.
+  shared catalog recovery with cancellation of only an unsent proposal,
+  and exact-target schedule deletion with billed-job retention.
 - **Mac native tests**: the complete logic target on arm64 Mac Catalyst,
   followed by an unsigned optimized Release build. `lipo -verify_arch`
   requires both arm64 and x86_64 in the Release executable.
@@ -47,10 +48,11 @@ This is exact-head evidence for that checkpoint, not subsequent catalog work.
 
 The workflow selects Xcode 26.6 on the standard arm64 `macos-26` runner.
 
-Workflow commit `b6bf8bf` adds the catalog recovery journey to the existing
-five hosted journeys. This six-journey hosted selection differs from the seven
-focused local catalog-checkpoint journeys documented in
-[QBO_SERVER_CATALOG_PUBLICATION.md](QBO_SERVER_CATALOG_PUBLICATION.md).
+Workflow commit `b6bf8bf` added catalog recovery to the original five hosted
+journeys. Workflow commit `b1ad814` adds schedule deletion protection, making
+seven hosted journeys. Its supporting source is `6f56db0`. The hosted selection
+differs from the seven focused local calendar-checkpoint journeys documented in
+[GOOGLE_CALENDAR_WORKFLOW_LIFECYCLE.md](GOOGLE_CALENDAR_WORKFLOW_LIFECYCLE.md).
 Local success does not establish hosted success; inspect the exact PR head's
 native and backend checks before approving the candidate.
 
