@@ -123,6 +123,70 @@ struct QuickBooksBillingWorkflowTests {
         do { try await body(); Issue.record("Expected guarded workflow to stop") } catch {}
     }
 
+    private func addTaxAddresses(_ f: Fixture) throws {
+        f.item.isTaxable = true
+        let address = BillingPublicationAddress(Line1: "12 Main Street", City: "Raleigh",
+            CountrySubDivisionCode: "NC", PostalCode: "27601")
+        let tax = try BillingTaxAddressContext(scope: .init(customerID: f.customer.id,
+            serviceLocationID: nil, siteAddress: nil), service: address,
+            origin: .init(Line1: "40 Shop Street", City: "Cary", CountrySubDivisionCode: "NC", PostalCode: "27511"))
+        let json = try BillingTaxAddressContext.attaching(tax, to: CatalogLineItemSnapshot.encoded(from: [f.item])!)
+        f.invoice.catalogSnapshotJSON = json; f.estimate.catalogSnapshotJSON = json
+        try f.context.save()
+    }
+
+    @Test func taxablePublicationChecksAddressesBeforeCustomerOrItemWrites() async throws {
+        let f = try Fixture(mapped: false)
+        f.item.isTaxable = true
+        f.invoice.catalogSnapshotJSON = CatalogLineItemSnapshot.encoded(from: [f.item])
+        try f.context.save()
+        let flow = try f.flow()
+        await #expect(throws: BillingTaxAddressError.required) { try await flow.execute() }
+        #expect(f.requests.isEmpty); #expect(!flow.attemptedWrite)
+        #expect(f.invoice.catalogLineSnapshots.first?.unitPrice == 190)
+    }
+
+    @Test func invoiceCreateAndUpdateSendReviewedServiceAndSaleAddresses() async throws {
+        for linked in [false, true] {
+            let f = try Fixture(linkedInvoice: linked)
+            try addTaxAddresses(f)
+            _ = try await f.flow().execute()
+            let post = try #require(f.requests.last?.httpBody)
+            let value = try JSONSerialization.jsonObject(with: post) as! [String: Any]
+            #expect((value["ShipAddr"] as? [String: String])?["City"] == "Raleigh")
+            #expect((value["ShipFromAddr"] as? [String: String])?["PostalCode"] == "27511")
+            #expect(f.invoice.catalogLineSnapshots.first?.unitPrice == 190)
+        }
+    }
+
+    @Test func estimatePublicationSendsBothAddressesWithoutCustomerEmailSend() async throws {
+        let f = try Fixture()
+        try addTaxAddresses(f)
+        _ = try await f.flow(estimate: true).execute()
+        let value = try JSONSerialization.jsonObject(with: #require(f.requests.last?.httpBody)) as! [String: Any]
+        #expect((value["ShipAddr"] as? [String: String])?["CountrySubDivisionCode"] == "NC")
+        #expect((value["ShipFromAddr"] as? [String: String])?["Line1"] == "40 Shop Street")
+        #expect(f.requests.allSatisfy { !$0.url!.path.contains("/send") })
+    }
+
+    @Test func changedSiteStopsTaxablePublicationWithoutChangingSoldLines() async throws {
+        let f = try Fixture()
+        try addTaxAddresses(f)
+        f.invoice.siteAddress = "A different property"
+        let flow = try f.flow()
+        await #expect(throws: BillingTaxAddressError.changed) { try await flow.execute() }
+        #expect(f.requests.isEmpty); #expect(f.invoice.amount == 190)
+    }
+
+    @Test func changedAddressDuringProviderReadRejectsTheOldPublication() async throws {
+        let f = try Fixture()
+        try addTaxAddresses(f)
+        f.beforeResponse = { _ in f.invoice.siteAddress = "Changed during request" }
+        await fails { _ = try await f.flow().execute() }
+        #expect(!f.requests.contains { $0.httpMethod == "POST" })
+        #expect(f.invoice.quickBooksID == nil)
+    }
+
 
     @Test func invalidSubtotalCannotCreateCustomerOrCatalogRecords() throws {
         let f = try Fixture(mapped: false)

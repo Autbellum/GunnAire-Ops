@@ -2632,6 +2632,10 @@ struct QuickBooksPhoneNumber: Codable {
 
 struct QuickBooksAddress: Codable {
     let Line1: String?
+    var City: String? = nil
+    var CountrySubDivisionCode: String? = nil
+    var PostalCode: String? = nil
+    var Country: String? = nil
 }
 
 struct QuickBooksLineItem: Codable {
@@ -3289,6 +3293,7 @@ struct QuickBooksEstimateCreate: Codable {
     let PrivateNote: String?
     let BillEmail: QuickBooksEmailAddress?
     let ShipAddr: QuickBooksAddress?
+    let ShipFromAddr: QuickBooksAddress?
     let GlobalTaxCalculation: String?
     let ApplyTaxAfterDiscount: Bool?
 
@@ -3298,6 +3303,7 @@ struct QuickBooksEstimateCreate: Codable {
         PrivateNote: String?,
         BillEmail: QuickBooksEmailAddress? = nil,
         ShipAddr: QuickBooksAddress? = nil,
+        ShipFromAddr: QuickBooksAddress? = nil,
         GlobalTaxCalculation: String? = nil,
         ApplyTaxAfterDiscount: Bool? = nil
     ) {
@@ -3306,6 +3312,7 @@ struct QuickBooksEstimateCreate: Codable {
         self.PrivateNote = PrivateNote
         self.BillEmail = BillEmail
         self.ShipAddr = ShipAddr
+        self.ShipFromAddr = ShipFromAddr
         self.GlobalTaxCalculation = GlobalTaxCalculation
         self.ApplyTaxAfterDiscount = ApplyTaxAfterDiscount
     }
@@ -3534,6 +3541,7 @@ struct QuickBooksInvoiceCreate: Codable {
     let PrivateNote: String?
     let BillEmail: QuickBooksEmailAddress?
     let ShipAddr: QuickBooksAddress?
+    let ShipFromAddr: QuickBooksAddress?
     let DueDate: String?
     let GlobalTaxCalculation: String?
     let ApplyTaxAfterDiscount: Bool?
@@ -3544,6 +3552,7 @@ struct QuickBooksInvoiceCreate: Codable {
         PrivateNote: String?,
         BillEmail: QuickBooksEmailAddress? = nil,
         ShipAddr: QuickBooksAddress? = nil,
+        ShipFromAddr: QuickBooksAddress? = nil,
         DueDate: String? = nil,
         GlobalTaxCalculation: String? = nil,
         ApplyTaxAfterDiscount: Bool? = nil
@@ -3553,6 +3562,7 @@ struct QuickBooksInvoiceCreate: Codable {
         self.PrivateNote = PrivateNote
         self.BillEmail = BillEmail
         self.ShipAddr = ShipAddr
+        self.ShipFromAddr = ShipFromAddr
         self.DueDate = DueDate
         self.GlobalTaxCalculation = GlobalTaxCalculation
         self.ApplyTaxAfterDiscount = ApplyTaxAfterDiscount
@@ -3568,6 +3578,7 @@ struct QuickBooksInvoiceUpdate: Codable {
     let PrivateNote: String?
     let BillEmail: QuickBooksEmailAddress?
     let ShipAddr: QuickBooksAddress?
+    let ShipFromAddr: QuickBooksAddress?
     let DueDate: String?
     let GlobalTaxCalculation: String?
     let ApplyTaxAfterDiscount: Bool?
@@ -3580,6 +3591,7 @@ struct QuickBooksInvoiceUpdate: Codable {
         PrivateNote: String?,
         BillEmail: QuickBooksEmailAddress? = nil,
         ShipAddr: QuickBooksAddress? = nil,
+        ShipFromAddr: QuickBooksAddress? = nil,
         DueDate: String? = nil,
         GlobalTaxCalculation: String? = nil,
         ApplyTaxAfterDiscount: Bool? = nil
@@ -3592,6 +3604,7 @@ struct QuickBooksInvoiceUpdate: Codable {
         self.PrivateNote = PrivateNote
         self.BillEmail = BillEmail
         self.ShipAddr = ShipAddr
+        self.ShipFromAddr = ShipFromAddr
         self.DueDate = DueDate
         self.GlobalTaxCalculation = GlobalTaxCalculation
         self.ApplyTaxAfterDiscount = ApplyTaxAfterDiscount

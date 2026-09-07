@@ -1,4 +1,13 @@
-Native dispatch follow-up, September 7, 2026: candidate 2026.09.07.27 connects
+Native tax-address follow-up, September 7, 2026: the existing taxable billing
+editor now captures and retains reviewed service and sale/ship-from addresses,
+preserves sold prices and sends structured address fields on the current native
+QBO document path. Final acceptance passes 1159 logic tests per native platform,
+five iPad journeys and unsigned universal Mac Release. No stored schema change.
+See [NATIVE_BILLING_TAX_ADDRESSES.md](NATIVE_BILLING_TAX_ADDRESSES.md) for exact
+evidence, retained diagnostics and scope. Shared-server invoice/estimate cutover,
+legacy mapping and full-suite/CloudKit acceptance remain open.
+
+Prior native dispatch follow-up, September 7, 2026: candidate 2026.09.07.27 connects
 Add/Edit Job and dispatch-board assignment to encrypted original-account
 offline intents and revisioned server authority. The existing job Overview
 has a compact Field Billing review/recovery link. Reconnected-grant and newer

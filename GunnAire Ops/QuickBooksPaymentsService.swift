@@ -709,12 +709,16 @@ final class QuickBooksPaymentsService {
                 payments: []
             )
         }
+        let taxAddresses = try await MainActor.run {
+            try BillingTaxAddressContext.forPublication(.invoice(invoice))
+        }
         let payload = QuickBooksInvoiceCreate(
             CustomerRef: QuickBooksReference(value: customerQBID, name: inputs.customerRef.name),
             Line: inputs.lines,
             PrivateNote: inputs.privateNote,
             BillEmail: inputs.billEmail,
-            ShipAddr: inputs.shipAddress,
+            ShipAddr: taxAddresses?.service.quickBooksAddress ?? inputs.shipAddress,
+            ShipFromAddr: taxAddresses?.origin.quickBooksAddress,
             DueDate: QuickBooksDateOnly.string(from: invoice.effectiveDueDate()),
             GlobalTaxCalculation: "TaxExcluded",
             ApplyTaxAfterDiscount: invoice.documentDiscount == nil ? nil : true

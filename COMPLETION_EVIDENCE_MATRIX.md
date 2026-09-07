@@ -1,4 +1,15 @@
-Native job assignment checkpoint, 2026-09-07: **103/103 focused server tests,
+Native tax-address checkpoint, 2026-09-07: **1159/1159 logic tests per native
+platform, 5/5 selected iPad journeys and unsigned universal Mac Release pass**.
+The final native form screenshot was visually reviewed. Address review retains
+the customer/site scope, sold prices and offline snapshot, reaches actual
+native QBO request bodies, and survives saving/reopening the same job. Tests
+are fixture-only; no signed CloudKit or production/provider proof is inferred.
+Exact bundles and diagnostics: [NATIVE_BILLING_TAX_ADDRESSES.md](NATIVE_BILLING_TAX_ADDRESSES.md).
+Native shared-server publication, legacy mapping, complete integration and
+multi-device acceptance remain required. Prior address-capture gaps below are
+superseded only for the entry paths covered by this checkpoint.
+
+Prior native job assignment checkpoint, 2026-09-07: **103/103 focused server tests,
 319/319 complete Backend tests and 37/37 Tools tests pass**. Add/Edit Job and
 dispatch-board assignment now have durable encrypted queueing, original
 connection/revision checks and an in-job review handoff. Early focused native

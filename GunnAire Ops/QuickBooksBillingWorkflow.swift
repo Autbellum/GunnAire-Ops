@@ -320,6 +320,10 @@ final class QuickBooksBillingWorkflow {
         started = true
         return try await run.perform {
             try self.check()
+            // Check before any prerequisite customer/catalog write. Taxable
+            // drafts remain offline-editable, but incomplete tax context cannot
+            // be published using a guessed or inherited customer address.
+            _ = try BillingTaxAddressContext.forPublication(self.document)
             try await self.prepareCustomer()
             for item in self.items {
                 try self.check()
@@ -390,12 +394,15 @@ final class QuickBooksBillingWorkflow {
 
     private func publishDocument() async throws -> Outcome {
         let catalog = try context.fetch(FetchDescriptor<Item>())
+        let taxAddresses = try BillingTaxAddressContext.forPublication(document)
         switch document {
         case .invoice(let invoice):
             let inputs = try QuickBooksInvoicePublicationRecovery.publicationInputs(for: invoice, catalogItems: catalog,
                 payments: context.fetch(FetchDescriptor<Payment>()).filter { $0.invoice != nil })
             let payload = QuickBooksInvoiceCreate(CustomerRef: inputs.customerRef, Line: inputs.lines,
-                PrivateNote: inputs.privateNote, BillEmail: inputs.billEmail, ShipAddr: inputs.shipAddress,
+                PrivateNote: inputs.privateNote, BillEmail: inputs.billEmail,
+                ShipAddr: taxAddresses?.service.quickBooksAddress ?? inputs.shipAddress,
+                ShipFromAddr: taxAddresses?.origin.quickBooksAddress,
                 DueDate: QuickBooksDateOnly.string(from: invoice.effectiveDueDate()), GlobalTaxCalculation: "TaxExcluded",
                 ApplyTaxAfterDiscount: invoice.documentDiscount == nil ? nil : true)
             let remote: QuickBooksInvoice
@@ -412,7 +419,7 @@ final class QuickBooksBillingWorkflow {
                 attemptedWrite = true
                 remote = try await run.receive { api.updateInvoice(.init(Id: identifier, SyncToken: token,
                     CustomerRef: payload.CustomerRef, Line: payload.Line, PrivateNote: payload.PrivateNote,
-                    BillEmail: payload.BillEmail, ShipAddr: payload.ShipAddr, DueDate: payload.DueDate,
+                    BillEmail: payload.BillEmail, ShipAddr: payload.ShipAddr, ShipFromAddr: payload.ShipFromAddr, DueDate: payload.DueDate,
                     GlobalTaxCalculation: payload.GlobalTaxCalculation, ApplyTaxAfterDiscount: payload.ApplyTaxAfterDiscount), completion: $0) }
             } else {
                 let remotes = try await run.receive(api.fetchInvoices)
@@ -462,7 +469,9 @@ final class QuickBooksBillingWorkflow {
                 }
                 attemptedWrite = true; recovered = false
                 remote = try await run.receive { api.createEstimate(.init(CustomerRef: inputs.customerRef, Line: inputs.lines,
-                    PrivateNote: inputs.privateNote, BillEmail: inputs.billEmail, ShipAddr: inputs.shipAddress,
+                    PrivateNote: inputs.privateNote, BillEmail: inputs.billEmail,
+                    ShipAddr: taxAddresses?.service.quickBooksAddress ?? inputs.shipAddress,
+                    ShipFromAddr: taxAddresses?.origin.quickBooksAddress,
                     GlobalTaxCalculation: "TaxExcluded", ApplyTaxAfterDiscount: estimate.documentDiscount == nil ? nil : true),
                     requestID: QuickBooksEstimateLineage.createRequestID(for: estimate), completion: $0) }
             }

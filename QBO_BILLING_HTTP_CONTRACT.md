@@ -9,6 +9,13 @@ cutover. See [NATIVE_JOB_BILLING_AUTHORITY.md](NATIVE_JOB_BILLING_AUTHORITY.md).
 
 ## Current boundary
 
+Native address capture is now implemented and qualified in
+[NATIVE_BILLING_TAX_ADDRESSES.md](NATIVE_BILLING_TAX_ADDRESSES.md), including
+service/origin validation and saved-job reopening. It supplies the existing
+native provider path; it does not itself connect the native billing buttons
+to the server client described here. Legacy mapping and original-proposal
+approval/recovery handoffs remain required.
+
 The staged publisher is now reachable through authenticated application HTTP
 routes. It owns invoice/estimate dispatch and interrupted-result recovery on
 those routes. A typed native client implements the same contract and retains

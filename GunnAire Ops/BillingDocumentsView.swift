@@ -74,6 +74,7 @@ struct BillingDocumentsView: View {
     @State private var selectedItemQuantities: [UUID: Double] = [:]
     @State private var selectedItemPriceAdjustments: [UUID: AuthorizedLinePriceAdjustment] = [:]
     @State private var selectedDocumentDiscount: AuthorizedDocumentDiscount?
+    @State private var selectedTaxAddresses: BillingTaxAddressContext?
     @State private var selectedItemEquipmentIDs: [UUID: UUID] = [:]
     @State private var selectedItemAssemblySnapshots: [UUID: CatalogLineAssemblySnapshot] = [:]
     @State private var selectedItemizedAssemblyMemberships: [UUID: Set<UUID>] = [:]
@@ -521,7 +522,7 @@ struct BillingDocumentsView: View {
     }
 
     private var selectedCatalogSnapshotJSON: String? {
-        CatalogLineItemSnapshot.encoded(
+        let json = CatalogLineItemSnapshot.encoded(
             from: selectedLineItems,
             quantities: selectedItemQuantities,
             priceAdjustments: selectedItemPriceAdjustments,
@@ -529,6 +530,16 @@ struct BillingDocumentsView: View {
             assemblies: selectedItemAssemblySnapshots,
             documentDiscount: selectedDocumentDiscount
         )
+        guard let json, let addresses = selectedTaxAddresses, let scope = selectedTaxAddressScope,
+              (try? addresses.validate(for: scope)) != nil else { return json }
+        return try? BillingTaxAddressContext.attaching(addresses, to: json)
+    }
+
+    private var selectedTaxAddressScope: BillingTaxAddressScope? {
+        guard let customer = selectedCustomer ?? activeServiceCall?.customer else { return nil }
+        return .init(customerID: customer.id,
+            serviceLocationID: activeServiceCall?.serviceLocationID ?? selectedServiceLocationID,
+            siteAddress: selectedSiteAddressSnapshot)
     }
 
     private var jobMaterialRequirements: [JobMaterialRequirement] {
@@ -4153,6 +4164,10 @@ GunnAire
 
     @ViewBuilder
     private var documentSubtotalSummary: some View {
+        if selectedHasTaxableLines, let scope = selectedTaxAddressScope {
+            BillingTaxAddressReviewControl(scope: scope, addresses: $selectedTaxAddresses)
+                .disabled(isCreatingDocument)
+        }
         if selectedDocumentDiscount != nil {
             HStack {
                 Text("Items Subtotal")
@@ -7676,6 +7691,7 @@ GunnAire
             customerAddress = address
         }
         self.notes = notes ?? ""
+        selectedTaxAddresses = BillingTaxAddressContext.read(catalogSnapshotJSON)
 
         let restoredItems = restoredCatalogItems(snapshotJSON: catalogSnapshotJSON, lineItemSummary: lineItemSummary)
         let snapshots = CatalogLineItemSnapshot.decoded(from: catalogSnapshotJSON)
@@ -8473,6 +8489,7 @@ GunnAire
         selectedItemQuantities.removeAll()
         selectedItemPriceAdjustments.removeAll()
         selectedDocumentDiscount = nil
+        selectedTaxAddresses = nil
         selectedItemEquipmentIDs.removeAll()
         selectedItemAssemblySnapshots.removeAll()
         selectedItemizedAssemblyMemberships.removeAll()

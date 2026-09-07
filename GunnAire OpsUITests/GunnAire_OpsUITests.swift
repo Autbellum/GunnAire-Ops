@@ -3788,6 +3788,76 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testTaxAddressReviewKeepsDraftPricesAndReturnsToBilling() throws {
+        let app = XCUIApplication()
+        func enter(_ identifier: String, _ text: String) {
+            let field = app.textFields[identifier]
+            XCTAssertTrue(field.waitForExistence(timeout: 4))
+            field.tap()
+            field.typeText(text)
+            XCTAssertEqual(field.value as? String, text)
+        }
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin", "-uiTestSeedPendingQuickBooksTax"]
+        app.launch()
+        revealSidebarDestination("Schedule & Jobs", in: app).tap()
+        let documentation = app.buttons["OpenDocumentation-\(screenshotServiceCallID)"]
+        for _ in 0..<8 where !documentation.exists || !documentation.isHittable { app.swipeUp() }
+        XCTAssertTrue(documentation.waitForExistence(timeout: 4)); documentation.tap()
+        let stages = app.segmentedControls["JobDocumentationStagePicker"]
+        XCTAssertTrue(stages.waitForExistence(timeout: 4)); stages.buttons["Billing"].tap()
+        let review = app.buttons["BillingTaxAddresses"]
+        for _ in 0..<8 where !review.exists || !review.isHittable { app.swipeUp() }
+        XCTAssertTrue(review.waitForExistence(timeout: 4))
+        let originalSubtotal = app.staticTexts["DocumentNetSubtotal"].label
+        review.tap()
+        XCTAssertTrue(app.navigationBars["Tax addresses"].waitForExistence(timeout: 4))
+        XCTAssertFalse(app.buttons["BillingTaxUseAddresses"].isEnabled)
+        enter("BillingTaxServiceStreet", "Cancelled address")
+        app.buttons["BillingTaxCancel"].tap()
+        XCTAssertTrue(app.navigationBars["Job Documentation"].exists)
+        review.tap()
+        XCTAssertEqual(app.textFields["BillingTaxServiceStreet"].value as? String, "Street address")
+        enter("BillingTaxServiceStreet", "12 Main Street")
+        enter("BillingTaxServiceCity", "Raleigh")
+        enter("BillingTaxServiceState", "NC")
+        enter("BillingTaxServiceZIP", "27601")
+        let same = app.switches["BillingTaxSameLocation"]
+        let form = app.collectionViews.containing(.textField, identifier: "BillingTaxServiceStreet").firstMatch
+        XCTAssertTrue(form.exists)
+        for _ in 0..<6 where !same.isHittable || !form.frame.insetBy(dx: 0, dy: 24).contains(same.frame) { form.swipeUp() }
+        XCTAssertTrue(same.isHittable)
+        same.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        XCTAssertEqual(same.value as? String, "1")
+        let use = app.buttons["BillingTaxUseAddresses"]
+        XCTAssertTrue(use.isEnabled)
+        let capture = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        capture.name = "Reviewed service and sale locations"; capture.lifetime = .keepAlways; add(capture)
+        use.tap()
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 4))
+        XCTAssertEqual(app.staticTexts["DocumentNetSubtotal"].label, originalSubtotal)
+        XCTAssertTrue(review.label.contains("Reviewed"))
+        review.tap()
+        XCTAssertEqual(app.textFields["BillingTaxServiceStreet"].value as? String, "12 Main Street")
+        app.buttons["BillingTaxCancel"].tap()
+        let update = app.buttons["InvoicePrimaryAction"]
+        for _ in 0..<6 where !update.exists || !update.isHittable { app.swipeUp() }
+        XCTAssertTrue(update.isEnabled); update.tap()
+        XCTAssertTrue(app.navigationBars["Job Documentation"].exists)
+        app.buttons["Minimize"].tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 4))
+        for _ in 0..<8 where !documentation.exists || !documentation.isHittable { app.swipeUp() }
+        documentation.tap()
+        XCTAssertTrue(stages.waitForExistence(timeout: 4))
+        stages.buttons["Billing"].tap()
+        for _ in 0..<8 where !review.exists || !review.isHittable { app.swipeUp() }
+        review.tap()
+        XCTAssertEqual(app.textFields["BillingTaxServiceCity"].value as? String, "Raleigh")
+        app.buttons["BillingTaxCancel"].tap()
+        XCTAssertTrue(app.navigationBars["Job Documentation"].exists)
+    }
+
+    @MainActor
     func testAssignedTechnicianRecordsBilledPartUseAgainstTruckStock() throws {
         let app = XCUIApplication()
         app.launchArguments = [
