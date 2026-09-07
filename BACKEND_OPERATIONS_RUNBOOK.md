@@ -1,6 +1,6 @@
 # GunnAire backend operations runbook
 
-Last verified: 2026-09-05
+Last source verification: 2026-09-06 (production observations below retain their original dates)
 
 This runbook covers the shared GunnAire service at
 `https://gunnaire-api.onrender.com`. It does not authorize accounting changes,
@@ -15,6 +15,14 @@ credential rotation, production restores, or customer communications.
   automated off-host backup schedule is configured and observed.
 - Proposed recovery time objective: 4 hours. This is not proven until a timed
   restore drill is completed by the deployment owner.
+
+## 2026-09-06 source review follow-up
+
+Candidate `2026.09.06.19` in PR #18 fixes portal approval concurrency,
+revocation/expiry, and oversized-amount validation. Local Backend tests pass
+77/77 and Tools pass 37/37. See `PORTAL_APPROVAL_REVIEW.md` for the reproductions.
+The older PR #17 overlaps this branch and lacks these follow-up fixes; reconcile
+the overlap before selecting a deployment candidate.
 
 ## 2026-09-05 production pre-deployment reconciliation
 
@@ -85,10 +93,9 @@ credential rotation, production restores, or customer communications.
    python3 -m unittest discover -s Tools -p 'test_*.py' -v
    ```
 
-   Source `2026.09.03.18` has 71 expected backend tests. A different count
+   Source `2026.09.06.19` has 77 expected backend tests. A different count
    requires review before deployment even when the discovered subset is green.
-   The 2026-09-05 exact-branch preflight also ran the five applicable Tools
-   checks. Both suites must pass in the
+   The complete Tools suite has 37 tests. Both suites must pass in the
    **Backend regression** GitHub workflow on Python 3.13 and the
    production-aligned Python 3.14 job. The established status-check names remain
    unchanged even though each job now runs both suites. The workflow has
@@ -122,7 +129,7 @@ credential rotation, production restores, or customer communications.
    part of a routine code deploy.
 6. After the authorized deployment, rerun the same preflight with `--online`.
    Confirm `/health` returns HTTP 200 and exact `serviceVersion`
-   `2026.09.03.18`.
+   `2026.09.06.19`.
 7. Confirm the new public Apple route is present without fabricating an Apple
    event or storing data:
 

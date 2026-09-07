@@ -33,7 +33,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.03.18"
+SERVICE_VERSION = "2026.09.06.19"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -2910,6 +2910,16 @@ def communication_record(row: sqlite3.Row) -> dict[str, object]:
     }
 
 
+def customer_portal_link_is_active(row: sqlite3.Row | None) -> bool:
+    if row is None or row["revoked_at"] is not None:
+        return False
+    try:
+        expires_at = datetime.fromisoformat(str(row["expires_at"]).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    return expires_at.tzinfo is not None and expires_at > datetime.now(timezone.utc)
+
+
 def customer_portal_link_record(row: sqlite3.Row) -> dict[str, object]:
     """Return management metadata only; the token hash and capability URL never leave storage."""
     return {
@@ -3030,19 +3040,29 @@ def supplier_order_acceptance_record(row: sqlite3.Row, *, replayed: bool) -> dic
     return safe
 
 
-def record_audit_event(actor_email: str | None, action: str, subject_type: str, subject_id: str | None = None) -> None:
+def record_audit_event(
+    actor_email: str | None,
+    action: str,
+    subject_type: str,
+    subject_id: str | None = None,
+    *,
+    connection: sqlite3.Connection | None = None,
+) -> None:
     """Record high-impact actions without storing tokens, payment details, or customer content."""
     actor = normalize_email(actor_email)
     if not actor:
         return
-    with db() as connection:
-        connection.execute(
-            """
-            INSERT INTO audit_events(id, occurred_at, actor_email, action, subject_type, subject_id)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (str(uuid.uuid4()), utc_now(), actor, action, subject_type, subject_id),
-        )
+    if connection is None:
+        with db() as audit_connection:
+            record_audit_event(actor, action, subject_type, subject_id, connection=audit_connection)
+        return
+    connection.execute(
+        """
+        INSERT INTO audit_events(id, occurred_at, actor_email, action, subject_type, subject_id)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (str(uuid.uuid4()), utc_now(), actor, action, subject_type, subject_id),
+    )
 
 
 class GunnAireBackendHandler(BaseHTTPRequestHandler):
@@ -4011,10 +4031,11 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             if isinstance(raw_balance_due, bool) or not isinstance(raw_balance_due, (int, float)):
                 self.write_json({"error": "Balance due must be a non-negative amount"}, status=HTTPStatus.BAD_REQUEST)
                 return
-            balance_due = float(raw_balance_due)
-            if not math.isfinite(balance_due) or not 0 <= balance_due <= 999_999_999.99:
+            # Bound arbitrary-precision JSON integers before float conversion.
+            if not 0 <= raw_balance_due <= 999_999_999.99:
                 self.write_json({"error": "Balance due must be a non-negative amount"}, status=HTTPStatus.BAD_REQUEST)
                 return
+            balance_due = float(raw_balance_due)
             balance_due = round(balance_due, 2)
 
         raw_estimate_amount = payload.get("estimateAmount")
@@ -4035,14 +4056,13 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             ):
                 self.write_json({"error": "Estimate amount is invalid"}, status=HTTPStatus.BAD_REQUEST)
                 return
-            estimate_amount = float(raw_estimate_amount)
             if (
-                not math.isfinite(estimate_amount)
-                or not 0 <= estimate_amount <= 999_999_999.99
+                not 0 <= raw_estimate_amount <= 999_999_999.99
                 or re.fullmatch(r"[0-9a-f]{64}", estimate_revision or "") is None
             ):
                 self.write_json({"error": "Estimate approval snapshot is invalid"}, status=HTTPStatus.BAD_REQUEST)
                 return
+            estimate_amount = float(raw_estimate_amount)
             estimate_amount = round(estimate_amount, 2)
 
         requested_days = payload.get("expiresInDays", 14)
@@ -4100,25 +4120,20 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 "SELECT * FROM customer_portal_links WHERE token_hash = ? AND revoked_at IS NULL",
                 (portal_token_hash(token),),
             ).fetchone()
-            try:
-                expires_at = datetime.fromisoformat(str(row["expires_at"]).replace("Z", "+00:00")) if row is not None else None
-            except (TypeError, ValueError):
-                expires_at = None
-            if expires_at is not None and expires_at.tzinfo is None:
-                expires_at = None
-            if row is not None and expires_at is not None and expires_at > datetime.now(timezone.utc):
+            if customer_portal_link_is_active(row):
                 opened_at = utc_now()
                 updated = connection.execute(
                     """
                     UPDATE customer_portal_links
                     SET opened_count = opened_count + 1, last_opened_at = ?
                     WHERE id = ? AND revoked_at IS NULL
+                        AND julianday(expires_at) > julianday('now')
                     """,
                     (opened_at, row["id"]),
                 ).rowcount
             else:
                 updated = 0
-        if row is None or expires_at is None or updated != 1:
+        if updated != 1:
             self.write_json({"error": "This customer link is unavailable"}, status=HTTPStatus.NOT_FOUND, require_auth=False)
             return
         items = [("Appointment", row["appointment_summary"]), ("Invoice", row["invoice_reference"])]
@@ -4235,16 +4250,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 "SELECT * FROM customer_portal_links WHERE token_hash = ? AND revoked_at IS NULL",
                 (portal_token_hash(token),),
             ).fetchone()
-            try:
-                expires_at = datetime.fromisoformat(str(row["expires_at"]).replace("Z", "+00:00")) if row is not None else None
-            except (TypeError, ValueError):
-                expires_at = None
-            if expires_at is not None and expires_at.tzinfo is None:
-                expires_at = None
             if (
-                row is None
-                or expires_at is None
-                or expires_at <= datetime.now(timezone.utc)
+                not customer_portal_link_is_active(row)
                 or row["estimate_id"] is None
             ):
                 self.write_json({"error": "This approval link is unavailable"}, status=HTTPStatus.NOT_FOUND, require_auth=False)
@@ -4252,27 +4259,28 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             if row["estimate_response_id"] is None:
                 response_id = str(uuid.uuid4())
                 responded_at = utc_now()
-                updated = connection.execute(
+                connection.execute(
                     """
                     UPDATE customer_portal_links
                     SET estimate_response_id = ?, estimate_response_name = ?,
                         estimate_responded_at = ?, estimate_resolution_status = 'pending'
                     WHERE id = ? AND revoked_at IS NULL AND estimate_response_id IS NULL
+                        AND julianday(expires_at) > julianday('now')
                     """,
                     (response_id, approval_name, responded_at, row["id"]),
-                ).rowcount
-                if updated != 1:
-                    concurrent_row = connection.execute(
-                        "SELECT estimate_response_id FROM customer_portal_links WHERE id = ?",
-                        (row["id"],),
-                    ).fetchone()
-                    if concurrent_row is None or concurrent_row["estimate_response_id"] is None:
-                        self.write_json({"error": "Approval could not be recorded"}, status=HTTPStatus.CONFLICT, require_auth=False)
-                        return
+                )
+            # Revalidate the capability for both new submissions and replays.
+            # A stale initial read must not confirm a link another request revoked.
             row = connection.execute(
-                "SELECT * FROM customer_portal_links WHERE token_hash = ?",
+                "SELECT * FROM customer_portal_links WHERE token_hash = ? AND revoked_at IS NULL",
                 (portal_token_hash(token),),
             ).fetchone()
+            if not customer_portal_link_is_active(row):
+                self.write_json({"error": "This approval link is unavailable"}, status=HTTPStatus.NOT_FOUND, require_auth=False)
+                return
+            if row["estimate_response_id"] is None:
+                self.write_json({"error": "Approval could not be recorded"}, status=HTTPStatus.CONFLICT, require_auth=False)
+                return
 
         content = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Estimate approved</title><style>body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:40rem;margin:clamp(1rem,8vw,4rem) auto;padding:0 1.25rem;color:CanvasText;background:Canvas}}main{{border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:16px;padding:clamp(1.25rem,5vw,2rem)}}h1{{font-size:clamp(1.55rem,5vw,2.2rem);line-height:1.15}}small{{color:color-mix(in srgb,CanvasText 65%,transparent)}}</style></head>
@@ -4320,6 +4328,18 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         principal = self.principal() or {}
         actor = principal.get("email") if isinstance(principal.get("email"), str) else "unknown"
         with db() as connection:
+            # The write predicate protects the transition across connections.
+            # Once applied, all original resolution evidence is immutable.
+            updated = connection.execute(
+                """
+                UPDATE customer_portal_links
+                SET estimate_resolution_status = ?, estimate_resolution_detail = ?,
+                    estimate_resolved_at = ?, estimate_resolved_by = ?
+                WHERE id = ? AND estimate_response_id = ?
+                    AND (estimate_resolution_status IS NULL OR estimate_resolution_status != 'applied')
+                """,
+                (status, detail, utc_now(), actor, link_id, response_id),
+            ).rowcount
             row = connection.execute(
                 "SELECT * FROM customer_portal_links WHERE id = ?",
                 (link_id,),
@@ -4330,23 +4350,12 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             if row["estimate_resolution_status"] == "applied" and status != "applied":
                 self.write_json({"error": "An applied approval cannot be downgraded"}, status=HTTPStatus.CONFLICT)
                 return
-            resolved_at = row["estimate_resolved_at"] if row["estimate_resolution_status"] == "applied" else utc_now()
-            resolved_by = row["estimate_resolved_by"] if row["estimate_resolution_status"] == "applied" else actor
-            connection.execute(
-                """
-                UPDATE customer_portal_links
-                SET estimate_resolution_status = ?, estimate_resolution_detail = ?,
-                    estimate_resolved_at = ?, estimate_resolved_by = ?
-                WHERE id = ? AND estimate_response_id = ?
-                """,
-                (status, detail, resolved_at, resolved_by, link_id, response_id),
-            )
-            updated_row = connection.execute(
-                "SELECT * FROM customer_portal_links WHERE id = ?",
-                (link_id,),
-            ).fetchone()
-        record_audit_event(actor, f"estimate-approval-{status}", "customer-portal-link", link_id)
-        self.write_json(customer_portal_link_record(updated_row))
+            if updated == 1:
+                record_audit_event(
+                    actor, f"estimate-approval-{status}", "customer-portal-link", link_id,
+                    connection=connection,
+                )
+        self.write_json(customer_portal_link_record(row))
 
     def store_public_service_request(self) -> None:
         if not PUBLIC_BOOKING_ENABLED:
