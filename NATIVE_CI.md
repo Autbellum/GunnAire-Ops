@@ -6,6 +6,16 @@ It complements the existing Backend/Tools Python 3.13 and 3.14 workflow.
 
 ## Coverage
 
+The published Calendar/documentation head `d9a83d8` passes all four hosted jobs:
+[native](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34113375386) and
+[backend](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34113375391).
+Mail local acceptance passes 1049 logic tests per native platform, eight
+selected iPad journeys, Backend 173 and Tools 37, plus the universal Mac Release.
+See [GMAIL_COMPOSITION_WORKFLOW.md](GMAIL_COMPOSITION_WORKFLOW.md); these prior
+green hosted checks do not qualify the Mail source. The workflow candidate adds
+three Mail journeys (retained failed draft, uncertain-send recovery and native
+attachment preview/forward/removal) to the seven already hosted, for ten total.
+
 Published shared-catalog head `455ac33` passes all four hosted jobs:
 [native](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34108280415) and
 [backend](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34108280424).
@@ -32,12 +42,14 @@ The published resource-sync checkpoint 529fe26 passes all four hosted jobs:
 [Backend](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34093728884).
 This is exact-head evidence for that checkpoint, not subsequent catalog work.
 
-- **iPad native tests**: the complete `GunnAire OpsTests` target plus seven
+- **iPad native tests**: the complete `GunnAire OpsTests` target plus ten
   serial interface journeys: direct Invoice launch, simple Mail actions,
   current customer statement generation, statement review-to-Invoices,
   billing-identity review-to-Invoices with safe report export controls,
   shared catalog recovery with cancellation of only an unsent proposal,
-  and exact-target schedule deletion with billed-job retention.
+  exact-target schedule deletion with billed-job retention, editable draft
+  recovery after a rejected send, uncertain-send duplicate prevention, and
+  native attachment preview/forward/removal.
 - **Mac native tests**: the complete logic target on arm64 Mac Catalyst,
   followed by an unsigned optimized Release build. `lipo -verify_arch`
   requires both arm64 and x86_64 in the Release executable.

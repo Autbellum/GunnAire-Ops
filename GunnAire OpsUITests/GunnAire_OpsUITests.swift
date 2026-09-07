@@ -243,6 +243,124 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testMailSendFailureKeepsTheEditableDraftAndInboxSimple() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-appStoreScreenshotFixtures", "-uiTestSeedMailInbox", "-uiTestMailRejectSend",
+            "-GunnAirePendingAppRoute", "mail"]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 8))
+        app.buttons["MailComposeButton"].tap()
+        XCTAssertTrue(app.navigationBars["Compose"].waitForExistence(timeout: 3))
+        let to = app.textFields["MailComposeTo"]
+        let subject = app.textFields["MailComposeSubject"]
+        let body = app.textFields["MailComposeBody"]
+        to.tap(); to.typeText("vendor@example.invalid")
+        subject.tap(); subject.typeText("Replacement equipment")
+        body.tap(); body.typeText("Please confirm availability.")
+        app.buttons["MailSendButton"].tap()
+        let status = app.staticTexts["MailComposeStatus"]
+        XCTAssertTrue(status.waitForExistence(timeout: 4))
+        XCTAssertTrue(app.navigationBars["Compose"].exists)
+        XCTAssertEqual(to.value as? String, "vendor@example.invalid")
+        XCTAssertEqual(subject.value as? String, "Replacement equipment")
+        XCTAssertEqual(body.value as? String, "Please confirm availability.")
+        XCTAssertTrue(body.isEnabled)
+        XCTAssertTrue(app.buttons["MailSendButton"].isEnabled)
+        XCTAssertFalse(app.staticTexts["Headers"].exists)
+        let evidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        evidence.name = "Mail - retained draft after failed send"
+        evidence.lifetime = .keepAlways
+        add(evidence)
+        app.navigationBars["Compose"].buttons["Cancel"].tap()
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testMailUnconfirmedSendRetainsDraftWithoutOfferingDuplicateSend() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-appStoreScreenshotFixtures", "-uiTestSeedMailInbox", "-uiTestMailUnconfirmedSend",
+            "-GunnAirePendingAppRoute", "mail"]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 8))
+        app.buttons["MailComposeButton"].tap()
+        let to = app.textFields["MailComposeTo"]
+        let body = app.textFields["MailComposeBody"]
+        to.tap(); to.typeText("vendor@example.invalid")
+        body.tap(); body.typeText("Please confirm equipment availability.")
+        app.buttons["MailSendButton"].tap()
+        let status = app.staticTexts["MailComposeStatus"]
+        XCTAssertTrue(status.waitForExistence(timeout: 4))
+        XCTAssertTrue(status.label.contains("Check Sent in Gmail"))
+        XCTAssertFalse(app.buttons["MailSendButton"].isEnabled)
+        XCTAssertFalse(body.isEnabled)
+        XCTAssertEqual(body.value as? String, "Please confirm equipment availability.")
+        let evidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        evidence.name = "Mail - uncertain send recovery"
+        evidence.lifetime = .keepAlways
+        add(evidence)
+        app.navigationBars["Compose"].buttons["Close"].tap()
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testMailAttachmentPreviewAndForwardRetainTheOriginalFile() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-appStoreScreenshotFixtures", "-uiTestSeedMailInbox", "-uiTestMailAttachments",
+            "-GunnAirePendingAppRoute", "mail"]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 8))
+        app.descendants(matching: .any)["MailMessage-ui-mail-1"].tap()
+        let attachment = app.buttons["MailAttachment-0.0"]
+        XCTAssertTrue(attachment.waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] 'We will see you Tuesday morning'")).firstMatch.exists)
+        XCTAssertFalse(app.staticTexts["Fixture equipment list."].exists)
+        attachment.tap()
+        let done = app.buttons["Done"].firstMatch
+        XCTAssertTrue(done.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Equipment"].waitForExistence(timeout: 5))
+        let previewContent = app.descendants(matching: .any).matching(NSPredicate(
+            format: "label CONTAINS %@ OR value CONTAINS %@", "Fixture equipment list.", "Fixture equipment list."
+        )).firstMatch
+        XCTAssertTrue(previewContent.waitForExistence(timeout: 8))
+        let previewEvidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        previewEvidence.name = "Mail - native attachment preview"
+        previewEvidence.lifetime = .keepAlways
+        add(previewEvidence)
+        done.tap()
+        XCTAssertTrue(app.navigationBars["Mail"].waitForExistence(timeout: 3))
+        app.buttons["MailMoreActionsButton"].tap()
+        app.buttons["Forward"].tap()
+        XCTAssertTrue(app.navigationBars["Compose"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.textFields["MailComposeSubject"].value as? String, "Fwd: Service appointment confirmed")
+        XCTAssertTrue(app.staticTexts["Equipment.txt"].exists)
+        XCTAssertTrue((app.textFields["MailComposeBody"].value as? String)?.contains("We will see you Tuesday morning") == true)
+        XCTAssertFalse(app.buttons["MailSendButton"].isEnabled)
+        let evidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        evidence.name = "Mail - forward with original attachment"
+        evidence.lifetime = .keepAlways
+        add(evidence)
+        XCTAssertTrue(app.buttons["MailAttachFilesButton"].exists)
+        app.buttons["Remove Equipment.txt"].tap()
+        // The original message still has its attachment behind this sheet.
+        // Wait for the composer's removal action to disappear, not all matching
+        // filename text in the application accessibility tree.
+        XCTAssertTrue(app.buttons["Remove Equipment.txt"].waitForNonExistence(timeout: 3))
+        XCTAssertEqual(app.textFields["MailComposeSubject"].value as? String, "Fwd: Service appointment confirmed")
+        let removalEvidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        removalEvidence.name = "Mail - removed only the draft attachment"
+        removalEvidence.lifetime = .keepAlways
+        add(removalEvidence)
+        app.navigationBars["Compose"].buttons["Cancel"].tap()
+        XCTAssertTrue(app.navigationBars["Mail"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
     func testMailWorkspaceUsesASimpleInboxInterface() throws {
         let app = XCUIApplication()
         app.launchArguments = [
@@ -314,7 +432,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         app.buttons["MailReplyButton"].tap()
         XCTAssertTrue(app.navigationBars["Compose"].waitForExistence(timeout: 3))
         XCTAssertEqual(app.textFields["MailComposeTo"].value as? String, "jordan@example.com")
-        XCTAssertEqual(app.textFields["MailComposeSubject"].value as? String, "Re: Service appointment confirmed")
+        XCTAssertEqual(app.textFields["MailComposeSubject"].value as? String, "Service appointment confirmed")
         app.navigationBars["Compose"].buttons["Cancel"].tap()
         XCTAssertTrue(app.navigationBars["Mail"].waitForExistence(timeout: 3))
 

@@ -124,6 +124,7 @@ struct BillingDocumentsView: View {
     @State private var generatedCustomerDocumentEstimateID: UUID?
     @State private var generatedCustomerDocumentKind = "document"
     @State private var isEmailingGeneratedDocument = false
+    @State private var generatedEmailAttempts: [URL: GmailSendWorkflow] = [:]
     @State private var showingDocumentationFileImporter = false
     @State private var showingDocumentationCamera = false
     @State private var attachmentKind: ServiceDocumentAttachmentKind = .diagnosticPhoto
@@ -1321,19 +1322,6 @@ GunnAire
             actionMessage = "Add a customer email before sending this generated document."
             return
         }
-        guard recipient.allowsTransactionalEmail else {
-            recordGeneratedCustomerDocumentCommunication(
-                customer: recipient,
-                recipient: email,
-                subject: "GunnAire \(generatedCustomerDocumentKind.capitalized) - \(recipient.name)",
-                attachmentNames: [],
-                deliveryStatus: "suppressed",
-                providerMessageID: nil,
-                providerStatusDetail: "Transactional email preference is off."
-            )
-            actionMessage = "Email was not sent because \(recipient.name)'s service and billing email preference is off."
-            return
-        }
         let subject = "GunnAire \(generatedCustomerDocumentKind.capitalized) - \(recipient.name)"
         let body = """
 Hello \(recipient.name),
@@ -1368,84 +1356,25 @@ GunnAire
             actionMessage = "Could not read the generated PDF attachment."
             return
         }
-        isEmailingGeneratedDocument = true
-        actionMessage = "Emailing \(generatedCustomerDocumentKind)..."
-        googleAuth.sendGmailMessage(
-            to: email,
-            subject: subject,
-            body: body,
-            attachments: gmailAttachments
-        ) { result in
-            DispatchQueue.main.async {
+        do {
+            if generatedEmailAttempts[url] == nil {
+                let outgoing = try GmailOutgoingMessage(to: email, subject: subject, body: body, attachments: gmailAttachments)
+                generatedEmailAttempts[url] = try GmailSendWorkflow(auth: googleAuth, context: modelContext,
+                    message: outgoing, business: GmailBusinessContext(customerID: recipient.id,
+                        serviceCallID: generatedCustomerDocumentServiceCallID,
+                        invoiceID: generatedCustomerDocumentInvoiceID,
+                        estimateID: generatedCustomerDocumentEstimateID, workflow: .customerDocument))
+            }
+            guard let attempt = generatedEmailAttempts[url] else { throw GmailComposeError.changed }
+            isEmailingGeneratedDocument = true
+            actionMessage = "Sending document..."
+            Task { @MainActor in
+                let result = await attempt.send()
                 isEmailingGeneratedDocument = false
-                switch result {
-                case .success(let sentMessage):
-                    recordGeneratedCustomerDocumentCommunication(
-                        customer: recipient,
-                        recipient: email,
-                        subject: subject,
-                        attachmentNames: gmailAttachments.map(\.fileName),
-                        deliveryStatus: "sent",
-                        providerMessageID: sentMessage.id,
-                        providerStatusDetail: nil
-                    )
-                    let attachmentSummary = gmailAttachments.count == 1 ? "" : " with onsite report"
-                    actionMessage = "\(generatedCustomerDocumentKind.capitalized) emailed to \(email)\(attachmentSummary)."
-                case .failure(let error):
-                    recordGeneratedCustomerDocumentCommunication(
-                        customer: recipient,
-                        recipient: email,
-                        subject: subject,
-                        attachmentNames: gmailAttachments.map(\.fileName),
-                        deliveryStatus: "failed",
-                        providerMessageID: nil,
-                        providerStatusDetail: error.localizedDescription
-                    )
-                    actionMessage = "Generated document email failed: \(error.localizedDescription)"
-                }
+                actionMessage = result.message
+                if result.canRetry { generatedEmailAttempts.removeValue(forKey: url) }
             }
-        }
-    }
-
-    private func recordGeneratedCustomerDocumentCommunication(
-        customer: Customer,
-        recipient: String,
-        subject: String,
-        attachmentNames: [String],
-        deliveryStatus: String,
-        providerMessageID: String?,
-        providerStatusDetail: String?
-    ) {
-        let now = Date()
-        let communication = CustomerCommunication(
-            customer: customer,
-            serviceCallID: generatedCustomerDocumentServiceCallID,
-            invoiceID: generatedCustomerDocumentInvoiceID,
-            estimateID: generatedCustomerDocumentEstimateID,
-            recipient: recipient,
-            subject: subject,
-            deliveryStatus: deliveryStatus,
-            workflow: .customerDocument,
-            actorEmail: googleAuth.signedInEmail,
-            consentSnapshot: CustomerCommunicationConsentSnapshot(customer: customer),
-            providerStatusDetail: providerStatusDetail,
-            deliveredAt: deliveryStatus == "sent" ? now : nil,
-            attachmentFileNames: attachmentNames,
-            providerMessageID: providerMessageID,
-            createdAt: now
-        )
-        modelContext.insert(communication)
-        try? modelContext.save()
-        guard GunnAireBackendService.isConfigured else { return }
-        Task {
-            do {
-                let remote = try await GunnAireBackendService.uploadCustomerCommunication(communication)
-                communication.markSharedCompanySynced(id: remote.id)
-            } catch {
-                communication.markSharedCompanySyncFailed(error.localizedDescription)
-            }
-            try? modelContext.save()
-        }
+        } catch { actionMessage = GmailSendOutcome.notSent(error).message }
     }
 
     private var isJobDocumentationMode: Bool {

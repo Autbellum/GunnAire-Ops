@@ -94,6 +94,7 @@ final class CustomerCommunication {
     }
 
     var needsSharedCompanySync: Bool {
+        ["sent", "failed", "suppressed"].contains(normalizedDeliveryStatus) &&
         backendCommunicationID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
     }
 

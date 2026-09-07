@@ -1,3 +1,22 @@
+Mail workflow checkpoint, 2026-09-07: **1049/1049 logic tests pass on each of
+iPad Simulator and Mac Catalyst; 8/8 selected iPad UI journeys, 173/173 Backend
+and 37/37 Tools tests pass**. Native attachment preview, complete forwarding,
+file import/removal and simple draft recovery are integrated. Ordinary replies
+no longer require a customer template; original account, explicit job/document
+links and current consent/access are retained. Generated document email uses
+the shared coordinator. Failed confirmation after an accepted send cannot
+authorize a duplicate; accepted Gmail Sent evidence is not recipient delivery.
+Fifty-one new Mail logic tests and all five visually inspected final Mail PNGs
+are documented in [GMAIL_COMPOSITION_WORKFLOW.md](GMAIL_COMPOSITION_WORKFLOW.md).
+The optimized universal Mac Release passes and arm64/x86_64 are verified.
+The prior published `d9a83d8` head passes all four hosted jobs, not a substitute
+for this source's new-head checks. Cross-restart/server-owned Mail dispatch,
+folders/pagination, received-email linkage/archive, remaining Google/QBO and
+financial workflows, signed CloudKit/offline multi-device convergence, supplier
+onboarding, approved physical-iPhone Tap to Pay and provider/platform release
+acceptance remain open. No merge, deployment, signing/entitlement change,
+physical install or live customer/provider/accounting mutation occurred.
+
 Google Calendar schedule checkpoint, 2026-09-07: **998/998 logic tests pass
 on each of iPad Simulator and Mac Catalyst; 7/7 selected iPad UI journeys,
 173/173 Backend tests and 37/37 Tools tests pass**. The final unsigned optimized

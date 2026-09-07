@@ -296,6 +296,7 @@ struct GmailMessageHeader: Codable {
 struct GmailMessageBody: Codable {
     let data: String?
     let size: Int?
+    var attachmentId: String? = nil
 }
 
 struct GmailSendRequest: Codable {
@@ -810,7 +811,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     }
 
     /// Provider identifiers are one opaque path component, never a route.
-    private static func calendarPathComponent(_ value: String) -> String? {
+    static func calendarPathComponent(_ value: String) -> String? {
         guard !value.isEmpty, value != ".", value != "..",
               value == value.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.contains("/"), value.rangeOfCharacter(from: .controlCharacters) == nil else { return nil }
@@ -1089,14 +1090,26 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         }
     }
 
-    func fetchGmailMessage(id: String, completion: @escaping (Result<GmailMessageDetail, Error>) -> Void) {
+    func fetchGmailMessage(id: String, operation: WorkspaceProviderOperation? = nil, completion: @escaping (Result<GmailMessageDetail, Error>) -> Void) {
         if let businessAccountLinkError {
             completion(.failure(businessAccountLinkError))
             return
         }
-        let escapedID = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        guard let escapedID = Self.calendarPathComponent(id) else {
+            completion(.failure(GoogleAuthError.invalidEndpoint)); return
+        }
         let url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/\(escapedID)?format=full"
-        authorizedGET(url, completion: completion)
+        authorizedGET(url, existingOperation: operation, completion: completion)
+    }
+
+    func fetchGmailAttachment(messageID: String, attachmentID: String, operation: WorkspaceProviderOperation,
+                              completion: @escaping (Result<GmailMessageBody, Error>) -> Void) {
+        guard let message = Self.calendarPathComponent(messageID),
+              let attachment = Self.calendarPathComponent(attachmentID) else {
+            completion(.failure(GoogleAuthError.invalidEndpoint)); return
+        }
+        authorizedGET("https://gmail.googleapis.com/gmail/v1/users/me/messages/\(message)/attachments/\(attachment)",
+                      existingOperation: operation, completion: completion)
     }
 
     func fetchGmailThread(id: String, completion: @escaping (Result<[GmailMessageDetail], Error>) -> Void) {
@@ -1116,35 +1129,38 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         }
     }
 
-    func markGmailMessageRead(id: String, completion: @escaping (Result<Void, Error>) -> Void) {
+    func markGmailMessageRead(id: String, operation: WorkspaceProviderOperation? = nil, completion: @escaping (Result<Void, Error>) -> Void) {
         if let businessAccountLinkError {
             completion(.failure(businessAccountLinkError))
             return
         }
-        let escapedID = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
-        guard let url = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/\(escapedID)/modify") else {
+        guard let escapedID = Self.calendarPathComponent(id),
+              let url = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/\(escapedID)/modify") else {
             completion(.failure(GoogleAuthError.invalidEndpoint))
             return
         }
         let payload = GmailLabelModificationRequest(addLabelIds: [], removeLabelIds: ["UNREAD"])
-        authorizedJSONRequest(url: url, method: "POST", body: payload) { (result: Result<GmailMessageDetail, Error>) in
-            completion(result.map { _ in () })
+        authorizedJSONRequest(url: url, method: "POST", body: payload, existingOperation: operation) { (result: Result<GmailMessageDetail, Error>) in
+            completion(result.flatMap { value in
+                value.id == id && value.labelIds?.contains("UNREAD") != true
+                    ? .success(()) : .failure(GoogleAuthError.decoding)
+            })
         }
     }
 
     /// Gmail's recoverable delete action. Messages are moved to Trash instead
     /// of being permanently deleted so office staff can recover mistakes.
-    func moveGmailMessageToTrash(id: String, completion: @escaping (Result<Void, Error>) -> Void) {
+    func moveGmailMessageToTrash(id: String, operation: WorkspaceProviderOperation? = nil, completion: @escaping (Result<Void, Error>) -> Void) {
         if let businessAccountLinkError {
             completion(.failure(businessAccountLinkError))
             return
         }
-        let escapedID = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
-        guard let url = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/\(escapedID)/trash") else {
+        guard let escapedID = Self.calendarPathComponent(id),
+              let url = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/\(escapedID)/trash") else {
             completion(.failure(GoogleAuthError.invalidEndpoint))
             return
         }
-        authorizedEmptyRequest(url: url, method: "POST", completion: completion)
+        authorizedEmptyRequest(url: url, method: "POST", existingOperation: operation, completion: completion)
     }
 
     func sendGmailMessage(
@@ -1153,17 +1169,32 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         body: String,
         threadID: String? = nil,
         attachments: [GmailAttachment] = [],
+        reply: GmailReplyContext? = nil,
+        messageID: String? = nil,
+        operation: WorkspaceProviderOperation? = nil,
         completion: @escaping (Result<GmailMessageReference, Error>) -> Void
     ) {
         if let businessAccountLinkError {
             completion(.failure(businessAccountLinkError))
             return
         }
+        let outgoing: GmailOutgoingMessage
+        do {
+            outgoing = try GmailOutgoingMessage(to: to, subject: subject, body: body, attachments: attachments, reply: reply)
+            if persistsCredentials, operation == nil { throw GmailComposeError.access }
+            if let messageID, !GmailReplyContext.isValidMessageID(messageID) { throw GmailComposeError.header }
+            if let reply, (reply.threadID != threadID || Self.calendarPathComponent(reply.threadID) == nil ||
+                           !GmailReplyContext.isValidMessageID(reply.messageID) ||
+                           !reply.references.allSatisfy(GmailReplyContext.isValidMessageID)) { throw GmailComposeError.header }
+        } catch { completion(.failure(error)); return }
         let message = Self.makeGmailRawMessage(
-            to: to,
+            to: outgoing.to,
             subject: subject,
             body: body,
-            attachments: attachments
+            attachments: attachments,
+            reply: outgoing.reply,
+            messageID: messageID,
+            from: signedInEmail
         )
 
         guard let url = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/send") else {
@@ -1171,8 +1202,8 @@ final class GoogleAuthManager: NSObject, ObservableObject {
             return
         }
 
-        let payload = GmailSendRequest(raw: Data(message.utf8).base64URLEncodedString(), threadId: threadID)
-        authorizedJSONRequest(url: url, method: "POST", body: payload) { (result: Result<GmailMessageReference, Error>) in
+        let payload = GmailSendRequest(raw: Data(message.utf8).base64URLEncodedString(), threadId: outgoing.reply?.threadID)
+        authorizedJSONRequest(url: url, method: "POST", body: payload, existingOperation: operation, reportHTTPStatus: true) { (result: Result<GmailMessageReference, Error>) in
             switch result {
             case .success(let sentMessage):
                 completion(.success(sentMessage))
@@ -1186,31 +1217,60 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         to: String,
         subject: String,
         body: String,
-        attachments: [GmailAttachment] = []
+        attachments: [GmailAttachment] = [],
+        reply: GmailReplyContext? = nil,
+        messageID: String? = nil,
+        from: String? = nil
     ) -> String {
         let escapedSubject = subject.replacingOccurrences(of: "\r", with: " ").replacingOccurrences(of: "\n", with: " ")
+        let headerSubject: String
+        if escapedSubject.unicodeScalars.allSatisfy(\.isASCII) { headerSubject = escapedSubject }
+        else {
+            var words: [String] = [], chunk = ""
+            for scalar in escapedSubject.unicodeScalars {
+                let next = String(scalar)
+                if chunk.utf8.count + next.utf8.count > 42 {
+                    words.append("=?UTF-8?B?\(Data(chunk.utf8).base64EncodedString())?=")
+                    chunk = ""
+                }
+                chunk += next
+            }
+            if !chunk.isEmpty { words.append("=?UTF-8?B?\(Data(chunk.utf8).base64EncodedString())?=") }
+            headerSubject = words.joined(separator: "\r\n ")
+        }
+        let safeTo = to.replacingOccurrences(of: "\r", with: " ").replacingOccurrences(of: "\n", with: " ")
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss Z"
+        var headers = ["To: \(safeTo)", "Subject: \(headerSubject)", "Date: \(formatter.string(from: Date()))",
+                       "Message-ID: \(messageID ?? "<gunnaire-\(UUID().uuidString.lowercased())@gunnaire.com>")", "MIME-Version: 1.0"]
+        if let from, let addresses = try? GmailAddressList.parse(from), addresses.count == 1 {
+            headers.insert("From: \(addresses[0])", at: 0)
+        }
+        if let reply, reply.subject == subject, GmailReplyContext.isValidMessageID(reply.messageID),
+           reply.references.allSatisfy(GmailReplyContext.isValidMessageID) {
+            headers += ["In-Reply-To: \(reply.messageID)", "References: \(reply.referenceHeader)"]
+        }
+        let encodedBody = Data(body.utf8).base64EncodedString(options: [.lineLength76Characters, .endLineWithCarriageReturn, .endLineWithLineFeed])
         guard !attachments.isEmpty else {
-            return [
-                "To: \(to)",
-                "Subject: \(escapedSubject)",
+            return (headers + [
                 "Content-Type: text/plain; charset=utf-8",
+                "Content-Transfer-Encoding: base64",
                 "",
-                body
-            ].joined(separator: "\r\n")
+                encodedBody
+            ]).joined(separator: "\r\n")
         }
 
         let boundary = "gunnaire-\(UUID().uuidString)"
-        var lines: [String] = [
-            "To: \(to)",
-            "Subject: \(escapedSubject)",
-            "MIME-Version: 1.0",
+        var lines: [String] = headers + [
             "Content-Type: multipart/mixed; boundary=\"\(boundary)\"",
             "",
             "--\(boundary)",
             "Content-Type: text/plain; charset=utf-8",
-            "Content-Transfer-Encoding: 7bit",
+            "Content-Transfer-Encoding: base64",
             "",
-            body
+            encodedBody
         ]
 
         for attachment in attachments {
@@ -1224,7 +1284,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                 "Content-Disposition: attachment; filename=\"\(safeFileName)\"",
                 "Content-Transfer-Encoding: base64",
                 "",
-                attachment.data.base64EncodedString(options: [.lineLength76Characters])
+                attachment.data.base64EncodedString(options: [.lineLength76Characters, .endLineWithCarriageReturn, .endLineWithLineFeed])
             ])
         }
 
@@ -1323,6 +1383,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         method: String,
         body: Body,
         existingOperation: WorkspaceProviderOperation? = nil,
+        reportHTTPStatus: Bool = false,
         completion: @escaping (Result<T, Error>) -> Void
     ) {
         let operation: WorkspaceProviderOperation
@@ -1363,7 +1424,8 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                         return
                     }
                     guard (200...299).contains(http.statusCode) else {
-                        completion(.failure(self.parseProviderError(data: data, fallbackStatus: http.statusCode)))
+                        completion(.failure(reportHTTPStatus ? .http(statusCode: http.statusCode) :
+                            self.parseProviderError(data: data, fallbackStatus: http.statusCode)))
                         return
                     }
                     guard let decoded = try? JSONDecoder().decode(T.self, from: data) else {

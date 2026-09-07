@@ -25,7 +25,7 @@ enum CustomerCommunicationWorkflow {
 
         case .estimateFollowUp:
             guard let estimateID,
-                  let estimate = estimates.first(where: { $0.id == estimateID && $0.customer.id == customerID }) else {
+                  let estimate = estimates.first(where: { $0.id == estimateID && $0.customer?.id == customerID }) else {
                 return false
             }
             let status = estimate.status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -33,7 +33,7 @@ enum CustomerCommunicationWorkflow {
 
         case .paymentReminder:
             guard let invoiceID,
-                  let invoice = invoices.first(where: { $0.id == invoiceID && $0.customer.id == customerID }) else {
+                  let invoice = invoices.first(where: { $0.id == invoiceID && $0.customer?.id == customerID }) else {
                 return false
             }
             return invoice.normalizedStatus != "paid"
@@ -41,7 +41,7 @@ enum CustomerCommunicationWorkflow {
         case .appointmentConfirmation, .technicianEnRoute, .technicianArrival,
              .workInProgress, .serviceFollowUp, .postJobReview:
             guard let serviceCallID,
-                  let call = serviceCalls.first(where: { $0.id == serviceCallID && $0.customer.id == customerID }) else {
+                  let call = serviceCalls.first(where: { $0.id == serviceCallID && $0.customer?.id == customerID }) else {
                 return false
             }
             if workflow == .postJobReview {
@@ -52,27 +52,27 @@ enum CustomerCommunicationWorkflow {
         case .maintenanceVisitReminder, .maintenanceRenewal:
             guard let maintenanceContractID else { return false }
             return recurringContracts.contains {
-                $0.id == maintenanceContractID && $0.customer.id == customerID && $0.active
+                $0.id == maintenanceContractID && $0.customer?.id == customerID && $0.active
             }
 
         case .receipt:
             guard let invoiceID else { return false }
-            return invoices.contains { $0.id == invoiceID && $0.customer.id == customerID }
+            return invoices.contains { $0.id == invoiceID && $0.customer?.id == customerID }
 
         case .customerDocument:
             let invoiceMatches = invoiceID.map { id in
-                invoices.contains { $0.id == id && $0.customer.id == customerID }
+                invoices.contains { $0.id == id && $0.customer?.id == customerID }
             } ?? false
             let estimateMatches = estimateID.map { id in
-                estimates.contains { $0.id == id && $0.customer.id == customerID }
+                estimates.contains { $0.id == id && $0.customer?.id == customerID }
             } ?? false
             let callMatches = serviceCallID.map { id in
-                serviceCalls.contains { $0.id == id && $0.customer.id == customerID }
+                serviceCalls.contains { $0.id == id && $0.customer?.id == customerID }
             } ?? false
             return invoiceMatches || estimateMatches || callMatches
 
         case .accountStatement:
-            return invoices.contains { $0.customer.id == customerID }
+            return invoices.contains { $0.customer?.id == customerID }
         }
     }
 
@@ -114,7 +114,7 @@ enum CustomerCommunicationWorkflow {
 
         case .estimateFollowUp:
             guard let estimateID,
-                  let estimate = estimates.first(where: { $0.id == estimateID && $0.customer.id == customerID }) else {
+                  let estimate = estimates.first(where: { $0.id == estimateID && $0.customer?.id == customerID }) else {
                 return false
             }
             let normalizedStatus = estimate.status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -122,7 +122,7 @@ enum CustomerCommunicationWorkflow {
 
             let linkedCallID = serviceCallID ?? estimate.serviceCallID
             let linkedCall = linkedCallID.flatMap { id in
-                serviceCalls.first { $0.id == id && $0.customer.id == customerID }
+                serviceCalls.first { $0.id == id && $0.customer?.id == customerID }
             }
             if serviceCallID != nil, linkedCall == nil { return false }
 
@@ -143,14 +143,14 @@ enum CustomerCommunicationWorkflow {
 
         case .paymentReminder:
             guard let invoiceID,
-                  let invoice = invoices.first(where: { $0.id == invoiceID && $0.customer.id == customerID }),
+                  let invoice = invoices.first(where: { $0.id == invoiceID && $0.customer?.id == customerID }),
                   invoice.normalizedStatus != "paid" else {
                 return false
             }
 
             let linkedCallID = serviceCallID ?? invoice.serviceCallID
             guard let linkedCallID,
-                  let linkedCall = serviceCalls.first(where: { $0.id == linkedCallID && $0.customer.id == customerID }) else {
+                  let linkedCall = serviceCalls.first(where: { $0.id == linkedCallID && $0.customer?.id == customerID }) else {
                 return false
             }
             linkedCall.followUpRequired = true
@@ -167,7 +167,7 @@ enum CustomerCommunicationWorkflow {
 
         case .appointmentConfirmation, .technicianEnRoute, .technicianArrival, .workInProgress:
             guard let serviceCallID,
-                  let linkedCall = serviceCalls.first(where: { $0.id == serviceCallID && $0.customer.id == customerID }) else {
+                  let linkedCall = serviceCalls.first(where: { $0.id == serviceCallID && $0.customer?.id == customerID }) else {
                 return false
             }
             ServiceCallActivity.record(
@@ -181,7 +181,7 @@ enum CustomerCommunicationWorkflow {
 
         case .serviceFollowUp:
             guard let serviceCallID,
-                  let linkedCall = serviceCalls.first(where: { $0.id == serviceCallID && $0.customer.id == customerID }) else {
+                  let linkedCall = serviceCalls.first(where: { $0.id == serviceCallID && $0.customer?.id == customerID }) else {
                 return false
             }
             linkedCall.followUpRequired = true
@@ -200,7 +200,7 @@ enum CustomerCommunicationWorkflow {
 
         case .postJobReview:
             guard let serviceCallID,
-                  let linkedCall = serviceCalls.first(where: { $0.id == serviceCallID && $0.customer.id == customerID }) else {
+                  let linkedCall = serviceCalls.first(where: { $0.id == serviceCallID && $0.customer?.id == customerID }) else {
                 return false
             }
             ServiceCallActivity.record(
@@ -214,7 +214,7 @@ enum CustomerCommunicationWorkflow {
 
         case .maintenanceVisitReminder, .maintenanceRenewal:
             return recurringContracts.contains {
-                $0.id == maintenanceContractID && $0.customer.id == customerID && $0.active
+                $0.id == maintenanceContractID && $0.customer?.id == customerID && $0.active
             }
 
         case .receipt, .customerDocument, .accountStatement:

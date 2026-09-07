@@ -15,9 +15,16 @@ The Management catalog approval/retry and reviewed reconciliation directions
 now use one captured, one-shot workflow; the shared invoice-line boundary
 preserves and rejects conflicting local item identities. See
 [QBO_CATALOG_WORKFLOW_LIFECYCLE.md](QBO_CATALOG_WORKFLOW_LIFECYCLE.md).
-The separate BillingDocumentsView customer/item/document publication callback
-chain remains active and still requires full lifecycle migration; it is not
-qualified by the Management service's acceptance.
+Billing Documents now uses the retained customer/item/document workflow in
+[QBO_BILLING_WORKFLOW_LIFECYCLE.md](QBO_BILLING_WORKFLOW_LIFECYCLE.md).
+Shared catalog dispatch moved to the server-owned intent workflow in
+[QBO_SERVER_CATALOG_PUBLICATION.md](QBO_SERVER_CATALOG_PUBLICATION.md), and
+Calendar schedule identity/deletion handling is documented in
+[GOOGLE_CALENDAR_WORKFLOW_LIFECYCLE.md](GOOGLE_CALENDAR_WORKFLOW_LIFECYCLE.md).
+Mail composition, attachment forwarding and confirmed-send recovery are under
+active implementation/acceptance in
+[GMAIL_COMPOSITION_WORKFLOW.md](GMAIL_COMPOSITION_WORKFLOW.md). These migrations
+do not establish server authority or production acceptance for all workflows.
 The ten-suite feature comparison is a coverage inventory, not proof of flawless
 end-to-end behavior. CloudKit/offline convergence, historical accounting,
 complete payment-event reconciliation, retained-context orchestration and

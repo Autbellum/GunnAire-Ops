@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 
 enum GmailMessagePresentation {
     static func inboxQuery(searchText: String) -> String {
@@ -22,7 +23,8 @@ enum GmailMessagePresentation {
         if let html = decodedText(in: payload, matching: "text/html") {
             return cleaned(plainText(fromHTML: html))
         }
-        if let encoded = payload.body?.data, let decoded = decodeBase64URL(encoded) {
+        if payload.filename?.isEmpty != false, payload.mimeType?.lowercased() == "text/plain",
+           let encoded = payload.body?.data, let decoded = decodeBase64URL(encoded) {
             return cleaned(decoded)
         }
         return nil
@@ -40,6 +42,7 @@ enum GmailMessagePresentation {
     }
 
     private static func decodedText(in payload: GmailMessagePayload, matching mimeType: String) -> String? {
+        guard payload.filename?.isEmpty != false else { return nil }
         if payload.mimeType?.lowercased() == mimeType,
            let encoded = payload.body?.data,
            let decoded = decodeBase64URL(encoded),
@@ -107,18 +110,15 @@ enum GmailMessagePresentation {
 struct GmailView: View {
     @Environment(\.modelContext) private var modelContext
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
-    @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
-    @Query private var estimates: [Estimate]
-    @Query private var invoices: [Invoice]
-    @Query private var serviceCalls: [ServiceCall]
-    @Query private var recurringContracts: [RecurringMaintenanceContract]
 
     @State private var messages: [GmailMessageDetail] = []
     @State private var isLoading = false
     @State private var statusMessage: String?
     @State private var searchQuery = ""
     @State private var deletingMessageIDs: Set<String> = []
-    @State private var showingComposeSheet = false
+    @State private var activeMailSend: GmailSendWorkflow?
+    @State private var mailboxOperation: WorkspaceProviderOperation?
+    @State private var mailLoadRun = UUID()
     @State private var composeDraft: GmailDraft?
     @State private var didConsumePendingDraft = false
 
@@ -175,6 +175,7 @@ struct GmailView: View {
                             GmailMessageDetailView(
                                 message: message,
                                 loadsRemoteMessage: !usesMailUITestFixture,
+                                provider: mailboxOperation,
                                 onReply: { draft in
                                     composeDraft = draft
                                 },
@@ -234,7 +235,7 @@ struct GmailView: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
-                        showingComposeSheet = true
+                        composeDraft = GmailDraft(to: "", subject: "", body: "", threadID: nil, attachments: [])
                     } label: {
                         Label("Compose", systemImage: "square.and.pencil")
                     }
@@ -259,16 +260,18 @@ struct GmailView: View {
                     initialTo: draft.to,
                     initialSubject: draft.subject,
                     initialMessageBody: draft.body,
-                    attachments: draft.attachments
-                ) { to, subject, body in
-                    sendMessage(to: to, subject: subject, body: body, threadID: draft.threadID, attachments: draft.attachments, auditDraft: draft)
+                    attachments: draft.attachments,
+                    attachmentError: draft.attachmentError
+                ) { to, subject, body, attachments in
+                    await sendMessage(to: to, subject: subject, body: body, attachments: attachments, draft: draft)
                 }
             }
-            .sheet(isPresented: $showingComposeSheet) {
-                GmailComposeView { to, subject, body in
-                    sendMessage(to: to, subject: subject, body: body, threadID: nil, attachments: [], auditDraft: nil)
-                }
+            .onChange(of: composeDraft?.id) { _, value in
+                activeMailSend = nil
+                if value == nil { applyPendingDraftIfNeeded(force: true) }
             }
+            .onChange(of: googleAuth.signedInEmail) { _, _ in clearMailbox() }
+            .onChange(of: googleAuth.isAuthenticated) { _, _ in clearMailbox() }
         }
     }
 
@@ -297,15 +300,20 @@ struct GmailView: View {
             return
         }
 
+        let run = UUID()
+        mailLoadRun = run
+        guard let retainedOperation = try? googleAuth.captureProviderOperation() else { return }
         isLoading = true
         if !preservingStatus {
             statusMessage = nil
         }
         googleAuth.fetchGmailMessages(query: GmailMessagePresentation.inboxQuery(searchText: searchQuery)) { result in
             DispatchQueue.main.async {
+                guard mailLoadRun == run, (try? retainedOperation.check()) != nil else { return }
                 isLoading = false
                 switch result {
                 case .success(let loadedMessages):
+                    mailboxOperation = retainedOperation
                     messages = loadedMessages
                     if !preservingStatus {
                         statusMessage = nil
@@ -318,109 +326,45 @@ struct GmailView: View {
         }
     }
 
-    private func sendMessage(to: String, subject: String, body: String, threadID: String?, attachments: [GmailAttachment], auditDraft: GmailDraft?) {
+    private func sendMessage(to: String, subject: String, body: String, attachments: [GmailAttachment], draft: GmailDraft) async -> GmailSendOutcome {
         if usesMailUITestFixture {
+            if ProcessInfo.processInfo.arguments.contains("-uiTestMailRejectSend") {
+                return .notSent(GmailComposeError.recipients)
+            }
+            if ProcessInfo.processInfo.arguments.contains("-uiTestMailUnconfirmedSend") {
+                return .uncertain
+            }
             statusMessage = "Message sent."
-            return
+            return .init(state: .sent, message: "Message sent.")
         }
-        guard canUseGoogleIntegration else {
-            statusMessage = GoogleAuthError.businessAccountMismatch.localizedDescription
-            return
-        }
-        let recipient = AppAccess.normalizedEmail(to)
-        let linkedCustomer = auditDraft?.customerID.flatMap { customerID in
-            customers.first { $0.id == customerID }
-        } ?? customers.first { AppAccess.normalizedEmail($0.email) == recipient }
-        if let auditDraft {
-            guard let linkedCustomer else {
-                statusMessage = "Email was not sent because its customer record is no longer available. Open the record and draft it again."
-                return
+        do {
+            guard draft.attachmentError == nil else { throw GmailComposeError.attachment }
+            guard !draft.requiresBusinessContext || draft.businessContext != nil else { throw GmailComposeError.changed }
+            if activeMailSend == nil {
+                let message = try GmailOutgoingMessage(to: to, subject: subject, body: body,
+                                                       attachments: attachments, reply: draft.reply)
+                activeMailSend = try GmailSendWorkflow(auth: googleAuth, context: modelContext,
+                    message: message, business: draft.businessContext, provider: draft.provider)
             }
-            let expectedRecipient = AppAccess.normalizedEmail(linkedCustomer.email)
-            guard !expectedRecipient.isEmpty, recipient == expectedRecipient else {
-                statusMessage = "Email was not sent because the recipient no longer matches the linked customer. Return to the customer or job and draft it again."
-                return
+            guard let workflow = activeMailSend else { throw GmailComposeError.changed }
+            let result = await workflow.send()
+            if result.canRetry { activeMailSend = nil }
+            if result.state == .sent {
+                statusMessage = result.message
+                loadMessages(preservingStatus: true)
             }
-            guard CustomerCommunicationWorkflow.contextIsValid(
-                workflow: auditDraft.workflow,
-                customerID: auditDraft.customerID,
-                serviceCallID: auditDraft.serviceCallID,
-                invoiceID: auditDraft.invoiceID,
-                estimateID: auditDraft.estimateID,
-                maintenanceContractID: auditDraft.maintenanceContractID,
-                estimates: estimates,
-                invoices: invoices,
-                serviceCalls: serviceCalls,
-                recurringContracts: recurringContracts
-            ) else {
-                statusMessage = "Email was not sent because the linked job, agreement, estimate, or invoice changed. Return to that record and draft it again."
-                return
-            }
-            let consentAllowed = auditDraft.workflow.requiresMarketingConsent
-                ? linkedCustomer.allowsMarketing
-                : linkedCustomer.allowsTransactionalEmail
-            if !consentAllowed {
-                recordCustomerCommunicationAttempt(
-                    from: auditDraft,
-                    customer: linkedCustomer,
-                    to: to,
-                    subject: subject,
-                    attachments: attachments,
-                    deliveryStatus: "suppressed",
-                    providerMessageID: nil,
-                    providerStatusDetail: auditDraft.workflow.requiresMarketingConsent
-                        ? "Marketing preference is off."
-                        : "Transactional email preference is off."
-                )
-                statusMessage = auditDraft.workflow.requiresMarketingConsent
-                    ? "Email was not sent because \(linkedCustomer.name)'s marketing preference is off."
-                    : "Email was not sent because \(linkedCustomer.name)'s service and billing email preference is off. Update Contact Preferences before sending."
-                return
-            }
-        } else if let linkedCustomer, !linkedCustomer.allowsTransactionalEmail {
-            statusMessage = "Email was not sent because \(linkedCustomer.name)'s service and billing email preference is off. Update Contact Preferences in the customer record before sending."
-            return
-        }
-        statusMessage = "Sending message..."
-        googleAuth.sendGmailMessage(to: to, subject: subject, body: body, threadID: threadID, attachments: attachments) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let sentMessage):
-                    if let auditDraft,
-                       let customerID = auditDraft.customerID,
-                       let linkedCustomer = customers.first(where: { $0.id == customerID }) {
-                        recordCustomerCommunicationAttempt(
-                            from: auditDraft,
-                            customer: linkedCustomer,
-                            to: to,
-                            subject: subject,
-                            attachments: attachments,
-                            deliveryStatus: "sent",
-                            providerMessageID: sentMessage.id,
-                            providerStatusDetail: nil
-                        )
-                    }
-                    statusMessage = "Message sent."
-                    loadMessages(preservingStatus: true)
-                case .failure(let error):
-                    if let auditDraft,
-                       let customerID = auditDraft.customerID,
-                       let linkedCustomer = customers.first(where: { $0.id == customerID }) {
-                        recordCustomerCommunicationAttempt(
-                            from: auditDraft,
-                            customer: linkedCustomer,
-                            to: to,
-                            subject: subject,
-                            attachments: attachments,
-                            deliveryStatus: "failed",
-                            providerMessageID: nil,
-                            providerStatusDetail: error.localizedDescription
-                        )
-                    }
-                    statusMessage = "The message couldn't be sent. Check your connection and try again."
-                }
-            }
-        }
+            return result
+        } catch { return .notSent(error) }
+    }
+
+    private func clearMailbox() {
+        mailLoadRun = UUID()
+        mailboxOperation = nil
+        messages = []
+        deletingMessageIDs = []
+        isLoading = false
+        composeDraft = nil
+        statusMessage = nil
     }
 
     private func markMessageRead(_ message: GmailMessageDetail) {
@@ -430,10 +374,12 @@ struct GmailView: View {
             messages[index] = GmailMessagePresentation.removingUnreadLabel(from: messages[index])
             return
         }
-        googleAuth.markGmailMessageRead(id: message.id) { result in
+        guard let provider = mailboxOperation, (try? provider.check()) != nil else { return }
+        googleAuth.markGmailMessageRead(id: message.id, operation: provider) { result in
             guard case .success = result else { return }
             DispatchQueue.main.async {
-                guard let index = messages.firstIndex(where: { $0.id == message.id }) else { return }
+                guard (try? provider.check()) != nil,
+                      let index = messages.firstIndex(where: { $0.id == message.id }) else { return }
                 messages[index] = GmailMessagePresentation.removingUnreadLabel(from: messages[index])
             }
         }
@@ -446,9 +392,11 @@ struct GmailView: View {
             statusMessage = "Message moved to Trash."
             return
         }
+        guard let provider = mailboxOperation, (try? provider.check()) != nil else { return }
         deletingMessageIDs.insert(message.id)
-        googleAuth.moveGmailMessageToTrash(id: message.id) { result in
+        googleAuth.moveGmailMessageToTrash(id: message.id, operation: provider) { result in
             DispatchQueue.main.async {
+                guard (try? provider.check()) != nil else { return }
                 deletingMessageIDs.remove(message.id)
                 switch result {
                 case .success:
@@ -462,15 +410,17 @@ struct GmailView: View {
     }
 
     private func applyPendingDraftIfNeeded(force: Bool = false) {
-        guard force || !didConsumePendingDraft else { return }
+        guard composeDraft == nil, force || !didConsumePendingDraft else { return }
         didConsumePendingDraft = true
         guard let draft = GunnAireAppIntentRouter.consumePendingMailDraft() else { return }
+        let attachmentResult = Result { try GmailOutgoingMessage.attachments(paths: draft.attachmentPaths) }
         composeDraft = GmailDraft(
             to: draft.to,
             subject: draft.subject,
             body: draft.body,
             threadID: nil,
-            attachments: attachments(from: draft.attachmentPaths),
+            attachments: (try? attachmentResult.get()) ?? [],
+            attachmentError: attachmentResult.failureDescription,
             customerID: draft.customerID,
             serviceCallID: draft.serviceCallID,
             invoiceID: draft.invoiceID,
@@ -478,78 +428,6 @@ struct GmailView: View {
             maintenanceContractID: draft.maintenanceContractID,
             workflow: draft.workflow
         )
-    }
-
-    private func recordCustomerCommunicationAttempt(
-        from draft: GmailDraft,
-        customer: Customer,
-        to: String,
-        subject: String,
-        attachments: [GmailAttachment],
-        deliveryStatus: String,
-        providerMessageID: String?,
-        providerStatusDetail: String?
-    ) {
-        let now = Date()
-        let communication = CustomerCommunication(
-            customer: customer,
-            serviceCallID: draft.serviceCallID,
-            invoiceID: draft.invoiceID,
-            estimateID: draft.estimateID,
-            maintenanceContractID: draft.maintenanceContractID,
-            recipient: to,
-            subject: subject,
-            deliveryStatus: deliveryStatus,
-            workflow: draft.workflow,
-            actorEmail: googleAuth.signedInEmail,
-            consentSnapshot: CustomerCommunicationConsentSnapshot(customer: customer),
-            providerStatusDetail: providerStatusDetail,
-            deliveredAt: deliveryStatus == "sent" ? now : nil,
-            attachmentFileNames: attachments.map(\.fileName),
-            providerMessageID: providerMessageID,
-            createdAt: now
-        )
-        modelContext.insert(communication)
-        if deliveryStatus == "sent" {
-            CustomerCommunicationWorkflow.applyConfirmedSend(
-                workflow: draft.workflow,
-                customerID: draft.customerID,
-                serviceCallID: draft.serviceCallID,
-                invoiceID: draft.invoiceID,
-                estimateID: draft.estimateID,
-                maintenanceContractID: draft.maintenanceContractID,
-                estimates: estimates,
-                invoices: invoices,
-                serviceCalls: serviceCalls,
-                recurringContracts: recurringContracts,
-                now: now,
-                actorEmail: googleAuth.signedInEmail,
-                in: modelContext
-            )
-        }
-        try? modelContext.save()
-        guard GunnAireBackendService.isConfigured else { return }
-        Task {
-            do {
-                let remote = try await GunnAireBackendService.uploadCustomerCommunication(communication)
-                communication.markSharedCompanySynced(id: remote.id)
-            } catch {
-                communication.markSharedCompanySyncFailed(error.localizedDescription)
-            }
-            try? modelContext.save()
-        }
-    }
-
-    private func attachments(from paths: [String]) -> [GmailAttachment] {
-        paths.compactMap { path in
-            let url = URL(fileURLWithPath: path)
-            guard let data = try? Data(contentsOf: url) else { return nil }
-            return GmailAttachment(
-                fileName: url.lastPathComponent,
-                mimeType: QuickBooksDataAPI.mimeType(for: url),
-                data: data
-            )
-        }
     }
 
     private static var uiTestMessages: [GmailMessageDetail] {
@@ -567,6 +445,13 @@ struct GmailView: View {
             GmailMessageHeader(name: "MIME-Version", value: "1.0"),
             GmailMessageHeader(name: "Content-Type", value: "text/html; charset=UTF-8")
         ]
+        let textPayload = GmailMessagePayload(headers: nil, mimeType: "text/html",
+            body: GmailMessageBody(data: encodedHTML, size: html.utf8.count), parts: nil, filename: nil)
+        let fixtureAttachment = Data("Fixture equipment list.\n".utf8)
+        let includesAttachment = ProcessInfo.processInfo.arguments.contains("-uiTestMailAttachments")
+        let filePayload = GmailMessagePayload(headers: nil, mimeType: "text/plain",
+            body: GmailMessageBody(data: fixtureAttachment.base64EncodedString(), size: fixtureAttachment.count),
+            parts: nil, filename: "Equipment.txt")
         return [
             GmailMessageDetail(
                 id: "ui-mail-1",
@@ -576,9 +461,9 @@ struct GmailView: View {
                 internalDate: "1788442200000",
                 payload: GmailMessagePayload(
                     headers: headers,
-                    mimeType: "text/html",
-                    body: GmailMessageBody(data: encodedHTML, size: html.utf8.count),
-                    parts: nil,
+                    mimeType: includesAttachment ? "multipart/mixed" : "text/html",
+                    body: includesAttachment ? nil : textPayload.body,
+                    parts: includesAttachment ? [filePayload, textPayload] : nil,
                     filename: nil
                 )
             )
@@ -649,11 +534,17 @@ private struct GmailMessageRow: View {
     }
 }
 
+private struct GmailPreviewFile: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
 private struct GmailMessageDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     let message: GmailMessageDetail
     let loadsRemoteMessage: Bool
+    let provider: WorkspaceProviderOperation?
     let onReply: (GmailDraft) -> Void
     let onDelete: (GmailMessageDetail) -> Void
     let onRead: (GmailMessageDetail) -> Void
@@ -662,6 +553,12 @@ private struct GmailMessageDetailView: View {
     @State private var isLoading = false
     @State private var loadFailed = false
     @State private var showingDeleteConfirmation = false
+    @State private var attachmentTask: Task<Void, Never>?
+    @State private var attachmentRun = UUID()
+    @State private var isPreparingAttachment = false
+    @State private var attachmentStatus: String?
+    @State private var previewFile: GmailPreviewFile?
+    @State private var previewCleanupURL: URL?
 
     var body: some View {
         ScrollView {
@@ -711,10 +608,6 @@ private struct GmailMessageDetailView: View {
                         Spacer()
                     }
                     .padding(.vertical, 32)
-                } else if let bodyText = extractedBody {
-                    Text(bodyText)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
                 } else if loadFailed {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("The full message couldn't be loaded.")
@@ -723,9 +616,21 @@ private struct GmailMessageDetailView: View {
                             loadMessageIfNeeded(force: true)
                         }
                     }
+                } else if let bodyText = extractedBody {
+                    Text(bodyText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
                 } else {
                     Text("This message has no text content.")
                         .foregroundStyle(.secondary)
+                }
+                if canReadFullMessage { attachmentSection }
+                if isPreparingAttachment { ProgressView("Preparing attachments…") }
+                if let attachmentStatus {
+                    Text(attachmentStatus)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("MailAttachmentStatus")
                 }
             }
             .padding()
@@ -740,6 +645,7 @@ private struct GmailMessageDetailView: View {
                     Label("Reply", systemImage: "arrowshape.turn.up.left")
                 }
                 .accessibilityIdentifier("MailReplyButton")
+                .disabled(!canReadFullMessage || isPreparingAttachment)
 
                 Menu {
                     Button {
@@ -747,11 +653,13 @@ private struct GmailMessageDetailView: View {
                     } label: {
                         Label("Reply All", systemImage: "arrowshape.turn.up.left.2")
                     }
+                    .disabled(!canReadFullMessage || isPreparingAttachment)
                     Button {
-                        onReply(makeForwardDraft())
+                        prepareAttachments(forward: true)
                     } label: {
                         Label("Forward", systemImage: "arrowshape.turn.up.right")
                     }
+                    .disabled(!canReadFullMessage || isPreparingAttachment)
                     Divider()
                     Button(role: .destructive) {
                         showingDeleteConfirmation = true
@@ -763,6 +671,9 @@ private struct GmailMessageDetailView: View {
                 }
                 .accessibilityIdentifier("MailMoreActionsButton")
             }
+        }
+        .sheet(item: $previewFile, onDismiss: clearPreview) { file in
+            AttachmentPreviewScreen(url: file.url)
         }
         .alert("Move this message to Trash?", isPresented: $showingDeleteConfirmation) {
             Button("Cancel", role: .cancel) {}
@@ -779,6 +690,96 @@ private struct GmailMessageDetailView: View {
                 loadMessageIfNeeded()
             }
         }
+        .onDisappear {
+            attachmentTask?.cancel()
+            attachmentRun = UUID()
+            isPreparingAttachment = false
+            if previewFile == nil { clearPreview() }
+        }
+        .onChange(of: googleAuth.signedInEmail) { _, _ in
+            attachmentTask?.cancel()
+            attachmentRun = UUID()
+            previewFile = nil
+            clearPreview()
+        }
+    }
+
+    private var canReadFullMessage: Bool {
+        !isLoading && !loadFailed && (!loadsRemoteMessage || loadedMessage != nil)
+    }
+
+    @ViewBuilder private var attachmentSection: some View {
+        switch Result(catching: { try GmailAttachmentLoader.parts(in: activeMessage.payload) }) {
+        case .success(let parts):
+            if !parts.isEmpty {
+                Divider()
+                Text("Attachments").font(.headline)
+                ForEach(parts) { part in
+                    Button {
+                        prepareAttachments(forward: false, selected: part)
+                    } label: {
+                        HStack {
+                            Image(systemName: "doc")
+                            Text(part.fileName).lineLimit(2)
+                            Spacer()
+                            if let size = part.body.size, size >= 0 {
+                                Text(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(.vertical, 8)
+                        .contentShape(Rectangle())
+                    }
+                    .accessibilityIdentifier("MailAttachment-\(part.id)")
+                    .disabled(isPreparingAttachment)
+                }
+            }
+        case .failure:
+            Text("Attachments could not be read. Try loading this message again before forwarding.")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func prepareAttachments(forward: Bool, selected: GmailAttachmentPart? = nil) {
+        guard canReadFullMessage, !isPreparingAttachment else { return }
+        let retainedMessage = activeMessage
+        let run = UUID()
+        attachmentRun = run
+        isPreparingAttachment = true
+        attachmentStatus = nil
+        attachmentTask = Task { @MainActor in
+            defer { if attachmentRun == run { isPreparingAttachment = false } }
+            do {
+                let parts = try selected.map { [$0] } ?? GmailAttachmentLoader.parts(in: retainedMessage.payload)
+                let attachments: [GmailAttachment]
+                if loadsRemoteMessage {
+                    guard let provider else { throw GmailComposeError.changed }
+                    attachments = try await GmailAttachmentLoader.load(parts, messageID: retainedMessage.id,
+                        auth: googleAuth, operation: provider)
+                    try provider.check()
+                } else {
+                    attachments = try GmailAttachmentLoader.inlineAttachments(parts)
+                }
+                try Task.checkCancellation()
+                guard attachmentRun == run, activeMessage.id == retainedMessage.id else { return }
+                if forward {
+                    onReply(makeForwardDraft(attachments: attachments))
+                } else if let attachment = attachments.first {
+                    clearPreview()
+                    let url = try GmailAttachmentLoader.previewFile(for: attachment)
+                    previewCleanupURL = url
+                    previewFile = GmailPreviewFile(url: url)
+                }
+            } catch {
+                guard !Task.isCancelled, attachmentRun == run else { return }
+                attachmentStatus = "The attachments couldn't be loaded. No files were forwarded. Try again after checking your Google connection."
+            }
+        }
+    }
+
+    private func clearPreview() {
+        if let url = previewCleanupURL { GmailAttachmentLoader.removePreviewFile(url) }
+        previewCleanupURL = nil
     }
 
     private var activeMessage: GmailMessageDetail {
@@ -807,13 +808,21 @@ private struct GmailMessageDetailView: View {
         }
         loadFailed = false
         isLoading = true
-        googleAuth.fetchGmailMessage(id: message.id) { result in
-            DispatchQueue.main.async {
-                isLoading = false
-                switch result {
-                case .success(let fullMessage):
-                    loadedMessage = fullMessage
-                case .failure:
+        guard let provider, (try? provider.check()) != nil else { isLoading = false; loadFailed = true; return }
+        googleAuth.fetchGmailMessage(id: message.id, operation: provider) { result in
+            Task { @MainActor in
+                defer { isLoading = false }
+                do {
+                    try provider.check()
+                    let fullMessage = try result.get()
+                    guard fullMessage.id == message.id, fullMessage.threadId == message.threadId else {
+                        throw GoogleAuthError.decoding
+                    }
+                    let resolved = try await GmailAttachmentLoader.loadingTextBodies(in: fullMessage,
+                        auth: googleAuth, operation: provider)
+                    try provider.check()
+                    loadedMessage = resolved
+                } catch {
                     loadFailed = true
                 }
             }
@@ -821,10 +830,11 @@ private struct GmailMessageDetailView: View {
     }
 
     private func makeReplyDraft() -> GmailDraft {
-        let sender = GmailMessagePresentation.headerValue(named: "From", in: activeMessage) ?? ""
-        let extractedEmail = extractEmailAddress(from: sender) ?? sender
+        let sender = GmailMessagePresentation.headerValue(named: "Reply-To", in: activeMessage) ??
+            GmailMessagePresentation.headerValue(named: "From", in: activeMessage) ?? ""
+        let extractedEmail = (try? GmailAddressList.parse(sender).joined(separator: ", ")) ?? sender
         let subject = GmailMessagePresentation.headerValue(named: "Subject", in: activeMessage) ?? ""
-        let replySubject = subject.lowercased().hasPrefix("re:") ? subject : "Re: \(subject)"
+        let replySubject = subject
         let bodyText = extractedBody ?? activeMessage.snippet ?? ""
         let quoted = bodyText.isEmpty ? "" : "\n\n--- Original Message ---\n\(bodyText)"
         return GmailDraft(
@@ -832,19 +842,22 @@ private struct GmailMessageDetailView: View {
             subject: replySubject,
             body: quoted,
             threadID: activeMessage.threadId,
-            attachments: []
+            attachments: [],
+            reply: GmailReplyContext.from(activeMessage),
+            provider: provider
         )
     }
 
     private func makeReplyAllDraft() -> GmailDraft {
         let selfEmail = googleAuth.signedInEmail?.lowercased()
-        let senderValues = parseAddresses(from: GmailMessagePresentation.headerValue(named: "From", in: activeMessage))
+        let senderValues = parseAddresses(from: GmailMessagePresentation.headerValue(named: "Reply-To", in: activeMessage) ??
+            GmailMessagePresentation.headerValue(named: "From", in: activeMessage))
         let toValues = parseAddresses(from: GmailMessagePresentation.headerValue(named: "To", in: activeMessage))
         let ccValues = parseAddresses(from: GmailMessagePresentation.headerValue(named: "Cc", in: activeMessage))
         let uniqueRecipients = Array(Set((senderValues + toValues + ccValues).filter { $0.lowercased() != selfEmail }))
             .sorted()
         let subject = GmailMessagePresentation.headerValue(named: "Subject", in: activeMessage) ?? ""
-        let replySubject = subject.lowercased().hasPrefix("re:") ? subject : "Re: \(subject)"
+        let replySubject = subject
         let bodyText = extractedBody ?? activeMessage.snippet ?? ""
         let quoted = bodyText.isEmpty ? "" : "\n\n--- Original Message ---\n\(bodyText)"
         return GmailDraft(
@@ -852,11 +865,13 @@ private struct GmailMessageDetailView: View {
             subject: replySubject,
             body: quoted,
             threadID: activeMessage.threadId,
-            attachments: []
+            attachments: [],
+            reply: GmailReplyContext.from(activeMessage),
+            provider: provider
         )
     }
 
-    private func makeForwardDraft() -> GmailDraft {
+    private func makeForwardDraft(attachments: [GmailAttachment]) -> GmailDraft {
         let subject = GmailMessagePresentation.headerValue(named: "Subject", in: activeMessage) ?? ""
         let forwardSubject = subject.lowercased().hasPrefix("fwd:") ? subject : "Fwd: \(subject)"
         let bodyText = extractedBody ?? activeMessage.snippet ?? ""
@@ -878,28 +893,14 @@ private struct GmailMessageDetailView: View {
             subject: forwardSubject,
             body: quoted,
             threadID: nil,
-            attachments: []
+            attachments: attachments,
+            provider: provider
         )
-    }
-
-    private func extractEmailAddress(from value: String) -> String? {
-        guard let start = value.firstIndex(of: "<"),
-              let end = value.firstIndex(of: ">"),
-              start < end else {
-            return nil
-        }
-        return String(value[value.index(after: start)..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func parseAddresses(from value: String?) -> [String] {
         guard let value, !value.isEmpty else { return [] }
-        return value
-            .split(separator: ",")
-            .map { part in
-                let string = String(part).trimmingCharacters(in: .whitespacesAndNewlines)
-                return extractEmailAddress(from: string) ?? string
-            }
-            .filter { !$0.isEmpty }
+        return (try? GmailAddressList.parse(value)) ?? [value]
     }
 
 }
@@ -907,8 +908,14 @@ private struct GmailMessageDetailView: View {
 private struct GmailComposeView: View {
     @Environment(\.dismiss) private var dismiss
 
-    let onSend: (String, String, String) -> Void
-    let attachments: [GmailAttachment]
+    let onSend: (String, String, String, [GmailAttachment]) async -> GmailSendOutcome
+    @State private var attachments: [GmailAttachment]
+    let attachmentError: String?
+    @State private var isSending = false
+    @State private var sendOutcome: GmailSendOutcome?
+    @State private var showingFileImporter = false
+    @State private var fileImportError: String?
+    @State private var isImportingFiles = false
 
     @State private var to: String
     @State private var subject: String
@@ -919,10 +926,12 @@ private struct GmailComposeView: View {
         initialSubject: String = "",
         initialMessageBody: String = "",
         attachments: [GmailAttachment] = [],
-        onSend: @escaping (String, String, String) -> Void
+        attachmentError: String? = nil,
+        onSend: @escaping (String, String, String, [GmailAttachment]) async -> GmailSendOutcome
     ) {
         self.onSend = onSend
-        self.attachments = attachments
+        _attachments = State(initialValue: attachments)
+        self.attachmentError = attachmentError
         _to = State(initialValue: initialTo)
         _subject = State(initialValue: initialSubject)
         _messageBody = State(initialValue: initialMessageBody)
@@ -940,8 +949,11 @@ private struct GmailComposeView: View {
                 TextField("Message", text: $messageBody, axis: .vertical)
                     .lineLimit(8...16)
                     .accessibilityIdentifier("MailComposeBody")
-                if !attachments.isEmpty {
-                    Section("Attachments") {
+                Section {
+                    Button("Attach Files", systemImage: "paperclip") { showingFileImporter = true }
+                        .accessibilityIdentifier("MailAttachFilesButton")
+                    if isImportingFiles { ProgressView("Attaching files…") }
+                    if !attachments.isEmpty {
                         ForEach(attachments) { attachment in
                             HStack {
                                 Image(systemName: "paperclip")
@@ -951,23 +963,62 @@ private struct GmailComposeView: View {
                                         .font(.caption)
                                         .foregroundColor(.secondary)
                                 }
+                                Spacer()
+                                Button("Remove attachment", systemImage: "xmark.circle") {
+                                    attachments.removeAll { $0.id == attachment.id }
+                                }
+                                .labelStyle(.iconOnly)
+                                .buttonStyle(.borderless)
+                                .accessibilityLabel("Remove \(attachment.fileName)")
                             }
                         }
                     }
                 }
             }
+            .disabled(isSending || isImportingFiles || sendOutcome?.state == .reviewRequired)
+            .safeAreaInset(edge: .bottom) {
+                if let message = attachmentError ?? fileImportError ?? sendOutcome?.message {
+                    Text(message).font(.footnote).padding().frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.thinMaterial).accessibilityIdentifier("MailComposeStatus")
+                }
+            }
             .navigationTitle("Compose")
+            .interactiveDismissDisabled(isSending || isImportingFiles)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button(sendOutcome?.state == .reviewRequired ? "Close" : "Cancel") { dismiss() }
+                        .disabled(isSending || isImportingFiles)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Send") {
-                        onSend(to.trimmingCharacters(in: .whitespacesAndNewlines), subject, messageBody)
-                        dismiss()
+                    Button(isSending ? "Sending..." : "Send") {
+                        guard !isSending else { return }
+                        isSending = true
+                        Task { @MainActor in
+                            fileImportError = nil
+                            let result = await onSend(to.trimmingCharacters(in: .whitespacesAndNewlines), subject, messageBody, attachments)
+                            sendOutcome = result
+                            isSending = false
+                            if result.state == .sent { dismiss() }
+                        }
                     }
-                    .disabled(to.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || messageBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(isSending || isImportingFiles || attachmentError != nil || sendOutcome?.state == .reviewRequired ||
+                              to.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                              (messageBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+                               subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty))
                     .accessibilityIdentifier("MailSendButton")
+                }
+            }
+            .fileImporter(isPresented: $showingFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+                guard !isSending, !isImportingFiles, sendOutcome?.state != .reviewRequired else { return }
+                isImportingFiles = true
+                Task { @MainActor in
+                    defer { isImportingFiles = false }
+                    do {
+                        attachments = try await GmailOutgoingMessage.importingFiles(result.get(), to: attachments)
+                        fileImportError = nil
+                    } catch {
+                        fileImportError = "No new files were attached. Your existing attachments are unchanged. Choose readable files, up to 50 files and 25 MB total."
+                    }
                 }
             }
         }
@@ -981,6 +1032,9 @@ private struct GmailDraft: Identifiable {
     let body: String
     let threadID: String?
     let attachments: [GmailAttachment]
+    let attachmentError: String?
+    let reply: GmailReplyContext?
+    let provider: WorkspaceProviderOperation?
     let customerID: UUID?
     let serviceCallID: UUID?
     let invoiceID: UUID?
@@ -988,12 +1042,24 @@ private struct GmailDraft: Identifiable {
     let maintenanceContractID: UUID?
     let workflow: GunnAireMailWorkflow
 
+    var requiresBusinessContext: Bool {
+        customerID != nil || workflow != .general || serviceCallID != nil || invoiceID != nil ||
+        estimateID != nil || maintenanceContractID != nil
+    }
+    var businessContext: GmailBusinessContext? {
+        customerID.map { GmailBusinessContext(customerID: $0, serviceCallID: serviceCallID,
+            invoiceID: invoiceID, estimateID: estimateID, maintenanceContractID: maintenanceContractID, workflow: workflow) }
+    }
+
     init(
         to: String,
         subject: String,
         body: String,
         threadID: String?,
         attachments: [GmailAttachment],
+        attachmentError: String? = nil,
+        reply: GmailReplyContext? = nil,
+        provider: WorkspaceProviderOperation? = nil,
         customerID: UUID? = nil,
         serviceCallID: UUID? = nil,
         invoiceID: UUID? = nil,
@@ -1006,6 +1072,9 @@ private struct GmailDraft: Identifiable {
         self.body = body
         self.threadID = threadID
         self.attachments = attachments
+        self.attachmentError = attachmentError
+        self.reply = reply
+        self.provider = provider ?? (try? GoogleAuthManager.shared.captureProviderOperation())
         self.customerID = customerID
         self.serviceCallID = serviceCallID
         self.invoiceID = invoiceID
@@ -1019,5 +1088,12 @@ private extension String {
     var nilIfBlank: String? {
         let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+private extension Result {
+    var failureDescription: String? {
+        if case .failure = self { return GmailComposeError.attachment.localizedDescription }
+        return nil
     }
 }
