@@ -33,7 +33,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.06.19"
+SERVICE_VERSION = "2026.09.06.20"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -47,6 +47,8 @@ APPLE_ISSUER = "https://appleid.apple.com"
 APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys"
 APPLE_JWKS_CACHE_SECONDS = min(max(int(os.environ.get("GUNNAIRE_APPLE_JWKS_CACHE_SECONDS", "21600")), 300), 86400)
 APP_SESSION_DAYS = min(max(int(os.environ.get("GUNNAIRE_APP_SESSION_DAYS", "30")), 1), 30)
+CLOUDKIT_CONTAINER_ID = "iCloud.com.gunnaire.businesssuite"
+WORKSPACE_APPROVAL_MAX_SESSION_AGE_SECONDS = 600
 APPLE_JWKS_CACHE: dict[str, object] = {"expires_at": 0.0, "keys": {}}
 APPLE_JWKS_LOCK = threading.Lock()
 APPLE_ACCOUNT_EVENT_TYPES = {
@@ -1870,6 +1872,37 @@ def ensure_column(connection: sqlite3.Connection, table: str, column: str, defin
 
 def initialize_database() -> None:
     with db() as connection:
+        # A company is the durable backend database, not an email domain, QBO
+        # realm, role, or a nonempty client cache. Backups retain this identity.
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS company_identity (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                company_id TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cloudkit_workspace_bindings (
+                container_id TEXT NOT NULL,
+                environment TEXT NOT NULL CHECK (environment IN ('development', 'production')),
+                replica_id TEXT NOT NULL UNIQUE,
+                cloud_account_hash TEXT NOT NULL,
+                approved_at TEXT NOT NULL,
+                approved_by TEXT NOT NULL,
+                PRIMARY KEY(container_id, environment)
+            )
+            """
+        )
+        if connection.execute("SELECT 1 FROM company_identity WHERE singleton = 1").fetchone() is None:
+            if connection.execute("SELECT 1 FROM cloudkit_workspace_bindings LIMIT 1").fetchone() is not None:
+                raise sqlite3.DatabaseError("Approved CloudKit workspace has lost its company identity; restore the original database")
+            connection.execute(
+                "INSERT INTO company_identity(singleton, company_id, created_at) VALUES (1, ?, ?)",
+                (str(uuid.uuid4()), utc_now()),
+            )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -3040,6 +3073,32 @@ def supplier_order_acceptance_record(row: sqlite3.Row, *, replayed: bool) -> dic
     return safe
 
 
+def cloudkit_workspace_binding_record(row: sqlite3.Row, company_id: str) -> dict[str, str]:
+    return {
+        "companyID": company_id,
+        "containerID": str(row["container_id"]),
+        "environment": str(row["environment"]),
+        "replicaID": str(row["replica_id"]),
+        "cloudAccountHash": str(row["cloud_account_hash"]),
+        "approvedAt": str(row["approved_at"]),
+    }
+
+
+def company_workspace_identity() -> dict[str, object]:
+    with db() as connection:
+        company = connection.execute("SELECT company_id FROM company_identity WHERE singleton = 1").fetchone()
+        if company is None:
+            raise sqlite3.DatabaseError("Company identity is missing; restore the original database")
+        bindings = connection.execute(
+            "SELECT * FROM cloudkit_workspace_bindings ORDER BY container_id, environment"
+        ).fetchall()
+    return {
+        "companyID": str(company["company_id"]),
+        "containerID": CLOUDKIT_CONTAINER_ID,
+        "bindings": [cloudkit_workspace_binding_record(row, str(company["company_id"])) for row in bindings],
+    }
+
+
 def record_audit_event(
     actor_email: str | None,
     action: str,
@@ -3090,6 +3149,16 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/session":
             self.write_json({"user": self.principal()})
+            return
+        if parsed.path == "/api/workspace":
+            if not self.require_application_session():
+                return
+            try:
+                workspace = company_workspace_identity()
+            except sqlite3.Error:
+                self.write_json({"error": "Company workspace identity is unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            self.write_json({"user": self.principal(), "workspace": workspace})
             return
         if parsed.path == "/api/customer-financing":
             self.write_json(customer_financing_readiness())
@@ -3270,6 +3339,11 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/auth/logout":
             self.revoke_application_session()
+            return
+        if parsed.path == "/api/workspace/bind":
+            if not self.require_application_session() or not self.require_admin():
+                return
+            self.approve_cloudkit_workspace()
             return
         if parsed.path == "/api/push-devices":
             if not self.require_application_session():
@@ -3636,6 +3710,104 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             require_auth=False,
         )
         return False
+
+    def approve_cloudkit_workspace(self) -> None:
+        """An explicit, fresh admin approval; never adopt records on login.
+
+        The digest is an admin-approved device assertion, not Apple identity
+        attestation. Clients must obtain the actual current CloudKit user ID
+        through CKContainer and match both this binding and replica metadata.
+        """
+        try:
+            payload = json.loads(self.read_limited_body(4096).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            self.write_json({"error": "Invalid workspace approval"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not isinstance(payload, dict):
+            self.write_json({"error": "Invalid workspace approval"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        company_id = payload.get("expectedCompanyID")
+        container_id = payload.get("containerID")
+        environment = payload.get("environment")
+        account_hash = payload.get("cloudAccountHash")
+        try:
+            valid_company = isinstance(company_id, str) and str(uuid.UUID(company_id)) == company_id
+        except ValueError:
+            valid_company = False
+        if (
+            not valid_company
+            or container_id != CLOUDKIT_CONTAINER_ID
+            or environment not in ("development", "production")
+            or not isinstance(account_hash, str)
+            or re.fullmatch(r"[0-9a-f]{64}", account_hash) is None
+            or payload.get("confirmCompanyDataOwnership") is not True
+        ):
+            self.write_json({"error": "Invalid or unconfirmed workspace approval"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        result = None
+        created = False
+        failure = None
+        try:
+            with db() as connection:
+                # Recheck role, revocation and age inside the write transaction,
+                # so a stale authenticated request cannot win a later approval.
+                connection.execute("BEGIN IMMEDIATE")
+                session = connection.execute(
+                    """SELECT s.*, u.role, u.is_active FROM auth_sessions s
+                       JOIN users u ON u.email = s.email WHERE s.id = ?""",
+                    (getattr(self, "_application_session_id", None),),
+                ).fetchone()
+                now = datetime.now(timezone.utc)
+                is_fresh_admin = False
+                if session is not None and session["revoked_at"] is None and session["role"] == "Admin" and bool(session["is_active"]):
+                    try:
+                        issued = datetime.fromisoformat(str(session["created_at"]).replace("Z", "+00:00"))
+                        expires = datetime.fromisoformat(str(session["expires_at"]).replace("Z", "+00:00"))
+                        is_fresh_admin = (
+                            issued.tzinfo is not None and expires.tzinfo is not None
+                            and expires > now
+                            and 0 <= (now - issued).total_seconds() <= WORKSPACE_APPROVAL_MAX_SESSION_AGE_SECONDS
+                        )
+                    except ValueError:
+                        pass
+                if not is_fresh_admin:
+                    failure = (HTTPStatus.FORBIDDEN, "Sign in again as an administrator before approving a company workspace")
+                else:
+                    company = connection.execute("SELECT company_id FROM company_identity WHERE singleton = 1").fetchone()
+                    if company is None:
+                        failure = (HTTPStatus.SERVICE_UNAVAILABLE, "Company workspace identity is unavailable")
+                    elif company["company_id"] != company_id:
+                        failure = (HTTPStatus.CONFLICT, "Company identity changed; reload the verified business session")
+                    else:
+                        row = connection.execute(
+                            "SELECT * FROM cloudkit_workspace_bindings WHERE container_id = ? AND environment = ?",
+                            (container_id, environment),
+                        ).fetchone()
+                        if row is not None and row["cloud_account_hash"] != account_hash:
+                            failure = (HTTPStatus.CONFLICT, "A different CloudKit account is already approved; workspace rebinding requires reviewed data migration")
+                        elif row is not None:
+                            result = cloudkit_workspace_binding_record(row, company_id)
+                        else:
+                            replica_id = str(uuid.uuid4())
+                            connection.execute(
+                                """INSERT INTO cloudkit_workspace_bindings
+                                   (container_id, environment, replica_id, cloud_account_hash, approved_at, approved_by)
+                                   VALUES (?, ?, ?, ?, ?, ?)""",
+                                (container_id, environment, replica_id, account_hash, now.isoformat(), session["email"]),
+                            )
+                            record_audit_event(session["email"], "approve", "cloudkit-workspace", replica_id, connection=connection)
+                            row = connection.execute(
+                                "SELECT * FROM cloudkit_workspace_bindings WHERE replica_id = ?", (replica_id,)
+                            ).fetchone()
+                            result = cloudkit_workspace_binding_record(row, company_id)
+                            created = True
+        except sqlite3.Error:
+            self.write_json({"error": "Workspace approval was not saved; retry after storage recovers"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        if failure is not None:
+            self.write_json({"error": failure[1]}, status=failure[0])
+            return
+        self.write_json({"binding": result}, status=HTTPStatus.CREATED if created else HTTPStatus.OK)
 
     def register_push_device(self) -> None:
         try:

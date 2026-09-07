@@ -18,9 +18,13 @@ credential rotation, production restores, or customer communications.
 
 ## 2026-09-06 source review follow-up
 
-Candidate `2026.09.06.19` in PR #18 fixes portal approval concurrency,
-revocation/expiry, and oversized-amount validation. Local Backend tests pass
-77/77 and Tools pass 37/37. See `PORTAL_APPROVAL_REVIEW.md` for the reproductions.
+Candidate `2026.09.06.20` in PR #18 includes portal approval concurrency,
+revocation/expiry, and oversized-amount fixes from `.19`, plus the company and
+CloudKit workspace API contract. The original `.19` verification passed 77/77
+Backend and 37/37 Tools tests. The `.20` suite adds ten workspace tests; current
+local verification passes the complete 87/87 Backend and 37/37 Tools suites. See
+`PORTAL_APPROVAL_REVIEW.md` and `CLOUDKIT_WORKSPACE_IDENTITY.md` for evidence and
+the native storage-boundary work still required before company isolation is fixed.
 The older PR #17 overlaps this branch and lacks these follow-up fixes; reconcile
 the overlap before selecting a deployment candidate.
 
@@ -93,7 +97,7 @@ the overlap before selecting a deployment candidate.
    python3 -m unittest discover -s Tools -p 'test_*.py' -v
    ```
 
-   Source `2026.09.06.19` has 77 expected backend tests. A different count
+   Source `2026.09.06.20` has 87 expected backend tests. A different count
    requires review before deployment even when the discovered subset is green.
    The complete Tools suite has 37 tests. Both suites must pass in the
    **Backend regression** GitHub workflow on Python 3.13 and the
@@ -107,8 +111,10 @@ the overlap before selecting a deployment candidate.
    Confirm a recent verified off-host backup exists before a release that adds
    database tables. The `.12` Apple identity tables, `.13` supplier-attempt
    table/indexes, and `.15` Accounts Payable configuration columns are additive;
-   `.18` adds eleven nullable customer-portal columns. Rolling code back does
-   not require deleting them or restoring the database.
+   `.18` adds eleven nullable customer-portal columns; `.20` adds
+   `company_identity` and `cloudkit_workspace_bindings`. Preserve these identity
+   tables and approvals in backups and during code rollback. Rolling code back
+   does not require deleting them or restoring the database.
 5. Do not push release source directly to `main`. The repository's secret-free
    **Backend regression / Python 3.13** and **Backend regression / Python
    3.14** checks have unfiltered pull-request and push-to-`main` triggers.
@@ -129,7 +135,7 @@ the overlap before selecting a deployment candidate.
    part of a routine code deploy.
 6. After the authorized deployment, rerun the same preflight with `--online`.
    Confirm `/health` returns HTTP 200 and exact `serviceVersion`
-   `2026.09.06.19`.
+   `2026.09.06.20`.
 7. Confirm the new public Apple route is present without fabricating an Apple
    event or storing data:
 

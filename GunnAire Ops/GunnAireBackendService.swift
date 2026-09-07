@@ -761,6 +761,31 @@ enum GunnAireBackendService {
         return try JSONDecoder().decode(BackendSessionRecord.self, from: data).user
     }
 
+    static func fetchCompanyWorkspace() async throws -> BackendCompanyWorkspaceResponse {
+        let data = try await send(path: "/api/workspace", method: "GET")
+        return try JSONDecoder().decode(BackendCompanyWorkspaceResponse.self, from: data)
+    }
+
+    /// Call only from explicit administrator onboarding, never as a side effect
+    /// of login or record discovery. The server rechecks recent authentication
+    /// and makes the first binding immutable. Existing data must be reviewed
+    /// before the UI passes ownership confirmation.
+    static func approveCompanyCloudKitWorkspace(
+        _ approval: CompanyCloudKitApprovalRequest
+    ) async throws -> CompanyCloudKitBinding {
+        let body = try JSONEncoder().encode(approval)
+        let data = try await send(path: "/api/workspace/bind", method: "POST", body: body)
+        let result = try JSONDecoder().decode(BackendCompanyCloudKitApprovalResponse.self, from: data).binding
+        guard result.isValid,
+              result.companyID.uuidString.lowercased() == approval.expectedCompanyID,
+              result.containerID == approval.containerID,
+              result.environment == approval.environment,
+              result.cloudAccountHash == approval.cloudAccountHash else {
+            throw GunnAireBackendError.invalidResponse
+        }
+        return result
+    }
+
     static func exchangeAppleIdentity(
         identityToken: String,
         nonce: String

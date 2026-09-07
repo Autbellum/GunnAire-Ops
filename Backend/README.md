@@ -57,6 +57,22 @@ Apple identity exchange is available at `POST /api/auth/apple`. The token is ver
 
 After source `2026.08.28.13` is deployed, configure the primary App ID's Sign in with Apple server-to-server notification URL as `https://gunnaire-api.onrender.com/api/auth/apple/notifications`. The public endpoint accepts only Apple's exact JSON envelope, verifies the signed JWS against Apple's RS256 keys plus issuer, app audience, issue/event times, event ID, type, and subject, and idempotently processes `email-enabled`, `email-disabled`, `consent-revoked`, and `account-deleted`. Consent and deletion events revoke only Apple application sessions and their push registrations; delayed events older than a fresh Apple reauthorization cannot revoke that newer session. The raw JWS and private-relay address are not retained in the event ledger. Do not enter the URL in Apple Developer before the reviewed backend version is live and the endpoint is reachable over TLS 1.2 or later.
 
+## Company and CloudKit workspace identity
+
+Candidate `2026.09.06.20` adds a durable, server-owned company identity and
+`GET /api/workspace` / `POST /api/workspace/bind`. Both require current Apple or
+Google application sessions. Binding requires explicit ownership confirmation
+and an administrator authenticated within ten minutes; conflicting bindings
+cannot replace the original approval. Approval and its audit are atomic.
+The new company/binding tables must remain in database backups and code rollbacks.
+
+This is the server/native API contract stage, **not completed app-level tenant
+isolation**. Startup, legacy-store onboarding, Shortcuts and offline authorization
+must still be connected to the boundary before release. See
+[`CLOUDKIT_WORKSPACE_IDENTITY.md`](../CLOUDKIT_WORKSPACE_IDENTITY.md) for the exact
+contract, storage risks and required acceptance. No existing device or data set
+is automatically approved by this migration.
+
 ## Render deployment
 
 Deploy this directory as a Python **Web Service** with the start command:
