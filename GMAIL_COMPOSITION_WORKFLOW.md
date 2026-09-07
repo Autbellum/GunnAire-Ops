@@ -1,5 +1,11 @@
 # Mail composition, attachments and send recovery
 
+The current [draft-recovery candidate](GMAIL_DRAFT_RECOVERY.md) adds encrypted
+device-local drafts and persistent send locks to the existing coordinator.
+It supersedes the workflow-instance-only restart limitation below, not the
+remaining server-owned cross-device dispatch or received-mail archive gates.
+Its final qualification is recorded separately; prior results are historical.
+
 ## Scope and observed defects
 
 September 7, 2026. This is a native Mail implementation checkpoint, not

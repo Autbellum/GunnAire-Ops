@@ -1,4 +1,18 @@
-Native billing entry-point follow-up, 2026-09-07: Management invoice and
+Mail draft-recovery checkpoint, 2026-09-07: **1219 logic tests per native
+platform, ten selected iPad journeys, unsigned universal Mac Release, Backend
+366 and Tools 37 pass**. The existing composer and generated-document send
+coordinator retain encrypted original drafts, attachments and pre-send locks
+across relaunch. Drafts stays in the compact mailbox menu; uncertain sends
+reopen read-only and hand off to Sent without another copy. Stable business
+snapshots and account-scoped revisions prevent silent reapproval of changed
+work or stale-window overwrites. Seven representative final screenshots were
+visually reviewed with no account-email footer. Exact evidence and limits:
+[GMAIL_DRAFT_RECOVERY.md](GMAIL_DRAFT_RECOVERY.md). This is device-local
+durability, not the remaining server-owned/cross-device Google outbox or shared
+received-mail archive. The full suite, CloudKit, physical-device/provider,
+Tap to Pay and distribution gates remain open. No deployment or merge occurred.
+
+Prior native billing entry-point follow-up, 2026-09-07: Management invoice and
 estimate creation now uses the full saved-document builder and shared billing
 authority. Payment preparation cannot implicitly create or relink invoices or
 customers. Standalone invoices share a service/repair/replacement choice;

@@ -274,6 +274,8 @@ final class GunnAire_OpsUITests: XCTestCase {
         evidence.lifetime = .keepAlways
         add(evidence)
         app.navigationBars["Compose"].buttons["Cancel"].tap()
+        XCTAssertTrue(app.buttons["Save Draft"].waitForExistence(timeout: 3))
+        app.buttons["Save Draft"].tap()
         XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 3))
     }
 
@@ -357,6 +359,8 @@ final class GunnAire_OpsUITests: XCTestCase {
         removalEvidence.lifetime = .keepAlways
         add(removalEvidence)
         app.navigationBars["Compose"].buttons["Cancel"].tap()
+        XCTAssertTrue(app.buttons["Delete Draft"].waitForExistence(timeout: 3))
+        app.buttons["Delete Draft"].tap()
         XCTAssertTrue(app.navigationBars["Mail"].waitForExistence(timeout: 3))
     }
 
@@ -405,6 +409,8 @@ final class GunnAire_OpsUITests: XCTestCase {
         composeEvidence.lifetime = .keepAlways
         add(composeEvidence)
         app.navigationBars["Compose"].buttons["Cancel"].tap()
+        XCTAssertTrue(app.buttons["Delete Draft"].waitForExistence(timeout: 3))
+        app.buttons["Delete Draft"].tap()
         XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 3))
 
         let message = app.descendants(matching: .any)["MailMessage-ui-mail-1"]
@@ -434,6 +440,8 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertEqual(app.textFields["MailComposeTo"].value as? String, "jordan@example.com")
         XCTAssertEqual(app.textFields["MailComposeSubject"].value as? String, "Service appointment confirmed")
         app.navigationBars["Compose"].buttons["Cancel"].tap()
+        XCTAssertTrue(app.buttons["Delete Draft"].waitForExistence(timeout: 3))
+        app.buttons["Delete Draft"].tap()
         XCTAssertTrue(app.navigationBars["Mail"].waitForExistence(timeout: 3))
 
         app.buttons["MailMoreActionsButton"].tap()
@@ -448,6 +456,113 @@ final class GunnAire_OpsUITests: XCTestCase {
         add(trashEvidence)
         app.buttons["Cancel"].tap()
         XCTAssertTrue(app.navigationBars["Mail"].exists)
+    }
+
+    @MainActor
+    func testMailDraftWithAttachmentsSurvivesRelaunchAndExplicitDeletion() throws {
+        let app = mailDraftRecoveryApp(extra: ["-uiTestMailAttachments"])
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 8))
+        app.descendants(matching: .any)["MailMessage-ui-mail-1"].tap()
+        XCTAssertTrue(app.buttons["MailMoreActionsButton"].waitForExistence(timeout: 4))
+        app.buttons["MailMoreActionsButton"].tap(); app.buttons["Forward"].tap()
+        XCTAssertTrue(app.navigationBars["Compose"].waitForExistence(timeout: 5))
+        let to = app.textFields["MailComposeTo"]
+        to.tap(); to.typeText("vendor@example.invalid")
+        XCTAssertTrue(app.buttons["Remove Equipment.txt"].exists)
+        app.navigationBars["Compose"].buttons["Cancel"].tap()
+        XCTAssertTrue(app.buttons["Save Draft"].waitForExistence(timeout: 3))
+        // iPad's native confirmation popover omits the cancel-role row.
+        // Its observed dismissal region implements Keep Editing.
+        let dismissal = try XCTUnwrap(app.otherElements.matching(identifier: "PopoverDismissRegion").allElementsBoundByIndex.last)
+        dismissal.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertTrue(app.buttons["Save Draft"].waitForNonExistence(timeout: 3))
+        XCTAssertEqual(to.value as? String, "vendor@example.invalid")
+        app.navigationBars["Compose"].buttons["Cancel"].tap()
+        app.buttons["Save Draft"].tap()
+        XCTAssertTrue(app.navigationBars["Mail"].waitForExistence(timeout: 3))
+        app.terminate(); app.launch()
+        openMailDeviceDrafts(app)
+        let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'MailSavedDraft-'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
+        XCTAssertTrue(app.navigationBars["Compose"].waitForExistence(timeout: 4))
+        XCTAssertEqual(app.textFields["MailComposeTo"].value as? String, "vendor@example.invalid")
+        XCTAssertEqual(app.textFields["MailComposeSubject"].value as? String, "Fwd: Service appointment confirmed")
+        XCTAssertTrue((app.textFields["MailComposeBody"].value as? String)?.contains("Tuesday morning") == true)
+        XCTAssertTrue(app.buttons["Remove Equipment.txt"].exists)
+        let evidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        evidence.name = "Mail - original draft and attachment recovered after relaunch"
+        evidence.lifetime = .keepAlways; add(evidence)
+        app.navigationBars["Compose"].buttons["Cancel"].tap(); app.buttons["Delete Draft"].tap()
+        XCTAssertTrue(app.navigationBars["Drafts"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["No Saved Drafts"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testMailUncertainSendStaysReadOnlyAfterRelaunch() throws {
+        let app = mailDraftRecoveryApp(extra: ["-uiTestMailUnconfirmedSend"])
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 8))
+        app.buttons["MailComposeButton"].tap()
+        let to = app.textFields["MailComposeTo"]; to.tap(); to.typeText("vendor@example.invalid")
+        let subject = app.textFields["MailComposeSubject"]; subject.tap(); subject.typeText("Equipment availability")
+        let body = app.textFields["MailComposeBody"]; body.tap(); body.typeText("Please confirm the replacement equipment.")
+        app.buttons["MailSendButton"].tap()
+        XCTAssertTrue(app.staticTexts["MailComposeStatus"].waitForExistence(timeout: 4))
+        XCTAssertFalse(app.buttons["MailSendButton"].isEnabled)
+        app.terminate(); app.launch()
+        openMailDeviceDrafts(app)
+        let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'MailSavedDraft-'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
+        XCTAssertTrue(app.staticTexts["MailComposeStatus"].waitForExistence(timeout: 4))
+        XCTAssertFalse(app.buttons["MailSendButton"].isEnabled)
+        XCTAssertFalse(app.textFields["MailComposeBody"].isEnabled)
+        XCTAssertEqual(app.textFields["MailComposeBody"].value as? String, "Please confirm the replacement equipment.")
+        XCTAssertTrue(app.staticTexts["MailComposeStatus"].label.contains("Check Sent in Gmail"))
+        let evidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        evidence.name = "Mail - uncertain original send remains locked after relaunch"
+        evidence.lifetime = .keepAlways; add(evidence)
+        app.buttons["MailReviewSentButton"].tap()
+        XCTAssertTrue(app.navigationBars["Sent"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testMailAutosavedDraftSurvivesTerminationWithoutClosingComposer() throws {
+        let app = mailDraftRecoveryApp()
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 8))
+        app.buttons["MailComposeButton"].tap()
+        let to = app.textFields["MailComposeTo"]; to.tap(); to.typeText("incomplete@")
+        let body = app.textFields["MailComposeBody"]; body.tap(); body.typeText("Repair details to finish later.")
+        let saved = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == 'Draft saved on this device.'"), object: app.staticTexts["MailDraftSaveStatus"])
+        XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 5), .completed)
+        app.terminate(); app.launch()
+        openMailDeviceDrafts(app)
+        let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'MailSavedDraft-'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
+        XCTAssertTrue(app.navigationBars["Compose"].waitForExistence(timeout: 3))
+        XCTAssertEqual(app.textFields["MailComposeTo"].value as? String, "incomplete@")
+        XCTAssertEqual(app.textFields["MailComposeBody"].value as? String, "Repair details to finish later.")
+        XCTAssertTrue(app.textFields["MailComposeBody"].isEnabled)
+    }
+
+    @MainActor
+    private func mailDraftRecoveryApp(extra: [String] = []) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-appStoreScreenshotFixtures", "-uiTestSeedMailInbox", "-GunnAirePendingAppRoute", "mail"] + extra
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launchEnvironment["GUNNAIRE_MAIL_DRAFT_FIXTURE"] = UUID().uuidString
+        return app
+    }
+
+    @MainActor
+    private func openMailDeviceDrafts(_ app: XCUIApplication) {
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 8))
+        app.buttons["MailFoldersButton"].tap()
+        XCTAssertTrue(app.buttons["MailDraftsButton"].waitForExistence(timeout: 3))
+        app.buttons["MailDraftsButton"].tap()
+        XCTAssertTrue(app.navigationBars["Drafts"].waitForExistence(timeout: 3))
     }
 
     @MainActor

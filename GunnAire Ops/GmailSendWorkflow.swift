@@ -7,7 +7,8 @@ import SwiftData
 final class GmailSendWorkflow {
     let message: GmailOutgoingMessage
     let business: GmailBusinessContext?
-    let messageID = "<gunnaire-\(UUID().uuidString.lowercased())@gunnaire.com>"
+    let messageID: String
+    private let journal: GmailDraftSession?
     private let auth: GoogleAuthManager
     private let context: ModelContext
     private let sender: String
@@ -27,14 +28,42 @@ final class GmailSendWorkflow {
     init(auth: GoogleAuthManager, context: ModelContext, message: GmailOutgoingMessage,
          business: GmailBusinessContext? = nil, provider: WorkspaceProviderOperation? = nil,
          validateAccess: (() throws -> Void)? = nil,
+         journal: GmailDraftSession? = nil,
          save: @escaping (ModelContext) throws -> Void = { try $0.save() }) throws {
         self.auth = auth; self.context = context; self.message = message; self.business = business
         sender = AppAccess.normalizedEmail(auth.signedInEmail)
         self.provider = try provider ?? auth.captureProviderOperation()
         self.save = save
         access = validateAccess ?? { try Self.requireAccess(context: context, business: business, sender: auth.signedInEmail) }
+        if let journal {
+            self.journal = journal
+        } else if !GunnAireCloudKit.usesTestDatabase {
+            let scope = try GmailDraftScope.capture(auth: auth, context: context)
+            let content = GmailDraftContent(to: message.to, subject: message.subject, body: message.body,
+                files: message.attachments.map { GmailDraftFile($0) }, reply: message.reply,
+                business: business, requiresBusinessContext: business != nil,
+                businessSnapshot: try GmailDraftBusinessSnapshot.capture(business, context: context))
+            self.journal = try GmailDraftSession(record: .init(id: UUID(), scope: scope, content: content), store: .device) {
+                guard try GmailDraftScope.capture(auth: auth, context: context) == scope else { throw GmailDraftError.access }
+                try Self.requireAccess(context: context, business: business, sender: auth.signedInEmail)
+            }
+        } else { self.journal = nil }
+        messageID = self.journal?.record.messageID ?? "<gunnaire-\(UUID().uuidString.lowercased())@gunnaire.com>"
         try self.provider.check()
         try access()
+        if let journal = self.journal {
+            try journal.verify()
+            guard journal.record.scope.googleEmail == sender else { throw GmailDraftError.access }
+            if !GunnAireCloudKit.usesTestDatabase {
+                guard try journal.record.scope == GmailDraftScope.capture(auth: auth, context: context) else { throw GmailDraftError.access }
+            }
+            let saved = journal.record.content
+            guard journal.record.editable, saved.to == message.to, saved.subject == message.subject,
+                  saved.body == message.body, saved.files == message.attachments.map({ GmailDraftFile($0) }),
+                  saved.reply == message.reply, saved.business == business,
+                  saved.attachmentError == nil, !saved.requiresBusinessContext || business != nil else { throw GmailDraftError.changed }
+            guard try saved.businessSnapshot == GmailDraftBusinessSnapshot.capture(business, context: context) else { throw GmailDraftError.businessChanged }
+        }
         baseline = try recordState()
     }
 
@@ -77,6 +106,7 @@ final class GmailSendWorkflow {
                 synchronizeHistory()
                 return result
             }
+            try journal?.begin()
             let sent: GmailMessageReference = try await withCheckedThrowingContinuation { continuation in
                 auth.sendGmailMessage(to: message.to, subject: message.subject, body: message.body,
                     threadID: message.reply?.threadID, attachments: message.attachments,
@@ -130,9 +160,17 @@ final class GmailSendWorkflow {
                 let result = GmailSendOutcome(state: .reviewRequired,
                     message: "Gmail accepted the message, but its local history could not be saved. Do not send another copy. Review customer history and Gmail Sent.")
                 outcome = result
+                try? journal?.finish(result)
                 return result
             }
             let result = GmailSendOutcome(state: .sent, message: "Message saved in Gmail Sent.")
+            do { try journal?.finish(result) }
+            catch {
+                let retained = GmailSendOutcome(state: .reviewRequired,
+                    message: "Gmail accepted the message, but its saved draft needs review. Do not send another copy. Open Sent to check the original message.")
+                outcome = retained
+                return retained
+            }
             outcome = result
             synchronizeHistory()
             return result
@@ -152,6 +190,13 @@ final class GmailSendWorkflow {
                     record.providerStatusDetail = result.message
                 }
                 if !communications.isEmpty { try? save(context) }
+            }
+            if journal?.record.state == .sending {
+                do { try journal?.finish(result) }
+                catch {
+                    outcome = .uncertain
+                    return .uncertain
+                }
             }
             outcome = result
             return result
@@ -267,7 +312,7 @@ final class GmailSendWorkflow {
         }
     }
 
-    private static func requireAccess(context: ModelContext, business: GmailBusinessContext?, sender: String?) throws {
+    static func requireAccess(context: ModelContext, business: GmailBusinessContext?, sender: String?) throws {
         let controller = CompanyWorkspaceAccessController.shared
         let users = try context.fetch(FetchDescriptor<AppUser>())
         let fixture = GunnAireCloudKit.usesTestDatabase

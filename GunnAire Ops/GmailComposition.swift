@@ -65,7 +65,7 @@ enum GmailAddressList {
     }
 }
 
-struct GmailReplyContext {
+struct GmailReplyContext: Codable, Equatable {
     let threadID: String
     let messageID: String
     let references: [String]
@@ -92,7 +92,7 @@ struct GmailReplyContext {
     }
 }
 
-struct GmailBusinessContext {
+struct GmailBusinessContext: Codable, Equatable {
     let customerID: UUID
     var serviceCallID: UUID?
     var invoiceID: UUID?
@@ -205,7 +205,7 @@ struct GmailSendOutcome {
     var canRetry: Bool { state == .notSent }
 
     static func notSent(_ error: Error) -> Self {
-        .init(state: .notSent, message: (error as? GmailComposeError)?.localizedDescription ??
+        .init(state: .notSent, message: (error as? GmailDraftError)?.localizedDescription ?? (error as? GmailComposeError)?.localizedDescription ??
               "The message was not sent. Check your Google connection and try again. Your draft has been kept.")
     }
     static let uncertain = Self(state: .reviewRequired,

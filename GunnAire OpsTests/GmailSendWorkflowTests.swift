@@ -17,6 +17,12 @@ struct GmailSendWorkflowTests {
         var sentLabels = ["SENT"]
         var wrongMessageID = false
         var wrongRecipient = false
+        let draftDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("MailSendJournalTest-" + UUID().uuidString)
+        var draftKeyAvailable = true
+        lazy var draftStore = GmailDraftStore.encrypted(directory: draftDirectory) { [unowned self] _ in
+            guard draftKeyAvailable else { throw GmailDraftError.storage }
+            return Data(repeating: 83, count: 32)
+        }
         var beforeReply: ((URLRequest) async throws -> Void)?
         lazy var auth = GoogleAuthManager(testTokens: .init(accessToken: "fixture-token",
             refreshToken: nil, idToken: nil, expiration: .distantFuture), email: email,
@@ -62,11 +68,21 @@ struct GmailSendWorkflowTests {
                     HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
         }
 
-        func flow(to: String = "vendor@example.invalid", business: GmailBusinessContext? = nil,
+        deinit { try? FileManager.default.removeItem(at: draftDirectory) }
+
+        func draft() throws -> GmailDraftSession {
+            let scope = GmailDraftScope(companyID: UUID(), backendOrigin: "https://fixture.example.invalid", actorEmail: email, googleEmail: email)
+            return try GmailDraftSession(record: .init(id: UUID(), scope: scope,
+                content: .init(to: "vendor@example.invalid", subject: "Repair appointment", body: "Fixture only.")), store: draftStore) {
+                    if !self.allowed { throw GmailDraftError.access }
+                }
+        }
+
+        func flow(to: String = "vendor@example.invalid", business: GmailBusinessContext? = nil, journal: GmailDraftSession? = nil,
                   save: @escaping (ModelContext) throws -> Void = { try $0.save() }) throws -> GmailSendWorkflow {
             try GmailSendWorkflow(auth: auth, context: context,
                 message: GmailOutgoingMessage(to: to, subject: "Repair appointment", body: "Fixture only."),
-                business: business, validateAccess: { if !self.allowed { throw GmailComposeError.access } }, save: save)
+                business: business, validateAccess: { if !self.allowed { throw GmailComposeError.access } }, journal: journal, save: save)
         }
 
         var business: GmailBusinessContext {
@@ -82,6 +98,82 @@ struct GmailSendWorkflowTests {
         #expect(result.state == .sent)
         #expect(f.writes.count == 1 && f.requests.count == 2)
         #expect(try f.history().isEmpty)
+    }
+
+    @Test func persistentDraftIsLockedBeforeGmailAndUsesItsOriginalMessageID() async throws {
+        let f = try Fixture(); let journal = try f.draft()
+        f.beforeReply = { _ in
+            let original = try f.draftStore.read(journal.record.scope, journal.record.id)
+            #expect(original?.state == .sending)
+        }
+        let flow = try f.flow(journal: journal)
+        #expect(await flow.send().state == .sent)
+        #expect(f.header("Message-ID") == journal.record.messageID)
+        #expect(try f.draftStore.read(journal.record.scope, journal.record.id)?.state == .sent)
+    }
+
+    @Test func failedPersistentPreSendWriteMakesNoProviderRequest() async throws {
+        let f = try Fixture(); let journal = try f.draft(); let flow = try f.flow(journal: journal)
+        f.draftKeyAvailable = false
+        #expect(await flow.send().state == .notSent)
+        #expect(f.requests.isEmpty)
+        f.draftKeyAvailable = true
+        #expect(try f.draftStore.read(journal.record.scope, journal.record.id)?.state == .editing)
+    }
+
+    @Test func lostReplySurvivesNewWorkflowAndCannotProduceASecondPOST() async throws {
+        let f = try Fixture(); let journal = try f.draft()
+        f.beforeReply = { _ in throw URLError(.networkConnectionLost) }
+        let flow = try f.flow(journal: journal)
+        #expect(await flow.send().state == .reviewRequired)
+        let original = try #require(try f.draftStore.read(journal.record.scope, journal.record.id))
+        let reopened = try GmailDraftSession(record: original, store: f.draftStore, access: {})
+        #expect(throws: GmailDraftError.changed) { try f.flow(journal: reopened) }
+        #expect(f.writes.count == 1)
+    }
+
+    @Test func acceptedPOSTAndRejectedConfirmationPersistReviewNotRetry() async throws {
+        let f = try Fixture(); let journal = try f.draft()
+        f.beforeReply = { request in if request.httpMethod == "GET" { f.status = 403 } }
+        let flow = try f.flow(journal: journal)
+        #expect(await flow.send().state == .reviewRequired)
+        #expect(try f.draftStore.read(journal.record.scope, journal.record.id)?.state == .review)
+        #expect(f.writes.count == 1)
+    }
+
+    @Test func definiteRejectionCanBeExplicitlyRetriedFromSameSavedDraft() async throws {
+        let f = try Fixture(); let journal = try f.draft(); f.status = 400
+        let flow = try f.flow(journal: journal)
+        #expect(await flow.send().state == .notSent)
+        let original = try #require(try f.draftStore.read(journal.record.scope, journal.record.id))
+        let reopened = try GmailDraftSession(record: original, store: f.draftStore, access: {})
+        f.status = 200
+        let retry = try f.flow(journal: reopened)
+        #expect(await retry.send().state == .sent)
+        #expect(f.writes.count == 2)
+        #expect(f.header("Message-ID") == original.messageID)
+    }
+
+    @Test func mismatchedSavedDraftCannotAuthorizeDifferentMessageContents() throws {
+        let f = try Fixture(); let journal = try f.draft()
+        #expect(throws: GmailDraftError.changed) { try f.flow(to: "different@example.invalid", journal: journal) }
+        #expect(f.requests.isEmpty)
+    }
+
+    @Test func reopenedBusinessDraftCannotAdoptChangedConsentContactOrJob() throws {
+        for change in 0..<3 {
+            let f = try Fixture()
+            let scope = GmailDraftScope(companyID: UUID(), backendOrigin: "https://fixture.example.invalid", actorEmail: f.email, googleEmail: f.email)
+            let content = GmailDraftContent(to: f.customer.email!, subject: "Repair appointment", body: "Fixture only.",
+                business: f.business, requiresBusinessContext: true,
+                businessSnapshot: try GmailDraftBusinessSnapshot.capture(f.business, context: f.context))
+            let journal = try GmailDraftSession(record: .init(id: UUID(), scope: scope, content: content), store: f.draftStore, access: {})
+            if change == 0 { f.customer.name = "Changed customer" }
+            if change == 1 { f.customer.allowsTransactionalEmail = false }
+            if change == 2 { f.call.notes = "Changed scope of work" }
+            #expect(throws: GmailDraftError.businessChanged) { try f.flow(to: f.customer.email!, business: f.business, journal: journal) }
+            #expect(f.requests.isEmpty)
+        }
     }
 
     @Test func knownCustomerGeneralMailIsAuditedWithoutRequiringAJobTemplate() async throws {

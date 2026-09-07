@@ -110,12 +110,15 @@ enum GmailMessagePresentation {
 struct GmailView: View {
     @Environment(\.modelContext) private var modelContext
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
+    @ObservedObject private var workspace = CompanyWorkspaceAccessController.shared
 
     @StateObject private var mailbox = Self.makeMailbox()
     @State private var searchQuery = ""
     @State private var activeMailSend: GmailSendWorkflow?
     @State private var composeDraft: GmailDraft?
     @State private var didConsumePendingDraft = false
+    @State private var showingDrafts = false
+    @State private var savedDrafts: [GmailDraftSummary] = []
 
     private var messages: [GmailMessageDetail] { mailbox.messages }
     private var isLoading: Bool { mailbox.isLoading }
@@ -143,7 +146,22 @@ struct GmailView: View {
     var body: some View {
         NavigationStack {
             List {
-                if !isMailConnected {
+                if showingDrafts && canUseGoogleIntegration {
+                    if savedDrafts.isEmpty {
+                        ContentUnavailableView("No Saved Drafts", systemImage: "doc",
+                            description: Text("Messages you save on this device appear here."))
+                            .listRowBackground(Color.clear)
+                    }
+                    ForEach(savedDrafts.filter { searchQuery.isEmpty || ($0.subject + " " + $0.recipient).localizedCaseInsensitiveContains(searchQuery) }) { draft in
+                        Button { openSavedDraft(draft.id) } label: {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(draft.subject.isEmpty ? "(No subject)" : draft.subject).font(.headline).lineLimit(1)
+                                Text(draft.recipient.isEmpty ? "No recipient yet" : draft.recipient).font(.subheadline).lineLimit(1)
+                                if draft.state != .editing { Text("Check Sent before sending another copy").font(.caption).foregroundStyle(.secondary) }
+                            }.foregroundStyle(.primary).padding(.vertical, 4)
+                        }.accessibilityIdentifier("MailSavedDraft-\(draft.id.uuidString)")
+                    }
+                } else if !isMailConnected {
                     ContentUnavailableView(
                         "Connect Google",
                         systemImage: "envelope",
@@ -222,7 +240,7 @@ struct GmailView: View {
                         }
                     }
                 }
-                if mailbox.nextPageToken != nil && isMailConnected && canUseGoogleIntegration {
+                if !showingDrafts && mailbox.nextPageToken != nil && isMailConnected && canUseGoogleIntegration {
                     Button { mailbox.loadMore() } label: {
                         HStack {
                             Spacer()
@@ -237,7 +255,7 @@ struct GmailView: View {
             }
             .listStyle(.plain)
             .accessibilityIdentifier("MailInboxList")
-            .navigationTitle(mailbox.folder.rawValue)
+            .navigationTitle(showingDrafts ? "Drafts" : mailbox.folder.rawValue)
             .searchable(text: $searchQuery, prompt: "Search mail")
             .safeAreaInset(edge: .bottom) {
                 if let statusMessage, !statusMessage.isEmpty {
@@ -267,12 +285,15 @@ struct GmailView: View {
                             }
                         }
                         .disabled(!canUseGoogleIntegration || !mailbox.busyIDs.isEmpty)
+                        Button("Drafts on This Device", systemImage: "doc") { loadDrafts() }
+                            .disabled(!canUseGoogleIntegration || !mailbox.busyIDs.isEmpty)
+                            .accessibilityIdentifier("MailDraftsButton")
                     } label: {
                         Label("Mailboxes", systemImage: "tray.2")
                     }
                     .accessibilityIdentifier("MailFoldersButton")
                     Button {
-                        loadMessages()
+                        if showingDrafts { loadDrafts() } else { loadMessages() }
                     } label: {
                         Label("Refresh", systemImage: "arrow.clockwise")
                     }
@@ -296,10 +317,10 @@ struct GmailView: View {
                 applyPendingDraftIfNeeded()
             }
             .onSubmit(of: .search) {
-                loadMessages()
+                if showingDrafts { loadDrafts() } else { loadMessages() }
             }
             .onChange(of: searchQuery) { oldValue, newValue in
-                if !oldValue.isEmpty && newValue.isEmpty { loadMessages() }
+                if !showingDrafts, !oldValue.isEmpty && newValue.isEmpty { loadMessages() }
             }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
                 applyPendingDraftIfNeeded(force: true)
@@ -310,17 +331,26 @@ struct GmailView: View {
                     initialSubject: draft.subject,
                     initialMessageBody: draft.body,
                     attachments: draft.attachments,
-                    attachmentError: draft.attachmentError
-                ) { to, subject, body, attachments in
-                    await sendMessage(to: to, subject: subject, body: body, attachments: attachments, draft: draft)
+                    attachmentError: draft.attachmentError,
+                    template: draft.content,
+                    makeSession: { try makeDraftSession(draft, content: $0) },
+                    onReviewSent: { loadMessages(folder: .sent) }
+                ) { to, subject, body, attachments, journal in
+                    await sendMessage(to: to, subject: subject, body: body, attachments: attachments, draft: draft, journal: journal)
                 }
             }
             .onChange(of: composeDraft?.id) { _, value in
                 activeMailSend = nil
-                if value == nil { applyPendingDraftIfNeeded(force: true) }
+                if value == nil {
+                    if showingDrafts { loadDrafts() }
+                    applyPendingDraftIfNeeded(force: true)
+                }
             }
             .onChange(of: googleAuth.signedInEmail) { _, _ in clearMailbox() }
             .onChange(of: googleAuth.isAuthenticated) { _, _ in clearMailbox() }
+            .onChange(of: workspace.operationStamp) { _, _ in
+                if !usesMailUITestFixture { clearMailbox() }
+            }
         }
     }
 
@@ -336,6 +366,7 @@ struct GmailView: View {
             return
         }
         do {
+            showingDrafts = false
             let provider = try usesMailUITestFixture ? WorkspaceProviderOperation { true }
                 : GmailMailbox.captureAccess(auth: googleAuth, context: modelContext)
             mailbox.refresh(folder: folder ?? mailbox.folder, query: searchQuery,
@@ -346,16 +377,16 @@ struct GmailView: View {
         }
     }
 
-    private func sendMessage(to: String, subject: String, body: String, attachments: [GmailAttachment], draft: GmailDraft) async -> GmailSendOutcome {
+    private func sendMessage(to: String, subject: String, body: String, attachments: [GmailAttachment], draft: GmailDraft, journal: GmailDraftSession) async -> GmailSendOutcome {
         if usesMailUITestFixture {
+            do { try journal.begin() } catch { return .notSent(error) }
+            let result: GmailSendOutcome
             if ProcessInfo.processInfo.arguments.contains("-uiTestMailRejectSend") {
-                return .notSent(GmailComposeError.recipients)
-            }
-            if ProcessInfo.processInfo.arguments.contains("-uiTestMailUnconfirmedSend") {
-                return .uncertain
-            }
-            statusMessage = "Message sent."
-            return .init(state: .sent, message: "Message sent.")
+                result = .notSent(GmailComposeError.recipients)
+            } else if ProcessInfo.processInfo.arguments.contains("-uiTestMailUnconfirmedSend") { result = .uncertain }
+            else { result = .init(state: .sent, message: "Message sent.") }
+            do { try journal.finish(result) } catch { return .uncertain }
+            return result
         }
         do {
             guard draft.attachmentError == nil else { throw GmailComposeError.attachment }
@@ -363,8 +394,11 @@ struct GmailView: View {
             if activeMailSend == nil {
                 let message = try GmailOutgoingMessage(to: to, subject: subject, body: body,
                                                        attachments: attachments, reply: draft.reply)
+                var content = journal.record.content
+                content.to = message.to; content.reply = message.reply
+                try journal.save(content)
                 activeMailSend = try GmailSendWorkflow(auth: googleAuth, context: modelContext,
-                    message: message, business: draft.businessContext, provider: draft.provider)
+                    message: message, business: draft.businessContext, provider: draft.provider, journal: journal)
             }
             guard let workflow = activeMailSend else { throw GmailComposeError.changed }
             let result = await workflow.send()
@@ -379,7 +413,71 @@ struct GmailView: View {
 
     private func clearMailbox() {
         mailbox.clear()
+        savedDrafts = []; showingDrafts = false
         composeDraft = nil
+    }
+
+    private func draftScope() throws -> GmailDraftScope {
+        #if DEBUG
+        if usesMailUITestFixture {
+            return .init(companyID: UUID(uuidString: "3BF63F8D-C536-4BC2-826B-EF5CA1B1C9DA")!, backendOrigin: "https://fixture.example.invalid",
+                actorEmail: "mail-fixture@gunnaire.com", googleEmail: "mail-fixture@gunnaire.com")
+        }
+        #endif
+        return try GmailDraftScope.capture(auth: googleAuth, context: modelContext)
+    }
+
+    private var draftStore: GmailDraftStore {
+        #if DEBUG
+        if usesMailUITestFixture {
+            let id = ProcessInfo.processInfo.environment["GUNNAIRE_MAIL_DRAFT_FIXTURE"].flatMap(UUID.init(uuidString:)) ?? Self.fixtureDraftID
+            return .encrypted(directory: FileManager.default.temporaryDirectory.appendingPathComponent("MailDraftFixture-" + id.uuidString)) { _ in Data(repeating: 71, count: 32) }
+        }
+        #endif
+        return .device
+    }
+    #if DEBUG
+    private static let fixtureDraftID = UUID()
+    #endif
+
+    private func validateDraftAccess(_ scope: GmailDraftScope, business: GmailBusinessContext?) throws {
+        guard try draftScope() == scope else { throw GmailDraftError.access }
+        if !usesMailUITestFixture { try GmailSendWorkflow.requireAccess(context: modelContext, business: business, sender: googleAuth.signedInEmail) }
+    }
+
+    private func makeDraftSession(_ draft: GmailDraft, content: GmailDraftContent) throws -> GmailDraftSession {
+        let scope = try draftScope()
+        var content = content
+        if draft.savedRecord == nil {
+            content.businessSnapshot = try GmailDraftBusinessSnapshot.capture(content.business, context: modelContext)
+        }
+        let record = draft.savedRecord ?? GmailDraftRecord(id: draft.id, scope: scope, content: content)
+        guard record.scope == scope else { throw GmailDraftError.access }
+        return try GmailDraftSession(record: record, store: draftStore) {
+            try validateDraftAccess(scope, business: record.content.business)
+        }
+    }
+
+    private func loadDrafts() {
+        do {
+            let scope = try draftScope()
+            try validateDraftAccess(scope, business: nil)
+            savedDrafts = try draftStore.list(scope).filter { (try? validateDraftAccess(scope, business: $0.business)) != nil }
+            showingDrafts = true
+            statusMessage = nil
+        } catch {
+            savedDrafts = []
+            statusMessage = (error as? LocalizedError)?.errorDescription ?? GmailDraftError.storage.localizedDescription
+        }
+    }
+
+    private func openSavedDraft(_ id: UUID) {
+        do {
+            let scope = try draftScope()
+            guard let record = try draftStore.read(scope, id), record.state != .sent, record.state != .discarded else { throw GmailDraftError.changed }
+            try validateDraftAccess(scope, business: record.content.business)
+            composeDraft = GmailDraft(record: record)
+        } catch { statusMessage = (error as? LocalizedError)?.errorDescription ?? GmailDraftError.storage.localizedDescription }
     }
 
     private func trashMessage(_ message: GmailMessageDetail) {
@@ -962,8 +1060,17 @@ private struct GmailMessageDetailView: View {
 
 private struct GmailComposeView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
 
-    let onSend: (String, String, String, [GmailAttachment]) async -> GmailSendOutcome
+    let onSend: (String, String, String, [GmailAttachment], GmailDraftSession) async -> GmailSendOutcome
+    let template: GmailDraftContent
+    let makeSession: (GmailDraftContent) throws -> GmailDraftSession
+    let onReviewSent: () -> Void
+    @State private var journal: GmailDraftSession?
+    @State private var draftError: String?
+    @State private var confirmsClose = false
+    @State private var saveRevision = 0
+    @State private var savedContent: GmailDraftContent?
     @State private var attachments: [GmailAttachment]
     let attachmentError: String?
     @State private var isSending = false
@@ -982,14 +1089,61 @@ private struct GmailComposeView: View {
         initialMessageBody: String = "",
         attachments: [GmailAttachment] = [],
         attachmentError: String? = nil,
-        onSend: @escaping (String, String, String, [GmailAttachment]) async -> GmailSendOutcome
+        template: GmailDraftContent,
+        makeSession: @escaping (GmailDraftContent) throws -> GmailDraftSession,
+        onReviewSent: @escaping () -> Void,
+        onSend: @escaping (String, String, String, [GmailAttachment], GmailDraftSession) async -> GmailSendOutcome
     ) {
         self.onSend = onSend
+        self.template = template
+        self.makeSession = makeSession
+        self.onReviewSent = onReviewSent
         _attachments = State(initialValue: attachments)
         self.attachmentError = attachmentError
         _to = State(initialValue: initialTo)
         _subject = State(initialValue: initialSubject)
         _messageBody = State(initialValue: initialMessageBody)
+    }
+
+    private var content: GmailDraftContent {
+        var value = template
+        value.to = to; value.subject = subject; value.body = messageBody
+        value.files = attachments.map { GmailDraftFile($0) }
+        value.businessSnapshot = journal?.record.content.businessSnapshot ?? template.businessSnapshot
+        return value
+    }
+
+    @discardableResult private func persist() -> Bool {
+        do {
+            if journal == nil { journal = try makeSession(content) }
+            guard let journal else { throw GmailDraftError.storage }
+            try journal.verify()
+            if !journal.record.editable {
+                sendOutcome = .init(state: .reviewRequired, message: journal.record.status ?? GmailDraftError.locked.localizedDescription)
+                return true
+            }
+            if journal.record.content != content { try journal.save(content) }
+            savedContent = content
+            draftError = nil
+            return true
+        } catch {
+            draftError = (error as? LocalizedError)?.errorDescription ?? GmailDraftError.storage.localizedDescription
+            return false
+        }
+    }
+
+    private func closeSaving() {
+        guard persist() else { return }
+        dismiss()
+    }
+
+    private func discard() {
+        do {
+            // Discard is explicit; do not require invalid/oversize unsaved
+            // input to be saved before the user can leave it.
+            try journal?.discard()
+            dismiss()
+        } catch { draftError = (error as? LocalizedError)?.errorDescription ?? GmailDraftError.storage.localizedDescription }
     }
 
     var body: some View {
@@ -1032,25 +1186,60 @@ private struct GmailComposeView: View {
             }
             .disabled(isSending || isImportingFiles || sendOutcome?.state == .reviewRequired)
             .safeAreaInset(edge: .bottom) {
-                if let message = attachmentError ?? fileImportError ?? sendOutcome?.message {
-                    Text(message).font(.footnote).padding().frame(maxWidth: .infinity, alignment: .leading)
-                        .background(.thinMaterial).accessibilityIdentifier("MailComposeStatus")
+                if let message = attachmentError ?? fileImportError ?? draftError ?? sendOutcome?.message {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(message).font(.footnote).accessibilityIdentifier("MailComposeStatus")
+                        if sendOutcome?.state == .reviewRequired {
+                            Button("Open Sent", systemImage: "paperplane") {
+                                do {
+                                    try journal?.verify()
+                                    dismiss(); onReviewSent()
+                                } catch { draftError = GmailDraftError.access.localizedDescription }
+                            }.accessibilityIdentifier("MailReviewSentButton")
+                        }
+                    }.padding().frame(maxWidth: .infinity, alignment: .leading).background(.thinMaterial)
+                } else if content.hasContent {
+                    Text(savedContent == content ? "Draft saved on this device." : "Saving draft…")
+                        .font(.footnote).foregroundStyle(.secondary).padding()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("MailDraftSaveStatus")
                 }
             }
             .navigationTitle("Compose")
-            .interactiveDismissDisabled(isSending || isImportingFiles)
+            .interactiveDismissDisabled(true)
+            .onAppear { persist() }
+            .onChange(of: content) { _, _ in saveRevision += 1 }
+            .task(id: saveRevision) {
+                do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
+                guard !isSending, !isImportingFiles, sendOutcome?.state != .reviewRequired else { return }
+                persist()
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase != .active, !isSending, !isImportingFiles { persist() }
+            }
+            .confirmationDialog("Save this draft?", isPresented: $confirmsClose, titleVisibility: .visible) {
+                Button("Save Draft") { closeSaving() }
+                Button("Delete Draft", role: .destructive) { discard() }
+                Button("Keep Editing", role: .cancel) { }
+            } message: {
+                Text("Saved drafts stay on this device. Sending is always a separate action.")
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(sendOutcome?.state == .reviewRequired ? "Close" : "Cancel") { dismiss() }
+                    Button(sendOutcome?.state == .reviewRequired ? "Close" : "Cancel") {
+                        if sendOutcome?.state == .reviewRequired { dismiss() }
+                        else if content.hasContent { confirmsClose = true }
+                        else { discard() }
+                    }
                         .disabled(isSending || isImportingFiles)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(isSending ? "Sending..." : "Send") {
-                        guard !isSending else { return }
+                        guard !isSending, persist(), let journal, journal.record.editable else { return }
                         isSending = true
                         Task { @MainActor in
                             fileImportError = nil
-                            let result = await onSend(to.trimmingCharacters(in: .whitespacesAndNewlines), subject, messageBody, attachments)
+                            let result = await onSend(to.trimmingCharacters(in: .whitespacesAndNewlines), subject, messageBody, attachments, journal)
                             sendOutcome = result
                             isSending = false
                             if result.state == .sent { dismiss() }
@@ -1081,7 +1270,8 @@ private struct GmailComposeView: View {
 }
 
 private struct GmailDraft: Identifiable {
-    let id = UUID()
+    let id: UUID
+    var savedRecord: GmailDraftRecord?
     let to: String
     let subject: String
     let body: String
@@ -1105,8 +1295,24 @@ private struct GmailDraft: Identifiable {
         customerID.map { GmailBusinessContext(customerID: $0, serviceCallID: serviceCallID,
             invoiceID: invoiceID, estimateID: estimateID, maintenanceContractID: maintenanceContractID, workflow: workflow) }
     }
+    var content: GmailDraftContent {
+        .init(to: to, subject: subject, body: body, files: attachments.map { GmailDraftFile($0) },
+            reply: reply, business: businessContext, requiresBusinessContext: savedRecord?.content.requiresBusinessContext ?? requiresBusinessContext,
+            attachmentError: attachmentError, businessSnapshot: savedRecord?.content.businessSnapshot)
+    }
+
+    init(record: GmailDraftRecord) {
+        let value = record.content
+        self.init(id: record.id, to: value.to, subject: value.subject, body: value.body, threadID: value.reply?.threadID,
+            attachments: value.files.map(\.attachment), attachmentError: value.attachmentError,
+            reply: value.reply, customerID: value.business?.customerID, serviceCallID: value.business?.serviceCallID,
+            invoiceID: value.business?.invoiceID, estimateID: value.business?.estimateID,
+            maintenanceContractID: value.business?.maintenanceContractID, workflow: value.business?.workflow ?? .general)
+        savedRecord = record
+    }
 
     init(
+        id: UUID = UUID(),
         to: String,
         subject: String,
         body: String,
@@ -1122,6 +1328,7 @@ private struct GmailDraft: Identifiable {
         maintenanceContractID: UUID? = nil,
         workflow: GunnAireMailWorkflow = .general
     ) {
+        self.id = id
         self.to = to
         self.subject = subject
         self.body = body

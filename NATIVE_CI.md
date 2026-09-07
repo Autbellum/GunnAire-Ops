@@ -6,7 +6,20 @@ It complements the existing Backend/Tools Python 3.13 and 3.14 workflow.
 
 ## Coverage
 
-The billing entry-point candidate selects **twenty-four** iPad interface
+The Mail draft-recovery candidate selects **twenty-seven** iPad journeys.
+The three additions verify complete draft/attachment retention across relaunch,
+an uncertain send remaining read-only with a handoff to Sent after relaunch,
+and autosaved incomplete input surviving termination without closing Compose.
+The existing Mail journeys now exercise explicit Save/Delete Draft decisions.
+Scope, evidence and remaining cross-device/server gates are recorded in
+[GMAIL_DRAFT_RECOVERY.md](GMAIL_DRAFT_RECOVERY.md). Final local acceptance passes
+1219 logic tests per platform, ten selected iPad journeys, unsigned universal
+Mac Release, Backend 366 and Tools 37. Exact-head hosted checks remain separate.
+Preceding head `64e3fce` passes all four hosted jobs:
+[Native](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34163116116) and
+[Backend](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34163116154).
+
+The preceding billing entry-point checkpoint selected **twenty-four** iPad interface
 journeys. The two additions cover cancelling edited Management invoices and
 estimates without saving/sending, and saving each original document offline
 with return to the same Sales workspace. Both use the real standalone item
@@ -128,7 +141,7 @@ The published resource-sync checkpoint 529fe26 passes all four hosted jobs:
 [Backend](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34093728884).
 This is exact-head evidence for that checkpoint, not subsequent catalog work.
 
-- **iPad native tests**: the complete `GunnAire OpsTests` target plus twenty-four
+- **iPad native tests**: the complete `GunnAire OpsTests` target plus twenty-seven
   serial interface journeys: direct Invoice launch, simple Mail actions,
   current customer statement generation, statement review-to-Invoices,
   billing-identity review-to-Invoices with safe report export controls,
@@ -143,7 +156,9 @@ This is exact-head evidence for that checkpoint, not subsequent catalog work.
   GET recovery and safe cancellation after QuickBooks reconnection, plus native
   billing unsent-proposal cancellation and accepted-invoice read-only recovery
   with return to the original invoice, and Management invoice/estimate unsaved
-  cancellation and original-document offline saving with return to Sales.
+  cancellation and original-document offline saving with return to Sales;
+  persistent Mail drafts/attachments, uncertain-send review-to-Sent after
+  relaunch, and autosave recovery after abrupt termination.
 - **Mac native tests**: the complete logic target on arm64 Mac Catalyst,
   followed by an unsigned optimized Release build. `lipo -verify_arch`
   requires both arm64 and x86_64 in the Release executable.
