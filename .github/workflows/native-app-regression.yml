@@ -57,6 +57,9 @@ jobs:
               testMailAttachmentPreviewAndForwardRetainTheOriginalFile \
               testMailOlderMessagesSentAndArchiveHaveNaturalMailboxHandoffs \
               testMailTrashRestoresTheOriginalMessageInsideTheApp \
+              testMailDraftWithAttachmentsSurvivesRelaunchAndExplicitDeletion \
+              testMailUncertainSendStaysReadOnlyAfterRelaunch \
+              testMailAutosavedDraftSurvivesTerminationWithoutClosingComposer \
               testCustomerAccountStatementGeneratesFromTheExistingFilesWorkspace \
               testCustomerSyncReviewCancelsOnlyUnsentProposalAndReturnsToOriginalCustomer \
               testCustomerSyncReviewRecoversOriginalLinkWithoutAnotherCustomerCreate \
