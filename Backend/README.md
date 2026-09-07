@@ -2,7 +2,17 @@
 
 This is a small backend for sharing app users, roles, uploaded field receipts, and field payment records across iPads.
 
-Candidate **2026.09.07.27** adds an opaque connection epoch to job-assignment
+Candidate **2026.09.07.28** adds administrator-reviewed adoption of existing
+Customer/Item/Invoice/Estimate links. The native QuickBooks setup page reads
+exact provider records, retains the original review, and requires explicit
+confirmation for atomic shared mappings. It never writes QBO entities or changes
+sold prices. Reconnection permits scoped historical recovery/cancellation but
+never confirmation of stale evidence. Backend acceptance passes 349 tests;
+Tools passes 37. See [existing-link adoption](../QBO_EXISTING_LINK_ADOPTION.md)
+for API contracts, native evidence, backup/rollback and remaining billing
+cutover requirements. This candidate is not deployed.
+
+Prior candidate **2026.09.07.27** adds an opaque connection epoch to job-assignment
 reads and writes, rejecting offline edits after a new authorization grant.
 Native Add/Edit Job and dispatch-board assignment now use an encrypted durable
 queue with in-job conflict and recovery navigation. Current full Backend

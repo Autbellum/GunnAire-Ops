@@ -3858,6 +3858,72 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testExistingQuickBooksLinkReviewCancelsAndReturnsToManagement() throws {
+        try exerciseExistingQuickBooksLinks(lostReply: false)
+    }
+
+    @MainActor
+    func testExistingQuickBooksLinkReviewRecoversConfirmedDecisionWithoutAnotherPost() throws {
+        try exerciseExistingQuickBooksLinks(lostReply: true)
+    }
+
+    @MainActor
+    func testExistingQuickBooksLinkReviewCancelsAfterReconnection() throws {
+        try exerciseExistingQuickBooksLinks(lostReply: false, reconnected: true)
+    }
+
+    @MainActor
+    private func exerciseExistingQuickBooksLinks(lostReply: Bool, reconnected: Bool = false) throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob", "-uiTestForceQuickBooksConnected", "-uiTestExistingQuickBooksLinks",
+            "-GunnAirePendingAppRoute", "quickBooksManagement"]
+        if lostReply { app.launchArguments.append("-uiTestExistingLinksLostReply") }
+        if reconnected { app.launchArguments.append("-uiTestExistingLinksReconnected") }
+        app.launch()
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
+        let link = app.buttons["ExistingQBOLinksLink"]
+        for _ in 0..<8 where !link.isHittable { app.swipeUp() }
+        XCTAssertTrue(link.waitForExistence(timeout: 4)); link.tap()
+        XCTAssertTrue(app.navigationBars["Existing QuickBooks links"].waitForExistence(timeout: 4))
+        let choice = app.switches.matching(NSPredicate(format: "identifier BEGINSWITH %@", "ExistingQBOSelect-Customer:")).firstMatch
+        for _ in 0..<8 where !choice.isHittable { app.swipeUp() }
+        XCTAssertTrue(choice.waitForExistence(timeout: 4))
+        choice.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        XCTAssertEqual(choice.value as? String, "1")
+        let preview = app.buttons["ExistingQBOLinkPreview"]
+        for _ in 0..<6 where !preview.isHittable { app.swipeUp() }
+        XCTAssertTrue(preview.isEnabled); preview.tap()
+        let confirm = app.buttons["ExistingQBOLinkConfirm"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        if reconnected {
+            app.buttons["ExistingQBOLinkRecover"].tap()
+            let explanation = app.staticTexts["QuickBooks was reconnected. Cancel this old review, then review the records with the current connection."]
+            XCTAssertTrue(explanation.waitForExistence(timeout: 4))
+            XCTAssertFalse(confirm.isEnabled)
+        }
+        if lostReply {
+            confirm.tap()
+            let use = app.buttons["Use reviewed links"]
+            XCTAssertTrue(use.waitForExistence(timeout: 3)); use.tap()
+            XCTAssertTrue(app.staticTexts["ExistingQBOLinkMessage"].waitForExistence(timeout: 4))
+            XCTAssertFalse(confirm.exists)
+            app.buttons["ExistingQBOLinkRecover"].tap()
+            XCTAssertTrue(app.staticTexts["Shared links confirmed"].waitForExistence(timeout: 4))
+            XCTAssertFalse(confirm.exists)
+        } else {
+            app.buttons["ExistingQBOLinkCancel"].tap()
+            XCTAssertTrue(app.staticTexts["Review cancelled"].waitForExistence(timeout: 4))
+            XCTAssertFalse(confirm.exists)
+        }
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = reconnected ? "Reconnected links cancelled" : lostReply ? "Existing links recovered" : "Existing links cancelled"
+        screenshot.lifetime = .keepAlways; add(screenshot)
+        app.navigationBars["Existing QuickBooks links"].buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 4))
+    }
+
+    @MainActor
     func testAssignedTechnicianRecordsBilledPartUseAgainstTruckStock() throws {
         let app = XCUIApplication()
         app.launchArguments = [

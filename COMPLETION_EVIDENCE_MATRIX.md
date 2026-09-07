@@ -1,4 +1,16 @@
-Native tax-address checkpoint, 2026-09-07: **1159/1159 logic tests per native
+Existing QBO links checkpoint, 2026-09-07: **1174/1174 logic tests per native
+platform, 7/7 selected iPad journeys, 349/349 Backend, 37/37 Tools and unsigned
+universal Mac Release pass**. Administrator review now adopts original
+customer/item/document IDs into shared mappings without creating or changing
+QBO entities or sold prices. Lost decisions recover by GET; reconnecting the
+same realm allows cancellation but never stale confirmation. The three final
+review screenshots were visually checked. Exact evidence, API and recovery
+contracts: [QBO_EXISTING_LINK_ADOPTION.md](QBO_EXISTING_LINK_ADOPTION.md).
+The native Invoice/Estimate buttons still require shared-publication cutover;
+full historical migration, independent staff CloudKit/multidevice, Tap to Pay
+and the remaining full-suite requirements are not proved by these tests.
+
+Prior native tax-address checkpoint, 2026-09-07: **1159/1159 logic tests per native
 platform, 5/5 selected iPad journeys and unsigned universal Mac Release pass**.
 The final native form screenshot was visually reviewed. Address review retains
 the customer/site scope, sold prices and offline snapshot, reaches actual

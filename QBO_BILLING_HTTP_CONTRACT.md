@@ -13,8 +13,10 @@ Native address capture is now implemented and qualified in
 [NATIVE_BILLING_TAX_ADDRESSES.md](NATIVE_BILLING_TAX_ADDRESSES.md), including
 service/origin validation and saved-job reopening. It supplies the existing
 native provider path; it does not itself connect the native billing buttons
-to the server client described here. Legacy mapping and original-proposal
-approval/recovery handoffs remain required.
+to the server client described here. Reviewed existing-link adoption is now
+implemented in [QBO_EXISTING_LINK_ADOPTION.md](QBO_EXISTING_LINK_ADOPTION.md).
+It supplies explicit shared customer/item/document links, not full historical
+import or original billing-proposal approval/recovery handoffs.
 
 The staged publisher is now reachable through authenticated application HTTP
 routes. It owns invoice/estimate dispatch and interrupted-result recovery on
@@ -24,11 +26,13 @@ have not switched to this client.** They still use the previous native billing
 workflow. This checkpoint does not claim an end-to-end native billing cutover,
 complete field use, production deployment, or completion of the full suite.
 
-The native handoff still needs structured sale-origin/service-address review,
-shared legacy customer/item/document mapping, automatic office schedule-to-server
-assignment synchronization with durable offline edits, and recovery/approval
-navigation in the existing billing screens. Do not replace assigned technicians
-with an office-only workflow or silently change a sold price to pass a check.
+Before button cutover, the existing native address capture, reviewed shared
+links and durable Add/Edit/dispatch-board assignment paths must be consumed by
+the immutable original billing proposal. Recovery/approval navigation belongs
+inside the existing billing screens. All remaining job creation/import paths
+also need automatic authority synchronization. Do not replace assigned
+technicians with an office-only workflow or silently change a sold price to
+pass a check.
 
 No live QBO, payment, email, signing, entitlement, CloudKit promotion or device
 installation was used. The active full-app objective remains unchanged.

@@ -1,4 +1,16 @@
-Native tax-address follow-up, September 7, 2026: the existing taxable billing
+Existing QBO links follow-up, September 7, 2026: candidate 2026.09.07.28 adds one
+focused administrator review page under QuickBooks Management. It preserves
+original Customer/Item/Invoice/Estimate links, retains the operation before
+POST, and confirms shared mappings atomically after exact provider rereads.
+It changes no QBO entity or sold price and retains cancellation/recovery after
+reconnection. Final acceptance passes 1174 logic tests per native platform,
+seven iPad journeys, 349 Backend, 37 Tools and unsigned universal Mac Release;
+three review screenshots were visually checked. See
+[QBO_EXISTING_LINK_ADOPTION.md](QBO_EXISTING_LINK_ADOPTION.md). This closes a
+reviewed-link prerequisite, not native invoice/estimate publication cutover,
+complete historical migration, signed CloudKit or full-suite acceptance.
+
+Prior native tax-address follow-up, September 7, 2026: the existing taxable billing
 editor now captures and retains reviewed service and sale/ship-from addresses,
 preserves sold prices and sends structured address fields on the current native
 QBO document path. Final acceptance passes 1159 logic tests per native platform,

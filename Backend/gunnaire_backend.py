@@ -32,18 +32,19 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 
 try:
-    from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications
+    from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications, qbo_link_adoption
     from Backend.billing_provider import BillingQBOProvider
 except ModuleNotFoundError:
     import payment_attempts  # Direct launch from the Backend directory.
     import catalog_publications
     import customer_publications
     import billing_publications
+    import qbo_link_adoption
     from billing_provider import BillingQBOProvider
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.07.27"
+SERVICE_VERSION = "2026.09.07.28"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -2456,6 +2457,7 @@ def initialize_database() -> None:
         catalog_publications.initialize_schema(connection)
         customer_publications.initialize_schema(connection)
         billing_publications.initialize_schema(connection)
+        qbo_link_adoption.initialize_schema(connection)
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS customer_communications (
@@ -3505,6 +3507,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/customer-publications" or parsed.path.startswith("/api/customer-publications/"):
             self.handle_customer_publication(parsed, method="GET")
             return
+        if parsed.path == "/api/qbo-link-reviews" or parsed.path.startswith("/api/qbo-link-reviews/"):
+            self.handle_qbo_link_review(parsed, method="GET")
+            return
         if parsed.path == "/api/billing-publications" or parsed.path.startswith("/api/billing-publications/") or parsed.path == "/api/job-billing-assignments":
             self.handle_billing_publication(parsed, method="GET")
             return
@@ -3706,6 +3711,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/customer-publications" or parsed.path.startswith("/api/customer-publications/"):
             self.handle_customer_publication(parsed, method="POST")
+            return
+        if parsed.path == "/api/qbo-link-reviews" or parsed.path.startswith("/api/qbo-link-reviews/"):
+            self.handle_qbo_link_review(parsed, method="POST")
             return
         if parsed.path == "/api/billing-publications" or parsed.path.startswith("/api/billing-publications/") or parsed.path == "/api/job-billing-assignments":
             self.handle_billing_publication(parsed, method="POST")
@@ -5776,6 +5784,55 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 ).fetchone()
         record_audit_event(actor, "cancel", "field-payment", assignment_id)
         self.write_json({"assignment": field_payment_assignment_record(row)})
+
+    def handle_qbo_link_review(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        adopter = qbo_link_adoption.LinkAdopter(
+            db, lambda context, authorize: BillingQBOProvider(context, authorize, qbo_authorized_bearer),
+            encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
+        )
+        session_id = self._application_session_id
+        suffix = parsed.path.removeprefix("/api/qbo-link-reviews")
+        parts = suffix[1:].split("/") if suffix.startswith("/") else []
+        try:
+            if method == "GET" and not suffix:
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+                if any(len(value) != 1 for value in query.values()):
+                    raise qbo_link_adoption.failure("invalid_query", "Choose one original review operation.", 400)
+                result = adopter.lookup(session_id, {key: value[0] for key, value in query.items()})
+            elif method == "GET" and len(parts) == 1 and not parsed.query:
+                result = adopter.read(session_id, parts[0])
+            elif method == "POST" and not parsed.query:
+                def unique_object(pairs):
+                    result = {}
+                    for key, value in pairs:
+                        if key in result:
+                            raise ValueError()
+                        result[key] = value
+                    return result
+
+                def invalid_constant(value):
+                    raise ValueError()
+
+                payload = json.loads(self.read_limited_body(1024 * 1024).decode("utf-8"),
+                                     object_pairs_hook=unique_object, parse_constant=invalid_constant)
+                if not suffix:
+                    result = adopter.preview(session_id, payload)
+                elif len(parts) == 2 and parts[1] in ("confirm", "cancel") and isinstance(payload, dict) and set(payload) == {"revision"}:
+                    result = adopter.decide(session_id, parts[0], payload["revision"], confirm=parts[1] == "confirm")
+                else:
+                    raise qbo_link_adoption.failure("invalid_request", "Choose confirm or cancel for the exact link review.", 400)
+            else:
+                raise qbo_link_adoption.failure("not_found", "Link review action not found.", 404)
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError):
+            self.write_json({"error": "Invalid link review request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Link review storage is unavailable. Keep the original operation for recovery.",
+                             "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
 
     def handle_billing_publication(self, parsed, *, method):
         if not self.require_application_session():

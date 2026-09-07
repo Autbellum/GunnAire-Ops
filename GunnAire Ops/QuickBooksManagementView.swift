@@ -1676,6 +1676,12 @@ struct QuickBooksManagementView: View {
                     }
 
                     Section("Accounting Mappings") {
+                        NavigationLink {
+                            QuickBooksLinkReviewView(context: modelContext)
+                        } label: {
+                            Label("Review existing QuickBooks links", systemImage: "link")
+                        }
+                        .accessibilityIdentifier("ExistingQBOLinksLink")
                         Label(
                             accountingConfiguration == nil ? "Setup required" : "Ready for this company",
                             systemImage: accountingConfiguration == nil
