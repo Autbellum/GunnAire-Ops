@@ -61,7 +61,7 @@ struct CompanyWorkspaceHost: View {
     var body: some View {
         Group {
             if let container = access.authorizedContainer {
-                ContentView().modelContainer(container)
+                ContentView().modifier(JobBillingRecoveryModifier()).modelContainer(container)
                     .id(access.generation)
             } else {
                 ScrollView {

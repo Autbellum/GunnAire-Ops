@@ -2442,6 +2442,10 @@ GunnAire
     }
 
     private func assign(_ call: ServiceCall, to technician: Technician) {
+        assign(call, to: technician, reschedulingTo: nil)
+    }
+
+    private func assign(_ call: ServiceCall, to technician: Technician, reschedulingTo newStart: Date?) {
         guard AppAccess.canPerformScheduleMutation(
             .assignTechnician,
             email: AppIdentity.currentEmail,
@@ -2450,61 +2454,42 @@ GunnAire
             syncMessage = "Dispatcher or administrator access is required to assign technicians."
             return
         }
-        let previousTechnician = call.assignedTechnician?.name
+        let originalBilling: JobBillingTarget
+        do { originalBilling = try JobBillingTarget.capture(call, context: modelContext).1 }
+        catch { syncMessage = JobBillingDispatchError.changed.localizedDescription; return }
+        let originalTechnician = call.assignedTechnician
+        let originalCrew = call.additionalTechnicianIDs
+        let originalCalendar = call.googleCalendarID
+        let originalStart = call.scheduledDate
+        let previousTechnician = originalTechnician?.name
         call.assignedTechnician = technician
         var additionalCrew = call.additionalTechnicianIDs
         additionalCrew.remove(technician.id)
         call.additionalTechnicianIDs = additionalCrew
         let assignmentDetail = previousTechnician.map { "Reassigned from \($0) to \(technician.name)." } ?? "Assigned to \(technician.name)."
-        ServiceCallActivity.record(
+        let activity = ServiceCallActivity.record(
             for: call,
-            action: previousTechnician == nil ? "Technician assigned" : "Technician reassigned",
-            detail: assignmentDetail,
+            action: newStart == nil ? (previousTechnician == nil ? "Technician assigned" : "Technician reassigned") : "Assignment and schedule updated",
+            detail: assignmentDetail + (newStart.map { " Moved from \(originalStart.formatted(date: .abbreviated, time: .shortened)) to \($0.formatted(date: .abbreviated, time: .shortened))." } ?? ""),
             actorEmail: AppIdentity.currentEmail,
             in: modelContext
         )
         if GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call) {
             call.googleCalendarID = ServiceCalendarRouting.assignedCalendarID(for: technician)
         }
-        guard GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call) else {
-            try? modelContext.save()
+        if let newStart { call.scheduledDate = newStart }
+        do {
+            try JobBillingDispatch.shared.save(call, original: originalBilling, context: modelContext)
+        } catch {
+            call.assignedTechnician = originalTechnician
+            call.additionalTechnicianIDs = originalCrew
+            call.googleCalendarID = originalCalendar
+            call.scheduledDate = originalStart
+            modelContext.delete(activity)
+            syncMessage = (error as? JobBillingDispatchError)?.localizedDescription ?? JobBillingDispatchError.save.localizedDescription
             return
         }
-        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(call)
-        publishToGoogleCalendar(call)
-    }
-
-    private func assign(_ call: ServiceCall, to technician: Technician, reschedulingTo newStart: Date) {
-        guard AppAccess.canPerformScheduleMutation(
-            .assignTechnician,
-            email: AppIdentity.currentEmail,
-            users: users
-        ) else {
-            syncMessage = "Dispatcher or administrator access is required to assign or reschedule technicians."
-            return
-        }
-        let originalStart = call.scheduledDate
-        let previousTechnician = call.assignedTechnician?.name
-        call.assignedTechnician = technician
-        var additionalCrew = call.additionalTechnicianIDs
-        additionalCrew.remove(technician.id)
-        call.additionalTechnicianIDs = additionalCrew
-        if GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call) {
-            call.googleCalendarID = ServiceCalendarRouting.assignedCalendarID(for: technician)
-        }
-        call.scheduledDate = newStart
-        let technicianDetail = previousTechnician.map { "Reassigned from \($0) to \(technician.name)." } ?? "Assigned to \(technician.name)."
-        ServiceCallActivity.record(
-            for: call,
-            action: "Assignment and schedule updated",
-            detail: "\(technicianDetail) Moved from \(originalStart.formatted(date: .abbreviated, time: .shortened)) to \(newStart.formatted(date: .abbreviated, time: .shortened)).",
-            actorEmail: AppIdentity.currentEmail,
-            in: modelContext
-        )
-        guard GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call) else {
-            try? modelContext.save()
-            return
-        }
+        guard GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call) else { return }
         GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(call)
         publishToGoogleCalendar(call)
     }

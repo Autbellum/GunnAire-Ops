@@ -240,7 +240,21 @@ struct JobBillingAssignment: Codable, Equatable {
     }
 }
 
-struct JobBillingAssignmentRequest: Encodable {
+struct JobBillingAssignmentSnapshot: Codable, Equatable {
+    let assignment: JobBillingAssignment?
+    let connectionRevision: String
+
+    static func validConnectionRevision(_ value: String) -> Bool {
+        value.utf8.count == 64 && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+    }
+
+    func validate(_ scope: JobBillingScope, customerID: UUID) throws {
+        guard Self.validConnectionRevision(connectionRevision) else { throw BillingPublicationError.invalidResponse }
+        try assignment?.validate(scope, customerID: customerID)
+    }
+}
+
+struct JobBillingAssignmentRequest: Codable, Equatable {
     let companyID: UUID
     let realmID: String
     let environment: String
@@ -250,6 +264,7 @@ struct JobBillingAssignmentRequest: Encodable {
     let enabled: Bool
     let expectedRevision: Int
     let operationID: UUID
+    let connectionRevision: String
 
     var scope: JobBillingScope { .init(companyID: companyID, realmID: realmID, environment: environment, serviceCallID: serviceCallID) }
 }
@@ -263,7 +278,6 @@ struct BillingPublicationClient {
     typealias Transport = (_ path: String, _ method: String, _ body: Data?) async throws -> Data
     let transport: Transport
 
-    private struct AssignmentEnvelope: Decodable { let assignment: JobBillingAssignment? }
     private struct PublicationEnvelope: Decodable { let publication: BillingPublicationRecord }
     private struct ApprovalEnvelope: Decodable { let id: UUID }
     private struct ApprovalRequest: Encodable { let proposal: BillingPublicationRequest; let technicianEmail: String }
@@ -367,20 +381,26 @@ struct BillingPublicationClient {
 
     func assignment(_ scope: JobBillingScope, customerID: UUID,
                     workflow: QuickBooksDataAPI.CapturedWorkspaceWorkflow) async throws -> JobBillingAssignment? {
+        try await assignmentSnapshot(scope, customerID: customerID, workflow: workflow).assignment
+    }
+
+    func assignmentSnapshot(_ scope: JobBillingScope, customerID: UUID,
+                            workflow: QuickBooksDataAPI.CapturedWorkspaceWorkflow) async throws -> JobBillingAssignmentSnapshot {
         try scope.validate(workflow)
         let query = [URLQueryItem(name: "companyID", value: scope.companyID.uuidString.lowercased()), .init(name: "realmID", value: scope.realmID),
                      .init(name: "environment", value: scope.environment), .init(name: "serviceCallID", value: scope.serviceCallID.uuidString.lowercased())]
-        let result = try await perform(AssignmentEnvelope.self, path: path("/api/job-billing-assignments", query), workflow: workflow).assignment
-        try result?.validate(scope, customerID: customerID)
+        let result = try await perform(JobBillingAssignmentSnapshot.self, path: path("/api/job-billing-assignments", query), workflow: workflow)
+        try result.validate(scope, customerID: customerID)
         return result
     }
 
     func saveAssignment(_ request: JobBillingAssignmentRequest, workflow: QuickBooksDataAPI.CapturedWorkspaceWorkflow) async throws -> JobBillingAssignment {
         try request.scope.validate(workflow)
-        guard (0..<2_147_483_647).contains(request.expectedRevision) else { throw BillingPublicationError.invalidProposal }
-        let result = try await perform(AssignmentEnvelope.self, path: "/api/job-billing-assignments",
-                                       body: encode(request), workflow: workflow).assignment
-        guard let result else { throw BillingPublicationError.invalidResponse }
+        guard (0..<2_147_483_647).contains(request.expectedRevision),
+              JobBillingAssignmentSnapshot.validConnectionRevision(request.connectionRevision) else { throw BillingPublicationError.invalidProposal }
+        let envelope = try await perform(JobBillingAssignmentSnapshot.self, path: "/api/job-billing-assignments",
+                                        body: encode(request), workflow: workflow)
+        guard envelope.connectionRevision == request.connectionRevision, let result = envelope.assignment else { throw BillingPublicationError.invalidResponse }
         try result.validate(request.scope, customerID: request.localCustomerID)
         guard result.revision == request.expectedRevision + 1, result.enabled == request.enabled,
               !request.enabled || result.usable, result.technicianEmails.sorted() == request.technicianEmails.sorted() else {

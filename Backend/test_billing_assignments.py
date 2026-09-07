@@ -29,9 +29,38 @@ class BillingAssignmentTests(BillingFixture, unittest.TestCase):
         self.preflight.return_value = {"I1": {"Id": "I1", "Active": True, "Type": "Service", "UnitPrice": 189, "Taxable": False}}
 
     def assignment(self, **changes):
+        with backend.db() as connection:
+            epoch = assignments.connection_revision(assignments.grant_fingerprint(connection.execute("SELECT * FROM qbo_connections WHERE id=1").fetchone()))
         return {"companyID": self.company, "realmID": "realm", "environment": "sandbox", "serviceCallID": self.job_id,
                 "localCustomerID": self.customer_id, "technicianEmails": [self.email("Field Technician")], "enabled": True,
-                "expectedRevision": 0, "operationID": str(uuid.uuid4()), **changes}
+                "expectedRevision": 0, "operationID": str(uuid.uuid4()), "connectionRevision": epoch, **changes}
+
+    def test_offline_first_assignment_cannot_adopt_a_reconnected_grant(self):
+        original = self.assignment()
+        with backend.db() as connection:
+            connection.execute("UPDATE qbo_connections SET authorized_at='replacement-grant'")
+        self.expect("assignment_conflict", lambda: self.save_assignment(original))
+        self.assertIsNone(self.jobs.read(self.admin, self.job_scope())["assignment"])
+        self.save_assignment(self.assignment())
+
+    def test_connection_revision_is_opaque_and_changes_only_with_grant(self):
+        first = self.jobs.read(self.admin, self.job_scope())
+        self.assertIsNone(first["assignment"])
+        with backend.db() as connection:
+            fingerprint = assignments.grant_fingerprint(connection.execute("SELECT * FROM qbo_connections WHERE id=1").fetchone())
+            connection.execute("UPDATE qbo_connections SET refresh_token_ciphertext='rotated-refresh-token'")
+        self.assertRegex(first["connectionRevision"], r"^[0-9a-f]{64}$")
+        self.assertNotEqual(first["connectionRevision"], fingerprint)
+        self.assertEqual(first["connectionRevision"], self.jobs.read(self.admin, self.job_scope())["connectionRevision"])
+
+    def test_missing_malformed_or_client_invented_connection_revision_is_rejected(self):
+        for epoch in (None, "", "a" * 63, "A" * 64, "a" * 65, 4):
+            self.expect("invalid_request", lambda: self.save_assignment(self.assignment(connectionRevision=epoch)))
+        self.expect("assignment_conflict", lambda: self.save_assignment(self.assignment(connectionRevision="f" * 64)))
+        missing = self.assignment()
+        missing.pop("connectionRevision")
+        self.expect("invalid_request", lambda: self.save_assignment(missing))
+        self.assertIsNone(self.jobs.read(self.admin, self.job_scope())["assignment"])
 
     def save_assignment(self, payload=None, role="Dispatcher"):
         return self.jobs.save(self.sessions[role], payload or self.assignment())

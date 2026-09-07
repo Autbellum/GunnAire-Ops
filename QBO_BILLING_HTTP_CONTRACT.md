@@ -1,5 +1,12 @@
 # Shared billing HTTP and assigned-job authority — 2026.09.07.26
 
+**Native dispatch follow-up:** candidate `2026.09.07.27` adds mandatory opaque
+`connectionRevision` to job-assignment writes and both response envelopes.
+Add/Edit Job and dispatch-board assignment now stage durable, encrypted local
+intents and have an in-job conflict/recovery handoff. The historical schedule
+gap below is superseded for those entry paths, not for invoice/estimate button
+cutover. See [NATIVE_JOB_BILLING_AUTHORITY.md](NATIVE_JOB_BILLING_AUTHORITY.md).
+
 ## Current boundary
 
 The staged publisher is now reachable through authenticated application HTTP

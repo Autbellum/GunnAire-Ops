@@ -1,4 +1,18 @@
-Billing HTTP/assigned-job checkpoint, 2026-09-07: **100/100 focused, 316/316 Backend
+Native job assignment checkpoint, 2026-09-07: **103/103 focused server tests,
+319/319 complete Backend tests and 37/37 Tools tests pass**. Add/Edit Job and
+dispatch-board assignment now have durable encrypted queueing, original
+connection/revision checks and an in-job review handoff. Early focused native
+acceptance passes 41 logic tests. Final-source acceptance passes **1144/1144
+logic tests on each native platform, 5/5 selected iPad journeys, and the unsigned
+optimized universal Mac Release**, with both architectures verified and zero
+final failures/skips. All three final screenshots were visually reviewed.
+Exact evidence and intermediate failures are recorded in
+[NATIVE_JOB_BILLING_AUTHORITY.md](NATIVE_JOB_BILLING_AUTHORITY.md).
+The preceding published head `12382ae` passes all four hosted jobs, not a
+substitute for this new source's acceptance. The complete application goal,
+invoice/estimate cutover and signed multi-device CloudKit proof remain open.
+
+Prior billing HTTP/assigned-job checkpoint, 2026-09-07: **100/100 focused, 316/316 Backend
 and 37/37 Tools tests pass**. The loopback HTTP → real server publisher/adapter →
 fixture transport round trip verifies assigned-field publication and original
 recovery without another POST to QBO. Tests cover CAS roster races, encrypted

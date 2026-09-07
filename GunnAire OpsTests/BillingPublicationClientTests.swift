@@ -60,7 +60,7 @@ struct BillingPublicationClientTests {
     private func assignmentRequest() -> JobBillingAssignmentRequest {
         .init(companyID: company, realmID: "billing-realm", environment: Config.QuickBooks.environment,
               serviceCallID: job, localCustomerID: customer, technicianEmails: ["field@example.invalid"], enabled: true,
-              expectedRevision: 0, operationID: attempt)
+              expectedRevision: 0, operationID: attempt, connectionRevision: String(repeating: "a", count: 64))
     }
 
     @Test func invoiceContractKeepsOriginalSoldValuesJobAndDateWithoutSendOrPaymentFields() async throws {
@@ -212,7 +212,7 @@ struct BillingPublicationClientTests {
             let encoded = try JSONSerialization.jsonObject(with: #require(body)) as! [String: Any]
             #expect(encoded["expectedRevision"] as? Int == 0)
             #expect(encoded["operationID"] as? String == attempt.uuidString)
-            return try data(["assignment": assignment()])
+            return try data(["assignment": assignment(), "connectionRevision": String(repeating: "a", count: 64)])
         }
         let saved = try await client.saveAssignment(value, workflow: api.captureWorkspaceWorkflow())
         #expect(saved.revision == 1); #expect(saved.usable)
@@ -232,7 +232,7 @@ struct BillingPublicationClientTests {
     @Test func changedJobRosterCustomerRevisionAndUnusableApprovalAreRejected() async throws {
         for change: [String: Any] in [["serviceCallID": UUID().uuidString], ["localCustomerID": UUID().uuidString], ["revision": 2],
                                      ["technicianEmails": ["different@example.invalid"]], ["usable": false], ["enabled": false]] {
-            let api = api(), client = BillingPublicationClient { _, _, _ in try data(["assignment": assignment(changes: change)]) }
+            let api = api(), client = BillingPublicationClient { _, _, _ in try data(["assignment": assignment(changes: change), "connectionRevision": String(repeating: "a", count: 64)]) }
             await #expect(throws: BillingPublicationError.invalidResponse) { try await client.saveAssignment(assignmentRequest(), workflow: api.captureWorkspaceWorkflow()) }
         }
     }
@@ -241,7 +241,7 @@ struct BillingPublicationClientTests {
         let api = api()
         let client = BillingPublicationClient { path, method, body in
             #expect(path.hasPrefix("/api/job-billing-assignments?")); #expect(method == "GET"); #expect(body == nil)
-            return try data(["assignment": NSNull()])
+            return try data(["assignment": NSNull(), "connectionRevision": String(repeating: "a", count: 64)])
         }
         let result = try await client.assignment(assignmentRequest().scope, customerID: customer, workflow: api.captureWorkspaceWorkflow())
         #expect(result == nil)

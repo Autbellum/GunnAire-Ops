@@ -67,6 +67,11 @@ def digest(value):
     return hashlib.sha256(canonical(value).encode()).hexdigest()
 
 
+def connection_revision(fingerprint):
+    """Public opaque epoch; never disclose the internal grant fingerprint."""
+    return digest(["job-billing-connection-v1", fingerprint])
+
+
 class JobBillingAssignments:
     def __init__(self, database, actor, encrypt, decrypt, audit, now=None):
         self.database, self.actor, self.encrypt, self.decrypt, self.audit = database, actor, encrypt, decrypt, audit
@@ -145,10 +150,11 @@ class JobBillingAssignments:
                 if (actor["role"] != "Field Technician" or not self.usable(connection, row, fingerprint)
                         or actor["email"] not in self.roster(row)):
                     raise failure("access_denied", "Current access to this job is required.", 403)
-            return {"assignment": self.public(connection, row, fingerprint) if row is not None else None}
+            return {"assignment": self.public(connection, row, fingerprint) if row is not None else None,
+                    "connectionRevision": connection_revision(fingerprint)}
 
     def save(self, session_id, payload):
-        required = {"companyID", "realmID", "environment", "serviceCallID", "localCustomerID", "technicianEmails", "enabled", "expectedRevision", "operationID"}
+        required = {"companyID", "realmID", "environment", "serviceCallID", "localCustomerID", "technicianEmails", "enabled", "expectedRevision", "operationID", "connectionRevision"}
         if not isinstance(payload, dict) or set(payload) != required:
             raise failure("invalid_request", "Use the supported job billing assignment fields only.", 400)
         intent = request_scope(payload)
@@ -158,10 +164,16 @@ class JobBillingAssignments:
         expected = payload["expectedRevision"]
         if type(payload["enabled"]) is not bool or (payload["enabled"] and not roster) or type(expected) is not int or not 0 <= expected < 2147483647:
             raise failure("invalid_request", "Review the job roster, access choice and original revision.", 400)
-        normalized = {**intent, "customer": customer, "roster": roster, "enabled": payload["enabled"], "expected": expected}
+        epoch = payload["connectionRevision"]
+        if not isinstance(epoch, str) or not re.fullmatch(r"[0-9a-f]{64}", epoch):
+            raise failure("invalid_request", "Refresh the original job billing connection before saving.", 400)
+        normalized = {**intent, "customer": customer, "roster": roster, "enabled": payload["enabled"], "expected": expected,
+                      "connection_revision": epoch}
         with self.database() as connection:
             connection.execute("BEGIN IMMEDIATE")
             actor, fingerprint = self.context(connection, session_id, intent, office=True)
+            if epoch != connection_revision(fingerprint):
+                raise failure("assignment_conflict", "QuickBooks was reconnected. Review this saved job change against the current connection.")
             row = self.record(connection, intent)
             previous = connection.execute("SELECT * FROM billing_assignment_mutations WHERE company_id=? AND realm_id=? AND environment=? AND operation_id=?", (*scope(intent), operation)).fetchone()
             if previous is not None:
@@ -173,7 +185,7 @@ class JobBillingAssignments:
                     raise failure("assignment_conflict", "The saved assignment operation no longer matches this change.")
                 if row is None or row["revision"] != previous["revision"]:
                     raise failure("assignment_conflict", "A newer assignment exists. Review it without replacing it with the old edit.")
-                return {"assignment": self.public(connection, row, fingerprint)}
+                return {"assignment": self.public(connection, row, fingerprint), "connectionRevision": epoch}
             if (row["revision"] if row else 0) != expected:
                 raise failure("assignment_conflict", "Another dispatcher changed this job. Review the current assignment first.")
             if row is not None and row["local_customer_id"] != customer:
@@ -198,4 +210,4 @@ class JobBillingAssignments:
             connection.execute("INSERT INTO billing_assignment_mutations VALUES (?,?,?,?,?,?,?,?)",
                                (*scope(intent), operation, intent["service_call_id"], self.encrypt(canonical(normalized)), revision, fingerprint))
             self.audit(actor["email"], "assign" if payload["enabled"] else "revoke", "billing-job", intent["service_call_id"], connection=connection)
-            return {"assignment": self.public(connection, self.record(connection, intent), fingerprint)}
+            return {"assignment": self.public(connection, self.record(connection, intent), fingerprint), "connectionRevision": epoch}

@@ -2410,6 +2410,10 @@ GunnAire
                         jobActionsSection
                     }
 
+                    if selectedWorkspace == .overview && canScheduleApprovedWork {
+                        JobBillingAccessRow(call: call)
+                    }
+
                     if selectedWorkspace == .overview {
                         CustomerOperationalAlertInlineSummary(
                             alerts: activeOperationalAlerts,
@@ -4141,6 +4145,7 @@ struct AddServiceCallView: View {
     @AppStorage("defaultJobDurationMinutes") private var defaultJobDurationMinutes = 90
     
     @State private var callType: ServiceCallType = .service
+    @State private var jobSaveMessage: String?
     @State private var dispatchUrgency: ServiceRequestUrgency = .normal
     @State private var eventTitle = ""
     @State private var customer: Customer?
@@ -4666,6 +4671,9 @@ struct AddServiceCallView: View {
             }
         }
         .tint(Color.brandGold) // Accent color gold for form controls using Color
+        .alert("Job not saved", isPresented: Binding(get: { jobSaveMessage != nil }, set: { if !$0 { jobSaveMessage = nil } })) {
+            Button("Keep Editing", role: .cancel) { jobSaveMessage = nil }
+        } message: { Text(jobSaveMessage ?? "Keep this form open and try Save again.") }
         .sheet(isPresented: $showingEquipmentNameplateCapture) {
             EquipmentNameplateCaptureSheet { draft in
                 applyEquipmentNameplateDraft(draft)
@@ -4770,6 +4778,15 @@ struct AddServiceCallView: View {
             equipment.applyTechnicalBaselines(to: call)
         }
         modelContext.insert(call)
+        do {
+            try JobBillingDispatch.shared.save(call, original: nil, context: modelContext)
+        } catch {
+            // Only the just-inserted unsaved job is removed; form values and
+            // unrelated model changes are retained. Never dismiss on failure.
+            modelContext.delete(call)
+            jobSaveMessage = (error as? JobBillingDispatchError)?.localizedDescription ?? JobBillingDispatchError.save.localizedDescription
+            return
+        }
         publishToGoogleCalendar(call)
         dismiss()
         if openDocumentationAfterSave {
@@ -4922,6 +4939,9 @@ struct EditServiceCallView: View {
 
     let call: ServiceCall
 
+    @State private var jobSaveMessage: String?
+    @State private var billingEditRevision: JobBillingLocalRevision
+
     @State private var callType: ServiceCallType
     @State private var dispatchUrgency: ServiceRequestUrgency
     @State private var eventTitle: String
@@ -4965,6 +4985,7 @@ struct EditServiceCallView: View {
 
     init(call: ServiceCall) {
         self.call = call
+        _billingEditRevision = State(initialValue: JobBillingLocalRevision(call))
         let storedEventTitle = call.eventTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
         let recoveredEventTitle = GoogleCalendarScheduleSync.calendarEventSummary(from: call.notes)
         let initialEventTitle: String
@@ -5390,6 +5411,9 @@ struct EditServiceCallView: View {
             }
             .disabled(!canManageDispatch)
             .navigationTitle("Edit Service Call")
+            .alert("Job not saved", isPresented: Binding(get: { jobSaveMessage != nil }, set: { if !$0 { jobSaveMessage = nil } })) {
+                Button("Keep Editing", role: .cancel) { jobSaveMessage = nil }
+            } message: { Text(jobSaveMessage ?? "Keep this form open and try Save again.") }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -5534,6 +5558,17 @@ struct EditServiceCallView: View {
         guard !workLogBlocksRequestedStatus else { return }
         guard let customer else { return }
         guard !serviceRestrictionBlocksSave else { return }
+        let originalBillingTarget: JobBillingTarget
+        let restoreFailedEdit: () -> Void
+        do {
+            let (revision, target) = try JobBillingTarget.capture(call, context: modelContext)
+            guard revision == billingEditRevision else { throw JobBillingDispatchError.changed }
+            originalBillingTarget = target
+            restoreFailedEdit = try ServiceCallEditRollback.capture(call, context: modelContext)
+        } catch {
+            jobSaveMessage = JobBillingDispatchError.changed.localizedDescription
+            return
+        }
         let originalStart = call.scheduledDate
         let originalArrivalWindow = call.promisedArrivalWindowSummary
         let originalStatus = call.status
@@ -5632,10 +5667,18 @@ struct EditServiceCallView: View {
             ServiceCallActivity.record(for: call, action: "Dispatch priority updated", detail: "Priority changed from \(originalDispatchUrgency.displayName) to \(dispatchUrgency.displayName).", actorEmail: actorEmail, in: modelContext)
         }
         let shouldPublishCalendarChanges = GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call)
+        billingEditRevision = JobBillingLocalRevision(call)
+        do {
+            try JobBillingDispatch.shared.save(call, original: originalBillingTarget, context: modelContext)
+        } catch {
+            restoreFailedEdit()
+            billingEditRevision = JobBillingLocalRevision(call)
+            jobSaveMessage = (error as? JobBillingDispatchError)?.localizedDescription ?? JobBillingDispatchError.save.localizedDescription
+            return
+        }
         if shouldPublishCalendarChanges {
             GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(call)
         }
-        try? modelContext.save()
         if status == .cancelled {
             cancelManagedGoogleCalendarEvent(for: call)
         } else if shouldPublishCalendarChanges {

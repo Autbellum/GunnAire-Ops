@@ -6,6 +6,17 @@ It complements the existing Backend/Tools Python 3.13 and 3.14 workflow.
 
 ## Coverage
 
+The native job-authority candidate adds two in-job Field Billing journeys:
+saved-crew conflict confirmation with return to the original job, and
+read-only recovery of accepted access without another assignment POST.
+The candidate workflow therefore selects sixteen iPad interface journeys.
+Exact implementation and final local acceptance:
+[NATIVE_JOB_BILLING_AUTHORITY.md](NATIVE_JOB_BILLING_AUTHORITY.md).
+Published HTTP/client head `12382ae` passes all four hosted jobs:
+[Native](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34140905031) and
+[Backend](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34140905066).
+Those results do not qualify this new candidate or its added journeys.
+
 Published mailbox head `7d18532` now passes all four hosted jobs:
 [Native](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34127258110) and
 [Backend](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34127258022).
@@ -64,7 +75,7 @@ The published resource-sync checkpoint 529fe26 passes all four hosted jobs:
 [Backend](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34093728884).
 This is exact-head evidence for that checkpoint, not subsequent catalog work.
 
-- **iPad native tests**: the complete `GunnAire OpsTests` target plus fourteen
+- **iPad native tests**: the complete `GunnAire OpsTests` target plus sixteen
   serial interface journeys: direct Invoice launch, simple Mail actions,
   current customer statement generation, statement review-to-Invoices,
   billing-identity review-to-Invoices with safe report export controls,
@@ -73,7 +84,8 @@ This is exact-head evidence for that checkpoint, not subsequent catalog work.
   recovery after a rejected send, uncertain-send duplicate prevention, and
   native attachment preview/forward/removal, mailbox pagination/Sent/archive,
   recoverable Trash/restore inside the app, and customer sync original-link
-  recovery/unsent cancellation with return to the customer record.
+  recovery/unsent cancellation with return to the customer record, and
+  original job-access recovery and displayed-revision crew confirmation.
 - **Mac native tests**: the complete logic target on arm64 Mac Catalyst,
   followed by an unsigned optimized Release build. `lipo -verify_arch`
   requires both arm64 and x86_64 in the Release executable.

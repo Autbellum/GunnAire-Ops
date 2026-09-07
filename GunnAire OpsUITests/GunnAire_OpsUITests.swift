@@ -2349,6 +2349,78 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testJobBillingReviewUsesSavedCrewAndReturnsToTheSameJob() throws {
+        let app = openJobBillingReviewFixture(recovering: false)
+        XCTAssertTrue(app.staticTexts["JobBillingSavedCrew"].label.contains("UI Test Technician"))
+        XCTAssertTrue(app.staticTexts["JobBillingPendingStatus"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["JobBillingApplySavedCrew"].exists)
+        let pendingCapture = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        pendingCapture.name = "Job billing - saved crew conflict review"
+        pendingCapture.lifetime = .keepAlways
+        add(pendingCapture)
+        app.buttons["JobBillingApplySavedCrew"].tap()
+        let confirmation = app.alerts["Apply this job's saved access?"]
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 3))
+        confirmation.buttons["Cancel"].tap()
+        XCTAssertTrue(app.staticTexts["JobBillingPendingStatus"].exists)
+        app.buttons["JobBillingApplySavedCrew"].tap()
+        let apply = confirmation.buttons.matching(identifier: "JobBillingConfirmSavedCrew").firstMatch
+        XCTAssertTrue(apply.waitForExistence(timeout: 3))
+        apply.tap()
+        XCTAssertTrue(app.staticTexts["JobBillingConfirmedStatus"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["JobBillingApplySavedCrew"].exists)
+        let capture = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        capture.name = "Job billing - saved crew confirmed"
+        capture.lifetime = .keepAlways
+        add(capture)
+        app.navigationBars["Field Billing"].buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["JobBillingAccessLink"].exists)
+        let picker = app.segmentedControls["ServiceCallWorkspacePicker"]
+        for _ in 0..<8 where !picker.isHittable { app.swipeDown() }
+        XCTAssertTrue(picker.buttons["Overview"].isSelected)
+    }
+
+    @MainActor
+    func testJobBillingReviewRecoversLostReplyWithoutAnotherApproval() throws {
+        let app = openJobBillingReviewFixture(recovering: true)
+        XCTAssertTrue(app.staticTexts["JobBillingSavedCrew"].label.contains("UI Test Technician"))
+        XCTAssertTrue(app.staticTexts["JobBillingConfirmedStatus"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["JobBillingApplySavedCrew"].exists)
+        app.buttons["JobBillingRefresh"].tap()
+        XCTAssertTrue(app.staticTexts["JobBillingConfirmedStatus"].waitForExistence(timeout: 5))
+        let capture = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        capture.name = "Job billing - original access recovered"
+        capture.lifetime = .keepAlways
+        add(capture)
+        app.navigationBars["Field Billing"].buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    private func openJobBillingReviewFixture(recovering: Bool) -> XCUIApplication {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob", "-uiTestJobBillingReview", "-GunnAirePendingAppRoute", "scheduleAndJobs"]
+        if recovering { app.launchArguments.append("-uiTestJobBillingRecovered") }
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 8))
+        let job = app.buttons["OpenServiceCall-\(screenshotServiceCallID)"]
+        for _ in 0..<10 where !job.isHittable { app.swipeUp() }
+        XCTAssertTrue(job.waitForExistence(timeout: 3)); job.tap()
+        XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 5))
+        let picker = app.segmentedControls["ServiceCallWorkspacePicker"]
+        for _ in 0..<8 where !picker.isHittable { app.swipeDown() }
+        XCTAssertTrue(picker.waitForExistence(timeout: 3)); picker.buttons["Overview"].tap()
+        let link = app.buttons["JobBillingAccessLink"]
+        for _ in 0..<8 where !link.isHittable { app.swipeUp() }
+        XCTAssertTrue(link.waitForExistence(timeout: 3)); link.tap()
+        XCTAssertTrue(app.navigationBars["Field Billing"].waitForExistence(timeout: 5))
+        return app
+    }
+
+    @MainActor
     func testScheduleDeletionRetainsTheConfirmedTargetAndProtectsBilledJobs() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()

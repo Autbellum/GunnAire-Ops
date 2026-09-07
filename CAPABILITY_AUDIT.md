@@ -1,4 +1,15 @@
-Billing HTTP follow-up, September 7, 2026: candidate 2026.09.07.26 now exposes
+Native dispatch follow-up, September 7, 2026: candidate 2026.09.07.27 connects
+Add/Edit Job and dispatch-board assignment to encrypted original-account
+offline intents and revisioned server authority. The existing job Overview
+has a compact Field Billing review/recovery link. Reconnected-grant and newer
+dispatcher conflicts cannot be silently adopted. Failed form saves retain
+editing and stop calendar/access follow-up. See
+[NATIVE_JOB_BILLING_AUTHORITY.md](NATIVE_JOB_BILLING_AUTHORITY.md) for final
+acceptance and remaining automatic creation/import, billing-button cutover,
+CloudKit and full-suite requirements. Earlier schedule-gap claims below are
+historical; they remain true for entry paths not named in this checkpoint.
+
+Prior billing HTTP follow-up, September 7, 2026: candidate 2026.09.07.26 now exposes
 the shared engine through authenticated publish/recover/cancel/approve routes.
 Revisioned dispatcher/admin job authority permits assigned technicians' ordinary
 pricebook lines and retains exact-draft review for price exceptions. Stale

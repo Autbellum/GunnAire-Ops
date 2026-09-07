@@ -2,7 +2,15 @@
 
 This is a small backend for sharing app users, roles, uploaded field receipts, and field payment records across iPads.
 
-Candidate **2026.09.07.26** exposes shared billing publication/recovery/approval
+Candidate **2026.09.07.27** adds an opaque connection epoch to job-assignment
+reads and writes, rejecting offline edits after a new authorization grant.
+Native Add/Edit Job and dispatch-board assignment now use an encrypted durable
+queue with in-job conflict and recovery navigation. Current full Backend
+acceptance passes 319 tests; Tools passes 37. Deployment, invoice/estimate
+button cutover and signed-device acceptance remain separate requirements:
+[native job authority](../NATIVE_JOB_BILLING_AUTHORITY.md).
+
+Prior candidate **2026.09.07.26** exposes shared billing publication/recovery/approval
 HTTP routes and revisioned dispatcher-owned job authority. Assigned technicians
 can publish ordinary catalog-priced lines through the server; price exceptions
 retain exact office review. The typed native client is implemented, but

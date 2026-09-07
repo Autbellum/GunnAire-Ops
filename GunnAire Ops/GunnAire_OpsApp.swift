@@ -369,7 +369,7 @@ private enum GunnAireUITestFixtures {
         if arguments.contains("-uiTestAuthenticatedStandard") {
             context.insert(AppUser(id: standardUserID, email: GunnAireUITestIdentity.standardEmail, role: .standard))
         }
-        if arguments.contains("-uiTestAuthenticatedTechnician") {
+        if arguments.contains("-uiTestAuthenticatedTechnician") || arguments.contains("-uiTestJobBillingReview") {
             context.insert(AppUser(id: technicianUserID, email: GunnAireUITestIdentity.technicianEmail, role: .fieldTechnician))
         }
         if arguments.contains("-uiTestAuthenticatedAccounting") {

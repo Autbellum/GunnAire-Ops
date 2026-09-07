@@ -18,6 +18,23 @@ credential rotation, production restores, or customer communications.
 
 ## 2026-09-07 billing HTTP and job authority
 
+Candidate **2026.09.07.27** requires a server-returned opaque
+`connectionRevision` for each assignment POST. A reconnect invalidates the old
+epoch, including never-sent offline creates. Deploy/verify the reviewed server
+before distributing the updated native client; old v26 assignment clients will
+receive a validation error rather than unsafe compatibility fallback. Existing
+native invoice/estimate buttons have not switched to the server publisher.
+
+Native queue files under Application Support/JobBillingDispatch-v1 are
+encrypted with a device-only Keychain key and excluded from backup. Do not
+clear them, reset keys or rebind them to another account to resolve a sync
+problem. First inspect the original job's Field Billing review. A lost reply
+can be resolved by reading current server authority; a newer assignment or
+connection requires explicit office review. Offline changes are not effective
+on other devices until confirmed. See
+[native job authority](NATIVE_JOB_BILLING_AUTHORITY.md) for exact boundaries.
+Current backend fixture acceptance is 319 Backend and 37 Tools tests.
+
 Candidate **2026.09.07.26** exposes the shared publisher/recovery engine over
 authenticated HTTP and adds revisioned dispatcher/admin job assignments.
 Preserve `billing_job_assignments`, `billing_assignment_mutations` and
