@@ -75,12 +75,26 @@ enum QuickBooksQueryPagination {
     }
 }
 
+struct QuickBooksRetryContext: Equatable {
+    let realmID: String?
+    let environment: String
+}
+
 enum QuickBooksRateLimitRetryPolicy {
     /// A 429 retry is the same logical request, so it must retain the original
-    /// Intuit request ID, URL, headers, and body. Rebuilding mutation requests
+    /// Intuit request ID, URL, and body. Rebuilding mutation requests
     /// would generate a new idempotency key and could create a duplicate write.
-    static func requestForRetry(_ preparedRequest: URLRequest) -> URLRequest {
-        preparedRequest
+    /// Only authorization may change after token refresh, within the same company.
+    static func requestForRetry(
+        _ preparedRequest: URLRequest,
+        accessToken: String,
+        originalContext: QuickBooksRetryContext,
+        currentContext: QuickBooksRetryContext
+    ) -> URLRequest? {
+        guard originalContext == currentContext, !accessToken.isEmpty else { return nil }
+        var request = preparedRequest
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        return request
     }
 }
 
@@ -645,30 +659,51 @@ final class QuickBooksDataAPI: ObservableObject {
         let type: T.Type
     }
 
+    private var retryContext: QuickBooksRetryContext {
+        QuickBooksRetryContext(realmID: realmID, environment: currentEnvironment)
+    }
+
+    private func requestWithCurrentAuthorization(
+        _ request: URLRequest?,
+        originalContext: QuickBooksRetryContext
+    ) -> URLRequest? {
+        guard let request, let tokens else { return nil }
+        return QuickBooksRateLimitRetryPolicy.requestForRetry(
+            request,
+            accessToken: tokens.accessToken,
+            originalContext: originalContext,
+            currentContext: retryContext
+        )
+    }
+
     private func performAuthorizedDecodingRequest<T: Decodable>(
         _ requestBuilder: @escaping () -> URLRequest?,
         decode type: T.Type,
         completion: @escaping (Result<T, Error>) -> Void,
         attempt: Int = 0,
-        preparedRequest: URLRequest? = nil
+        preparedRequest: URLRequest? = nil,
+        originalContext: QuickBooksRetryContext? = nil
     ) {
         let typeBox = DecodableTypeBox(type: type)
         refreshTokensIfNeeded { ok in
-            guard ok, let request = preparedRequest ?? requestBuilder() else {
+            let context = originalContext ?? self.retryContext
+            guard ok, let request = self.requestWithCurrentAuthorization(
+                preparedRequest ?? requestBuilder(), originalContext: context
+            ) else {
                 completion(.failure(QBError.unauthorized))
                 return
             }
 
             URLSession.shared.dataTask(with: request) { data, response, error in
                 if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
-                    let retryRequest = QuickBooksRateLimitRetryPolicy.requestForRetry(request)
                     DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
                         self.performAuthorizedDecodingRequest(
                             requestBuilder,
                             decode: typeBox.type,
                             completion: completion,
                             attempt: attempt + 1,
-                            preparedRequest: retryRequest
+                            preparedRequest: request,
+                            originalContext: context
                         )
                     }
                     return
@@ -769,7 +804,8 @@ final class QuickBooksDataAPI: ObservableObject {
         decode type: T.Type,
         completion: @escaping (Result<T, Error>) -> Void,
         attempt: Int = 0,
-        preparedRequest: URLRequest? = nil
+        preparedRequest: URLRequest? = nil,
+        originalContext: QuickBooksRetryContext? = nil
     ) {
         if let scopeError = paymentsScopeReadinessError() {
             completion(.failure(scopeError))
@@ -777,21 +813,24 @@ final class QuickBooksDataAPI: ObservableObject {
         }
         let typeBox = DecodableTypeBox(type: type)
         refreshTokensIfNeeded { ok in
-            guard ok, let request = preparedRequest ?? requestBuilder() else {
+            let context = originalContext ?? self.retryContext
+            guard ok, let request = self.requestWithCurrentAuthorization(
+                preparedRequest ?? requestBuilder(), originalContext: context
+            ) else {
                 completion(.failure(QBError.unauthorized))
                 return
             }
 
             URLSession.shared.dataTask(with: request) { data, response, error in
                 if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
-                    let retryRequest = QuickBooksRateLimitRetryPolicy.requestForRetry(request)
                     DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
                         self.performPaymentsDecodingRequest(
                             requestBuilder,
                             decode: typeBox.type,
                             completion: completion,
                             attempt: attempt + 1,
-                            preparedRequest: retryRequest
+                            preparedRequest: request,
+                            originalContext: context
                         )
                     }
                     return
@@ -1831,50 +1870,59 @@ final class QuickBooksDataAPI: ObservableObject {
                 return
             }
 
-            self.performUploadDocumentRequest(request, completion: completion)
+            self.performUploadDocumentRequest(request, completion: completion, originalContext: self.retryContext)
         }
     }
 
     private func performUploadDocumentRequest(
-        _ request: URLRequest,
+        _ preparedRequest: URLRequest,
         completion: @escaping (Result<String, Error>) -> Void,
-        attempt: Int = 0
+        attempt: Int = 0,
+        originalContext: QuickBooksRetryContext
     ) {
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
-                let retryRequest = QuickBooksRateLimitRetryPolicy.requestForRetry(request)
-                DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
-                    self.performUploadDocumentRequest(
-                        retryRequest,
-                        completion: completion,
-                        attempt: attempt + 1
-                    )
-                }
+        refreshTokensIfNeeded { ok in
+            guard ok, let request = self.requestWithCurrentAuthorization(
+                preparedRequest, originalContext: originalContext
+            ) else {
+                completion(.failure(QBError.unauthorized))
                 return
             }
-            Task { @MainActor in
-                if let error {
-                    completion(.failure(error))
+            URLSession.shared.dataTask(with: request) { data, response, error in
+                if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
+                    DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                        self.performUploadDocumentRequest(
+                            request,
+                            completion: completion,
+                            attempt: attempt + 1,
+                            originalContext: originalContext
+                        )
+                    }
                     return
                 }
-                if let httpError = self.resolveHTTPError(data: data, response: response) {
-                    self.clearRejectedSessionIfNeeded(httpError)
-                    completion(.failure(httpError))
-                    return
+                Task { @MainActor in
+                    if let error {
+                        completion(.failure(error))
+                        return
+                    }
+                    if let httpError = self.resolveHTTPError(data: data, response: response) {
+                        self.clearRejectedSessionIfNeeded(httpError)
+                        completion(.failure(httpError))
+                        return
+                    }
+                    guard let data else {
+                        completion(.failure(QBError.noData))
+                        return
+                    }
+                    do {
+                        completion(.success(try QuickBooksUploadResponsePolicy.attachmentID(from: data)))
+                    } catch {
+                        completion(.failure(QBError.decodingDetail(
+                            "QuickBooks did not confirm the attachment identifier: \(error.localizedDescription)"
+                        )))
+                    }
                 }
-                guard let data else {
-                    completion(.failure(QBError.noData))
-                    return
-                }
-                do {
-                    completion(.success(try QuickBooksUploadResponsePolicy.attachmentID(from: data)))
-                } catch {
-                    completion(.failure(QBError.decodingDetail(
-                        "QuickBooks did not confirm the attachment identifier: \(error.localizedDescription)"
-                    )))
-                }
-            }
-        }.resume()
+            }.resume()
+        }
     }
 
     static func buildUploadBody(boundary: String, filename: String, contentType: String, fileData: Data, metadataJSON: String) -> Data {
@@ -1993,27 +2041,31 @@ private extension QuickBooksDataAPI {
         _ requestBuilder: @escaping () -> URLRequest?,
         completion: @escaping (Result<QuickBooksPaymentsTokenResponse, Error>) -> Void,
         attempt: Int = 0,
-        preparedRequest: URLRequest? = nil
+        preparedRequest: URLRequest? = nil,
+        originalContext: QuickBooksRetryContext? = nil
     ) {
         if let scopeError = paymentsScopeReadinessError() {
             completion(.failure(scopeError))
             return
         }
         refreshTokensIfNeeded { ok in
-            guard ok, let request = preparedRequest ?? requestBuilder() else {
+            let context = originalContext ?? self.retryContext
+            guard ok, let request = self.requestWithCurrentAuthorization(
+                preparedRequest ?? requestBuilder(), originalContext: context
+            ) else {
                 completion(.failure(QBError.unauthorized))
                 return
             }
 
             URLSession.shared.dataTask(with: request) { data, response, error in
                 if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
-                    let retryRequest = QuickBooksRateLimitRetryPolicy.requestForRetry(request)
                     DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
                         self.performPaymentsTokenRequest(
                             requestBuilder,
                             completion: completion,
                             attempt: attempt + 1,
-                            preparedRequest: retryRequest
+                            preparedRequest: request,
+                            originalContext: context
                         )
                     }
                     return
@@ -2052,27 +2104,31 @@ private extension QuickBooksDataAPI {
         _ requestBuilder: @escaping () -> URLRequest?,
         completion: @escaping (Result<QuickBooksPaymentsChargeResponse, Error>) -> Void,
         attempt: Int = 0,
-        preparedRequest: URLRequest? = nil
+        preparedRequest: URLRequest? = nil,
+        originalContext: QuickBooksRetryContext? = nil
     ) {
         if let scopeError = paymentsScopeReadinessError() {
             completion(.failure(scopeError))
             return
         }
         refreshTokensIfNeeded { ok in
-            guard ok, let request = preparedRequest ?? requestBuilder() else {
+            let context = originalContext ?? self.retryContext
+            guard ok, let request = self.requestWithCurrentAuthorization(
+                preparedRequest ?? requestBuilder(), originalContext: context
+            ) else {
                 completion(.failure(QBError.unauthorized))
                 return
             }
 
             URLSession.shared.dataTask(with: request) { data, response, error in
                 if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
-                    let retryRequest = QuickBooksRateLimitRetryPolicy.requestForRetry(request)
                     DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
                         self.performPaymentsChargeRequest(
                             requestBuilder,
                             completion: completion,
                             attempt: attempt + 1,
-                            preparedRequest: retryRequest
+                            preparedRequest: request,
+                            originalContext: context
                         )
                     }
                     return

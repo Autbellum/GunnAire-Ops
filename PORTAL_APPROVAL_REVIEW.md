@@ -38,8 +38,27 @@ PR #17 finding about a missing client flow does not describe this combined branc
 
 ## Remaining review scope
 
-PR #18 also identifies company-replica identity, historical statement balances,
-and refreshed bearer tokens on retained QBO retries. Those findings require
-separate verification and corrections. Production deployment, Apple distribution,
+PR #18 also identifies company-replica identity and historical statement balances.
+Those findings require separate verification and corrections. Production deployment, Apple distribution,
 CloudKit Production acceptance, and physical iPhone payment acceptance remain
 open release work. Neither PR has been merged by this change.
+
+## QuickBooks retry follow-up
+
+The retained retry request now receives the current bearer token after refresh
+and immediately before dispatch. This covers accounting, Payments decoding,
+payment tokens, charges, and multipart uploads. Request IDs, URL, method, body,
+multipart boundary, other headers, and timeout remain unchanged. Retried work
+also retains its original company realm and environment; a different connection
+causes the queued operation to fail instead of authorizing it as another company.
+
+This follows [Intuit's OAuth client documentation](https://github.com/intuit/oauth-jsclient),
+which describes token expiry, refresh, and authenticated API requests. No live
+accounting or payment request was used to test this change.
+
+The M5 13-inch iPad Simulator logic suite passes 718/718 with zero failures or
+skips. The new regression verifies refreshed authorization, preserved mutation
+metadata, and rejection after realm/environment changes. Mac Catalyst Debug
+build succeeds; its only reported warning is the existing host Metal-toolchain
+search path. Results are retained at
+`/tmp/GunnAireQBORetryDerivedData/Logs/Test/Test-GunnAire Ops-2026.09.06_20-09-49--0400.xcresult`.

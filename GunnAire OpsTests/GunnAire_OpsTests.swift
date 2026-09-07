@@ -25924,7 +25924,10 @@ struct GunnAire_OpsTests {
         original.setValue("payments-request-42", forHTTPHeaderField: "Request-Id")
         original.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let retry = QuickBooksRateLimitRetryPolicy.requestForRetry(original)
+        let context = QuickBooksRetryContext(realmID: "realm-1", environment: "production")
+        let retry = try #require(QuickBooksRateLimitRetryPolicy.requestForRetry(
+            original, accessToken: "current-token", originalContext: context, currentContext: context
+        ))
 
         #expect(retry.url == original.url)
         #expect(retry.httpMethod == original.httpMethod)
@@ -25934,6 +25937,42 @@ struct GunnAire_OpsTests {
             .queryItems?
             .first(where: { $0.name.lowercased() == "requestid" })?
             .value == "accounting-request-42")
+    }
+
+    @Test func quickBooksRetryRefreshesBearerWithoutChangingMutationOrCompany() throws {
+        let context = QuickBooksRetryContext(realmID: "realm-1", environment: "production")
+        for path in ["v3/company/realm-1/invoice?requestid=invoice-42", "quickbooks/v4/payments/charges", "v3/company/realm-1/upload?requestid=upload-42"] {
+            var original = URLRequest(url: try #require(URL(string: "https://quickbooks.api.intuit.com/\(path)")))
+            original.httpMethod = "POST"
+            original.timeoutInterval = 45
+            original.httpBody = Data("--preserved-boundary\r\noriginal-body\r\n--preserved-boundary--".utf8)
+            original.setValue("Bearer expired-token", forHTTPHeaderField: "Authorization")
+            original.setValue("stable-request-42", forHTTPHeaderField: "Request-Id")
+            original.setValue("multipart/form-data; boundary=preserved-boundary", forHTTPHeaderField: "Content-Type")
+
+            let retry = try #require(QuickBooksRateLimitRetryPolicy.requestForRetry(
+                original, accessToken: "refreshed-token", originalContext: context, currentContext: context
+            ))
+            #expect(retry.value(forHTTPHeaderField: "Authorization") == "Bearer refreshed-token")
+            #expect(original.value(forHTTPHeaderField: "Authorization") == "Bearer expired-token")
+            #expect(retry.url == original.url)
+            #expect(retry.httpBody == original.httpBody)
+            #expect(retry.httpMethod == original.httpMethod)
+            #expect(retry.timeoutInterval == original.timeoutInterval)
+            #expect(retry.allHTTPHeaderFields?.filter { $0.key.lowercased() != "authorization" }
+                == original.allHTTPHeaderFields?.filter { $0.key.lowercased() != "authorization" })
+            #expect(QuickBooksRateLimitRetryPolicy.requestForRetry(
+                retry, accessToken: "other-company-token", originalContext: context,
+                currentContext: QuickBooksRetryContext(realmID: "realm-2", environment: "production")
+            ) == nil)
+            #expect(QuickBooksRateLimitRetryPolicy.requestForRetry(
+                retry, accessToken: "sandbox-token", originalContext: context,
+                currentContext: QuickBooksRetryContext(realmID: "realm-1", environment: "sandbox")
+            ) == nil)
+            #expect(QuickBooksRateLimitRetryPolicy.requestForRetry(
+                retry, accessToken: "", originalContext: context, currentContext: context
+            ) == nil)
+        }
     }
 
     @Test func quickBooksWriteResponsesRequireRealProviderIdentifiers() throws {
