@@ -4,12 +4,15 @@ import UIKit
 enum CustomerDocumentExportError: LocalizedError {
     case documentsDirectoryUnavailable
     case authoritativeTaxRequired(String)
+    case statementNeedsReview(String)
 
     var errorDescription: String? {
         switch self {
         case .documentsDirectoryUnavailable:
             return "The app documents folder is unavailable."
         case .authoritativeTaxRequired(let message):
+            return message
+        case .statementNeedsReview(let message):
             return message
         }
     }
@@ -38,6 +41,7 @@ struct CustomerAccountStatementPaymentEntry: Equatable {
     let amount: Double
     let isRefund: Bool
     let method: String
+    let isSettlementPending: Bool
 }
 
 struct CustomerAccountStatementInvoiceEntry: Equatable {
@@ -63,6 +67,18 @@ struct CustomerAccountStatementSnapshot: Equatable {
     let customerID: UUID
     let asOf: Date
     let entries: [CustomerAccountStatementInvoiceEntry]
+    let preparedAt: Date
+    let calendar: Calendar
+    let isHistoricalProjection: Bool
+    let reviewMessages: [String]
+
+    var timeZoneIdentifier: String { calendar.timeZone.identifier }
+    var exportBlockingMessage: String? { reviewMessages.first }
+    var balanceSourceSummary: String {
+        isHistoricalProjection
+            ? "Dated app activity only; historical invoice and accounting values are not verified."
+            : "Saved QuickBooks-linked balances and locally recorded invoice activity. This is not a live accounting refresh."
+    }
 
     var openInvoiceCount: Int { entries.count }
     var totalBalance: Double { entries.reduce(0) { $0 + $1.balanceDue } }
@@ -413,92 +429,12 @@ enum CustomerDocumentExporter {
         for customer: Customer,
         invoices: [Invoice],
         payments: [Payment],
-        asOf: Date = Date(),
-        calendar: Calendar = .current
+        asOf: Date? = nil,
+        calendar: Calendar = .current,
+        now: Date = Date()
     ) -> CustomerAccountStatementSnapshot {
-        let statementDate = calendar.startOfDay(for: asOf)
-        let entries = Invoice.displayDeduplicated(invoices)
-            .filter { $0.customer?.id == customer.id }
-            .compactMap { invoice -> CustomerAccountStatementInvoiceEntry? in
-                let invoicePayments = payments.filter { $0.invoice?.id == invoice.id }
-                let balance = Invoice.outstandingBalance(for: invoice, payments: invoicePayments)
-                guard balance > 0.009 else { return nil }
-
-                let dueDate = invoice.effectiveDueDate(calendar: calendar)
-                let rawDaysPastDue = calendar.dateComponents(
-                    [.day],
-                    from: dueDate,
-                    to: statementDate
-                ).day ?? 0
-                let daysPastDue = max(rawDaysPastDue, 0)
-                let agingBucket: CustomerAccountStatementAgingBucket
-                switch daysPastDue {
-                case 0:
-                    agingBucket = .current
-                case 1...30:
-                    agingBucket = .days1To30
-                case 31...60:
-                    agingBucket = .days31To60
-                case 61...90:
-                    agingBucket = .days61To90
-                default:
-                    agingBucket = .days91Plus
-                }
-
-                let paymentActivity = invoicePayments
-                    .sorted { lhs, rhs in
-                        if lhs.date == rhs.date { return lhs.id.uuidString < rhs.id.uuidString }
-                        return lhs.date < rhs.date
-                    }
-                    .map {
-                        CustomerAccountStatementPaymentEntry(
-                            date: $0.date,
-                            amount: $0.amount,
-                            isRefund: $0.isRefund,
-                            method: $0.methodSummary
-                        )
-                    }
-                let netRecordedPayments = invoicePayments.reduce(0) { total, payment in
-                    total + (payment.isRefund ? -payment.amount : payment.amount)
-                }
-                let quickBooksReference = normalizedValue(invoice.quickBooksID)
-                let reference = String(invoice.id.uuidString.prefix(8)).uppercased()
-
-                return CustomerAccountStatementInvoiceEntry(
-                    invoiceID: invoice.id,
-                    reference: reference,
-                    quickBooksReference: quickBooksReference,
-                    quickBooksBalanceUpdatedAt: invoice.quickBooksLastSyncedAt,
-                    issuedAt: invoice.createdAt,
-                    dueAt: dueDate,
-                    workType: invoice.workType,
-                    serviceAddress: normalizedValue(invoice.siteAddress),
-                    invoiceTotal: invoice.amount,
-                    balanceDue: balance,
-                    netRecordedPayments: netRecordedPayments,
-                    dueStatus: Invoice.dueStatusDetail(
-                        for: invoice,
-                        payments: invoicePayments,
-                        now: asOf,
-                        calendar: calendar
-                    ),
-                    daysPastDue: daysPastDue,
-                    agingBucket: agingBucket,
-                    paymentActivity: paymentActivity,
-                    usesQuickBooksBalance: quickBooksReference != nil && invoice.quickBooksBalanceDue != nil
-                )
-            }
-            .sorted { lhs, rhs in
-                if lhs.dueAt != rhs.dueAt { return lhs.dueAt < rhs.dueAt }
-                if lhs.issuedAt != rhs.issuedAt { return lhs.issuedAt < rhs.issuedAt }
-                return lhs.invoiceID.uuidString < rhs.invoiceID.uuidString
-            }
-
-        return CustomerAccountStatementSnapshot(
-            customerID: customer.id,
-            asOf: statementDate,
-            entries: entries
-        )
+        CustomerAccountStatementPolicy.snapshot(customer: customer, invoices: invoices,
+            payments: payments, asOf: asOf, calendar: calendar, now: now)
     }
 
     @MainActor
@@ -506,18 +442,44 @@ enum CustomerDocumentExporter {
         customer: Customer,
         invoices: [Invoice],
         payments: [Payment],
-        asOf: Date = Date(),
-        calendar: Calendar = .current
+        asOf: Date? = nil,
+        calendar: Calendar = .current,
+        now: Date = Date()
     ) throws -> URL {
         let snapshot = accountStatementSnapshot(
             for: customer,
             invoices: invoices,
             payments: payments,
             asOf: asOf,
-            calendar: calendar
+            calendar: calendar,
+            now: now
         )
+        return try exportAccountStatement(customer: customer, snapshot: snapshot)
+    }
+
+    @MainActor
+    static func exportAccountStatement(
+        customer: Customer,
+        snapshot: CustomerAccountStatementSnapshot
+    ) throws -> URL {
+        guard snapshot.customerID == customer.id else {
+            throw CustomerDocumentExportError.statementNeedsReview("This statement belongs to a different customer.")
+        }
+        if let message = snapshot.exportBlockingMessage {
+            throw CustomerDocumentExportError.statementNeedsReview(message)
+        }
+        func statementDate(_ date: Date, includesTime: Bool = false) -> String {
+            let formatter = DateFormatter()
+            formatter.calendar = snapshot.calendar
+            formatter.timeZone = snapshot.calendar.timeZone
+            formatter.dateStyle = .medium
+            formatter.timeStyle = includesTime ? .short : .none
+            return formatter.string(from: date)
+        }
         var summaryRows = [
-            row("Statement Date", formattedDate(snapshot.asOf)),
+            row("Statement Date", statementDate(snapshot.asOf)),
+            row("Activity Through", statementDate(snapshot.asOf, includesTime: true)),
+            row("Time Zone", snapshot.timeZoneIdentifier),
             row("Open Invoices", String(snapshot.openInvoiceCount)),
             row("Current", currency(snapshot.balance(in: .current))),
             row("1–30 Days", currency(snapshot.balance(in: .days1To30))),
@@ -531,23 +493,27 @@ enum CustomerDocumentExporter {
         } else {
             summaryRows.append(row(
                 "Balance Source",
-                "The latest connected accounting balance is used for synced invoices. Other balances reflect invoice totals less recorded payments and refunds."
+                snapshot.balanceSourceSummary
             ))
         }
+        summaryRows.append(row("Scope",
+            "Open invoices recorded in GunnAire. Unapplied customer credits and transactions not imported from accounting are not included."))
 
         var sections = [DocumentSection(title: "Account Summary", rows: summaryRows)]
         sections.append(contentsOf: snapshot.entries.map { entry in
             let activityRows = entry.paymentActivity.map { payment in
                 row(
-                    payment.isRefund ? "Refund" : "Payment",
-                    "\(formattedDate(payment.date)) — \(currency(payment.amount)) via \(payment.method)"
+                    payment.isSettlementPending
+                        ? (payment.isRefund ? "Bank Refund Pending" : "Bank Payment Pending")
+                        : (payment.isRefund ? "Refund" : "Payment"),
+                    "\(statementDate(payment.date)) - \(currency(payment.amount)) via \(payment.method)"
                 )
             }
             return DocumentSection(
                 title: "Invoice \(entry.reference)",
                 rows: [
-                    row("Issued", formattedDate(entry.issuedAt)),
-                    row("Due", formattedDate(entry.dueAt)),
+                    row("Issued", statementDate(entry.issuedAt)),
+                    row("Due", statementDate(entry.dueAt)),
                     row("Status", entry.dueStatus),
                     row("Aging", entry.agingBucket.displayName),
                     row("Work Type", entry.workType.displayName),
@@ -555,9 +521,11 @@ enum CustomerDocumentExporter {
                     row("Invoice Total", currency(entry.invoiceTotal)),
                     row("App-recorded Payments", currency(entry.netRecordedPayments)),
                     row("Balance Due", currency(entry.balanceDue)),
-                    row("Balance Updated", entry.quickBooksBalanceUpdatedAt.map(formattedDateTime)),
+                    row("Accounting Last Refreshed", entry.quickBooksBalanceUpdatedAt.map { statementDate($0, includesTime: true) }),
+                    row("Balance Source", entry.usesQuickBooksBalance ? "Saved QuickBooks-linked balance" : "Recorded invoice payments and refunds"),
                     row("Payment Activity", entry.paymentActivity.isEmpty ? "No payment activity recorded." : nil)
-                ] + activityRows
+                ] + activityRows,
+                keepsTogether: true
             )
         })
 
@@ -1785,7 +1753,14 @@ enum CustomerDocumentExporter {
         let margin: CGFloat = 42
         let contentWidth = bounds.width - margin * 2
         var y = initialY
-        if y > bounds.height - 140 {
+        let sectionHeight = 24 + section.rows.filter { !$0.value.isEmpty }.reduce(CGFloat(0)) { height, row in
+            let labelHeight = measuredHeight(row.label, width: 138, font: .systemFont(ofSize: 10, weight: .semibold))
+            let valueHeight = measuredHeight(row.value, width: contentWidth - 152, font: .systemFont(ofSize: 11))
+            return height + max(22, max(labelHeight, valueHeight) + 8)
+        }
+        let keepOnNextPage = section.keepsTogether && sectionHeight <= bounds.height - 70 - 216 &&
+            y + sectionHeight > bounds.height - 70
+        if y > bounds.height - 140 || keepOnNextPage {
             drawFooter(in: bounds)
             y = startPage(context: context, bounds: bounds, title: title, customer: customer)
         }
@@ -1810,6 +1785,13 @@ enum CustomerDocumentExporter {
             if y + rowHeight > bounds.height - 70 {
                 drawFooter(in: bounds)
                 y = startPage(context: context, bounds: bounds, title: title, customer: customer)
+                if section.keepsTogether {
+                    "\(section.title) (continued)".draw(at: CGPoint(x: margin, y: y), withAttributes: [
+                        .font: UIFont.systemFont(ofSize: 15, weight: .semibold),
+                        .foregroundColor: UIColor.black
+                    ])
+                    y += 24
+                }
             }
 
             drawWrapped(
@@ -1821,7 +1803,7 @@ enum CustomerDocumentExporter {
             drawWrapped(row.value, in: CGRect(x: valueX, y: y, width: valueWidth, height: textHeight), font: valueFont, color: .black)
             y += rowHeight
 
-            if y > bounds.height - 80 {
+            if !section.keepsTogether && y > bounds.height - 80 {
                 drawFooter(in: bounds)
                 y = startPage(context: context, bounds: bounds, title: title, customer: customer)
             }
@@ -2022,6 +2004,7 @@ enum CustomerDocumentExporter {
 private struct DocumentSection {
     let title: String
     let rows: [DocumentRow]
+    var keepsTogether: Bool = false
 }
 
 private struct DocumentRow {

@@ -2923,6 +2923,70 @@ private struct CustomerEditorView: View {
         AppAccess.canSyncCustomerRecordsWithAccounting(email: currentEmail, users: users)
     }
 
+    private var customerAccountStatementSection: some View {
+        let statement = customerAccountStatementSnapshot
+        return Section("Account Statement") {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(statement.exportBlockingMessage == nil
+                         ? statement.totalBalance.formatted(.currency(code: "USD")) : "Review needed")
+                        .font(.title3.weight(.semibold))
+                    Text(statement.exportBlockingMessage == nil
+                         ? "\(statement.openInvoiceCount) open invoice\(statement.openInvoiceCount == 1 ? "" : "s")"
+                         : "Reconciliation required")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "doc.text")
+                    .foregroundStyle(Color.brandGold)
+                    .accessibilityHidden(true)
+            }
+
+            if statement.exportBlockingMessage == nil {
+                Text(statement.agingSummary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(statement.exportBlockingMessage ?? statement.balanceSourceSummary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("CustomerAccountStatementSource")
+
+            if statement.exportBlockingMessage != nil {
+                Button {
+                    GunnAireAppIntentRouter.store(.invoices)
+                    dismiss()
+                } label: {
+                    Label("Review Invoices", systemImage: "doc.text.magnifyingglass")
+                }
+                .accessibilityIdentifier("ReviewCustomerStatementInvoices")
+            }
+
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    accountStatementPreviewButton
+                    accountStatementEmailButton
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    accountStatementPreviewButton
+                    accountStatementEmailButton
+                }
+            }
+
+            if customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                Label("Add a customer email before emailing the statement.", systemImage: "exclamationmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            } else if !customer.allowsTransactionalEmail {
+                Label("Service and billing email is disabled in Contact Preferences.", systemImage: "envelope.badge.shield.half.filled")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+
     private var accountStatementPreviewButton: some View {
         Button {
             generateCustomerAccountStatement(emailAfterGeneration: false)
@@ -2932,6 +2996,7 @@ private struct CustomerEditorView: View {
         .buttonStyle(.borderedProminent)
         .tint(Color.brandGold)
         .foregroundStyle(Color.primaryBlack)
+        .disabled(customerAccountStatementSnapshot.exportBlockingMessage != nil)
         .accessibilityIdentifier("GenerateCustomerAccountStatement")
     }
 
@@ -2947,7 +3012,8 @@ private struct CustomerEditorView: View {
     }
 
     private var canEmailCustomerAccountStatement: Bool {
-        customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
+        customerAccountStatementSnapshot.exportBlockingMessage == nil &&
+            customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
             customer.allowsTransactionalEmail &&
             invoices.contains { $0.customer.id == customer.id }
     }
@@ -3458,50 +3524,7 @@ private struct CustomerEditorView: View {
 
                 if selectedWorkspace == .files {
                 if canViewFinancials {
-                Section("Account Statement") {
-                    HStack(alignment: .firstTextBaseline) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(customerAccountStatementSnapshot.totalBalance.formatted(.currency(code: "USD")))
-                                .font(.title3.weight(.semibold))
-                            Text("\(customerAccountStatementSnapshot.openInvoiceCount) open invoice\(customerAccountStatementSnapshot.openInvoiceCount == 1 ? "" : "s")")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Image(systemName: "doc.text")
-                            .foregroundStyle(Color.brandGold)
-                            .accessibilityHidden(true)
-                    }
-
-                    Text(customerAccountStatementSnapshot.agingSummary)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    Text("Creates a customer-ready PDF using the latest QuickBooks balance for linked invoices and recorded payment activity for local invoices.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    ViewThatFits(in: .horizontal) {
-                        HStack {
-                            accountStatementPreviewButton
-                            accountStatementEmailButton
-                        }
-                        VStack(alignment: .leading, spacing: 8) {
-                            accountStatementPreviewButton
-                            accountStatementEmailButton
-                        }
-                    }
-
-                    if customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
-                        Label("Add a customer email before emailing the statement.", systemImage: "exclamationmark.circle")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                    } else if !customer.allowsTransactionalEmail {
-                        Label("Service and billing email is disabled in Contact Preferences.", systemImage: "envelope.badge.shield.half.filled")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                    }
-                }
+                customerAccountStatementSection
                 }
 
                 Section("Documents & Photos") {
@@ -4984,13 +5007,13 @@ private struct CustomerEditorView: View {
         }
 
         do {
+            let statement = customerAccountStatementSnapshot
             let url = try CustomerDocumentExporter.exportAccountStatement(
                 customer: customer,
-                invoices: invoices,
-                payments: payments
+                snapshot: statement
             )
             let data = try Data(contentsOf: url)
-            let statementDate = Date().formatted(date: .abbreviated, time: .omitted)
+            let statementDate = statement.asOf.formatted(date: .abbreviated, time: .shortened)
             let attachment = ServiceDocumentAttachment(
                 customer: customer,
                 serviceCallID: nil,
@@ -5021,14 +5044,16 @@ private struct CustomerEditorView: View {
                     customerAttachmentPreviewURL = url
                     return
                 }
-                let balance = customerAccountStatementSnapshot.totalBalance.formatted(.currency(code: "USD"))
+                let balance = statement.totalBalance.formatted(.currency(code: "USD"))
                 GunnAireAppIntentRouter.storeMailDraftRoute(
                     to: recipient,
                     subject: "GunnAire account statement - \(customer.name)",
                     body: """
                     Hello \(customer.name),
 
-                    Attached is your GunnAire account statement showing a current balance of \(balance).
+                    Attached is your GunnAire statement showing a recorded open-invoice balance of \(balance) as of \(statementDate).
+
+                    The statement includes its balance sources and scope. Please let us know if you have a payment or credit that is not reflected.
 
                     Please reply with any questions.
 

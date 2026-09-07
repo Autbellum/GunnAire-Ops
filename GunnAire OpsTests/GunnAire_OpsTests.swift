@@ -28465,8 +28465,8 @@ struct GunnAire_OpsTests {
             for: customer,
             invoices: [current, tenDays, fortyFiveDays, seventyFiveDays, oneHundredTwentyDays, paid, unrelated],
             payments: [partialPayment, partialRefund, staleLocalQuickBooksPayment, fullPayment],
-            asOf: asOf,
-            calendar: calendar
+            calendar: calendar,
+            now: asOf
         )
 
         #expect(snapshot.openInvoiceCount == 5)
@@ -28519,7 +28519,7 @@ struct GunnAire_OpsTests {
             customer: customer,
             invoices: [invoice],
             payments: [payment],
-            asOf: asOf
+            now: asOf
         )
         let text = try #require(PDFDocument(url: url)?.string)
 

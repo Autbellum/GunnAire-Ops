@@ -4639,6 +4639,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         workspacePicker.buttons["Files"].tap()
         XCTAssertTrue(app.staticTexts["Account Statement"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["$189.00"].exists)
+        XCTAssertTrue(app.staticTexts["CustomerAccountStatementSource"].label.contains("not a live"))
         XCTAssertTrue(app.buttons["EmailCustomerAccountStatement"].exists)
 
         let generate = app.buttons["GenerateCustomerAccountStatement"]
@@ -4666,6 +4667,34 @@ final class GunnAire_OpsUITests: XCTestCase {
             customerForm.swipeUp()
         }
         XCTAssertTrue(generatedStatements.waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testUnreconciledStatementExplainsReviewAndHandsOffToInvoices() throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin", "-uiTestSeedCollectibleJob", "-uiTestStatementNeedsReview"
+        ]
+        app.launch()
+        revealSidebarDestination("Customers", in: app).tap()
+        let record = app.buttons["OpenCustomerRecord-\(screenshotCustomerID)"]
+        for _ in 0..<5 where !record.exists || !record.isHittable { app.swipeUp() }
+        XCTAssertTrue(record.waitForExistence(timeout: 3))
+        record.tap()
+        let picker = app.segmentedControls["CustomerProfileWorkspacePicker"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 3))
+        picker.buttons["Files"].tap()
+        XCTAssertTrue(app.staticTexts["Review needed"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["CustomerAccountStatementSource"].label.contains("marked paid"))
+        XCTAssertFalse(app.buttons["GenerateCustomerAccountStatement"].isEnabled)
+        XCTAssertFalse(app.buttons["EmailCustomerAccountStatement"].isEnabled)
+        let review = app.buttons["ReviewCustomerStatementInvoices"]
+        XCTAssertTrue(review.waitForExistence(timeout: 3))
+        review.tap()
+        XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 2))
     }
 
     @MainActor

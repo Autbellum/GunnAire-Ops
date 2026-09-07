@@ -919,6 +919,11 @@ private enum GunnAireUITestFixtures {
             status: "unpaid",
             dueDate: Calendar.current.date(byAdding: .day, value: 7, to: scheduledDate)
         )
+        if arguments.contains("-uiTestStatementNeedsReview") {
+            invoice.quickBooksID = nil
+            invoice.quickBooksBalanceDue = nil
+            invoice.status = "paid"
+        }
         let maintenanceDueDate = isScheduleAuthorizationFixture
             ? scheduledDate.addingTimeInterval(60 * 60)
             : ((isMaintenanceReportingFixture || isAgreementBillingFixture)

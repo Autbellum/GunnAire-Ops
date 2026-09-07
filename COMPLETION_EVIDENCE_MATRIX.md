@@ -1,3 +1,16 @@
+Customer statement checkpoint, 2026-09-07: **811/811 logic tests pass on iPad
+and Mac Catalyst; 4/4 focused iPad UI tests pass; universal optimized Mac
+Release succeeds**. The prior historical
+balance and same-day invoice suppression defects were reproduced. Dedicated
+statement identity/cutoff/reconciliation logic passes 16 focused regressions.
+Current statements retain a simple Files flow with a direct review handoff;
+historical customer export is explicitly unavailable until dated accounting
+and versioned invoice evidence is integrated. The unsafe cache fallback is
+removed, not the full historical-feature gate. Both native PDF pages were
+rendered and visually verified; invoice groups stay together when they fit. See
+[CUSTOMER_STATEMENT_RECONCILIATION.md](CUSTOMER_STATEMENT_RECONCILIATION.md).
+Other billing display heuristics and the full payment/platform gates remain.
+
 Payment coordination checkpoint, completed 2026-09-07: **792/792 logic tests
 on iPad and Mac Catalyst, 7/7 focused iPad UI journeys, 124/124 Backend and
 37/37 Tools tests; universal Mac Release built successfully**. Backend candidate
