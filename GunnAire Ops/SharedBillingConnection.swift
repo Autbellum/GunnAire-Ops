@@ -8,6 +8,7 @@ enum BillingPublicationTransportPolicy {
               (bodyBytes ?? 0) >= 0, (bodyBytes ?? 0) <= 1024 * 1024 else { return false }
         let base = "/api/billing-publications"
         let assignments = endpoint.path == "/api/job-billing-assignments"
+        if endpoint.path == "/api/job-billing-assignments/connection" { return method == "GET" && bodyBytes == nil }
         guard assignments || endpoint.path == base || endpoint.path.hasPrefix(base + "/") else { return false }
         let suffix = String(endpoint.path.dropFirst(base.count))
         let parts = suffix.split(separator: "/", omittingEmptySubsequences: false)

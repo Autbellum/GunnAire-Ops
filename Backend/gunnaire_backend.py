@@ -53,7 +53,7 @@ except ModuleNotFoundError:
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.08.40"
+SERVICE_VERSION = "2026.09.08.41"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -3590,7 +3590,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/qbo/change-capture":
             self.handle_qbo_change_capture(parsed, method="GET")
             return
-        if parsed.path == "/api/billing-publications" or parsed.path.startswith("/api/billing-publications/") or parsed.path == "/api/job-billing-assignments":
+        if parsed.path == "/api/billing-publications" or parsed.path.startswith("/api/billing-publications/") or parsed.path in ("/api/job-billing-assignments", "/api/job-billing-assignments/connection"):
             self.handle_billing_publication(parsed, method="GET")
             return
         if parsed.path == "/api/workspace":
@@ -6019,15 +6019,18 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         native = billing_native.NativeBilling(publisher)
         session_id = self._application_session_id
         assignments = parsed.path == "/api/job-billing-assignments"
+        assignment_connection = parsed.path == "/api/job-billing-assignments/connection"
         suffix = parsed.path.removeprefix("/api/billing-publications")
         parts = suffix[1:].split("/") if suffix.startswith("/") else []
         try:
-            if method == "GET" and (assignments or not suffix or parts in (["context"], ["connection"])):
+            if method == "GET" and (assignments or assignment_connection or not suffix or parts in (["context"], ["connection"])):
                 query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
                 if any(len(value) != 1 for value in query.values()):
                     raise billing_publications.failure("invalid_query", "Choose one original job or billing document.", 400)
                 query = {key: values[0] for key, values in query.items()}
-                if assignments:
+                if assignment_connection:
+                    result = publisher.assignments.connection(session_id, query)
+                elif assignments:
                     result = publisher.assignments.read(session_id, query)
                 elif parts == ["context"]:
                     result = native.context(session_id, query)

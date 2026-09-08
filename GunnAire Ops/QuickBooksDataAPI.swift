@@ -172,20 +172,30 @@ final class QuickBooksDataAPI: ObservableObject {
 
     /// Ephemeral business-session billing, never an OAuth connection. It cannot
     /// issue a direct Intuit request, load credentials, or start a refresh timer.
-    init(sharedBilling connection: SharedBillingConnection, operation: WorkspaceProviderOperation,
+    convenience init(sharedBilling connection: SharedBillingConnection, operation: WorkspaceProviderOperation,
          billingPublisher: BillingPublicationClient,
          catalogPublisher: @escaping CatalogPublicationBoundary.Transport,
          customerPublisher: @escaping CustomerPublicationBoundary.Transport) {
+        self.init(sharedCompanyID: connection.identity.companyID, realmID: connection.realmID,
+            environment: connection.environment, connectionRevision: connection.connectionRevision,
+            operation: operation, billingPublisher: billingPublisher,
+            catalogPublisher: catalogPublisher, customerPublisher: customerPublisher)
+    }
+
+    init(sharedCompanyID: UUID, realmID: String, environment: String, connectionRevision: String,
+         operation: WorkspaceProviderOperation, billingPublisher: BillingPublicationClient,
+         catalogPublisher: @escaping CatalogPublicationBoundary.Transport = { _ in throw CatalogPublicationError.accessRequired },
+         customerPublisher: @escaping CustomerPublicationBoundary.Transport = { _ in throw CustomerPublicationError.accessRequired }) {
         requestTransport = { _ in throw BillingPublicationError.accessRequired }
         persistsCredentials = false
-        catalogFixtureCompanyID = connection.identity.companyID
+        catalogFixtureCompanyID = sharedCompanyID
         catalogPublicationTransport = catalogPublisher
         customerPublicationTransport = customerPublisher
         billingPublicationClient = billingPublisher
         catalogRecoveryTransport = { _ in throw CatalogPublicationError.needsReview }
-        storedRealmID = connection.realmID
-        storedEnvironment = connection.environment
-        sharedBillingConnectionRevision = connection.connectionRevision
+        storedRealmID = realmID
+        storedEnvironment = environment
+        sharedBillingConnectionRevision = connectionRevision
         sharedBillingOperation = operation
     }
 

@@ -443,11 +443,17 @@ struct BillingPublicationClient {
                      .init(name: "environment", value: scope.environment), .init(name: "serviceCallID", value: scope.serviceCallID.uuidString.lowercased())]
         let result = try await perform(JobBillingAssignmentSnapshot.self, path: path("/api/job-billing-assignments", query), workflow: workflow)
         try result.validate(scope, customerID: customerID)
+        if let pin = workflow.sharedBillingConnectionRevision, result.connectionRevision != pin {
+            throw BillingPublicationError.reviewRequired
+        }
         return result
     }
 
     func saveAssignment(_ request: JobBillingAssignmentRequest, workflow: QuickBooksDataAPI.CapturedWorkspaceWorkflow) async throws -> JobBillingAssignment {
         try request.scope.validate(workflow)
+        if let pin = workflow.sharedBillingConnectionRevision, request.connectionRevision != pin {
+            throw BillingPublicationError.reviewRequired
+        }
         guard (0..<2_147_483_647).contains(request.expectedRevision),
               JobBillingAssignmentSnapshot.validConnectionRevision(request.connectionRevision) else { throw BillingPublicationError.invalidProposal }
         let envelope = try await perform(JobBillingAssignmentSnapshot.self, path: "/api/job-billing-assignments",

@@ -10,7 +10,9 @@ final class JobBillingDispatch: ObservableObject {
     static let shared = JobBillingDispatch()
     @Published private(set) var generation = 0
     private let store: JobBillingJournalStore
-    private let api: QuickBooksDataAPI
+    private let api: QuickBooksDataAPI?
+    private let bootstrapStore: JobBillingBootstrapStore
+    private let fixtureCompanyID: UUID?
     private let client: BillingPublicationClient
     private let actor: () -> String
     private let validateAccess: (ModelContext, String) throws -> Void
@@ -19,11 +21,17 @@ final class JobBillingDispatch: ObservableObject {
 
     init(store: JobBillingJournalStore? = nil, api: QuickBooksDataAPI? = nil,
          client: BillingPublicationClient? = nil, actor: (() -> String)? = nil,
-         validateAccess: ((ModelContext, String) throws -> Void)? = nil, fixture: Bool = false) {
+         validateAccess: ((ModelContext, String) throws -> Void)? = nil, fixture: Bool = false,
+         bootstrapStore: JobBillingBootstrapStore? = nil, fixtureCompanyID: UUID? = nil) {
         // Resolve actor-isolated defaults inside this MainActor initializer,
         // not in the caller's default-argument evaluation context.
         self.store = store ?? .device
-        self.api = api ?? .shared
+        // Device OAuth is supported only by explicit legacy test fixtures.
+        precondition(api == nil || fixture)
+        precondition(fixtureCompanyID == nil || (fixture && GunnAireCloudKit.usesTestDatabase))
+        self.api = api
+        self.bootstrapStore = bootstrapStore ?? .device
+        self.fixtureCompanyID = fixtureCompanyID
         self.client = client ?? GunnAireBackendService.billingPublicationClient
         self.actor = actor ?? { AppAccess.normalizedEmail(AppIdentity.currentEmail) }
         self.validateAccess = validateAccess ?? { try GoogleCalendarWorkflow.requireDispatchAccess(context: $0, email: $1) }
@@ -43,12 +51,167 @@ final class JobBillingDispatch: ObservableObject {
         let record: JobBillingQueueRecord
     }
 
+    private func business(_ context: ModelContext) throws -> JobBillingBusinessScope {
+        guard !GunnAireCloudKit.usesTestDatabase || fixture,
+              let company = fixtureCompanyID ?? CompanyWorkspaceAccessController.shared.verifiedCompanyID else {
+            throw JobBillingDispatchError.access
+        }
+        let value = JobBillingBusinessScope(companyID: company, actorEmail: actor())
+        try value.validate(); try validateAccess(context, value.actorEmail)
+        return value
+    }
+
+    private func bootstrap(_ business: JobBillingBusinessScope) throws -> JobBillingBootstrap {
+        let value = try bootstrapStore.read(business)
+        try value.validate(business)
+        return value
+    }
+
+    private func businessOperation(_ context: ModelContext, business: JobBillingBusinessScope) throws -> WorkspaceProviderOperation {
+        try WorkspaceProviderOperation.capture {
+            do { return try self.business(context) == business } catch { return false }
+        }
+    }
+
+    private func handle(_ connection: SharedJobBillingConnection, business: JobBillingBusinessScope,
+                        operation: WorkspaceProviderOperation) throws -> Handle {
+        try connection.validate(business.companyID); try operation.check()
+        let api = QuickBooksDataAPI(sharedCompanyID: business.companyID, realmID: connection.realmID,
+            environment: connection.environment, connectionRevision: connection.connectionRevision,
+            operation: operation, billingPublisher: client)
+        return .init(scope: connection.scope(business), workflow: try api.captureWorkspaceWorkflow())
+    }
+
+    /// No cached descriptor authorizes network work. Every new run checks the
+    /// server, retaining the initiating workspace/actor through suspension.
+    func discover(context: ModelContext, original: Handle? = nil,
+                  preparation: WorkspaceProviderOperation? = nil,
+                  isCurrent: @escaping () -> Bool = { true }) async throws -> Handle {
+        try preparation?.check(); try original?.workflow.check()
+        guard isCurrent() else { throw JobBillingDispatchError.changed }
+        if let api {
+            let captured = try capture(context: context)
+            return .init(scope: captured.scope, workflow: try api.captureWorkspaceWorkflow(isCurrent: isCurrent))
+        }
+        let business = try business(context)
+        let parent = try preparation ?? businessOperation(context, business: business)
+        let operation = WorkspaceProviderOperation(parent: parent, isCurrent: isCurrent)
+        try operation.check()
+        let path = "/api/job-billing-assignments/connection?companyID=" + business.companyID.uuidString.lowercased()
+        let connection: SharedJobBillingConnection
+        do {
+            let data = try await client.transport(path, "GET", nil)
+            try operation.check(); try original?.workflow.check()
+            guard data.count <= 16_384 else { throw JobBillingDispatchError.connection }
+            connection = try JSONDecoder().decode(SharedJobBillingConnection.self, from: data)
+            try connection.validate(business.companyID)
+        } catch {
+            try operation.check(); try original?.workflow.check()
+            if case GunnAireBackendError.server(let status, _) = error {
+                if status == 404 { throw JobBillingDispatchError.serverUpdate }
+                if status == 401 || status == 403 { throw JobBillingDispatchError.access }
+            }
+            throw JobBillingDispatchError.connection
+        }
+        // Do not strand or move older realm-bound requests after reconnecting
+        // to a different accounting company. Restore/review that original link.
+        var saved = try bootstrap(business)
+        if let prior = saved.connection, prior.scope(business) != connection.scope(business) {
+            throw JobBillingDispatchError.connection
+        }
+        saved.connection = connection
+        try bootstrapStore.write(saved)
+        try importBootstrap(business, connection: connection)
+        return try handle(connection, business: business, operation: operation)
+    }
+
+    private func importBootstrap(_ business: JobBillingBusinessScope, connection: SharedJobBillingConnection) throws {
+        var saved = try bootstrap(business)
+        let scope = connection.scope(business)
+        for record in saved.records {
+            guard let edit = record.pending else { throw JobBillingDispatchError.storage }
+            try update(scope, jobID: record.id) { bound in
+                if bound.importedBootstrapEditID == edit.id { return }
+                if let customer = bound.confirmed?.assignment?.localCustomerID ?? bound.pending?.desired.localCustomerID,
+                   customer != edit.desired.localCustomerID { throw JobBillingDispatchError.changed }
+                let older = (bound.pending?.supersededRequests ?? []) + [bound.pending?.request].compactMap { $0 }
+                bound.pending = .init(id: edit.id, original: edit.original, desired: edit.desired,
+                    localRevision: edit.localRevision, baseline: nil,
+                    state: bound.pending != nil || !older.isEmpty ? .review : edit.state,
+                    supersededRequests: older)
+                bound.importedBootstrapEditID = edit.id
+            }
+        }
+        if !saved.records.isEmpty {
+            saved.records.removeAll()
+            try bootstrapStore.write(saved)
+            generation &+= 1
+        }
+    }
+
+    private func saveUnbound(_ call: ServiceCall, original: JobBillingTarget?, context: ModelContext,
+                             saveLocal: (ModelContext) throws -> Void, startSync: Bool) throws -> UUID {
+        let business = try business(context)
+        let operation = try businessOperation(context, business: business)
+        let (revision, target) = try JobBillingTarget.capture(call, context: context)
+        let jobID = call.id
+        var value = try bootstrap(business)
+        let prior = value.records.first { $0.id == jobID }?.pending
+        if let prior, prior.desired.localCustomerID != target.localCustomerID { throw JobBillingDispatchError.changed }
+        let same = prior?.desired == target && prior?.localRevision == revision
+        let editID = same ? prior!.id : UUID()
+        let pending = JobBillingPendingEdit(id: editID, original: prior?.original ?? original, desired: target,
+            localRevision: revision, baseline: nil, state: .prepared, supersededRequests: [])
+        value.records.removeAll { $0.id == jobID }
+        value.records.append(.init(id: jobID, pending: pending))
+        try value.validate(business); try bootstrapStore.write(value)
+        let activity = same ? nil : ServiceCallActivity.record(for: call, action: "Job billing access queued",
+            detail: "The saved crew's field billing access is pending the business connection check.",
+            actorEmail: business.actorEmail, in: context)
+        do { try saveLocal(context) }
+        catch {
+            if let activity { context.delete(activity) }
+            throw JobBillingDispatchError.save
+        }
+        // A post-save storage failure never reports that the job failed to save.
+        do {
+            try operation.check()
+            value = try bootstrap(business)
+            guard let index = value.records.firstIndex(where: { $0.id == jobID && $0.pending?.id == editID }) else {
+                throw JobBillingDispatchError.changed
+            }
+            value.records[index].pending?.state = .queued
+            try bootstrapStore.write(value)
+        } catch { generation &+= 1; return editID }
+        generation &+= 1
+        if startSync {
+            Task {
+                do {
+                    let handle = try await discover(context: context, preparation: operation)
+                    try verifySaved(call, context: context, revision: revision, target: target)
+                    guard try queue(handle.scope).records.first(where: { $0.id == jobID })?.pending?.id == editID else {
+                        throw JobBillingDispatchError.changed
+                    }
+                    _ = try await synchronize(call, context: context, handle: handle, allowInitialBinding: true, send: true)
+                } catch { /* Retain first-use intent; never guess another connection. */ }
+            }
+        }
+        return editID
+    }
+
     func capture(context: ModelContext) throws -> Handle {
         guard !GunnAireCloudKit.usesTestDatabase || fixture else { throw JobBillingDispatchError.connection }
         let email = actor()
         try validateAccess(context, email)
         guard !email.isEmpty else { throw JobBillingDispatchError.access }
-        let workflow = try api.captureWorkspaceWorkflow()
+        if api == nil {
+            let business = try business(context)
+            let saved = try bootstrap(business)
+            guard let connection = saved.connection else { throw JobBillingDispatchError.connection }
+            try importBootstrap(business, connection: connection)
+            return try handle(connection, business: business, operation: businessOperation(context, business: business))
+        }
+        let workflow = try api!.captureWorkspaceWorkflow()
         guard let companyID = workflow.companyID, let realmID = workflow.realmID else { throw JobBillingDispatchError.connection }
         let scope = JobBillingQueueScope(companyID: companyID, realmID: realmID,
                                         environment: workflow.environment, actorEmail: email)
@@ -63,6 +226,12 @@ final class JobBillingDispatch: ObservableObject {
     }
 
     func record(jobID: UUID, context: ModelContext) throws -> JobBillingQueueRecord? {
+        if api == nil {
+            let saved = try bootstrap(business(context))
+            if let unbound = saved.records.first(where: { $0.id == jobID }) { return unbound }
+            guard let connection = saved.connection else { return nil }
+            return try queue(connection.scope(saved.business)).records.first { $0.id == jobID }
+        }
         let handle = try capture(context: context)
         return try queue(handle.scope).records.first { $0.id == jobID }
     }
@@ -98,8 +267,8 @@ final class JobBillingDispatch: ObservableObject {
             do { try saveLocal(context); return nil } catch { throw JobBillingDispatchError.save }
         }
         try validateAccess(context, actor())
-        guard api.isAuthenticated else {
-            do { try saveLocal(context); return nil } catch { throw JobBillingDispatchError.save }
+        if api == nil, try bootstrap(business(context)).connection == nil {
+            return try saveUnbound(call, original: original, context: context, saveLocal: saveLocal, startSync: startSync)
         }
         let handle = try capture(context: context)
         let (revision, desired) = try JobBillingTarget.capture(call, context: context)
@@ -146,7 +315,16 @@ final class JobBillingDispatch: ObservableObject {
             }
         } catch { return editID } // Job DID save; prepared intent remains for recovery.
         if startSync {
-            Task { _ = try? await synchronize(call, context: context, handle: handle, allowInitialBinding: true, send: true) }
+            Task {
+                do {
+                    let fresh = try await discover(context: context, original: handle)
+                    try verifySaved(call, context: context, revision: revision, target: desired)
+                    guard try queue(fresh.scope).records.first(where: { $0.id == call.id })?.pending?.id == editID else {
+                        throw JobBillingDispatchError.changed
+                    }
+                    _ = try await synchronize(call, context: context, handle: fresh, allowInitialBinding: true, send: true)
+                } catch { /* The original durable edit remains visible from the job. */ }
+            }
         }
         return editID
     }
@@ -156,7 +334,7 @@ final class JobBillingDispatch: ObservableObject {
     func resume(context: ModelContext) async {
         guard !GunnAireCloudKit.usesTestDatabase || fixture else { return }
         do {
-            let handle = try capture(context: context)
+            let handle = try await discover(context: context)
             let pending = try queue(handle.scope).records.filter { $0.pending != nil }
             for record in pending {
                 try check(handle, context: context)
@@ -167,14 +345,18 @@ final class JobBillingDispatch: ObservableObject {
         } catch { /* Retained queue; the job's review link supplies recovery. */ }
     }
 
-    func refresh(_ call: ServiceCall, context: ModelContext) async throws -> Review {
-        try await synchronize(call, context: context, handle: capture(context: context), send: false)
+    func refresh(_ call: ServiceCall, context: ModelContext, isCurrent: @escaping () -> Bool = { true }) async throws -> Review {
+        let original = try JobBillingTarget.capture(call, context: context)
+        let handle = try await discover(context: context, isCurrent: isCurrent)
+        try verifySaved(call, context: context, revision: original.0, target: original.1)
+        return try await synchronize(call, context: context, handle: handle, send: false)
     }
 
     /// Explicit confirmation is tied to the snapshot the office actually saw.
     /// Refreshing a conflict never adopts its revision for a blind overwrite.
-    func applySavedCrew(_ call: ServiceCall, context: ModelContext, reviewed: Review) async throws -> Review {
-        let handle = try capture(context: context)
+    func applySavedCrew(_ call: ServiceCall, context: ModelContext, reviewed: Review,
+                       isCurrent: @escaping () -> Bool = { true }) async throws -> Review {
+        let handle = try await discover(context: context, isCurrent: isCurrent)
         guard handle.scope == reviewed.scope else { throw JobBillingDispatchError.changed }
         let (revision, target) = try JobBillingTarget.capture(call, context: context)
         guard revision == reviewed.localRevision, target == reviewed.target else { throw JobBillingDispatchError.changed }

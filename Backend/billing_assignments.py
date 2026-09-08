@@ -153,6 +153,23 @@ class JobBillingAssignments:
             return {"assignment": self.public(connection, row, fingerprint) if row is not None else None,
                     "connectionRevision": connection_revision(fingerprint)}
 
+    def connection(self, session_id, payload):
+        """Office-only discovery. No roster, credentials, writes or QBO call."""
+        if not isinstance(payload, dict) or set(payload) != {"companyID"}:
+            raise failure("invalid_request", "Choose the original business workspace.", 400)
+        company = canonical_uuid(payload["companyID"])
+        with self.database() as connection:
+            actor = self.actor(connection, session_id)
+            if actor["role"] not in ("Admin", "Dispatcher"):
+                raise failure("dispatcher_required", "A dispatcher or administrator must review job billing access.", 403)
+            grant = connection.execute("SELECT * FROM qbo_connections WHERE id=1").fetchone()
+            if grant is None:
+                raise failure("provider_changed", "Ask the administrator to connect this business to QuickBooks.")
+            intent = {"company_id": company, "realm_id": grant["realm_id"], "environment": grant["environment"]}
+            _, fingerprint = self.context(connection, session_id, intent, office=True)
+            return {"companyID": company, "realmID": grant["realm_id"], "environment": grant["environment"],
+                    "connectionRevision": connection_revision(fingerprint), "protocolVersion": 1}
+
     def save(self, session_id, payload):
         required = {"companyID", "realmID", "environment", "serviceCallID", "localCustomerID", "technicianEmails", "enabled", "expectedRevision", "operationID", "connectionRevision"}
         if not isinstance(payload, dict) or set(payload) != required:

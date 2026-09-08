@@ -7,7 +7,8 @@ import Testing
     @Test func transportRetainsEveryBillingRouteButCannotBecomeAGeneralProxy() {
         let root = "/api/billing-publications", id = UUID().uuidString.lowercased()
         for path in [root + "?companyID=fixture", root + "/context?companyID=fixture", root + "/connection?companyID=fixture",
-                     root + "/" + id, "/api/job-billing-assignments?companyID=fixture"] {
+                     root + "/" + id, "/api/job-billing-assignments?companyID=fixture",
+                     "/api/job-billing-assignments/connection?companyID=fixture"] {
             #expect(BillingPublicationTransportPolicy.allows(path: path, method: "GET", bodyBytes: nil))
             #expect(!BillingPublicationTransportPolicy.allows(path: path, method: "GET", bodyBytes: 2))
         }
@@ -17,7 +18,8 @@ import Testing
             #expect(!BillingPublicationTransportPolicy.allows(path: path + "?unexpected=1", method: "POST", bodyBytes: 2))
         }
         for path in ["https://foreign.invalid" + root, "//foreign.invalid" + root, root + "/../users", root + "/connection#fragment",
-                     root + "/not-a-uuid", root + "/\(id)/delete", "/api/users", "/api/payments"] {
+                     root + "/not-a-uuid", root + "/\(id)/delete", "/api/users", "/api/payments",
+                     "/api/job-billing-assignments/connection/extra"] {
             #expect(!BillingPublicationTransportPolicy.allows(path: path, method: "GET", bodyBytes: nil))
             #expect(!BillingPublicationTransportPolicy.allows(path: path, method: "POST", bodyBytes: 2))
         }

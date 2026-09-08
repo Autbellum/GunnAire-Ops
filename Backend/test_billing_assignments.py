@@ -35,6 +35,49 @@ class BillingAssignmentTests(BillingFixture, unittest.TestCase):
                 "localCustomerID": self.customer_id, "technicianEmails": [self.email("Field Technician")], "enabled": True,
                 "expectedRevision": 0, "operationID": str(uuid.uuid4()), "connectionRevision": epoch, **changes}
 
+    def test_shared_connection_returns_only_opaque_office_business_descriptor(self):
+        with backend.db() as connection:
+            before = connection.total_changes
+            rows = connection.execute("SELECT COUNT(*) FROM billing_assignment_mutations").fetchone()[0]
+        for role in ("Admin", "Dispatcher"):
+            value = self.jobs.connection(self.sessions[role], {"companyID": self.company})
+            self.assertEqual(set(value), {"companyID", "realmID", "environment", "connectionRevision", "protocolVersion"})
+            self.assertEqual(value["companyID"], self.company)
+            self.assertEqual(value["protocolVersion"], 1)
+            self.assertEqual(value["connectionRevision"], self.assignment()["connectionRevision"])
+        with backend.db() as connection:
+            self.assertEqual(connection.total_changes, before)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM billing_assignment_mutations").fetchone()[0], rows)
+
+    def test_shared_connection_never_trusts_caller_realm_or_nonoffice_role(self):
+        for extra in ({"realmID": "realm"}, {"environment": "sandbox"}, {"serviceCallID": self.job_id}):
+            self.expect("invalid_request", lambda: self.jobs.connection(self.admin, {"companyID": self.company, **extra}))
+        for role in ("Accounting", "Field Technician"):
+            self.expect("dispatcher_required", lambda: self.jobs.connection(self.sessions[role], {"companyID": self.company}))
+        self.expect("company_changed", lambda: self.jobs.connection(self.admin, {"companyID": str(uuid.uuid4())}))
+        self.expect("invalid_request", lambda: self.jobs.connection(self.admin, {"companyID": "invalid"}))
+
+    def test_shared_connection_tracks_grant_replacement_and_revoked_office_access(self):
+        original = self.jobs.connection(self.admin, {"companyID": self.company})
+        with backend.db() as connection:
+            connection.execute("UPDATE qbo_connections SET authorized_at='replacement-shared-dispatch'")
+        self.assertNotEqual(original["connectionRevision"], self.jobs.connection(self.admin, {"companyID": self.company})["connectionRevision"])
+        with backend.db() as connection:
+            connection.execute("UPDATE users SET is_active=0 WHERE email=?", (self.email("Dispatcher"),))
+        with self.assertRaises(assignments.AttemptError):
+            self.jobs.connection(self.sessions["Dispatcher"], {"companyID": self.company})
+
+    def test_shared_connection_http_is_read_only_strict_and_never_requests_provider_credentials(self):
+        path = "/api/job-billing-assignments/connection?companyID=" + self.company
+        with self.http() as request:
+            status, body = request(path, role="Dispatcher")
+            self.assertEqual(status, 200)
+            self.assertEqual(body["companyID"], self.company)
+            self.assertEqual(request(path, role="Field Technician")[0], 403)
+            self.assertEqual(request(path + "&companyID=" + self.company)[0], 400)
+            self.assertEqual(request(path + "&realmID=realm")[0], 400)
+            self.assertNotEqual(request("/api/job-billing-assignments/connection", payload={"companyID": self.company})[0], 200)
+
     def test_offline_first_assignment_cannot_adopt_a_reconnected_grant(self):
         original = self.assignment()
         with backend.db() as connection:

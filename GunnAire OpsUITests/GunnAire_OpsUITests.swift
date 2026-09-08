@@ -2668,7 +2668,8 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
         app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-uiTestAuthenticatedAdmin",
-            "-uiTestSeedCollectibleJob", "-uiTestJobBillingReview", "-GunnAirePendingAppRoute", "scheduleAndJobs"]
+            "-uiTestSeedCollectibleJob", "-uiTestJobBillingReview", "-uiTestForceQuickBooksDisconnected",
+            "-GunnAirePendingAppRoute", "scheduleAndJobs"]
         if recovering { app.launchArguments.append("-uiTestJobBillingRecovered") }
         app.launch()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 8))

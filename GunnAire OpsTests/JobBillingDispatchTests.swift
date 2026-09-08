@@ -23,8 +23,22 @@ struct JobBillingDispatchTests {
         var loseWriteResponse = false
         var failStoreWrite = false
         var storeWrites = 0
+        var afterStoreWrite: (() throws -> Void)?
         var failStoreWriteNumber: Int?
         var beforeReply: (() async throws -> Void)?
+        var beforeDiscovery: (() async throws -> Void)?
+        var discoveryChanges: [String: Any] = [:]
+        var discoveryError: Error?
+        var bootstrapFiles: [String: Data] = [:]
+        var failBootstrapWrite = false
+        var discoveries = 0
+        lazy var bootstrapStore = JobBillingBootstrapStore(read: { [unowned self] scope in
+            if let data = bootstrapFiles[scope.storageKey] { return try JSONDecoder().decode(JobBillingBootstrap.self, from: data) }
+            return .init(business: scope)
+        }, write: { [unowned self] value in
+            if failBootstrapWrite { throw JobBillingDispatchError.storage }
+            bootstrapFiles[value.business.storageKey] = try JSONEncoder().encode(value)
+        })
         lazy var api = QuickBooksDataAPI(testTokens: .init(accessToken: "fixture", expiration: .distantFuture),
             realmID: "dispatch-fixture", environment: Config.QuickBooks.environment, catalogCompanyID: company,
             transport: { _ in Issue.record("Job access reached direct QuickBooks transport"); throw JobBillingDispatchError.connection })
@@ -35,6 +49,7 @@ struct JobBillingDispatchTests {
             storeWrites += 1
             if failStoreWrite || failStoreWriteNumber == storeWrites { throw JobBillingDispatchError.storage }
             files[queue.scope.storageKey] = try JSONEncoder().encode(queue)
+            try afterStoreWrite?()
         })
 
         init() throws {
@@ -55,9 +70,19 @@ struct JobBillingDispatchTests {
 
         var scope: JobBillingQueueScope { .init(companyID: company, realmID: "dispatch-fixture", environment: Config.QuickBooks.environment, actorEmail: email) }
 
-        func coordinator() -> JobBillingDispatch {
-            JobBillingDispatch(store: store, api: api, client: .init { [unowned self] path, method, body in
+        func coordinator(shared: Bool = false) -> JobBillingDispatch {
+            JobBillingDispatch(store: store, api: shared ? nil : api, client: .init { [unowned self] path, method, body in
                 #expect(path.hasPrefix("/api/job-billing-assignments"))
+                if path.hasPrefix("/api/job-billing-assignments/connection?") {
+                    #expect(method == "GET" && body == nil)
+                    discoveries += 1
+                    try await beforeDiscovery?()
+                    if let discoveryError { throw discoveryError }
+                    var result: [String: Any] = ["companyID": company.uuidString.lowercased(), "realmID": scope.realmID,
+                        "environment": scope.environment, "connectionRevision": epoch, "protocolVersion": 1]
+                    result.merge(discoveryChanges) { _, new in new }
+                    return try JSONSerialization.data(withJSONObject: result)
+                }
                 try await beforeReply?()
                 if method == "GET" {
                     reads += 1
@@ -76,7 +101,7 @@ struct JobBillingDispatchTests {
                 return try JSONEncoder().encode(JobBillingAssignmentSnapshot(assignment: remote, connectionRevision: epoch))
             }, actor: { [unowned self] in email }, validateAccess: { [unowned self] _, actor in
                 guard authorized, actor == "office@example.invalid" else { throw JobBillingDispatchError.access }
-            }, fixture: true)
+            }, fixture: true, bootstrapStore: bootstrapStore, fixtureCompanyID: shared ? company : nil)
         }
 
         func setRemote(revision: Int = 1, emails: [String] = ["alex@example.invalid"], enabled: Bool = true, usable: Bool? = nil) {
@@ -90,7 +115,7 @@ struct JobBillingDispatchTests {
         }
 
         func liveSync(_ dispatch: JobBillingDispatch) async throws -> JobBillingDispatch.Review {
-            try await dispatch.synchronize(call, context: context, handle: dispatch.capture(context: context), allowInitialBinding: true, send: true)
+            try await dispatch.synchronize(call, context: context, handle: dispatch.discover(context: context), allowInitialBinding: true, send: true)
         }
 
         func pending(_ dispatch: JobBillingDispatch) throws -> JobBillingPendingEdit? { try dispatch.record(jobID: call.id, context: context)?.pending }

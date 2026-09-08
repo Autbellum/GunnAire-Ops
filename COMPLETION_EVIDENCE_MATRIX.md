@@ -1,3 +1,33 @@
+Shared business-session dispatch qualification, 2026-09-08:
+NATIVE_SHARED_DISPATCH_CONNECTION.md records candidate backend 2026.09.08.41
+and the actual job-save, field-billing review and recovery cutover from device
+QBO OAuth to the verified business session. First-use offline crew edits now
+have an encrypted original-account intent with no guessed realm or grant.
+The original realm-bound journal remains compatible; a durable import receipt
+prevents replay after interrupted transfer. Discovery is office-only and read
+only; original role, job/customer, saved crew, revision and connection checks
+continue through awaits and navigation cancellation. Legacy queues are retained.
+Focused native acceptance passes 46 tests across existing dispatch/shared-billing
+and 12 new shared-dispatch cases. All 652 Backend and 56 Tools tests pass.
+Final Mac and iPad logic each pass 1,525 cases; all eight selected iPad UI journeys
+pass (1,533 total), with zero failures/skips and actual-execution verification.
+All eight exported screenshots are visually reviewed: compact original-job crew
+review, simple Mail and original invoice recovery have no account-email footer
+or raw API payload. Unsigned universal Mac Release and both architecture checks
+pass. Original-project preflight verifies 17 scoped files, 248 unrelated changes,
+the unchanged empty index and 290 other byte-identical tracked source files.
+Existing document actor-isolation and optional Metal-toolchain warnings remain.
+The published predecessor has hosted Backend success; native jobs were running
+at the prepublication read. A new head requires fresh hosted qualification.
+The first new
+backend assertion used the wrong existing error name; two Swift test expressions
+needed explicit throwing evaluation; the first Tools command used an unsuitable
+import root. Those failed results are retained alongside corrected passes.
+No production action or full-suite completion is claimed. Signed CloudKit
+convergence and independent staff sharing, real approved Tap to Pay/Handoff,
+remaining OAuth-only operations, vendor onboarding and complete competitor-suite
+acceptance remain part of the unchanged goal.
+
 Shared business-session billing qualification, 2026-09-08:
 NATIVE_SHARED_BILLING_CONNECTION.md records candidate backend 2026.09.08.40
 and the actual native invoice/estimate, agreement/progress, Management retry and

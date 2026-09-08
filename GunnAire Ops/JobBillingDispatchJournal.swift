@@ -3,14 +3,15 @@ import CryptoKit
 import SwiftData
 
 enum JobBillingDispatchError: LocalizedError, Equatable {
-    case storage, save, changed, connection, access
+    case storage, save, changed, connection, access, serverUpdate
 
     var errorDescription: String? {
         switch self {
         case .storage: "The saved billing-access queue could not be verified. Your existing work was not cleared. Keep this job open and ask an administrator to review this device."
         case .save: "This job could not be saved. Keep the form open and try Save again. No billing-access or calendar update was sent."
         case .changed: "This job or its crew changed while you were editing. Reopen the job and review the current assignment."
-        case .connection: "Connect this business to QuickBooks, then review field billing access from the job."
+        case .connection: "The business connection could not be confirmed. Saved work is retained. Refresh Field Billing when online; ask the administrator if the business connection has changed."
+        case .serverUpdate: "Saved work is retained. Ask the administrator to update the business server, then refresh this job's Field Billing."
         case .access: "Current dispatcher or administrator access to this business is required."
         }
     }
@@ -133,6 +134,9 @@ struct JobBillingQueueRecord: Codable, Equatable, Identifiable {
     let id: UUID // job, not an invoice or provider identity
     var confirmed: JobBillingAssignmentSnapshot?
     var pending: JobBillingPendingEdit?
+    /// Durable import receipt prevents a crash between the two journal writes
+    /// from resurrecting a first-use edit that was already confirmed.
+    var importedBootstrapEditID: UUID?
 }
 
 struct JobBillingQueue: Codable, Equatable {

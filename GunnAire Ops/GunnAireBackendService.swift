@@ -826,7 +826,7 @@ enum GunnAireBackendService {
         try check()
         do {
             let (data, _) = try await GmailServerHTTPTransfer.data(for: request,
-                maximum: URLComponents(string: path)?.path == "/api/billing-publications/connection" ? 16_384 : 2 * 1024 * 1024)
+                maximum: URLComponents(string: path)?.path.hasSuffix("/connection") == true ? 16_384 : 2 * 1024 * 1024)
             try check()
             return data
         } catch {

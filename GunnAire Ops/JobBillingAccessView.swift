@@ -41,6 +41,8 @@ struct JobBillingAccessView: View {
     @State private var message: String?
     @State private var busy = false
     @State private var confirmsSavedCrew = false
+    @State private var visit = UUID()
+    @State private var visible = true
 
     init(dispatch: JobBillingDispatch? = nil, call: ServiceCall, context: ModelContext) {
         self.call = call
@@ -113,7 +115,8 @@ struct JobBillingAccessView: View {
         }
         .navigationTitle("Field Billing")
         .accessibilityIdentifier("JobBillingAccessReview")
-        .task { await load() }
+        .task { visible = true; await load() }
+        .onDisappear { visible = false; visit = UUID(); busy = false }
         .alert("Apply this job's saved access?", isPresented: $confirmsSavedCrew) {
             Button("Cancel", role: .cancel) { }
             Button("Apply Saved Access") { Task { await apply() } }
@@ -126,17 +129,26 @@ struct JobBillingAccessView: View {
     private func load() async {
         guard !busy else { return }
         busy = true; message = nil
-        defer { busy = false }
-        do { review = try await dispatch.refresh(call, context: modelContext) }
-        catch { message = safeMessage(error) }
+        let originalVisit = visit
+        defer { if visit == originalVisit { busy = false } }
+        do {
+            let result = try await dispatch.refresh(call, context: modelContext, isCurrent: { visible && visit == originalVisit })
+            guard visible, visit == originalVisit else { return }
+            review = result
+        } catch { if visible && visit == originalVisit { message = safeMessage(error) } }
     }
 
     private func apply() async {
         guard !busy, let reviewed = review else { return }
         busy = true; message = nil
-        defer { busy = false }
-        do { review = try await dispatch.applySavedCrew(call, context: modelContext, reviewed: reviewed) }
-        catch { message = safeMessage(error) }
+        let originalVisit = visit
+        defer { if visit == originalVisit { busy = false } }
+        do {
+            let result = try await dispatch.applySavedCrew(call, context: modelContext, reviewed: reviewed,
+                isCurrent: { visible && visit == originalVisit })
+            guard visible, visit == originalVisit else { return }
+            review = result
+        } catch { if visible && visit == originalVisit { message = safeMessage(error) } }
     }
 
     private func safeMessage(_ error: Error) -> String {
@@ -174,14 +186,18 @@ extension JobBillingDispatch {
             baseline: .init(assignment: nil, connectionRevision: epoch), state: recovering ? .queued : .review,
             supersededRequests: []))])
         var sent = false
-        let api = QuickBooksDataAPI(testTokens: .init(accessToken: "fixture", expiration: .distantFuture),
-            realmID: scope.realmID, environment: scope.environment, catalogCompanyID: company,
-            transport: { _ in throw JobBillingDispatchError.connection })
+        let connection = SharedJobBillingConnection(companyID: company, realmID: scope.realmID,
+            environment: scope.environment, connectionRevision: epoch)
+        var bootstrap = JobBillingBootstrap(business: .init(companyID: company, actorEmail: scope.actorEmail), connection: connection)
         return .init(store: .init(read: { expected in
             guard expected == scope else { throw JobBillingDispatchError.access }
             return queue
-        }, write: { queue = $0 }), api: api, client: .init { path, method, body in
+        }, write: { queue = $0 }), client: .init { path, method, body in
             guard path.hasPrefix("/api/job-billing-assignments") else { throw JobBillingDispatchError.connection }
+            if path.hasPrefix("/api/job-billing-assignments/connection?") {
+                guard method == "GET", body == nil else { throw JobBillingDispatchError.connection }
+                return try JSONEncoder().encode(connection)
+            }
             if method == "POST" {
                 guard !recovering, !sent, let body else { throw BillingPublicationError.invalidProposal }
                 let request = try JSONDecoder().decode(JobBillingAssignmentRequest.self, from: body)
@@ -195,7 +211,9 @@ extension JobBillingDispatch {
             return try JSONEncoder().encode(JobBillingAssignmentSnapshot(assignment: remote, connectionRevision: epoch))
         }, actor: { scope.actorEmail }, validateAccess: { context, email in
             try GoogleCalendarWorkflow.requireDispatchAccess(context: context, email: email)
-        }, fixture: true)
+        }, fixture: true, bootstrapStore: .init(read: { expected in
+            try bootstrap.validate(expected); return bootstrap
+        }, write: { bootstrap = $0 }), fixtureCompanyID: company)
     }
 }
 #endif
@@ -205,11 +223,10 @@ extension JobBillingDispatch {
 struct JobBillingRecoveryModifier: ViewModifier {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
-    @ObservedObject private var api = QuickBooksDataAPI.shared
 
     func body(content: Content) -> some View {
         content
-            .task(id: api.realmID) { await JobBillingDispatch.shared.resume(context: modelContext) }
+            .task { await JobBillingDispatch.shared.resume(context: modelContext) }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active { Task { await JobBillingDispatch.shared.resume(context: modelContext) } }
             }
