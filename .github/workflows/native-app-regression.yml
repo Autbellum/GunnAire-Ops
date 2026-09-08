@@ -62,6 +62,8 @@ jobs:
               testMailAutosavedDraftSurvivesTerminationWithoutClosingComposer \
               testGoogleAccessRecoversOriginalApprovalAfterRelaunchAndReturnsToSettings \
               testGoogleAccessShowsOnlyConfirmedPermissionsWithoutTechnicalDetails \
+              testSharedMailInboxReadsOriginalMessageAndReturnsNaturally \
+              testSharedMailLostSendRecoversOriginalAfterRelaunchWithoutAnotherCopy \
               testCustomerAccountStatementGeneratesFromTheExistingFilesWorkspace \
               testCustomerSyncReviewCancelsOnlyUnsentProposalAndReturnsToOriginalCustomer \
               testCustomerSyncReviewRecoversOriginalLinkWithoutAnotherCustomerCreate \
