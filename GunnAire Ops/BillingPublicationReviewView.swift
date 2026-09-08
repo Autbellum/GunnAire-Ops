@@ -51,17 +51,7 @@ import SwiftData
                     LabeledContent("Date", value: proposal.document.TxnDate)
                     if let due = proposal.document.DueDate { LabeledContent("Due", value: due) }
                     ForEach(Array(proposal.document.Line.prefix(visibleLines).enumerated()), id: \.offset) { _, line in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack(alignment: .firstTextBaseline) {
-                                Text(line.Description?.isEmpty == false ? line.Description! : line.DetailType == "DiscountLineDetail" ? "Discount" : "Saved item")
-                                Spacer()
-                                Text(line.DetailType == "DiscountLineDetail" ? -line.Amount : line.Amount, format: .currency(code: "USD"))
-                            }
-                            if let qty = line.SalesItemLineDetail.Qty, let price = line.SalesItemLineDetail.UnitPrice {
-                                Text("\(qty.formatted()) × \(price.formatted(.currency(code: "USD")))")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
+                        BillingPublicationLineReview(line: line)
                     }
                     if visibleLines < proposal.document.Line.count { Button("Show more items") { visibleLines += 20 } }
                     if let note = proposal.document.PrivateNote, !note.isEmpty {
@@ -216,8 +206,20 @@ import SwiftData
         try context.save()
         let value = try QuickBooksBillingWorkflow(document: document, context: context, api: api, lifecycle: lifecycle, billingJournal: store)
         guard let customer = document.customer else { throw BillingNativeError.pending }
-        let lines = try QuickBooksDocumentLinePublication.lines(snapshotJSON: document.snapshotJSON,
+        var lines = try QuickBooksDocumentLinePublication.lines(snapshotJSON: document.snapshotJSON,
             expectedSubtotal: document.subtotal, catalogItems: fixtureItems)
+        if ProcessInfo.processInfo.arguments.contains("-uiTestBillingBundleReview"), let first = lines.first {
+            // A server-original bundle proposal can differ from this device's
+            // current draft. This fixture only exercises read/review/cancel;
+            // publish still has no fixture route and cannot reach accounting.
+            let members = ["First retained labor", "Second retained labor"].map { name in
+                QuickBooksLineItem(Amount: 94.5, DetailType: "SalesItemLineDetail", Description: name,
+                    SalesItemLineDetail: .init(ItemRef: first.SalesItemLineDetail.ItemRef, Qty: 1, UnitPrice: 94.5,
+                                               TaxCodeRef: .init(value: "NON", name: nil)))
+            }
+            lines = [.bundle(description: "Saved repair bundle", reference: .init(value: "BILLING-UI-GROUP", name: nil),
+                             quantity: 2, components: members)]
+        }
         let revision = try value.billingDraftRevision()
         request = .init(companyID: company, realmID: "billing-review-fixture", environment: Config.QuickBooks.environment,
             documentType: .invoice, localDocumentID: document.id, localCustomerID: customer.id, operation: .create,
@@ -228,6 +230,48 @@ import SwiftData
         flow = value; shared = try value.openSharedReview()
     }
     #endif
+}
+
+/// Keep the bill readable, with exact repeated components one disclosure away.
+/// No account references, receipt payloads, internal IDs or email footer.
+@MainActor struct BillingPublicationLineReview: View {
+    let line: QuickBooksLineItem
+    var body: some View {
+        if line.DetailType == "GroupLineDetail", let group = line.GroupLineDetail {
+            DisclosureGroup {
+                ForEach(Array(group.Line.enumerated()), id: \.offset) { _, member in
+                    row(member)
+                }
+            } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                    row(line)
+                    Text("\(group.Quantity.formatted()) \(group.Quantity == 1 ? "bundle" : "bundles") · \(group.Line.count) included items")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .accessibilityIdentifier("BillingBundleComponents")
+        } else { row(line) }
+    }
+
+    private func row(_ value: QuickBooksLineItem) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(value.Description?.isEmpty == false ? value.Description! : value.DetailType == "DiscountLineDetail" ? "Discount" : value.GroupLineDetail?.GroupItemRef.name ?? "Saved item")
+                Spacer()
+                if let amount = QuickBooksSalesLineContract.displayedAmount(value) {
+                    Text(amount, format: .currency(code: "USD"))
+                } else { Text("Review amount").foregroundStyle(.secondary) }
+            }
+            if value.DetailType == "SalesItemLineDetail", let qty = value.SalesItemLineDetail.Qty,
+               let price = value.SalesItemLineDetail.UnitPrice {
+                Text("\(qty.formatted()) × \(QuickBooksSalesLineContract.unitPriceLabel(price))")
+                    .font(.caption).foregroundStyle(.secondary)
+                if value.SalesItemLineDetail.TaxCodeRef?.value == "TAX" {
+                    Text("Taxable").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
 }
 
 @MainActor struct BillingPublicationReviewLink: View {

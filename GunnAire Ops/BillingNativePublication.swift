@@ -73,12 +73,7 @@ struct BillingNativeContext: Decodable {
               let totalMoney = BillingPublicationResponse.money(total), let taxMoney = BillingPublicationResponse.money(tax) else {
             throw BillingPublicationError.invalidResponse
         }
-        var sold = Decimal.zero
-        for line in lines {
-            guard line.hasExplicitAmount, let amount = BillingPublicationResponse.money(line.Amount),
-                  ["SalesItemLineDetail", "DiscountLineDetail"].contains(line.DetailType) else { throw BillingPublicationError.invalidResponse }
-            sold += line.DetailType == "DiscountLineDetail" ? -amount : amount
-        }
+        let sold = try QuickBooksSalesLineContract.totals(lines).net
         guard sold >= 0, sold + taxMoney == totalMoney else { throw BillingPublicationError.invalidResponse }
         if let invoice {
             guard let balance = invoice.Balance, BillingPublicationResponse.money(balance) != nil, balance <= total else {

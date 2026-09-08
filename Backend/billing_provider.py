@@ -12,10 +12,10 @@ import urllib.parse
 import urllib.request
 
 try:
-    from Backend.billing_publications import bounded_text, document_values, failure, reference
+    from Backend.billing_publications import bounded_text, document_values, failure, reference, sold_lines, catalog_identifiers, group_definition
     from Backend.catalog_publications import canonical
 except ModuleNotFoundError:
-    from billing_publications import bounded_text, document_values, failure, reference
+    from billing_publications import bounded_text, document_values, failure, reference, sold_lines, catalog_identifiers, group_definition
     from catalog_publications import canonical
 
 
@@ -141,7 +141,7 @@ class BillingQBOProvider:
         if currency["MultiCurrencyEnabled"] and (document.get("CurrencyRef") != {"value": "USD"}
                 or not isinstance(customer.get("CurrencyRef"), dict) or customer["CurrencyRef"].get("value") != "USD"):
             raise failure("currency_review", "Confirm the document and customer currency explicitly.")
-        taxable = any(line.get("SalesItemLineDetail", {}).get("TaxCodeRef", {}).get("value") == "TAX" for line in document["Line"])
+        taxable = any(line["SalesItemLineDetail"]["TaxCodeRef"]["value"] == "TAX" for line in sold_lines(document["Line"]))
         if taxable:
             tax = preferences.get("TaxPrefs")
             if not isinstance(tax, dict) or tax.get("UsingSalesTax") is not True or tax.get("PartnerTaxEnabled") is not True:
@@ -152,11 +152,20 @@ class BillingQBOProvider:
                 if not isinstance(address, dict) or not all(isinstance(address.get(key), str) and address[key].strip() for key in ("Line1", "City", "CountrySubDivisionCode", "PostalCode")):
                     raise failure("tax_review", "Confirm the sale origin and service address for automated tax.")
         evidence = {}
-        for identifier in sorted({line["SalesItemLineDetail"]["ItemRef"]["value"] for line in document["Line"] if line["DetailType"] == "SalesItemLineDetail"}):
+        groups = {line["GroupLineDetail"]["GroupItemRef"]["value"] for line in document["Line"] if line["DetailType"] == "GroupLineDetail"}
+        leaves = {line["SalesItemLineDetail"]["ItemRef"]["value"] for line in sold_lines(document["Line"])}
+        if groups & leaves:
+            raise failure("item_review", "A bundle cannot also be used as an individual sold item.")
+        for identifier in sorted(catalog_identifiers(document["Line"])):
             item = self.read("Item", identifier)
-            if item.get("Active") is not True or item.get("Type") not in ("Service", "NonInventory", "Inventory"):
+            allowed_types = ("Group",) if identifier in groups else ("Service", "NonInventory", "Inventory")
+            if item.get("Active") is not True or item.get("Type") not in allowed_types:
                 raise failure("item_review", "Review the sold item's current accounting status.")
-            evidence[identifier] = {key: item[key] for key in ("Id", "Active", "Type", "UnitPrice", "Taxable") if key in item}
+            if identifier in groups:
+                evidence[identifier] = {key: item[key] for key in ("Id", "Active", "Type")}
+                evidence[identifier]["ItemGroupDetail"] = group_definition(item)
+            else:
+                evidence[identifier] = {key: item[key] for key in ("Id", "Active", "Type", "UnitPrice", "Taxable") if key in item}
         return evidence
 
     def write(self, kind, document, request_id, before_send):

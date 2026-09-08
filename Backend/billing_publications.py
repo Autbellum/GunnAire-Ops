@@ -91,15 +91,65 @@ def ref(value):
     return {"value": reference(value["value"])}
 
 
-def line_values(values):
+def sold_lines(values):
+    """Ordered charge-bearing leaves; group headers never add another charge."""
+    for line in values:
+        if line["DetailType"] == "SalesItemLineDetail":
+            yield line
+        elif line["DetailType"] == "GroupLineDetail":
+            yield from line["GroupLineDetail"]["Line"]
+
+
+def catalog_identifiers(values):
+    identifiers = {line["SalesItemLineDetail"]["ItemRef"]["value"] for line in sold_lines(values)}
+    identifiers.update(line["GroupLineDetail"]["GroupItemRef"]["value"]
+                       for line in values if line["DetailType"] == "GroupLineDetail")
+    return identifiers
+
+
+def gross_amount(values):
+    return sum((number(line["Amount"]) for line in sold_lines(values)), Decimal(0))
+
+
+def net_amount(values):
+    return gross_amount(values) - sum((number(line["Amount"]) for line in values
+                                      if line["DetailType"] == "DiscountLineDetail"), Decimal(0))
+
+
+def group_definition(item):
+    """Bounded provider-only evidence, preserving order and repeated members.
+
+    Transaction components may intentionally differ from this catalog recipe.
+    Only unreviewed field authority requires its exact current composition.
+    """
+    detail = item.get("ItemGroupDetail") if isinstance(item, dict) else None
+    members = detail.get("ItemGroupLine") if isinstance(detail, dict) else None
+    if not isinstance(members, list) or not 1 <= len(members) < 750:
+        raise failure("item_review", "Refresh this bundle's complete component list.")
+    result = []
+    for member in members:
+        item_ref = member.get("ItemRef") if isinstance(member, dict) else None
+        if (not isinstance(item_ref, dict) or item_ref.get("value") == item.get("Id")
+                or ("type" in item_ref and item_ref["type"] not in ("Service", "NonInventory", "Inventory"))):
+            raise failure("item_review", "Review this bundle's component identities and types.")
+        identifier = reference(item_ref.get("value"))
+        quantity = number(member.get("Qty"), places=5, maximum="999999", positive=True)
+        result.append({"ItemRef": {"value": identifier}, "Qty": float(quantity)})
+    return {"ItemGroupLine": result}
+
+
+def line_values(values, *, _components=False):
     if not isinstance(values, list) or not 1 <= len(values) <= 750:
         raise failure("invalid_lines", "Use between one and 750 billing lines.", 400)
-    result, subtotal, discounted = [], Decimal(0), False
+    result, subtotal, discounted, line_count = [], Decimal(0), False, len(values)
     for index, line in enumerate(values):
-        if not isinstance(line, dict) or set(line) - {"Amount", "DetailType", "Description", "SalesItemLineDetail", "DiscountLineDetail"}:
+        if not isinstance(line, dict) or set(line) - {"Amount", "DetailType", "Description", "SalesItemLineDetail", "DiscountLineDetail", "GroupLineDetail"}:
             raise failure("invalid_lines", "Use supported sold items and one final document discount.", 400)
-        amount = number(line.get("Amount"))
         kind = line.get("DetailType")
+        if (_components and kind != "SalesItemLineDetail") or any(
+                field in line and field != kind for field in ("SalesItemLineDetail", "DiscountLineDetail", "GroupLineDetail")):
+            raise failure("invalid_lines", "A bundle contains only individual sold item lines, not other bundles or discounts.", 400)
+        amount = number(line.get("Amount", 0) if kind == "GroupLineDetail" else line.get("Amount"))
         value = {"Amount": float(amount), "DetailType": kind}
         if "Description" in line:
             description = bounded_text(line["Description"], 4000, multiline=True)
@@ -120,6 +170,21 @@ def line_values(values):
                 raise failure("invalid_lines", "Choose the supported US taxable or nontaxable line setting.", 400)
             value[kind] = {"ItemRef": ref(detail["ItemRef"]), "Qty": float(qty), "UnitPrice": float(price), "TaxCodeRef": tax}
             subtotal += amount
+        elif kind == "GroupLineDetail":
+            detail = line.get(kind)
+            if (discounted or amount != 0 or not isinstance(detail, dict)
+                    or set(detail) != {"GroupItemRef", "Quantity", "Line"}):
+                raise failure("invalid_lines", "Keep the bundle identity, quantity and complete sold components. The header has no separate charge.", 400)
+            quantity = number(detail["Quantity"], places=5, maximum="999999", positive=True)
+            members = line_values(detail["Line"], _components=True)
+            line_count += len(members)
+            if line_count > 750:
+                raise failure("invalid_lines", "Use at most 750 lines including bundle headers and components.", 400)
+            group_ref = ref(detail["GroupItemRef"])
+            if any(member["SalesItemLineDetail"]["ItemRef"]["value"] == group_ref["value"] for member in members):
+                raise failure("invalid_lines", "A bundle cannot include itself as a sold component.", 400)
+            value[kind] = {"GroupItemRef": group_ref, "Quantity": float(quantity), "Line": members}
+            subtotal += gross_amount(members)
         elif kind == "DiscountLineDetail":
             detail = line.get(kind)
             if (index == 0 or index != len(values) - 1 or discounted or "SalesItemLineDetail" in line
@@ -139,6 +204,53 @@ def line_values(values):
             raise failure("invalid_lines", "Unsupported billing line type.", 400)
         result.append(value)
     number(float(subtotal))
+    return result
+
+
+def provider_line_values(values):
+    """Validate provider evidence once for recovery, mapped reads and responses.
+
+    Ignore known accounting metadata, never a charge-bearing line. IDs are
+    unique across both top-level lines and nested components. Group Amount is
+    zero (or omitted); only its already-extended component amounts are summed.
+    """
+    if not isinstance(values, list) or not 1 <= len(values) <= 751:
+        raise failure("provider_unconfirmed", "QuickBooks did not confirm the complete sold lines.")
+    identifiers, subtotals = set(), []
+
+    def normalize(line, *, component=False):
+        if not isinstance(line, dict):
+            raise failure("provider_unconfirmed", "QuickBooks returned incomplete line details.")
+        if "Id" in line:
+            identifier = reference(line["Id"])
+            if identifier in identifiers:
+                raise failure("provider_unconfirmed", "QuickBooks repeated a billing-line identity.")
+            identifiers.add(identifier)
+        kind = line.get("DetailType")
+        if (component and kind != "SalesItemLineDetail") or any(
+                key != kind and key.endswith("LineDetail") for key in line):
+            raise failure("provider_unconfirmed", "QuickBooks returned conflicting line types.")
+        if kind == "SubTotalLineDetail" and not component:
+            subtotals.append(number(line.get("Amount")))
+            return None
+        fields = {"SalesItemLineDetail": {"ItemRef", "Qty", "UnitPrice", "TaxCodeRef"},
+                  "DiscountLineDetail": {"PercentBased", "DiscountPercent"},
+                  "GroupLineDetail": {"GroupItemRef", "Quantity", "Line"}}
+        if kind not in fields or not isinstance(line.get(kind), dict):
+            raise failure("provider_unconfirmed", "Review unsupported accounting line details.")
+        result = {key: line[key] for key in ("Amount", "DetailType", "Description") if key in line}
+        result[kind] = {key: content for key, content in line[kind].items() if key in fields[kind]}
+        if kind == "GroupLineDetail":
+            members = result[kind].get("Line")
+            if not isinstance(members, list) or not 1 <= len(members) < 750:
+                raise failure("provider_unconfirmed", "QuickBooks did not confirm the complete bundle.")
+            result[kind]["Line"] = [normalize(member, component=True) for member in members]
+        return result
+
+    normalized = [value for line in values if (value := normalize(line)) is not None]
+    result = line_values(normalized)
+    if len(subtotals) > 1 or (subtotals and subtotals[0] != gross_amount(result)):
+        raise failure("provider_unconfirmed", "QuickBooks returned a conflicting billing subtotal.")
     return result
 
 
@@ -374,10 +486,7 @@ class BillingPublisher:
             (*scope(intent), intent["local_customer_id"])).fetchone()
         if mapping is None or mapping[0] != document["CustomerRef"]["value"]:
             raise failure("customer_review", "Establish this customer's verified shared QuickBooks link first.")
-        for line in document["Line"]:
-            if line["DetailType"] != "SalesItemLineDetail":
-                continue
-            item_id = line["SalesItemLineDetail"]["ItemRef"]["value"]
+        for item_id in sorted(catalog_identifiers(document["Line"])):
             if connection.execute("SELECT 1 FROM catalog_entity_mappings WHERE company_id=? AND realm_id=? AND environment=? AND provider_id=?",
                                   (*scope(intent), item_id)).fetchone() is None:
                 raise failure("item_review", "Publish or review the sold item's shared pricebook link first.")
@@ -609,8 +718,25 @@ discounts and missing tax evidence use an exact office-reviewed draft grant.
     if not isinstance(evidence, dict):
         raise failure("price_review", "Current pricebook evidence is required for field billing.")
     for line in document["Line"]:
-        if line["DetailType"] != "SalesItemLineDetail":
+        if line["DetailType"] == "DiscountLineDetail":
             raise failure("price_review", "Keep the saved discount and ask the office to approve this exact draft.")
+        if line["DetailType"] == "GroupLineDetail":
+            group = line["GroupLineDetail"]
+            item = evidence.get(group["GroupItemRef"]["value"])
+            try:
+                if (not isinstance(item, dict) or item.get("Id") != group["GroupItemRef"]["value"]
+                        or item.get("Type") != "Group" or item.get("Active") is not True):
+                    raise ValueError()
+                recipe = group_definition(item)["ItemGroupLine"]
+                quantity = number(group["Quantity"], places=5, maximum="999999", positive=True)
+                actual = [(member["SalesItemLineDetail"]["ItemRef"]["value"],
+                           number(member["SalesItemLineDetail"]["Qty"], places=5)) for member in group["Line"]]
+                expected = [(member["ItemRef"]["value"], number(member["Qty"], places=5) * quantity) for member in recipe]
+                if actual != expected:
+                    raise ValueError()
+            except (AttemptError, ValueError, KeyError, TypeError):
+                raise failure("price_review", "Keep this bundle's saved components. Ask the office to approve the exact changed bundle.") from None
+    for line in sold_lines(document["Line"]):
         sold = line["SalesItemLineDetail"]
         item = evidence.get(sold["ItemRef"]["value"])
         try:
@@ -653,33 +779,14 @@ def verify_remote(row, expected, remote, *, original_attempt):
         raise failure("identity_conflict", "QuickBooks returned conflicting document lineage.")
     if not isinstance(remote.get("CustomerRef"), dict) or remote["CustomerRef"].get("value") != expected["CustomerRef"]["value"]:
         raise failure("identity_conflict", "QuickBooks returned a different customer.")
-    reported = remote.get("Line")
-    if not isinstance(reported, list) or any(not isinstance(value, dict) for value in reported):
-        raise failure("provider_unconfirmed", "QuickBooks did not confirm the sold lines.")
-    identifiers = [reference(value["Id"]) for value in reported if "Id" in value]
-    if len(set(identifiers)) != len(identifiers):
-        raise failure("provider_unconfirmed", "QuickBooks repeated a billing-line identity.")
-    subtotals = [value for value in reported if value.get("DetailType") == "SubTotalLineDetail"]
-    gross = sum((number(value["Amount"]) for value in expected["Line"] if value["DetailType"] == "SalesItemLineDetail"), Decimal(0))
-    if len(subtotals) > 1 or (subtotals and number(subtotals[0].get("Amount")) != gross):
-        raise failure("provider_unconfirmed", "QuickBooks returned a conflicting billing subtotal.")
-    normalized = [{key: value for key, value in line.items() if key in {"Amount", "DetailType", "Description", "SalesItemLineDetail", "DiscountLineDetail"}}
-                  for line in reported if line.get("DetailType") != "SubTotalLineDetail"]
-    # Provider line details may include calculated/metadata fields; compare only
-    # submitted sold values and exact identities, never replace them with cache.
-    for line in normalized:
-        for detail, allowed in (("SalesItemLineDetail", {"ItemRef", "Qty", "UnitPrice", "TaxCodeRef"}),
-                                ("DiscountLineDetail", {"PercentBased", "DiscountPercent"})):
-            if isinstance(line.get(detail), dict):
-                line[detail] = {key: value for key, value in line[detail].items() if key in allowed}
-    if line_values(normalized) != expected["Line"]:
+    if provider_line_values(remote.get("Line")) != expected["Line"]:
         raise failure("provider_unconfirmed", "QuickBooks returned changed or incomplete sold lines.")
     total = number(remote.get("TotalAmt"))
     tax_detail = remote.get("TxnTaxDetail")
     if not isinstance(tax_detail, dict) or "TotalTax" not in tax_detail:
         raise failure("provider_unconfirmed", "QuickBooks did not confirm the document tax.")
     tax = number(tax_detail["TotalTax"])
-    subtotal = sum((number(line["Amount"]) * (-1 if line["DetailType"] == "DiscountLineDetail" else 1) for line in expected["Line"]), Decimal(0))
+    subtotal = net_amount(expected["Line"])
     if total != subtotal + tax:
         raise failure("provider_unconfirmed", "QuickBooks returned an unreconciled document total.")
     if row["document_type"] == "Invoice" and number(remote.get("Balance")) > total:
@@ -699,15 +806,7 @@ def public_document(remote):
     value = {key: remote[key] for key in ("Id", "SyncToken", "DocNumber", "TotalAmt", "Balance", "TxnDate", "DueDate", "PrivateNote") if key in remote}
     value["CustomerRef"] = ref(remote["CustomerRef"])
     value["TxnTaxDetail"] = {"TotalTax": remote["TxnTaxDetail"]["TotalTax"]}
-    value["Line"] = []
-    for line in remote["Line"]:
-        if line["DetailType"] == "SubTotalLineDetail":
-            continue
-        filtered = {key: line[key] for key in ("Amount", "DetailType", "Description") if key in line}
-        detail = line["DetailType"]
-        allowed = {"ItemRef", "Qty", "UnitPrice", "TaxCodeRef"} if detail == "SalesItemLineDetail" else {"PercentBased", "DiscountPercent"}
-        filtered[detail] = {key: (ref(content) if key.endswith("Ref") else content) for key, content in line[detail].items() if key in allowed}
-        value["Line"].append(filtered)
+    value["Line"] = provider_line_values(remote["Line"])
     if isinstance(remote.get("BillEmail"), dict) and isinstance(remote["BillEmail"].get("Address"), str):
         value["BillEmail"] = {"Address": remote["BillEmail"]["Address"]}
     # Service addresses remain the captured local model values. QBO reformats

@@ -1,3 +1,16 @@
+Bundle transaction checkpoint, 2026-09-08: QBO_BUNDLE_TRANSACTION_CONTRACT.md
+records actual GroupLineDetail support in shared publication, fixed-origin
+preflight, original-business mappings, field approval, existing-link adoption,
+native response validation, encrypted proposals and expandable Billing Review.
+Final local qualification passes 546 Backend tests, 1,341 logic tests on each
+native platform, five iPad UI journeys, 42 Tools tests and unsigned universal
+Mac Release. The prior hosted iPad job hit its 45-minute execution limit, not a
+green completion; the new workflow retains all checks, adds bundle review and
+allows iPad 60 minutes. Category browsing, native bundle selection/member editing,
+immutable composer snapshots, downstream cost/stock/export integration and the
+full signed/multidevice/provider business-suite objective remain incomplete.
+No live accounting write, deployment, schema promotion or merge occurred.
+
 Native inventory candidate, 2026-09-08: NATIVE_QBO_INVENTORY.md records native
 Inventory creation/review, original-business account choices, read-only provider
 balances, immutable sold type/identity and additive CloudKit v25/receipt v2.

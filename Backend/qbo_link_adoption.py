@@ -100,12 +100,18 @@ def evidence(entry, remote):
             raise failure("identity_conflict", "The QuickBooks customer belongs to a different saved record.")
         value["lineageHash"] = digest(markers)
     elif kind == "Item":
-        if type(remote.get("Active")) is not bool or remote.get("Type") not in ("Service", "NonInventory", "Inventory"):
+        if type(remote.get("Active")) is not bool or remote.get("Type") not in ("Service", "NonInventory", "Inventory", "Group"):
             raise failure("provider_unconfirmed", "Review the accounting item's type and active status.")
         name = billing_publications.bounded_text(remote.get("Name"), 500)
         if not name.strip():
             raise failure("provider_unconfirmed", "QuickBooks did not provide an item name.")
         value.update(Name=name, Active=remote["Active"], Type=remote["Type"])
+        if remote["Type"] == "Group":
+            value["ItemGroupDetail"] = billing_publications.group_definition(remote)
+            if "PrintGroupedItems" in remote:
+                if type(remote["PrintGroupedItems"]) is not bool:
+                    raise failure("provider_unconfirmed", "Review the bundle's customer display setting.")
+                value["PrintGroupedItems"] = remote["PrintGroupedItems"]
         for key in ("UnitPrice", "Taxable", "Sku"):
             if key in remote:
                 if key == "UnitPrice":

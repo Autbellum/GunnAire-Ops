@@ -46,10 +46,13 @@ Native reads retain inventory/account, parent/hierarchy and bundle component
 details, including repeated bundle entries and their types. Categories and
 bundles cannot accidentally publish as zero-price ordinary service lines.
 
-**Category organization UI, existing-bundle selection, and actual bundle
-transaction serialization remain incomplete.** They require their own native
-and server transaction integration; the new gate is not claimed as completion
-of those features. Intuit does not support creating Group items via its QBO API.
+At this inventory checkpoint, category organization UI, existing-bundle selection
+and actual bundle transaction serialization were incomplete. The subsequent
+[bundle transaction contract](QBO_BUNDLE_TRANSACTION_CONTRACT.md) implements
+real group publication/read/recovery and native Billing Review. **Category
+organization, bundle selection/member editing and immutable composer snapshots
+still require integration; the original gate is not completion of those
+features.** Intuit does not support creating Group items via its QBO API.
 
 ## Additive persistence
 

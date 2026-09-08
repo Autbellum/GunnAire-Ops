@@ -23,12 +23,19 @@ enum QuickBooksBillingWorkflowError: LocalizedError, Equatable {
 enum QuickBooksBillingLineEvidence {
     static func matches(expected: [QuickBooksLineItem], reported: [QuickBooksLineItem]?) -> Bool {
         guard let reported else { return false }
+        guard (try? QuickBooksSalesLineContract.totals(expected)) != nil,
+              (try? QuickBooksSalesLineContract.totals(reported, allowsSubtotal: true)) != nil else { return false }
         // QBO adds a computed subtotal row; it is not an additional sold item.
         let rows = reported.filter { $0.DetailType != "SubTotalLineDetail" }
         guard rows.count == expected.count else { return false }
         return zip(expected, rows).allSatisfy { left, right in
-            guard left.DetailType == right.DetailType, right.hasExplicitAmount, right.Amount.isFinite,
+            guard left.DetailType == right.DetailType, (right.hasExplicitAmount || right.DetailType == "GroupLineDetail"), right.Amount.isFinite,
                   abs(left.Amount - right.Amount) <= 0.009 else { return false }
+            if left.DetailType == "GroupLineDetail" {
+                guard let a = left.GroupLineDetail, let b = right.GroupLineDetail else { return false }
+                return a.GroupItemRef.value == b.GroupItemRef.value && a.Quantity == b.Quantity &&
+                    matches(expected: a.Line, reported: b.Line)
+            }
             if left.DetailType == "DiscountLineDetail" {
                 return left.DiscountLineDetail?.PercentBased == right.DiscountLineDetail?.PercentBased &&
                     left.DiscountLineDetail?.DiscountPercent == right.DiscountLineDetail?.DiscountPercent

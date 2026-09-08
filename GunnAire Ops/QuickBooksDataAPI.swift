@@ -2652,26 +2652,41 @@ struct QuickBooksAddress: Codable {
 }
 
 struct QuickBooksLineItem: Codable {
+    /// Read-only provider identity, retained to detect duplicate nested rows.
+    let Id: String?
     let Amount: Double
     let hasExplicitAmount: Bool
+    let hasValidGroupHeaderAmount: Bool
     let DetailType: String
     let Description: String?
     let SalesItemLineDetail: QuickBooksSalesItemLineDetail
     let DiscountLineDetail: QuickBooksDiscountLineDetail?
+    let GroupLineDetail: QuickBooksGroupLineDetail?
 
     init(
         Amount: Double,
         DetailType: String,
         Description: String?,
         SalesItemLineDetail: QuickBooksSalesItemLineDetail,
-        DiscountLineDetail: QuickBooksDiscountLineDetail? = nil
+        DiscountLineDetail: QuickBooksDiscountLineDetail? = nil,
+        GroupLineDetail: QuickBooksGroupLineDetail? = nil
     ) {
+        self.Id = nil
         self.Amount = Amount
         self.hasExplicitAmount = true
+        self.hasValidGroupHeaderAmount = Amount == 0
         self.DetailType = DetailType
         self.Description = Description
         self.SalesItemLineDetail = SalesItemLineDetail
         self.DiscountLineDetail = DiscountLineDetail
+        self.GroupLineDetail = GroupLineDetail
+    }
+
+    static func bundle(description: String?, reference: QuickBooksReference, quantity: Double,
+                       components: [QuickBooksLineItem]) -> QuickBooksLineItem {
+        .init(Amount: 0, DetailType: "GroupLineDetail", Description: description,
+              SalesItemLineDetail: .init(ItemRef: .init(value: "", name: nil)),
+              GroupLineDetail: .init(GroupItemRef: reference, Quantity: quantity, Line: components))
     }
 
     static func documentDiscount(
@@ -2693,11 +2708,12 @@ struct QuickBooksLineItem: Codable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case Amount, DetailType, Description, SalesItemLineDetail, DiscountLineDetail
+        case Id, Amount, DetailType, Description, SalesItemLineDetail, DiscountLineDetail, GroupLineDetail
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        Id = try container.decodeIfPresent(String.self, forKey: .Id)
         if let amount = try? container.decode(Double.self, forKey: .Amount) {
             Amount = amount
             hasExplicitAmount = amount.isFinite
@@ -2713,6 +2729,10 @@ struct QuickBooksLineItem: Codable {
             hasExplicitAmount = false
         }
         DetailType = try container.decode(String.self, forKey: .DetailType)
+        hasValidGroupHeaderAmount = (hasExplicitAmount && Amount == 0) || !container.contains(.Amount)
+        if DetailType == "GroupLineDetail", decoder.codingPath.contains(where: { $0.stringValue == "GroupLineDetail" }) {
+            throw DecodingError.dataCorruptedError(forKey: .GroupLineDetail, in: container, debugDescription: "Nested accounting bundles are unsupported.")
+        }
         Description = try container.decodeIfPresent(String.self, forKey: .Description)
         SalesItemLineDetail = try container.decodeIfPresent(
             QuickBooksSalesItemLineDetail.self,
@@ -2722,6 +2742,11 @@ struct QuickBooksLineItem: Codable {
             QuickBooksDiscountLineDetail.self,
             forKey: .DiscountLineDetail
         )
+        GroupLineDetail = try container.decodeIfPresent(QuickBooksGroupLineDetail.self, forKey: .GroupLineDetail)
+        for key in [CodingKeys.SalesItemLineDetail, .DiscountLineDetail, .GroupLineDetail]
+            where container.contains(key) && key.stringValue != DetailType {
+            throw DecodingError.dataCorruptedError(forKey: key, in: container, debugDescription: "Conflicting accounting line details.")
+        }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -2731,10 +2756,19 @@ struct QuickBooksLineItem: Codable {
         try container.encodeIfPresent(Description, forKey: .Description)
         if DetailType == "DiscountLineDetail" {
             try container.encodeIfPresent(DiscountLineDetail, forKey: .DiscountLineDetail)
+        } else if DetailType == "GroupLineDetail" {
+            try container.encodeIfPresent(GroupLineDetail, forKey: .GroupLineDetail)
         } else {
             try container.encode(SalesItemLineDetail, forKey: .SalesItemLineDetail)
         }
     }
+}
+
+struct QuickBooksGroupLineDetail: Codable {
+    let GroupItemRef: QuickBooksReference
+    /// Bundle count, not a second multiplier for the already-extended leaves.
+    let Quantity: Double
+    let Line: [QuickBooksLineItem]
 }
 
 struct QuickBooksDiscountLineDetail: Codable {

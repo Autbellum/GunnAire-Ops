@@ -1,5 +1,26 @@
 # Native GitHub Actions checks
 
+## Bundle review and iPad runtime qualification
+
+The bundle checkpoint adds one selected iPad journey, bringing the total to
+**34**, with the complete logic targets retained. It tests the actual original
+bundle proposal's component total, expansion, repeated rows and unsent
+cancellation/return, not unfinished native bundle selection or editing.
+See [bundle transaction qualification](QBO_BUNDLE_TRANSACTION_CONTRACT.md).
+
+Prior head `21694fd` passes [Backend run 34198971037](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34198971037)
+on Python 3.13/3.14 and the Mac job in [native run 34198971304](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34198971304).
+Its iPad job ended **cancelled**, with GitHub's explicit annotation that the job
+exceeded 45 minutes. Logs show continuing successful UI tests before tax-address
+review was interrupted. This is not a complete green native qualification.
+
+The updated workflow grants iPad 60 minutes while retaining Mac's 45-minute
+limit, every prior selector, the universal Release build, read-only permissions
+and artifact retention. No failure assertion or journey is removed. The new
+published head still requires its own full hosted result; the final local
+1,341 logic tests per platform, five iPad journeys, 546 Backend tests, 42 Tools
+tests and universal Mac Release do not substitute for that hosted run.
+
 ## Native inventory regression additions
 
 The current native inventory candidate adds two selected iPad journeys, bringing

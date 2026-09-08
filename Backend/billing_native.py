@@ -112,25 +112,11 @@ class NativeBilling:
             date.fromisoformat(posting_date)
         except ValueError:
             raise failure("provider_unconfirmed", "Review the original accounting posting date.") from None
-        lines = remote.get("Line")
-        if not isinstance(lines, list) or any(not isinstance(line, dict) for line in lines):
-            raise failure("provider_unconfirmed", "Review the original document's line details.")
-        normalized = []
-        for line in lines:
-            kind = line.get("DetailType")
-            if kind == "SubTotalLineDetail":
-                continue
-            if kind not in ("SalesItemLineDetail", "DiscountLineDetail") or not isinstance(line.get(kind), dict):
-                raise failure("provider_unconfirmed", "Review unsupported accounting line details.")
-            value = {key: content for key, content in line.items() if key in ("Amount", "DetailType", "Description")}
-            fields = {"ItemRef", "Qty", "UnitPrice", "TaxCodeRef"} if kind == "SalesItemLineDetail" else {"PercentBased", "DiscountPercent"}
-            value[kind] = {key: content for key, content in line[kind].items() if key in fields}
-            normalized.append(value)
-        lines = billing.line_values(normalized)
+        lines = billing.provider_line_values(remote.get("Line"))
         tax_detail = remote.get("TxnTaxDetail")
         tax = billing.number(tax_detail.get("TotalTax") if isinstance(tax_detail, dict) else None)
         total = billing.number(remote.get("TotalAmt"))
-        sold = sum(billing.number(line["Amount"]) * (-1 if line["DetailType"] == "DiscountLineDetail" else 1) for line in lines)
+        sold = billing.net_amount(lines)
         if sold < 0 or sold + tax != total or (intent["document_type"] == "Invoice" and billing.number(remote.get("Balance")) > total):
             raise failure("provider_unconfirmed", "Review the accounting total and balance.")
         if "CurrencyRef" in remote and billing.ref(remote["CurrencyRef"])["value"] != "USD":

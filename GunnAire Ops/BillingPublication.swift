@@ -117,12 +117,15 @@ struct BillingPublicationRequest: Codable {
                 : (document.Id?.isEmpty == false && document.SyncToken?.isEmpty == false && document.sparse == true) else {
             throw BillingPublicationError.invalidProposal
         }
-        if document.Line.contains(where: { $0.SalesItemLineDetail.TaxCodeRef?.value == "TAX" }) {
+        let totals: QuickBooksSalesLineContract.Totals
+        do { totals = try QuickBooksSalesLineContract.totals(document.Line) }
+        catch { throw BillingPublicationError.invalidProposal }
+        if totals.taxable {
             guard document.ShipAddr?.isComplete == true, document.ShipFromAddr?.isComplete == true else {
                 throw BillingPublicationError.invalidProposal
             }
         }
-        guard document.Line.allSatisfy({ $0.hasExplicitAmount && $0.Amount.isFinite && $0.Amount >= 0 }) else {
+        if document.Line.contains(where: { $0.DetailType == "DiscountLineDetail" }), document.ApplyTaxAfterDiscount != true {
             throw BillingPublicationError.invalidProposal
         }
     }
@@ -182,14 +185,7 @@ struct BillingPublicationResponse: Decodable {
               let totalMoney = Self.money(total), let taxMoney = Self.money(tax) else {
             throw BillingPublicationError.invalidResponse
         }
-        var sold = Decimal.zero
-        for line in lines {
-            guard line.hasExplicitAmount, let amount = Self.money(line.Amount),
-                  ["SalesItemLineDetail", "DiscountLineDetail"].contains(line.DetailType) else {
-                throw BillingPublicationError.invalidResponse
-            }
-            sold += line.DetailType == "DiscountLineDetail" ? -amount : amount
-        }
+        let sold = try QuickBooksSalesLineContract.totals(lines).net
         guard sold >= 0, sold + taxMoney == totalMoney else { throw BillingPublicationError.invalidResponse }
         if let invoice {
             guard let balance = invoice.Balance, balance.isFinite, balance >= 0, balance <= total else {

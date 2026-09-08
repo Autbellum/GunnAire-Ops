@@ -4166,6 +4166,11 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testNativeBillingBundleReviewShowsRepeatedComponentsAndCancelsOriginalProposal() throws {
+        try exerciseNativeBillingReview(recover: false, bundle: true)
+    }
+
+    @MainActor
     private func openManagementBillingComposer(_ kind: String) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-appStoreScreenshotFixtures",
@@ -4265,11 +4270,12 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
-    private func exerciseNativeBillingReview(recover: Bool) throws {
+    private func exerciseNativeBillingReview(recover: Bool, bundle: Bool = false) throws {
         let app = XCUIApplication()
         app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-appStoreScreenshotFixtures",
             "-uiTestSeedCollectibleJob", "-uiTestNativeBillingReview", "-GunnAirePendingAppRoute", "invoices"]
         if recover { app.launchArguments.append("-uiTestNativeBillingAccepted") }
+        if bundle { app.launchArguments.append("-uiTestBillingBundleReview") }
         app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
         app.launch()
         XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 8))
@@ -4285,6 +4291,21 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["BillingReviewStatus"].waitForExistence(timeout: 4))
         XCTAssertFalse(app.staticTexts["CustomerRef"].exists)
         XCTAssertFalse(app.staticTexts["connectionRevision"].exists)
+        if bundle {
+            XCTAssertTrue(app.staticTexts["Saved repair bundle"].waitForExistence(timeout: 4))
+            XCTAssertTrue(app.staticTexts["$189.00"].exists, "A bundle displays its component sum, not the zero-price header.")
+            XCTAssertFalse(app.staticTexts["First retained labor"].exists)
+            let components = app.buttons["BillingBundleComponents"].firstMatch
+            XCTAssertTrue(components.waitForExistence(timeout: 4)); components.tap()
+            XCTAssertTrue(app.staticTexts["First retained labor"].waitForExistence(timeout: 4))
+            XCTAssertTrue(app.staticTexts["Second retained labor"].exists)
+            XCTAssertEqual(app.staticTexts.matching(identifier: "1 × $94.50").count, 2, "Repeated members keep separate sold quantities and prices.")
+            XCTAssertFalse(app.staticTexts["GroupLineDetail"].exists)
+            XCTAssertFalse(app.staticTexts["BILLING-UI-GROUP"].exists)
+            let bundleEvidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            bundleEvidence.name = "Billing - expanded original bundle with repeated components"
+            bundleEvidence.lifetime = .keepAlways; add(bundleEvidence)
+        }
         if recover {
             app.buttons["BillingReviewRecover"].tap()
             let message = app.staticTexts["BillingReviewMessage"]
