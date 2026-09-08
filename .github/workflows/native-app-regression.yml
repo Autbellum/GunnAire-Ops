@@ -82,6 +82,10 @@ jobs:
               testOfficeRetainsUnusedMilestoneDraftAndReopensOriginalFromInvoices \
               testRetainedMilestoneScheduleCollectsTheOriginalInvoice \
               testRetainedMilestoneDocumentationQueueCollectsTheOriginalInvoice \
+              testDocumentationQueueShowsUnresolvedCloudKitBillingWithoutClaimingPaid \
+              testDocumentationQueueRetainsJobsWhileTheirCustomersSync \
+              testDocumentationBillingReviewReturnsToTheOriginalWorkspace \
+              testReceiptJobAndTransactionChangesKeepAttachmentTypeAndIDTogether \
               testManagementBillingComposerCancelsWithoutCreatingOrSending \
               testManagementBillingComposerSavesOriginalInvoiceAndEstimateOffline \
               testInvoiceComposerBrowsesCategoriesEditsRepeatedBundleMembersAndSavesOriginal \
