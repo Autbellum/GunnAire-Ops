@@ -1562,6 +1562,34 @@ enum GunnAireBackendService {
         return data
     }
 
+    static func googleMailRequest(path: String, method: String, body: Data?, maximum: Int) async throws -> Data {
+        guard path.hasPrefix("/api/google/mail/"), ["GET", "POST"].contains(method),
+              (1...68 * 1024 * 1024).contains(maximum), (body?.count ?? 0) <= 48 * 1024 * 1024,
+              let identity = CompanyWorkspaceSession.current else { throw GmailServerMailError.access }
+        var request = try makeRequest(path: path, method: method, body: body)
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        guard bearer.hasPrefix("Bearer "), CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == identity.tokenFingerprint,
+              request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil else { throw GmailServerMailError.access }
+        request.timeoutInterval = 100
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        let controller = CompanyWorkspaceAccessController.shared
+        let generation = controller.generation
+        do {
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: maximum)
+            guard CompanyWorkspaceSession.current == identity, controller.generation == generation,
+                  controller.authorizedContainer != nil else { throw GmailServerMailError.access }
+            return data
+        } catch {
+            guard CompanyWorkspaceSession.current == identity, controller.generation == generation,
+                  controller.authorizedContainer != nil else { throw GmailServerMailError.access }
+            if case GmailServerHTTPError.status(let code) = error {
+                throw GunnAireBackendError.server(statusCode: code, message: "Mail request was not confirmed.")
+            }
+            if error is GmailServerHTTPError { throw GmailServerMailError.invalid }
+            throw error
+        }
+    }
+
     private static func send(
         path: String,
         method: String,

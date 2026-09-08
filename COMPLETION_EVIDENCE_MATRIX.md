@@ -1,3 +1,21 @@
+Native shared Mail checkpoint, 2026-09-07: the existing office mailbox now uses
+the captured company/actor/grant service for pages, reads, attachments, actions
+and general composition, without requiring a native Google token. Existing
+device drafts retain encrypted original server attempts and read-only recovery;
+Outbox provides shared original-request review. Domain-linked technician and
+accounting messages remain behind their existing workflows, not the general
+office endpoint. `NATIVE_SERVER_MAIL.md` records contracts, evidence and remaining
+scope. The first iPad run found
+that encrypted review-state storage rejected the newly verified server outcome.
+An explicit server-resolution transition and encrypted-store regression address
+that cause. Final frozen-source Mac and iPad runs each pass 1,271 logic tests;
+iPad also passes five selected UI journeys. Unsigned universal Mac Release and
+both architecture checks pass. Final Inbox/Outbox screenshots were reviewed with
+no account-email footer. Preceding published head `a9dd55c` passes hosted Backend
+and Mac but repeats the existing tax-address incomplete-input failure on iPad;
+its cause remains unconfirmed and all failure gates remain intact. These changes
+are not deployed and do not complete the full application goal.
+
 Server Mail checkpoint, 2026-09-07: backend **2026.09.07.32** adds own-account
 office mailbox reading, paging, attachments and recoverable actions, plus an
 encrypted immutable outbox with one dispatch claim and exact MIME/Sent recovery.

@@ -1069,6 +1069,13 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     func fetchGmailMessagePage(folder: GmailMailboxFolder, query: String = "", pageToken: String? = nil,
                                maxResults: Int = 25, operation existingOperation: WorkspaceProviderOperation? = nil,
                                completion: @escaping (Result<GmailMailboxPage, Error>) -> Void) {
+        if let operation = existingOperation, let server = operation.serverMail {
+            Task { @MainActor in
+                do { completion(.success(try await server.page(folder: folder, query: query, pageToken: pageToken, maximum: maxResults, operation: operation))) }
+                catch { completion(.failure(error)) }
+            }
+            return
+        }
         let operation: WorkspaceProviderOperation
         do { operation = try existingOperation ?? captureProviderOperation(); try operation.check() }
         catch { completion(.failure(error)); return }
@@ -1114,6 +1121,13 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     }
 
     func fetchGmailMessage(id: String, operation: WorkspaceProviderOperation? = nil, completion: @escaping (Result<GmailMessageDetail, Error>) -> Void) {
+        if let operation, let server = operation.serverMail {
+            Task { @MainActor in
+                do { completion(.success(try await server.message(id: id, operation: operation))) }
+                catch { completion(.failure(error)) }
+            }
+            return
+        }
         if let businessAccountLinkError {
             completion(.failure(businessAccountLinkError))
             return
@@ -1127,6 +1141,13 @@ final class GoogleAuthManager: NSObject, ObservableObject {
 
     func fetchGmailAttachment(messageID: String, attachmentID: String, operation: WorkspaceProviderOperation,
                               completion: @escaping (Result<GmailMessageBody, Error>) -> Void) {
+        if let server = operation.serverMail {
+            Task { @MainActor in
+                do { completion(.success(try await server.attachment(messageID: messageID, attachmentID: attachmentID, operation: operation))) }
+                catch { completion(.failure(error)) }
+            }
+            return
+        }
         guard let message = Self.calendarPathComponent(messageID),
               let attachment = Self.calendarPathComponent(attachmentID) else {
             completion(.failure(GoogleAuthError.invalidEndpoint)); return
@@ -1165,6 +1186,13 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     func changeGmailMessage(id: String, threadID: String? = nil, action: GmailMailboxAction,
                             operation: WorkspaceProviderOperation? = nil,
                             completion: @escaping (Result<GmailMessageDetail, Error>) -> Void) {
+        if let operation, let server = operation.serverMail {
+            Task { @MainActor in
+                do { completion(.success(try await server.change(id: id, threadID: threadID, action: action, operation: operation))) }
+                catch { completion(.failure(error)) }
+            }
+            return
+        }
         if let businessAccountLinkError {
             completion(.failure(businessAccountLinkError))
             return

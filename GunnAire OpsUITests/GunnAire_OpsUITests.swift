@@ -547,6 +547,74 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testSharedMailInboxReadsOriginalMessageAndReturnsNaturally() throws {
+        let app = mailDraftRecoveryApp(extra: ["-uiTestServerMail"])
+        app.launch()
+        let row = app.descendants(matching: .any)["MailMessage-server-fixture-message"]
+        XCTAssertTrue(row.waitForExistence(timeout: 8))
+        XCTAssertFalse(app.staticTexts["Headers"].exists)
+        XCTAssertFalse(app.staticTexts["Snippet"].exists)
+        row.tap()
+        XCTAssertTrue(app.staticTexts["Your service visit is confirmed."].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["MailReplyButton"].isEnabled)
+        app.buttons["MailReplyButton"].tap()
+        XCTAssertTrue(app.navigationBars["Compose"].waitForExistence(timeout: 4))
+        XCTAssertEqual(app.textFields["MailComposeTo"].value as? String, "jordan@example.invalid")
+        XCTAssertEqual(app.textFields["MailComposeSubject"].value as? String, "Service appointment confirmed")
+        app.navigationBars["Compose"].buttons["Cancel"].tap()
+        app.buttons["Delete Draft"].tap()
+        XCTAssertTrue(app.navigationBars["Mail"].waitForExistence(timeout: 4))
+        app.navigationBars["Mail"].buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 4))
+        app.buttons["MailFoldersButton"].tap()
+        app.buttons["MailOutboxButton"].tap()
+        XCTAssertTrue(app.navigationBars["Outbox"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["Outbox Empty"].waitForExistence(timeout: 4))
+        app.navigationBars["Outbox"].buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 4))
+        let evidence = XCTAttachment(screenshot: app.screenshot())
+        evidence.name = "Shared Mail - simple inbox after original message and outbox handoffs"
+        evidence.lifetime = .keepAlways; add(evidence)
+    }
+
+    @MainActor
+    func testSharedMailLostSendRecoversOriginalAfterRelaunchWithoutAnotherCopy() throws {
+        let app = mailDraftRecoveryApp(extra: ["-uiTestServerMail", "-uiTestServerMailLostReply"])
+        app.launch()
+        XCTAssertTrue(app.descendants(matching: .any)["MailMessage-server-fixture-message"].waitForExistence(timeout: 8))
+        app.buttons["MailComposeButton"].tap()
+        let to = app.textFields["MailComposeTo"]; to.tap(); to.typeText("vendor@example.invalid")
+        let subject = app.textFields["MailComposeSubject"]; subject.tap(); subject.typeText("Equipment request")
+        let body = app.textFields["MailComposeBody"]; body.tap(); body.typeText("Please confirm equipment availability.")
+        XCTAssertEqual(subject.value as? String, "Equipment request")
+        app.buttons["MailSendButton"].tap()
+        XCTAssertTrue(app.buttons["MailCheckSendingStatus"].waitForExistence(timeout: 6))
+        XCTAssertFalse(app.buttons["MailSendButton"].isEnabled)
+        app.terminate(); app.launch()
+        openMailDeviceDrafts(app)
+        let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'MailSavedDraft-'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
+        XCTAssertTrue(app.buttons["MailCheckSendingStatus"].waitForExistence(timeout: 4))
+        XCTAssertFalse(app.buttons["MailSendButton"].isEnabled)
+        app.buttons["MailCheckSendingStatus"].tap()
+        XCTAssertTrue(app.navigationBars["Sent"].waitForExistence(timeout: 6))
+        XCTAssertTrue(app.staticTexts["Equipment request"].waitForExistence(timeout: 5))
+        app.buttons["MailFoldersButton"].tap()
+        app.buttons["MailOutboxButton"].tap()
+        XCTAssertTrue(app.navigationBars["Outbox"].waitForExistence(timeout: 4))
+        XCTAssertEqual(app.staticTexts.matching(identifier: "Equipment request").count, 1)
+        app.staticTexts["Equipment request"].tap()
+        XCTAssertTrue(app.navigationBars["Outbox Message"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["Please confirm equipment availability."].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Saved in Sent"].exists)
+        XCTAssertFalse(app.buttons["Send"].exists)
+        XCTAssertFalse(app.buttons["Cancel Unsent Request"].exists)
+        let evidence = XCTAttachment(screenshot: app.screenshot())
+        evidence.name = "Shared Mail - original accepted message recovered after relaunch"
+        evidence.lifetime = .keepAlways; add(evidence)
+    }
+
+    @MainActor
     private func mailDraftRecoveryApp(extra: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting",

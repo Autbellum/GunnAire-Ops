@@ -1,5 +1,12 @@
 # Native GitHub Actions checks
 
+The native shared-Mail checkpoint adds two iPad journeys: reading/replying through
+the shared transport with natural mailbox/Outbox navigation, and recovering the
+original interrupted send after relaunch without another copy. All earlier
+selectors and failure gates remain. The new server-Mail, bounded HTTP and
+encrypted recovery tests also run with the complete logic target on both platforms.
+See `NATIVE_SERVER_MAIL.md` for exact-source local evidence and remaining scope.
+
 The `Native app regression` workflow runs on pull requests, pushes to `main`,
 and manual dispatch (available once the workflow is on the default branch).
 It complements the existing Backend/Tools Python 3.13 and 3.14 workflow.

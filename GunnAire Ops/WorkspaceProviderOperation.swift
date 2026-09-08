@@ -31,11 +31,14 @@ final class WorkspaceProviderOperation {
     typealias Transport = (URLRequest) async throws -> (Data, URLResponse)
     private let isCurrent: () -> Bool
     private let parent: WorkspaceProviderOperation?
+    private let retainedServerMail: GmailServerMail?
+    var serverMail: GmailServerMail? { retainedServerMail ?? parent?.serverMail }
     private(set) var mayHaveReachedProvider = false
 
-    init(isCurrent: @escaping () -> Bool) {
+    init(serverMail: GmailServerMail? = nil, isCurrent: @escaping () -> Bool) {
         self.isCurrent = isCurrent
         parent = nil
+        retainedServerMail = serverMail
     }
 
     /// Add a run/role lifetime without losing the initiating provider identity
@@ -43,6 +46,7 @@ final class WorkspaceProviderOperation {
     init(parent: WorkspaceProviderOperation, isCurrent: @escaping () -> Bool) {
         self.parent = parent
         self.isCurrent = isCurrent
+        retainedServerMail = nil
     }
 
     static func capture(

@@ -4,7 +4,9 @@ Backend candidate **2026.09.07.32**, September 7, 2026. This adds the mailbox
 service and shared immutable outbox required for native Mail's server migration.
 It does **not** yet switch the app's transport, replace the device draft journal,
 enable automated customer communications, or establish production acceptance.
-The app still uses its existing Gmail connection. No live email was sent.
+That server-only checkpoint retained the device Gmail connection. The subsequent
+native migration is tracked in `NATIVE_SERVER_MAIL.md`; it connects the office
+mailbox without changing domain-linked sending. No live email was sent.
 
 ## Interface and account boundary
 

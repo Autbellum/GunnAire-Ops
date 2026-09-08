@@ -44,7 +44,7 @@ struct GmailMailboxPage {
     }
 }
 
-enum GmailMailboxAction: CaseIterable {
+enum GmailMailboxAction: String, Codable, CaseIterable {
     case read, unread, archive, trash, restore
     var title: String {
         switch self {

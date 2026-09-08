@@ -43,6 +43,14 @@ struct GmailDraftScope: Codable, Equatable {
         try scope.validate()
         return scope
     }
+    @MainActor static func captureCompany(context: ModelContext) throws -> Self {
+        let controller = CompanyWorkspaceAccessController.shared
+        guard controller.authorizedContainer === context.container, let company = controller.verifiedCompanyID,
+              let session = CompanyWorkspaceSession.current else { throw GmailDraftError.access }
+        let scope = Self(companyID: company, backendOrigin: session.backendOrigin,
+                         actorEmail: session.email, googleEmail: session.email)
+        try scope.validate(); return scope
+    }
 }
 
 struct GmailDraftFile: Codable, Equatable {
@@ -125,6 +133,18 @@ enum GmailDraftBusinessSnapshot {
 
 enum GmailDraftState: String, Codable { case editing, sending, review, sent, discarded }
 
+struct GmailServerDraftAttempt: Codable, Equatable {
+    let id: UUID
+    let scope: GmailServerScope
+}
+
+/// Constructed only after the original server content, identity and result have
+/// been checked below. Generic draft writes cannot manufacture this transition.
+fileprivate struct GmailServerDraftResolution: Codable, Equatable {
+    let attempt: GmailServerDraftAttempt
+    let state: GmailServerOperationState
+}
+
 struct GmailDraftRecord: Codable, Equatable, Identifiable {
     var version = 1
     let id: UUID
@@ -134,12 +154,22 @@ struct GmailDraftRecord: Codable, Equatable, Identifiable {
     var state: GmailDraftState = .editing
     var updatedAt = Date()
     var status: String?
-    var messageID: String { "<gunnaire-\(id.uuidString.lowercased())@gunnaire.com>" }
+    var serverAttempt: GmailServerDraftAttempt?
+    var retiredServerAttempts: [GmailServerDraftAttempt]?
+    fileprivate var serverResolution: GmailServerDraftResolution?
+    init(id: UUID, scope: GmailDraftScope, content: GmailDraftContent) {
+        self.id = id; self.scope = scope; self.content = content
+    }
+    var messageID: String { "<gunnaire-\((serverAttempt?.id ?? id).uuidString.lowercased())@gunnaire.com>" }
     var editable: Bool { state == .editing }
     func validate() throws {
         try scope.validate(); try content.validate()
         guard version == 1, revision >= 0, revision < Int.max, updatedAt.timeIntervalSince1970.isFinite,
               (status?.utf8.count ?? 0) <= 4096 else { throw GmailDraftError.storage }
+        let attempts = (retiredServerAttempts ?? []) + (serverAttempt.map { [$0] } ?? [])
+        guard attempts.count <= 100, Set(attempts.map(\.id)).count == attempts.count,
+              attempts.allSatisfy({ $0.scope.draftScope == scope }) else { throw GmailDraftError.storage }
+        if let serverResolution, !attempts.contains(serverResolution.attempt) { throw GmailDraftError.storage }
     }
 }
 
@@ -245,7 +275,20 @@ private struct GmailDraftIndex: Codable, Equatable {
                 switch previous.state {
                 case .editing: legal = [.editing, .sending, .discarded].contains(record.state)
                 case .sending: legal = [.editing, .review, .sent].contains(record.state)
-                case .review, .sent, .discarded: legal = false
+                case .review:
+                    if let original = previous.serverAttempt, let resolution = record.serverResolution,
+                       resolution.attempt == original {
+                        switch resolution.state {
+                        case .confirmed:
+                            legal = record.state == .sent && record.serverAttempt == original
+                        case .rejected, .cancelled:
+                            legal = record.state == .editing && record.serverAttempt == nil &&
+                                record.retiredServerAttempts == (previous.retiredServerAttempts ?? []) + [original]
+                        default:
+                            legal = record.state == .review && record.serverAttempt == original
+                        }
+                    } else { legal = false }
+                case .sent, .discarded: legal = false
                 }
                 guard legal, previous.state == .editing || previous.content == record.content else { throw GmailDraftError.locked }
             } else {
@@ -302,6 +345,7 @@ private struct GmailDraftIndex: Codable, Equatable {
     private let store: GmailDraftStore
     private let access: () throws -> Void
     private var ownsDispatch = false
+    private(set) var serverCanCancel = false
 
     init(record: GmailDraftRecord, store: GmailDraftStore, access: @escaping () throws -> Void) throws {
         self.record = record; self.store = store; self.access = access
@@ -314,7 +358,29 @@ private struct GmailDraftIndex: Codable, Equatable {
     func save(_ content: GmailDraftContent) throws {
         guard record.editable else { throw GmailDraftError.locked }
         var next = record; next.content = content; next.status = nil
+        if content != record.content { retireAttempt(&next) }
         try update(next)
+    }
+
+    func prepareServerAttempt(scope: GmailServerScope) throws {
+        try verify()
+        guard record.editable, scope.draftScope == record.scope, record.content.business == nil,
+              !record.content.requiresBusinessContext else { throw GmailDraftError.access }
+        if let original = record.serverAttempt {
+            guard original.scope == scope else { throw GmailDraftError.access }
+            return
+        }
+        var next = record
+        next.serverAttempt = .init(id: UUID(), scope: scope)
+        next.serverResolution = nil
+        try update(next)
+    }
+
+    private func retireAttempt(_ record: inout GmailDraftRecord) {
+        if let original = record.serverAttempt {
+            record.retiredServerAttempts = (record.retiredServerAttempts ?? []) + [original]
+            record.serverAttempt = nil
+        }
     }
 
     func verify() throws {
@@ -334,8 +400,48 @@ private struct GmailDraftIndex: Codable, Equatable {
         var next = record
         next.state = outcome.state == .sent ? .sent : outcome.canRetry ? .editing : .review
         next.status = outcome.message
+        if outcome.canRetry { retireAttempt(&next) }
         try update(next)
         ownsDispatch = false
+    }
+
+    /// Only a read of the exact retained server content and original outcome
+    /// can resolve an interrupted send. Never rebind it to a replacement grant.
+    func recoverServer(provider: WorkspaceProviderOperation, cancelUnsent: Bool = false) async throws -> GmailSendOutcome {
+        try verify(); try provider.check()
+        guard !record.editable, record.state != .discarded, let attempt = record.serverAttempt,
+              let server = provider.serverMail, server.scope == attempt.scope,
+              record.content.business == nil, !record.content.requiresBusinessContext else { throw GmailDraftError.access }
+        let original = record
+        if original.state == .sent { return .init(state: .sent, message: "The original message is saved in Gmail Sent.") }
+        let content = original.content
+        let expected = try GmailServerMessage(GmailOutgoingMessage(to: content.to, subject: content.subject,
+            body: content.body, attachments: content.files.map(\.attachment), reply: content.reply))
+        guard try await server.savedMessage(id: attempt.id, operation: provider) == expected else { throw GmailDraftError.changed }
+        try verify(); guard record == original else { throw GmailDraftError.changed }
+        let response = try await (cancelUnsent ? server.cancel(id: attempt.id, operation: provider)
+            : server.operation(id: attempt.id, recovery: true, operation: provider))
+        try provider.check(); try verify(); guard record == original else { throw GmailDraftError.changed }
+        var next = record
+        next.serverResolution = .init(attempt: attempt, state: response.state)
+        let result: GmailSendOutcome
+        switch response.state {
+        case .confirmed:
+            next.state = .sent
+            result = .init(state: .sent, message: "The original message is saved in Gmail Sent.")
+        case .rejected, .cancelled:
+            next.state = .editing; retireAttempt(&next)
+            result = .init(state: .notSent, message: "The original message was not sent. You can edit this draft.")
+        case .prepared:
+            next.state = .review
+            result = .init(state: .reviewRequired, message: "The original message is saved but has not been sent. Cancel the unsent request to edit this draft.")
+        default:
+            next.state = .review; result = .uncertain
+        }
+        serverCanCancel = response.state == .prepared
+        next.status = result.message
+        try update(next); ownsDispatch = false
+        return result
     }
 
     func discard() throws {

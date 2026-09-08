@@ -70,6 +70,7 @@ struct GmailReplyContext: Codable, Equatable {
     let messageID: String
     let references: [String]
     let subject: String
+    var parentID: String? = nil
 
     static func from(_ message: GmailMessageDetail) -> GmailReplyContext? {
         guard let thread = message.threadId, !thread.isEmpty,
@@ -79,7 +80,7 @@ struct GmailReplyContext: Codable, Equatable {
             .split(whereSeparator: \.isWhitespace).map(String.init)
         guard references.count <= 50, references.allSatisfy(isValidMessageID) else { return nil }
         return .init(threadID: thread, messageID: id, references: references,
-                     subject: GmailMessagePresentation.headerValue(named: "Subject", in: message) ?? "")
+                     subject: GmailMessagePresentation.headerValue(named: "Subject", in: message) ?? "", parentID: message.id)
     }
 
     nonisolated static func isValidMessageID(_ value: String) -> Bool {

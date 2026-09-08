@@ -119,6 +119,10 @@ struct GmailView: View {
     @State private var didConsumePendingDraft = false
     @State private var showingDrafts = false
     @State private var savedDrafts: [GmailDraftSummary] = []
+    @State private var connectingMail = false
+    @State private var needsMailApproval = false
+    @State private var mailConnectionRun = UUID()
+    @State private var mailConnectionTask: Task<Void, Never>?
 
     private var messages: [GmailMessageDetail] { mailbox.messages }
     private var isLoading: Bool { mailbox.isLoading }
@@ -134,13 +138,27 @@ struct GmailView: View {
         false
         #endif
     }
+    private var usesServerMailFixture: Bool {
+        #if DEBUG
+        GmailServerMailFixture.enabled
+        #else
+        false
+        #endif
+    }
+    private func captureMailProvider() async throws -> WorkspaceProviderOperation {
+        #if DEBUG
+        if usesServerMailFixture { return try GmailServerMailFixture.provider() }
+        #endif
+        return try await GmailServerMail.capture(context: modelContext)
+    }
 
     private var isMailConnected: Bool {
-        usesMailUITestFixture || googleAuth.isAuthenticated
+        usesMailUITestFixture || !needsMailApproval
     }
 
     private var canUseGoogleIntegration: Bool {
-        usesMailUITestFixture || googleAuth.canUseCurrentBusinessIdentity
+        usesMailUITestFixture || (workspace.authorizedContainer === modelContext.container &&
+                                  (workspace.verifiedRole == .admin || workspace.verifiedRole == .dispatcher))
     }
 
     var body: some View {
@@ -163,19 +181,21 @@ struct GmailView: View {
                     }
                 } else if !isMailConnected {
                     ContentUnavailableView(
-                        "Connect Google",
+                        "Connect Mail",
                         systemImage: "envelope",
-                        description: Text("Connect your GunnAire Google account in Settings to use Mail.")
+                        description: Text("Approve shared Mail access for this business login, then return to your inbox.")
                     )
                     .listRowBackground(Color.clear)
+                    NavigationLink("Google Access") { GoogleServerAccessView(context: modelContext) }
+                        .accessibilityIdentifier("MailGoogleAccessLink")
                 } else if !canUseGoogleIntegration {
                     ContentUnavailableView(
-                        "Use Your GunnAire Account",
+                        "Mail Access Required",
                         systemImage: "person.crop.circle.badge.xmark",
-                        description: Text("Reconnect Google in Settings using the account that matches this business login.")
+                        description: Text("The office mailbox is available to approved office staff. Job-related messages remain available from the work you can access.")
                     )
                     .listRowBackground(Color.clear)
-                } else if isLoading && messages.isEmpty {
+                } else if (isLoading || connectingMail) && messages.isEmpty {
                     HStack {
                         Spacer()
                         ProgressView("Loading mail...")
@@ -199,7 +219,7 @@ struct GmailView: View {
                         NavigationLink {
                             GmailMessageDetailView(
                                 message: message,
-                                loadsRemoteMessage: !usesMailUITestFixture,
+                                loadsRemoteMessage: !usesMailUITestFixture || usesServerMailFixture,
                                 provider: mailbox.provider,
                                 mailbox: mailbox,
                                 onReply: { draft in
@@ -288,6 +308,19 @@ struct GmailView: View {
                         Button("Drafts on This Device", systemImage: "doc") { loadDrafts() }
                             .disabled(!canUseGoogleIntegration || !mailbox.busyIDs.isEmpty)
                             .accessibilityIdentifier("MailDraftsButton")
+                        if let provider = mailbox.provider, provider.serverMail != nil {
+                            NavigationLink("Outbox", destination: GmailServerOutboxView(provider: provider))
+                                .accessibilityIdentifier("MailOutboxButton")
+                            Button("Check Mail Changes", systemImage: "arrow.clockwise") {
+                                Task { @MainActor in
+                                    do {
+                                        let remaining = try await provider.serverMail!.recoverActions(operation: provider)
+                                        statusMessage = remaining == 0 ? "Mail changes checked." : "Some changes still need confirmation. The original requests have been kept."
+                                        loadMessages(preservingStatus: true)
+                                    } catch { statusMessage = GmailServerMailError.safe(error).localizedDescription }
+                                }
+                            }
+                        }
                     } label: {
                         Label("Mailboxes", systemImage: "tray.2")
                     }
@@ -297,7 +330,7 @@ struct GmailView: View {
                     } label: {
                         Label("Refresh", systemImage: "arrow.clockwise")
                     }
-                    .disabled(isLoading || !canUseGoogleIntegration || !mailbox.busyIDs.isEmpty)
+                    .disabled(isLoading || connectingMail || !canUseGoogleIntegration || !mailbox.busyIDs.isEmpty)
                     .accessibilityIdentifier("MailRefreshButton")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -334,7 +367,17 @@ struct GmailView: View {
                     attachmentError: draft.attachmentError,
                     template: draft.content,
                     makeSession: { try makeDraftSession(draft, content: $0) },
-                    onReviewSent: { loadMessages(folder: .sent) }
+                    onReviewSent: { loadMessages(folder: .sent) },
+                    onRecover: { journal, cancel in
+                        do {
+                            let provider = try await captureMailProvider()
+                            let result = try await journal.recoverServer(provider: provider, cancelUnsent: cancel)
+                            if result.canRetry { activeMailSend = nil }
+                            return result
+                        } catch {
+                            return .init(state: .reviewRequired, message: GmailServerMailError.safe(error).localizedDescription)
+                        }
+                    }
                 ) { to, subject, body, attachments, journal in
                     await sendMessage(to: to, subject: subject, body: body, attachments: attachments, draft: draft, journal: journal)
                 }
@@ -346,8 +389,8 @@ struct GmailView: View {
                     applyPendingDraftIfNeeded(force: true)
                 }
             }
-            .onChange(of: googleAuth.signedInEmail) { _, _ in clearMailbox() }
-            .onChange(of: googleAuth.isAuthenticated) { _, _ in clearMailbox() }
+            .onChange(of: googleAuth.signedInEmail) { _, _ in if mailbox.provider?.serverMail == nil { clearMailbox() } }
+            .onChange(of: googleAuth.isAuthenticated) { _, _ in if mailbox.provider?.serverMail == nil { clearMailbox() } }
             .onChange(of: workspace.operationStamp) { _, _ in
                 if !usesMailUITestFixture { clearMailbox() }
             }
@@ -360,9 +403,27 @@ struct GmailView: View {
             return
         }
         guard canUseGoogleIntegration else {
-            statusMessage = googleAuth.isAuthenticated
-                ? GoogleAuthError.businessAccountMismatch.localizedDescription
-                : "Connect Google in Settings first."
+            statusMessage = "Verify your business login and Mail access before opening this mailbox."
+            return
+        }
+        if !usesMailUITestFixture || usesServerMailFixture {
+            mailConnectionTask?.cancel()
+            let run = UUID(); mailConnectionRun = run; connectingMail = true
+            mailConnectionTask = Task { @MainActor in
+                defer { if mailConnectionRun == run { connectingMail = false; mailConnectionTask = nil } }
+                do {
+                    let provider = try await captureMailProvider()
+                    guard mailConnectionRun == run else { return }
+                    try provider.check()
+                    needsMailApproval = false; showingDrafts = false
+                    mailbox.refresh(folder: folder ?? mailbox.folder, query: searchQuery, provider: provider, preservingStatus: preservingStatus)
+                } catch {
+                    guard mailConnectionRun == run, !(error is CancellationError) else { return }
+                    mailbox.clear()
+                    needsMailApproval = (error as? GmailServerMailError) == .connect
+                    statusMessage = GmailServerMailError.safe(error).localizedDescription
+                }
+            }
             return
         }
         do {
@@ -378,7 +439,7 @@ struct GmailView: View {
     }
 
     private func sendMessage(to: String, subject: String, body: String, attachments: [GmailAttachment], draft: GmailDraft, journal: GmailDraftSession) async -> GmailSendOutcome {
-        if usesMailUITestFixture {
+        if usesMailUITestFixture && !usesServerMailFixture {
             do { try journal.begin() } catch { return .notSent(error) }
             let result: GmailSendOutcome
             if ProcessInfo.processInfo.arguments.contains("-uiTestMailRejectSend") {
@@ -397,8 +458,23 @@ struct GmailView: View {
                 var content = journal.record.content
                 content.to = message.to; content.reply = message.reply
                 try journal.save(content)
+                let provider: WorkspaceProviderOperation?
+                if draft.businessContext == nil {
+                    if let original = draft.provider { try original.check(); provider = original }
+                    else { provider = try await captureMailProvider() }
+                } else {
+                    // Domain messages keep the job/billing/consent-authorized
+                    // device workflow until its server domain gate is available.
+                    guard googleAuth.canUseCurrentBusinessIdentity else { throw GmailComposeError.access }
+                    provider = draft.provider
+                }
+                #if DEBUG
+                let fixtureAccess: (() throws -> Void)? = usesServerMailFixture ? {} : nil
+                #else
+                let fixtureAccess: (() throws -> Void)? = nil
+                #endif
                 activeMailSend = try GmailSendWorkflow(auth: googleAuth, context: modelContext,
-                    message: message, business: draft.businessContext, provider: draft.provider, journal: journal)
+                    message: message, business: draft.businessContext, provider: provider, validateAccess: fixtureAccess, journal: journal)
             }
             guard let workflow = activeMailSend else { throw GmailComposeError.changed }
             let result = await workflow.send()
@@ -412,6 +488,7 @@ struct GmailView: View {
     }
 
     private func clearMailbox() {
+        mailConnectionRun = UUID(); mailConnectionTask?.cancel(); mailConnectionTask = nil; connectingMail = false
         mailbox.clear()
         savedDrafts = []; showingDrafts = false
         composeDraft = nil
@@ -424,7 +501,7 @@ struct GmailView: View {
                 actorEmail: "mail-fixture@gunnaire.com", googleEmail: "mail-fixture@gunnaire.com")
         }
         #endif
-        return try GmailDraftScope.capture(auth: googleAuth, context: modelContext)
+        return try GmailDraftScope.captureCompany(context: modelContext)
     }
 
     private var draftStore: GmailDraftStore {
@@ -442,7 +519,9 @@ struct GmailView: View {
 
     private func validateDraftAccess(_ scope: GmailDraftScope, business: GmailBusinessContext?) throws {
         guard try draftScope() == scope else { throw GmailDraftError.access }
-        if !usesMailUITestFixture { try GmailSendWorkflow.requireAccess(context: modelContext, business: business, sender: googleAuth.signedInEmail) }
+        if !usesMailUITestFixture {
+            try GmailSendWorkflow.requireAccess(context: modelContext, business: business, sender: scope.actorEmail)
+        }
     }
 
     private func makeDraftSession(_ draft: GmailDraft, content: GmailDraftContent) throws -> GmailDraftSession {
@@ -507,6 +586,7 @@ struct GmailView: View {
 
     private static func makeMailbox() -> GmailMailbox {
         #if DEBUG
+        if GmailServerMailFixture.enabled { return GmailMailbox() }
         if ProcessInfo.processInfo.arguments.contains("-uiTestSeedMailInbox") {
             var fixtures = uiTestMessages
             if ProcessInfo.processInfo.arguments.contains("-uiTestMailMailbox") {
@@ -1002,7 +1082,7 @@ private struct GmailMessageDetailView: View {
     }
 
     private func makeReplyAllDraft() -> GmailDraft {
-        let selfEmail = googleAuth.signedInEmail?.lowercased()
+        let selfEmail = (provider?.serverMail?.scope.company.actorEmail ?? googleAuth.signedInEmail)?.lowercased()
         let senderValues = parseAddresses(from: GmailMessagePresentation.headerValue(named: "Reply-To", in: activeMessage) ??
             GmailMessagePresentation.headerValue(named: "From", in: activeMessage))
         let toValues = parseAddresses(from: GmailMessagePresentation.headerValue(named: "To", in: activeMessage))
@@ -1066,6 +1146,7 @@ private struct GmailComposeView: View {
     let template: GmailDraftContent
     let makeSession: (GmailDraftContent) throws -> GmailDraftSession
     let onReviewSent: () -> Void
+    let onRecover: (GmailDraftSession, Bool) async -> GmailSendOutcome
     @State private var journal: GmailDraftSession?
     @State private var draftError: String?
     @State private var confirmsClose = false
@@ -1092,12 +1173,14 @@ private struct GmailComposeView: View {
         template: GmailDraftContent,
         makeSession: @escaping (GmailDraftContent) throws -> GmailDraftSession,
         onReviewSent: @escaping () -> Void,
+        onRecover: @escaping (GmailDraftSession, Bool) async -> GmailSendOutcome,
         onSend: @escaping (String, String, String, [GmailAttachment], GmailDraftSession) async -> GmailSendOutcome
     ) {
         self.onSend = onSend
         self.template = template
         self.makeSession = makeSession
         self.onReviewSent = onReviewSent
+        self.onRecover = onRecover
         _attachments = State(initialValue: attachments)
         self.attachmentError = attachmentError
         _to = State(initialValue: initialTo)
@@ -1190,6 +1273,14 @@ private struct GmailComposeView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(message).font(.footnote).accessibilityIdentifier("MailComposeStatus")
                         if sendOutcome?.state == .reviewRequired {
+                            if let journal, journal.record.serverAttempt != nil {
+                                Button("Check Sending Status") { recover(cancel: false) }
+                                    .disabled(isSending).accessibilityIdentifier("MailCheckSendingStatus")
+                                if journal.serverCanCancel {
+                                    Button("Cancel Unsent Request") { recover(cancel: true) }
+                                        .disabled(isSending).accessibilityIdentifier("MailCancelUnsentRequest")
+                                }
+                            }
                             Button("Open Sent", systemImage: "paperplane") {
                                 do {
                                     try journal?.verify()
@@ -1265,6 +1356,16 @@ private struct GmailComposeView: View {
                     }
                 }
             }
+        }
+    }
+
+    private func recover(cancel: Bool) {
+        guard let journal, !isSending else { return }
+        isSending = true
+        Task { @MainActor in
+            let outcome = await onRecover(journal, cancel)
+            sendOutcome = outcome; isSending = false
+            if outcome.state == .sent { dismiss(); onReviewSent() }
         }
     }
 }

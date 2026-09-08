@@ -43,7 +43,7 @@ struct GoogleServerAccessView: View {
                         .disabled(connection.busy || !connection.available)
                         .accessibilityIdentifier("GoogleSharedAccessRefresh")
                 } header: { Text("Shared access") } footer: {
-                    Text("Approval prepares shared services; synchronization is not enabled yet. Your current device connection stays unchanged.")
+                    Text("Mail uses shared access when the business server supports it. Calendar, Drive and job-related sending still use their existing device workflows.")
                 }
                 if let pending = connection.pending {
                     Section("Unfinished request") {

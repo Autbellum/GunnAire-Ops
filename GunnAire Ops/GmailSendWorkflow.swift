@@ -31,10 +31,11 @@ final class GmailSendWorkflow {
          journal: GmailDraftSession? = nil,
          save: @escaping (ModelContext) throws -> Void = { try $0.save() }) throws {
         self.auth = auth; self.context = context; self.message = message; self.business = business
-        sender = AppAccess.normalizedEmail(auth.signedInEmail)
+        sender = AppAccess.normalizedEmail(provider?.serverMail?.scope.company.actorEmail ?? auth.signedInEmail)
         self.provider = try provider ?? auth.captureProviderOperation()
         self.save = save
-        access = validateAccess ?? { try Self.requireAccess(context: context, business: business, sender: auth.signedInEmail) }
+        let retainedSender = sender
+        access = validateAccess ?? { try Self.requireAccess(context: context, business: business, sender: retainedSender) }
         if let journal {
             self.journal = journal
         } else if !GunnAireCloudKit.usesTestDatabase {
@@ -48,6 +49,10 @@ final class GmailSendWorkflow {
                 try Self.requireAccess(context: context, business: business, sender: auth.signedInEmail)
             }
         } else { self.journal = nil }
+        if let server = self.provider.serverMail {
+            guard business == nil, let journal = self.journal else { throw GmailComposeError.access }
+            try journal.prepareServerAttempt(scope: server.scope)
+        }
         messageID = self.journal?.record.messageID ?? "<gunnaire-\(UUID().uuidString.lowercased())@gunnaire.com>"
         try self.provider.check()
         try access()
@@ -55,7 +60,9 @@ final class GmailSendWorkflow {
             try journal.verify()
             guard journal.record.scope.googleEmail == sender else { throw GmailDraftError.access }
             if !GunnAireCloudKit.usesTestDatabase {
-                guard try journal.record.scope == GmailDraftScope.capture(auth: auth, context: context) else { throw GmailDraftError.access }
+                let scope = try self.provider.serverMail == nil ? GmailDraftScope.capture(auth: auth, context: context)
+                    : GmailDraftScope.captureCompany(context: context)
+                guard journal.record.scope == scope else { throw GmailDraftError.access }
             }
             let saved = journal.record.content
             guard journal.record.editable, saved.to == message.to, saved.subject == message.subject,
@@ -107,11 +114,20 @@ final class GmailSendWorkflow {
                 return result
             }
             try journal?.begin()
-            let sent: GmailMessageReference = try await withCheckedThrowingContinuation { continuation in
-                auth.sendGmailMessage(to: message.to, subject: message.subject, body: message.body,
-                    threadID: message.reply?.threadID, attachments: message.attachments,
-                    reply: message.reply, messageID: messageID, operation: operation) {
-                        continuation.resume(with: $0)
+            let sent: GmailMessageReference
+            if let server = operation.serverMail {
+                guard business == nil, let attempt = journal?.record.serverAttempt, attempt.scope == server.scope else { throw GmailComposeError.access }
+                let response = try await server.send(id: attempt.id, message: GmailServerMessage(message), operation: operation)
+                if response.state == .rejected || response.state == .cancelled { throw GmailServerMailError.rejected }
+                guard response.state == .confirmed, let id = response.messageID, let thread = response.threadID else { throw GmailServerMailError.pending }
+                sent = .init(id: id, threadId: thread)
+            } else {
+                sent = try await withCheckedThrowingContinuation { continuation in
+                    auth.sendGmailMessage(to: message.to, subject: message.subject, body: message.body,
+                        threadID: message.reply?.threadID, attachments: message.attachments,
+                        reply: message.reply, messageID: messageID, operation: operation) {
+                            continuation.resume(with: $0)
+                        }
                     }
             }
             receivedSendResponse = true
@@ -180,7 +196,7 @@ final class GmailSendWorkflow {
                 // A failed verification GET cannot undo an accepted POST or
                 // authorize another copy of a possibly sent customer message.
                 rejected = !receivedSendResponse && [400, 401, 403, 404, 413, 422].contains(code)
-            } else { rejected = false }
+            } else { rejected = !receivedSendResponse && (error as? GmailServerMailError) == .rejected }
             let result: GmailSendOutcome = operation.mayHaveReachedProvider && !rejected
                 ? .uncertain : .notSent(error)
             // Never attach a late result to another workspace or changed job.
