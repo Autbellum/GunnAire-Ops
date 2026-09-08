@@ -144,6 +144,15 @@ promotion, production deployment, signing or account-permission change occurred.
 
 ## Remaining implementation — do not substitute the current gates for support
 
+Continuation: [native bundle composition](NATIVE_BUNDLE_COMPOSITION.md) now
+implements category browsing, immutable ordered selection/member edits,
+customer summaries, cost/tax/stock consumers and native publication/recovery
+from those saved snapshots. Its newer evidence supersedes the local-composer
+gaps below, but not their signed CloudKit and concrete provider-acceptance
+requirements. Progress billing, editable provider imports and mixed-version
+client protection remain explicit implementation work. The list below records
+the original transaction checkpoint, not a claim that these gates were waived.
+
 1. Add category hierarchy browsing/filtering to native catalog selection, with
    exact parent identities, bounded depth and explicit missing/cyclic/ambiguous
    hierarchy handling. Categories remain organizational, never sold lines.

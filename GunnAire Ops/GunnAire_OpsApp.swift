@@ -1033,6 +1033,7 @@ private enum GunnAireUITestFixtures {
         if isServicePackageFixture || isMultiLinePurchaseOrderFixture {
             context.insert(servicePackageComponent)
         }
+        try CatalogBundleFixture.seed(context)
         if isServicePackageFixture {
             context.insert(servicePackage)
         }

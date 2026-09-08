@@ -4171,12 +4171,13 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
-    private func openManagementBillingComposer(_ kind: String) -> XCUIApplication {
+    private func openManagementBillingComposer(_ kind: String, bundle: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-appStoreScreenshotFixtures",
             "-uiTestSeedCollectibleJob", "-uiTestForceQuickBooksDisconnected", "-GunnAirePendingAppRoute", "quickBooksManagement",
             "-GunnAirePendingQuickBooksWorkspace", "sales"]
         app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        if bundle { app.launchArguments.append("-uiTestBundleComposer") }
         app.launch()
         XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
         let sales = app.segmentedControls["QuickBooksWorkspacePicker"].buttons["Sales"]
@@ -4262,6 +4263,108 @@ final class GunnAire_OpsUITests: XCTestCase {
             assertReturnedToManagementSales(app)
             app.terminate()
         }
+    }
+
+    @MainActor
+    func testInvoiceComposerBrowsesCategoriesEditsRepeatedBundleMembersAndSavesOriginal() throws {
+        try exerciseBundleComposer(kind: "Invoice", submitKeyboard: true)
+    }
+
+    @MainActor
+    func testEstimateBundleComposerSavesEditsWithKeyboardActive() throws {
+        try exerciseBundleComposer(kind: "Estimate", submitKeyboard: false)
+    }
+
+    @MainActor
+    func testBundleComposerSavesAfterHardwareKeyboardSelectAll() throws {
+        try exerciseBundleComposer(kind: "Invoice", submitKeyboard: false, hardwareKeys: true)
+    }
+
+    @MainActor
+    private func exerciseBundleComposer(kind: String, submitKeyboard: Bool, hardwareKeys: Bool = false) throws {
+        let app = openManagementBillingComposer(kind, bundle: true)
+        func enterQuantity(_ identifier: String, _ value: String) {
+            let field = app.textFields[identifier]
+            XCTAssertTrue(field.waitForExistence(timeout: 4))
+            field.tap()
+            if hardwareKeys {
+                field.typeKey("a", modifierFlags: .command)
+                field.typeKey(value, modifierFlags: [])
+                XCTAssertEqual(field.value as? String, value)
+                return
+            }
+            let prior = field.value as? String ?? ""
+            field.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: prior.count) + value)
+            XCTAssertEqual(field.value as? String, value)
+        }
+        let customer = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Select Customer")).firstMatch
+        XCTAssertTrue(customer.waitForExistence(timeout: 4)); customer.tap()
+        let choice = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Blue Ridge Dental")).firstMatch
+        XCTAssertTrue(choice.waitForExistence(timeout: 4)); choice.tap()
+        let browse = app.buttons["BrowseBillingCatalog"]
+        for _ in 0..<10 where !browse.exists || !browse.isHittable { app.swipeUp() }
+        XCTAssertTrue(browse.waitForExistence(timeout: 4)); browse.tap()
+        XCTAssertTrue(app.navigationBars["Select Items"].waitForExistence(timeout: 4))
+        let category = app.buttons["BillingCatalogCategory"]
+        XCTAssertTrue(category.waitForExistence(timeout: 4)); category.tap()
+        let electrical = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Repairs › Electrical")).firstMatch
+        XCTAssertTrue(electrical.waitForExistence(timeout: 3)); electrical.tap()
+        let root = "90000000-0000-4000-8000-000000000044"
+        let bundle = app.buttons["SelectBillingCatalogItem-\(root)"]
+        XCTAssertTrue(bundle.waitForExistence(timeout: 4)); bundle.tap()
+        XCTAssertFalse(app.staticTexts["BillingCatalogSelectionError"].exists)
+        app.buttons["Done"].tap()
+        let members = app.buttons["Included Items (2)"]
+        for _ in 0..<8 where !members.exists || !members.isHittable { app.swipeUp() }
+        XCTAssertFalse(app.textFields["New item"].exists, "Creating a product stays collapsed while reviewing a selected bundle.")
+        XCTAssertTrue(members.waitForExistence(timeout: 4)); members.tap()
+        XCTAssertFalse(app.textFields["New item"].exists, "Expanding bundle members must not open the separate Create Item disclosure.")
+        app.buttons["EditBundleQuantity-\(root)"].tap()
+        XCTAssertTrue(app.navigationBars["Bundle Quantity"].waitForExistence(timeout: 4))
+        if submitKeyboard { replaceText(in: app.textFields["BundleQuantity"], with: "2") }
+        else { enterQuantity("BundleQuantity", "2") }
+        if submitKeyboard { app.textFields["BundleQuantity"].typeText("\n") }
+        XCTAssertTrue(waitForHittable(app.buttons["SaveBundleQuantity"], timeout: 4))
+        app.buttons["SaveBundleQuantity"].tap()
+        XCTAssertTrue(app.navigationBars["Bundle Quantity"].waitForNonExistence(timeout: 4))
+        let second = app.buttons["EditBundleMember-\(root)-1"]
+        XCTAssertTrue(second.waitForExistence(timeout: 4)); second.tap()
+        XCTAssertTrue(app.navigationBars["Included Item"].waitForExistence(timeout: 4))
+        let quantity = app.textFields["BundleMemberQuantity"]
+        XCTAssertTrue(quantity.waitForExistence(timeout: 3))
+        if submitKeyboard { replaceText(in: quantity, with: "3") }
+        else { enterQuantity("BundleMemberQuantity", "3") }
+        if submitKeyboard { quantity.typeText("\n") }
+        XCTAssertTrue(waitForHittable(app.buttons["SaveBundleMember"], timeout: 4))
+        app.buttons["SaveBundleMember"].tap()
+        XCTAssertTrue(app.navigationBars["Included Item"].waitForNonExistence(timeout: 4))
+        XCTAssertTrue(app.buttons["EditBundleMember-\(root)-1"].waitForExistence(timeout: 4))
+        app.buttons["RemoveBundleMember-\(root)-0"].tap()
+        XCTAssertTrue(app.buttons["EditBundleMember-\(root)-1"].waitForNonExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["$283.50"].firstMatch.exists)
+        let expanded = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        expanded.name = "\(kind) composer - edited bundle retains group and remaining repeated member"
+        expanded.lifetime = .keepAlways; add(expanded)
+        let save = app.buttons["SaveBillingDocument"]
+        for _ in 0..<12 where !save.exists || !save.isHittable { app.swipeUp() }
+        XCTAssertTrue(save.waitForExistence(timeout: 4)); XCTAssertTrue(save.isEnabled); save.tap()
+        XCTAssertTrue(app.staticTexts["ManagementBillingSavedCustomer"].waitForExistence(timeout: 5))
+        app.buttons["Saved Items"].tap()
+        let summary = app.staticTexts["ManagementBillingSavedItems"]
+        XCTAssertTrue(summary.waitForExistence(timeout: 4))
+        XCTAssertTrue(summary.label.contains("Electrical Repair Bundle"))
+        XCTAssertTrue(summary.label.contains("$283.50"))
+        XCTAssertTrue(summary.label.contains("Qty 3"))
+        XCTAssertEqual(summary.label.components(separatedBy: "Saved diagnostic labor").count, 2)
+        XCTAssertFalse(summary.label.contains("BC-L1"))
+        let saved = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        saved.name = "\(kind) - original edited bundle saved offline"
+        saved.lifetime = .keepAlways; add(saved)
+        XCTAssertFalse(app.buttons["SaveBillingDocument"].exists)
+        app.buttons["ManagementBillingClose"].tap()
+        assertReturnedToManagementSales(app)
+        app.terminate()
     }
 
     @MainActor

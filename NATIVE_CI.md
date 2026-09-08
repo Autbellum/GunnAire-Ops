@@ -1,5 +1,36 @@
 # Native GitHub Actions checks
 
+## Native category and bundle composer coverage
+
+The workflow adds three actual composer journeys (37 selected UI tests):
+invoice and estimate category browsing, independent repeated-member edits,
+original document save/return, and direct Save after hardware-keyboard Select
+All. All 34 existing UI selectors, complete logic targets, read-only permissions,
+unsigned universal Mac Release and job limits are retained.
+
+After xcodebuild, `Tools/verify_native_test_execution.py` checks the actual
+xcresult tree against every requested selector. An absent UI method fails even
+if all 1,365 logic tests pass; a zero-test success, skipped/failed method, wrong
+target or malformed result also fails. The full Tools suite tests this verifier.
+The workflow retains the detailed test tree beside its existing summary.
+
+See [native bundle composition](NATIVE_BUNDLE_COMPOSITION.md) for exact local
+qualification, retained discovery/keyboard failures and the full remaining
+scope. This candidate requires its own exact-head hosted run after publication.
+Corrected local source passes 1,365 logic tests on each native platform, all
+eight selected iPad journeys, 546 Backend tests, 51 Tools tests and unsigned
+universal Mac Release. The execution verifier confirms the actual selected
+methods rather than treating an xcodebuild success message as sufficient.
+
+## Completed hosted result at the bundle-transaction head: `5d16fb8`
+
+Verified September 8, 2026: [native run 34203848028](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34203848028)
+passes both iPad and Mac, and [Backend run 34203848023](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34203848023)
+passes Python 3.13 and 3.14. The published branch contains workflow commit
+`640ae2e` and PR #18 remains open and unmerged. This is evidence for the exact
+published transaction checkpoint, not later native composer changes, signed
+CloudKit delivery, provider acceptance or production release.
+
 ## Bundle review and iPad runtime qualification
 
 The bundle checkpoint adds one selected iPad journey, bringing the total to

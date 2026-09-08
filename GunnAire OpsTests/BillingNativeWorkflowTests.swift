@@ -71,7 +71,8 @@ import Testing
             if reserveOnly { throw GunnAireBackendError.server(statusCode: 409, message: "fixture field price review") }
             writes += 1
             remote = try object(request.document) as? [String: Any]
-            remote?.merge(["Id": "D1", "SyncToken": "8", "TotalAmt": 190, "Balance": 190, "TxnTaxDetail": ["TotalTax": 0],
+            let total = QuickBooksSalesLineContract.double(try QuickBooksSalesLineContract.totals(request.document.Line).net)
+            remote?.merge(["Id": "D1", "SyncToken": "8", "TotalAmt": total, "Balance": total, "TxnTaxDetail": ["TotalTax": 0],
                 "PrivateNote": "GunnAire \(request.documentType.rawValue) ID: \(request.localDocumentID.uuidString.uppercased())\nGunnAire Publication: \(attempt.uuidString.lowercased())"]) { _, new in new }
             if failReply { throw URLError(.timedOut) }
             return try response()

@@ -275,7 +275,8 @@ final class QuickBooksBillingWorkflow {
         validateDocument = document.validation(context: context)
         try validateDocument()
         let allItems = try context.fetch(FetchDescriptor<Item>())
-        let selectedIDs = Set(CatalogLineItemSnapshot.decoded(from: document.snapshotJSON).map(\.catalogItemID))
+        let selectedIDs = Set(CatalogLineItemSnapshot.decoded(from: document.snapshotJSON)
+            .flatMap { [$0.catalogItemID] + $0.soldLeaves.map(\.catalogItemID) })
         items = allItems.filter { selectedIDs.contains($0.id) }
         itemRevisions = Dictionary(uniqueKeysWithValues: items.map { (ObjectIdentifier($0), QuickBooksCatalogItemRevision($0)) })
         paymentRevisions = try context.fetch(FetchDescriptor<Payment>()).filter { $0.invoice?.id == document.id }
@@ -315,10 +316,21 @@ final class QuickBooksBillingWorkflow {
         // Validate sold values before any customer/catalog write, while allowing
         // unmapped approved items to obtain their identity during preparation.
         let snapshots = CatalogLineItemSnapshot.decoded(from: document.snapshotJSON)
-        guard !snapshots.isEmpty, snapshots.allSatisfy({ snapshot in
-            items.filter { $0.id == snapshot.catalogItemID }.count == 1 &&
-            snapshot.quantity.isFinite && snapshot.quantity > 0 && snapshot.unitPrice.isFinite && snapshot.unitPrice >= 0
-        }) else { throw QuickBooksBillingWorkflowError.changed }
+        if snapshots.contains(where: { $0.bundle != nil }) {
+            guard let companyID = run.workflow.companyID, let realmID = run.workflow.realmID else {
+                throw CatalogBundleError.originalBusiness
+            }
+            try CatalogBundlePolicy.validateScope(document.snapshotJSON,
+                expected: .init(companyID: companyID, realmID: realmID, environment: run.workflow.environment))
+        }
+        guard !snapshots.isEmpty else { throw QuickBooksBillingWorkflowError.changed }
+        var allSnapshots = snapshots
+        for snapshot in snapshots where snapshot.bundle != nil { allSnapshots.append(contentsOf: snapshot.soldLeaves) }
+        for snapshot in allSnapshots {
+            let count = items.filter { $0.id == snapshot.catalogItemID }.count
+            guard count == 1, snapshot.quantity.isFinite, snapshot.quantity > 0,
+                  snapshot.unitPrice.isFinite, snapshot.unitPrice >= 0 else { throw QuickBooksBillingWorkflowError.changed }
+        }
         if api.billingPublicationClient == nil, !completed, case .invoice(let invoice) = document,
            invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
            let reason = BillingInvoiceMutationPolicy.blockedMessage(for: invoice,

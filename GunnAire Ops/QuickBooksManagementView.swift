@@ -100,7 +100,8 @@ enum QuickBooksDocumentLinePublication {
         guard !snapshots.isEmpty else { throw QuickBooksDocumentLinePublicationError.missingCatalogSnapshot }
         var gross = 0.0
         for line in snapshots {
-            let extended = line.unitPrice * line.quantity
+            if line.bundle != nil { try CatalogBundlePolicy.validate(line) }
+            let extended = line.extendedAmount
             guard line.quantity.isFinite, line.quantity > 0, line.unitPrice.isFinite, line.unitPrice >= 0,
                   extended.isFinite, extended >= 0 else {
                 throw QuickBooksDocumentLinePublicationError.invalidLineAmount(line.name)
@@ -138,7 +139,8 @@ enum QuickBooksDocumentLinePublication {
         }
 
         let itemsByID = Dictionary(grouping: catalogItems, by: \.id)
-        let documentItems = try snapshots.map { snapshot in
+        let allSnapshots = snapshots.flatMap { $0.bundle == nil ? [$0] : [$0] + $0.soldLeaves }
+        let documentItems = try allSnapshots.map { snapshot in
             guard let matches = itemsByID[snapshot.catalogItemID], let item = matches.first else {
                 throw QuickBooksDocumentLinePublicationError.missingCatalogItem(snapshot.name)
             }
@@ -155,9 +157,9 @@ enum QuickBooksDocumentLinePublication {
         }
         try QuickBooksCatalogMappingIntegrity.validateDocumentItems(documentItems, against: catalogItems)
 
-        var lines = try zip(snapshots, documentItems).map { snapshot, item in
-            guard item.itemType.isDirectSalesItem else {
-                throw QuickBooksDocumentLinePublicationError.unsupportedItemType(snapshot.name)
+        func mappedLine(_ snapshot: CatalogLineItemSnapshot) throws -> QuickBooksLineItem {
+            guard let item = itemsByID[snapshot.catalogItemID]?.first else {
+                throw QuickBooksDocumentLinePublicationError.missingCatalogItem(snapshot.name)
             }
             guard snapshot.itemTypeRawValue == nil || snapshot.itemTypeRawValue == item.itemTypeRawValue,
                   snapshot.quickBooksItemID == nil || snapshot.quickBooksItemID == item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines) else {
@@ -173,7 +175,19 @@ enum QuickBooksDocumentLinePublication {
                   !quickBooksItemID.isEmpty else {
                 throw QuickBooksDocumentLinePublicationError.missingQuickBooksItemMapping(snapshot.name)
             }
-            let extendedAmount = snapshot.unitPrice * snapshot.quantity
+            if let bundle = snapshot.bundle {
+                try CatalogBundlePolicy.validate(snapshot)
+                guard item.itemType == .group else {
+                    throw QuickBooksDocumentLinePublicationError.catalogIdentityChanged(snapshot.name)
+                }
+                return .bundle(description: snapshot.quickBooksDescription,
+                    reference: .init(value: quickBooksItemID, name: snapshot.name),
+                    quantity: snapshot.quantity, components: try bundle.members.map { try mappedLine($0.line) })
+            }
+            guard item.itemType.isDirectSalesItem else {
+                throw QuickBooksDocumentLinePublicationError.unsupportedItemType(snapshot.name)
+            }
+            let extendedAmount = snapshot.extendedAmount
             guard extendedAmount.isFinite, extendedAmount >= 0 else {
                 throw QuickBooksDocumentLinePublicationError.invalidLineAmount(snapshot.name)
             }
@@ -192,8 +206,9 @@ enum QuickBooksDocumentLinePublication {
                 )
             )
         }
+        var lines = try snapshots.map(mappedLine)
 
-        let grossSubtotal = lines.reduce(0) { $0 + $1.Amount }
+        let grossSubtotal = QuickBooksSalesLineContract.double(try QuickBooksSalesLineContract.totals(lines).gross)
         var mappedTotal = grossSubtotal
         if let discount = CatalogLineItemSnapshot.documentDiscount(from: snapshotJSON) {
             guard let discountAmount = discount.amount(for: grossSubtotal) else {
@@ -797,6 +812,7 @@ enum PricebookReviewQueue {
         CatalogLineItemSnapshot.decoded(from: snapshotJSON)
             .contains { snapshot in
                 snapshot.catalogItemID == item.id ||
+                snapshot.soldLeaves.contains(where: { $0.catalogItemID == item.id }) ||
                 snapshot.assembly?.components.contains(where: { $0.itemID == item.id }) == true
             }
     }

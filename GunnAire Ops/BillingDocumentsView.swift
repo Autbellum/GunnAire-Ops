@@ -83,6 +83,11 @@ struct BillingDocumentsView: View {
     @State private var taxAddressReview: BillingTaxAddressReviewRequest?
     @State private var selectedItemEquipmentIDs: [UUID: UUID] = [:]
     @State private var selectedItemAssemblySnapshots: [UUID: CatalogLineAssemblySnapshot] = [:]
+    @State private var selectedBundleSnapshots: [UUID: CatalogLineItemSnapshot] = [:]
+    @State private var bundleEquipmentCustomerID: UUID?
+    @State private var bundleSelectionError: String?
+    @State private var loadedCatalogIssue: String?
+    @State private var bundleEditRequest: CatalogBundleEditRequest?
     @State private var selectedItemizedAssemblyMemberships: [UUID: Set<UUID>] = [:]
     @State private var selectedInvoicePaymentTerms: InvoicePaymentTerms = .dueOnReceipt
     @State private var invoiceCustomDueDate = Calendar.current.startOfDay(for: Date())
@@ -198,7 +203,7 @@ struct BillingDocumentsView: View {
     }
 
     private var selectedGrossSubtotal: Double {
-        selectedLineItems.reduce(0) { $0 + effectiveUnitPrice(for: $1) * lineItemQuantity(for: $1) }
+        selectedLineItems.reduce(0) { $0 + selectedLineAmount($1) }
     }
 
     private var selectedDiscountAmount: Double? {
@@ -222,7 +227,9 @@ struct BillingDocumentsView: View {
     }
 
     private var selectedHasTaxableLines: Bool {
-        selectedLineItems.contains(where: \.isTaxable)
+        selectedLineItems.contains {
+            selectedBundleSnapshots[$0.id]?.soldLeaves.contains(where: \.isTaxable) ?? $0.isTaxable
+        }
     }
 
     private var selectedCustomer: Customer? {
@@ -452,7 +459,7 @@ struct BillingDocumentsView: View {
     }
 
     private func lineItemQuantityAccessibilityValue(for item: Item) -> String {
-        lineItemQuantity(for: item).formatted(.number.precision(.fractionLength(0...2)))
+        lineItemQuantity(for: item).formatted(.number.precision(.fractionLength(0...5)))
     }
 
     private func paymentDisplayDetail(_ payment: Payment) -> String {
@@ -500,6 +507,9 @@ struct BillingDocumentsView: View {
 
     private var selectedCostTotal: Double {
         selectedLineItems.reduce(0) { partial, item in
+            if let bundle = selectedBundleSnapshots[item.id] {
+                return partial + bundle.soldLeaves.reduce(0) { $0 + ($1.purchaseCost ?? 0) * $1.quantity }
+            }
             let unitCost = selectedItemAssemblySnapshots[item.id]?.presentation == .flatRate
                 ? (selectedItemAssemblySnapshots[item.id]?.unitPurchaseCost ?? item.purchaseCost ?? 0)
                 : (item.purchaseCost ?? 0)
@@ -537,6 +547,7 @@ struct BillingDocumentsView: View {
             priceAdjustments: selectedItemPriceAdjustments,
             servicedEquipment: selectedLineEquipmentSnapshots,
             assemblies: selectedItemAssemblySnapshots,
+            bundles: selectedBundleSnapshots,
             documentDiscount: selectedDocumentDiscount
         )
         guard let json, let addresses = selectedTaxAddresses, let scope = selectedTaxAddressScope,
@@ -595,7 +606,7 @@ struct BillingDocumentsView: View {
             .compactMap { $0?.lowercased() }
             .joined(separator: " ")
             let matchesQuery = query.isEmpty || haystack.contains(query)
-            let canDisplay = CatalogItemSelectionPolicy.canDisplay(
+            let canDisplay = item.itemType == .group || CatalogItemSelectionPolicy.canDisplay(
                 item,
                 isSelected: isCatalogItemSelected(item),
                 documentScopedReviewItemIDs: documentScopedReviewItemIDs
@@ -721,6 +732,7 @@ struct BillingDocumentsView: View {
             (startsNewDocument && (!canViewFinancials || completedNewDocument != nil)) ||
             customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
             selectedItems.isEmpty ||
+            loadedCatalogIssue != nil ||
             documentDiscountValidationMessage != nil ||
             (selectedDocumentKind == .invoice && invoiceWorkflowBlockedMessage != nil)
     }
@@ -976,6 +988,7 @@ struct BillingDocumentsView: View {
     private var selectedSummary: String {
         selectedLineItems
             .map { item in
+                if let bundle = selectedBundleSnapshots[item.id] { return bundle.customerSummary }
                 let quantity = lineItemQuantity(for: item)
                 let unitPrice = effectiveUnitPrice(for: item)
                 let quantityDescription = quantity == 1
@@ -1611,6 +1624,12 @@ GunnAire
                                  : "The original draft is retained, but its local save was not confirmed. Retry saving this same draft before leaving. No replacement document will be created.")
                                 .foregroundStyle(.secondary)
                             if newDocumentSaveConfirmed {
+                                LabeledContent("Saved subtotal", value: document.subtotal.formatted(.currency(code: "USD")))
+                                    .accessibilityIdentifier("ManagementBillingSavedSubtotal")
+                                DisclosureGroup("Saved Items") {
+                                    Text(document.snapshotJSON.map { CatalogLineItemSnapshot.decoded(from: $0).map(\.customerSummary).joined(separator: "\n") } ?? "")
+                                        .accessibilityIdentifier("ManagementBillingSavedItems")
+                                }
                                 BillingPublicationReviewLink(document: document, context: modelContext)
                                 Button("Sync Saved \(document.label)") { publishBillingDocument(document) }
                                     .disabled(!isQuickBooksConnected || billingSyncLifecycles["\(document.label)-\(document.id)"] != nil)
@@ -1718,7 +1737,10 @@ GunnAire
                         selectedItems: selectedItems,
                         selectedItemizedAssemblyIDs: Set(selectedItemizedAssemblyMemberships.keys),
                         documentScopedReviewItemIDs: documentScopedReviewItemIDs,
-                        onToggle: toggleItem
+                        onToggle: toggleItem,
+                        catalogScope: bundleSelectionScope,
+                        priceLabel: catalogPriceLabel,
+                        selectionMessage: bundleSelectionError
                     )
                 }
         )
@@ -1873,6 +1895,11 @@ GunnAire
     @ViewBuilder
     var body: some View {
         AnyView(billingBody)
+        .sheet(item: $bundleEditRequest) { request in
+            bundleEditSheet(request).id(request.id)
+                .presentationDetents([.large])
+                .presentationSizing(.page)
+        }
         .sheet(item: $taxAddressReview) { request in
             BillingTaxAddressReview(scope: request.scope, initial: request.initial) { value in
                 guard taxAddressReview?.id == request.id,
@@ -2095,7 +2122,10 @@ GunnAire
                     selectedItems: selectedItems,
                     selectedItemizedAssemblyIDs: Set(selectedItemizedAssemblyMemberships.keys),
                     documentScopedReviewItemIDs: documentScopedReviewItemIDs,
-                    onToggle: toggleItem
+                        onToggle: toggleItem,
+                        catalogScope: bundleSelectionScope,
+                        priceLabel: catalogPriceLabel,
+                        selectionMessage: bundleSelectionError
                 )
             }
             .sheet(isPresented: $showingItemCreator) {
@@ -2311,14 +2341,24 @@ GunnAire
         guard let newValue, let customer = customers.first(where: { $0.id == newValue }) else {
             selectedServiceLocationID = nil
             selectedItemEquipmentIDs.removeAll()
+            reconcileBundleEquipmentCustomer(nil)
             return
         }
         populateCustomerFields(from: customer)
         synchronizeServiceLocation(for: customer)
         reconcileLineEquipmentAssignments()
+        reconcileBundleEquipmentCustomer(customer.id)
+    }
+
+    private func reconcileBundleEquipmentCustomer(_ customerID: UUID?) {
+        let defaultEquipment = documentEquipmentSnapshots.first { $0.equipmentID == defaultDocumentEquipmentID }
+        selectedBundleSnapshots = CatalogBundlePolicy.equipmentForCustomerChange(in: selectedBundleSnapshots,
+            from: bundleEquipmentCustomerID, to: customerID, defaultEquipment: defaultEquipment)
+        bundleEquipmentCustomerID = customerID
     }
 
     private func selectedItemsDidChange(to selectedIDs: Set<UUID>) {
+        selectedBundleSnapshots = selectedBundleSnapshots.filter { selectedIDs.contains($0.key) }
         selectedItemPriceAdjustments = Dictionary(
             uniqueKeysWithValues: selectedItemPriceAdjustments.filter { selectedIDs.contains($0.key) }
         )
@@ -3987,7 +4027,7 @@ GunnAire
                                 VStack(alignment: .leading, spacing: 6) {
                                     HStack {
                                         VStack(alignment: .leading, spacing: 2) {
-                                            Text(item.name)
+                                            Text(selectedBundleSnapshots[item.id]?.name ?? item.name)
                                                 .font(.caption)
                                             Text(lineItemQuantityLabel(for: item))
                                                 .font(.caption2)
@@ -4012,7 +4052,7 @@ GunnAire
                                         }
                                         Spacer()
                                         VStack(alignment: .trailing, spacing: 4) {
-                                            Text(effectiveUnitPrice(for: item) * lineItemQuantity(for: item), format: .currency(code: "USD"))
+                                            Text(selectedLineAmount(item), format: .currency(code: "USD"))
                                                 .font(.caption)
                                                 .foregroundColor(.secondary)
                                             if let adjustment = selectedItemPriceAdjustments[item.id] {
@@ -4023,7 +4063,7 @@ GunnAire
                                                     .accessibilityLabel(authorizedPriceAdjustmentAccessibilityLabel(for: item))
                                                     .accessibilityValue(adjustment.reason)
                                             }
-                                            if canAuthorizePriceAdjustments {
+                                            if canAuthorizePriceAdjustments && item.itemType != .group {
                                                 Button(selectedItemPriceAdjustments[item.id] == nil ? "Discount / Adjust" : "Edit Adjustment") {
                                                     itemPendingPriceAdjustment = item
                                                 }
@@ -4048,7 +4088,7 @@ GunnAire
                                                 Stepper(
                                                     lineItemQuantityLabel(for: item),
                                                     value: lineItemQuantityBinding(for: item),
-                                                    in: 0.25...100,
+                                                    in: item.itemType == .group ? 0.00001...999_999 : 0.25...100,
                                                     step: 0.25
                                                 )
                                                 .labelsHidden()
@@ -4060,6 +4100,7 @@ GunnAire
                                         }
                                     }
                                     lineEquipmentPicker(for: item)
+                                    bundleMembersView(for: item)
                                 }
                             }
 
@@ -4309,10 +4350,17 @@ GunnAire
     @ViewBuilder
     private var lineItemBuilderView: some View {
                     VStack(alignment: .leading, spacing: 8) {
+                        if let loadedCatalogIssue {
+                            Text(loadedCatalogIssue).foregroundStyle(.orange)
+                            Button("Replace All Saved Lines") { clearSelectedCatalogLines() }
+                        }
                         HStack {
                             Text("Line Items")
                                 .font(.headline)
                             Spacer()
+                            Button("Browse Catalog") { showingItemSelector = true }
+                                .buttonStyle(.bordered)
+                                .accessibilityIdentifier("BrowseBillingCatalog")
                             Button {
                                 showingItemCreator = true
                             } label: {
@@ -4372,7 +4420,7 @@ GunnAire
                                             catalogSyncStateLabel(for: item)
                                         }
                                         Spacer()
-                                        Text(item.unitPrice, format: .currency(code: "USD"))
+                                        Text(catalogPriceLabel(item))
                                             .foregroundColor(.secondary)
                                     }
                                 }
@@ -4386,8 +4434,8 @@ GunnAire
                                 VStack(alignment: .leading, spacing: 6) {
                                     HStack {
                                         VStack(alignment: .leading, spacing: 2) {
-                                            Text(item.name)
-                                            if let description = item.itemDescription, !description.isEmpty {
+                                            Text(selectedBundleSnapshots[item.id]?.name ?? item.name)
+                                            if let description = selectedLineDescription(item), !description.isEmpty {
                                                 Text(description)
                                                     .font(.caption)
                                                     .foregroundColor(.secondary)
@@ -4397,14 +4445,14 @@ GunnAire
                                         }
                                         Spacer()
                                         VStack(alignment: .trailing, spacing: 4) {
-                                            Text(effectiveUnitPrice(for: item) * lineItemQuantity(for: item), format: .currency(code: "USD"))
+                                            Text(selectedLineAmount(item), format: .currency(code: "USD"))
                                                 .foregroundColor(.secondary)
                                             if let adjustment = selectedItemPriceAdjustments[item.id] {
                                                 Text("\(adjustment.unitPrice < adjustment.pricebookUnitPrice ? "Discounted" : "Adjusted") from \(adjustment.pricebookUnitPrice.formatted(.currency(code: "USD")))")
                                                     .font(.caption2)
                                                     .foregroundStyle(.orange)
                                             }
-                                            if canAuthorizePriceAdjustments {
+                                            if canAuthorizePriceAdjustments && item.itemType != .group {
                                                 Button(selectedItemPriceAdjustments[item.id] == nil ? "Discount / Adjust" : "Edit Adjustment") {
                                                     itemPendingPriceAdjustment = item
                                                 }
@@ -4430,7 +4478,7 @@ GunnAire
                                                 Stepper(
                                                     lineItemQuantityLabel(for: item),
                                                     value: lineItemQuantityBinding(for: item),
-                                                    in: 0.25...100,
+                                                    in: item.itemType == .group ? 0.00001...999_999 : 0.25...100,
                                                     step: 0.25
                                                 )
                                                 .labelsHidden()
@@ -4441,6 +4489,7 @@ GunnAire
                                         }
                                     }
                                     lineEquipmentPicker(for: item)
+                                    bundleMembersView(for: item)
                                 }
                             }
                         }
@@ -7506,60 +7555,41 @@ GunnAire
     }
 
     private func importQuickBooksItems() {
-        guard canApprovePricebookItems, isQuickBooksConnected else { return }
-        isImportingQuickBooksItems = true
-        actionMessage = "Loading QuickBooks catalog..."
-        liveAPI.fetchItems { result in
-            DispatchQueue.main.async {
-                isImportingQuickBooksItems = false
-                switch result {
-                case .failure(let error):
-                    actionMessage = "QuickBooks catalog sync failed: \(error.localizedDescription)"
-                case .success(let quickBooksItems):
-                    var imported = 0
-                    for quickBooksItem in quickBooksItems {
-                        let normalizedID = quickBooksItem.Id.trimmingCharacters(in: .whitespacesAndNewlines)
-                        let linkedLocalItems = QuickBooksCatalogMappingIntegrity.linkedItems(
-                            to: normalizedID,
-                            in: items
-                        )
-                        if linkedLocalItems.count > 1 {
-                            QuickBooksCatalogMappingIntegrity.markConflictsForReview(in: items)
-                            continue
-                        }
-                        if let existing = Item.matchingLocalCatalogItem(
-                            in: items,
-                            quickBooksID: normalizedID,
-                            name: quickBooksItem.Name,
-                            sku: quickBooksItem.Sku
-                        ) {
-                            applyQuickBooksItem(quickBooksItem, to: existing)
-                            continue
-                        }
-
-                        let localItem = Item(
-                            quickBooksID: normalizedID,
-                            name: quickBooksItem.Name,
-                            itemType: CatalogItemType(rawValue: quickBooksItem.ItemType ?? "") ?? .service,
-                            unitPrice: quickBooksItem.UnitPrice ?? 0,
-                            purchaseCost: quickBooksItem.PurchaseCost,
-                            isTaxable: quickBooksItem.Taxable ?? false,
-                            itemDescription: quickBooksItem.Description,
-                            sku: quickBooksItem.Sku,
-                            preferredVendorName: quickBooksItem.PrefVendorRef?.name,
-                            preferredVendorQuickBooksID: quickBooksItem.PrefVendorRef?.value,
-                            purchaseDescription: quickBooksItem.PurchaseDesc
-                        )
-                        modelContext.insert(localItem)
-                        imported += 1
-                    }
-                    saveQuickBooksSyncState()
-                    actionMessage = imported == 0
-                        ? "QuickBooks catalog is already up to date."
-                        : "Imported \(imported) catalog items from QuickBooks."
+        guard canApprovePricebookItems, isQuickBooksConnected, !isImportingQuickBooksItems else { return }
+        let owner = QuickBooksSyncLifecycle()
+        do {
+            var request: QuickBooksChangeHistoryClient.Request?
+            if GunnAireBackendService.isConfigured && !GunnAireCloudKit.usesTestDatabase {
+                request = { path, method, body in
+                    try await GunnAireBackendService.quickBooksChangeHistoryRequest(path: path, method: method, body: body)
                 }
             }
-        }
+            let run = try owner.begin(api: liveAPI, sharedHistoryRequest: request) {
+                try QuickBooksSyncAccessPolicy.validate(context: modelContext)
+            }
+            billingSyncLifecycles["catalog-refresh"] = owner
+            isImportingQuickBooksItems = true
+            actionMessage = "Refreshing the company catalog…"
+            Task { @MainActor in
+                defer {
+                    owner.finish(run)
+                    if billingSyncLifecycles["catalog-refresh"] === owner {
+                        billingSyncLifecycles.removeValue(forKey: "catalog-refresh")
+                        isImportingQuickBooksItems = false
+                    }
+                }
+                do {
+                    let records: [QuickBooksItem] = try await run.receiveResource(id: "catalog", fetch: liveAPI.fetchItems)
+                    try run.markSucceeded("catalog")
+                    let history = try await run.prepareCatalogImport()
+                    try run.commit {
+                        try QuickBooksLocalSync.importSnapshot(customers: [], items: records, estimates: [],
+                            invoices: [], payments: [], vendors: [], into: modelContext, catalogHistory: history)
+                    }
+                    actionMessage = "Company catalog refreshed. Saved document prices were kept."
+                } catch { actionMessage = "Catalog refresh needs review: \(error.localizedDescription)" }
+            }
+        } catch { actionMessage = "Catalog refresh is unavailable: \(error.localizedDescription)" }
     }
 
     private func importQuickBooksItemsIfNeeded() {
@@ -7809,6 +7839,14 @@ GunnAire
         let restoredItems = restoredCatalogItems(snapshotJSON: catalogSnapshotJSON, lineItemSummary: lineItemSummary)
         let snapshots = CatalogLineItemSnapshot.decoded(from: catalogSnapshotJSON)
         newlyCreatedLineItems.removeAll()
+        do { try CatalogBundlePolicy.validateRestoration(catalogSnapshotJSON, catalog: items) }
+        catch {
+            clearSelectedCatalogLines()
+            loadedCatalogIssue = "The saved line items need catalog review. The original document has not changed. Refresh the catalog, or explicitly replace all saved lines."
+            actionMessage = loadedCatalogIssue ?? ""
+            return
+        }
+        loadedCatalogIssue = nil
         if restoredItems.isEmpty {
             clearSelectedCatalogLines()
         } else {
@@ -7837,6 +7875,9 @@ GunnAire
             selectedItemizedAssemblyMemberships = CatalogAssemblyPolicy.restoredItemizedMemberships(
                 from: snapshots
             )
+            selectedBundleSnapshots = Dictionary(snapshots.filter { $0.bundle != nil }
+                .map { ($0.catalogItemID, $0) }, uniquingKeysWith: { first, _ in first })
+            bundleEquipmentCustomerID = customer.id
             reconcileLineEquipmentAssignments()
         }
 
@@ -8503,11 +8544,32 @@ GunnAire
     }
 
     private func toggleItem(_ item: Item) {
+        bundleSelectionError = nil
         if isCatalogItemSelected(item) {
             if item.assemblyDefinition?.presentation == .itemized {
                 removeAssembly(item.id)
             } else {
                 removeCatalogLine(item.id)
+            }
+            return
+        }
+
+        if item.itemType == .group {
+            do {
+                guard let scope = bundleSelectionScope else { throw CatalogBundleError.originalBusiness }
+                var snapshot = try CatalogBundlePolicy.resolve(root: item, catalog: items, scope: scope)
+                if let equipmentID = defaultDocumentEquipmentID {
+                    selectedItemEquipmentIDs[item.id] = equipmentID
+                    snapshot = CatalogBundlePolicy.equipment(snapshot, documentEquipmentSnapshots.first { $0.equipmentID == equipmentID })
+                }
+                selectedBundleSnapshots[item.id] = snapshot
+                bundleEquipmentCustomerID = contextCustomer?.id
+                selectedItems.insert(item.id)
+                selectedItemQuantities[item.id] = snapshot.quantity
+                actionMessage = "Added \(item.name). Open Included Items to review or customize this document's bundle."
+            } catch {
+                actionMessage = error.localizedDescription
+                bundleSelectionError = error.localizedDescription
             }
             return
         }
@@ -8577,6 +8639,7 @@ GunnAire
         selectedItemPriceAdjustments.removeValue(forKey: itemID)
         selectedItemEquipmentIDs.removeValue(forKey: itemID)
         selectedItemAssemblySnapshots.removeValue(forKey: itemID)
+        selectedBundleSnapshots.removeValue(forKey: itemID)
     }
 
     private func removeAssembly(_ assemblyItemID: UUID) {
@@ -8596,6 +8659,7 @@ GunnAire
     }
 
     private func clearSelectedCatalogLines() {
+        loadedCatalogIssue = nil
         selectedItems.removeAll()
         newlyCreatedLineItems.removeAll()
         documentScopedReviewItemIDs.removeAll()
@@ -8605,6 +8669,8 @@ GunnAire
         selectedTaxAddresses = nil
         selectedItemEquipmentIDs.removeAll()
         selectedItemAssemblySnapshots.removeAll()
+        selectedBundleSnapshots.removeAll()
+        bundleEquipmentCustomerID = nil
         selectedItemizedAssemblyMemberships.removeAll()
     }
 
@@ -8631,9 +8697,16 @@ GunnAire
                 guard let equipmentID,
                       documentEquipmentProfiles.contains(where: { $0.id == equipmentID }) else {
                     selectedItemEquipmentIDs.removeValue(forKey: item.id)
+                    if let root = selectedBundleSnapshots[item.id] {
+                        selectedBundleSnapshots[item.id] = CatalogBundlePolicy.equipment(root, nil)
+                    }
                     return
                 }
                 selectedItemEquipmentIDs[item.id] = equipmentID
+                if let root = selectedBundleSnapshots[item.id] {
+                    selectedBundleSnapshots[item.id] = CatalogBundlePolicy.equipment(root,
+                        documentEquipmentSnapshots.first { $0.equipmentID == equipmentID })
+                }
             }
         )
     }
@@ -8653,14 +8726,74 @@ GunnAire
     }
 
     private func lineItemQuantity(for item: Item) -> Double {
-        max(selectedItemQuantities[item.id] ?? 1, 0.25)
+        selectedBundleSnapshots[item.id]?.quantity ?? max(selectedItemQuantities[item.id] ?? 1, 0.25)
     }
 
     private func lineItemQuantityBinding(for item: Item) -> Binding<Double> {
         Binding(
             get: { lineItemQuantity(for: item) },
-            set: { selectedItemQuantities[item.id] = min(max($0, 0.25), 100) }
+            set: { quantity in
+                if let saved = selectedBundleSnapshots[item.id] {
+                    do {
+                        selectedBundleSnapshots[item.id] = try CatalogBundlePolicy.resized(saved, quantity: quantity)
+                        selectedItemQuantities[item.id] = quantity
+                    } catch { actionMessage = error.localizedDescription }
+                } else { selectedItemQuantities[item.id] = min(max(quantity, 0.25), 100) }
+            }
         )
+    }
+
+    private var bundleSelectionScope: QuickBooksChangeHistoryScope? {
+        #if DEBUG
+        if GunnAireCloudKit.usesTestDatabase, ProcessInfo.processInfo.arguments.contains("-uiTestBundleComposer") {
+            return CatalogBundleFixture.scope
+        }
+        #endif
+        guard let companyID = CompanyWorkspaceAccessController.shared.verifiedCompanyID,
+              let realmID = liveAPI.realmID else { return nil }
+        return .init(companyID: companyID, realmID: realmID, environment: Config.QuickBooks.environment)
+    }
+
+    private func selectedLineAmount(_ item: Item) -> Double {
+        selectedBundleSnapshots[item.id]?.extendedAmount ??
+            BillingDocumentDiscountPolicy.roundCurrency(effectiveUnitPrice(for: item) * lineItemQuantity(for: item))
+    }
+
+    private func selectedLineDescription(_ item: Item) -> String? {
+        if let saved = selectedBundleSnapshots[item.id] { return saved.description }
+        return item.itemDescription
+    }
+
+    private func catalogPriceLabel(_ item: Item) -> String {
+        guard item.itemType == .group else { return QuickBooksSalesLineContract.unitPriceLabel(item.unitPrice) }
+        guard let scope = bundleSelectionScope,
+              let snapshot = try? CatalogBundlePolicy.resolve(root: item, catalog: items, scope: scope) else {
+            return "Review bundle"
+        }
+        return snapshot.extendedAmount.formatted(.currency(code: "USD"))
+    }
+
+    @ViewBuilder private func bundleMembersView(for item: Item) -> some View {
+        if let snapshot = selectedBundleSnapshots[item.id] {
+            CatalogBundleMembersView(snapshot: snapshot, onChange: { updated in
+                    selectedBundleSnapshots[item.id] = updated
+                }, onEdit: { memberID in
+                    bundleEditRequest = .init(snapshot: snapshot, memberID: memberID)
+                })
+        }
+    }
+
+    private func bundleEditSheet(_ request: CatalogBundleEditRequest) -> some View {
+        CatalogBundleEditSheet(request: request, canAuthorize: canAuthorizePriceAdjustments,
+            actorEmail: currentUserEmail, users: users) { updated in
+                guard selectedBundleSnapshots[request.snapshot.catalogItemID] == request.snapshot,
+                      selectedItems.contains(request.snapshot.catalogItemID) else {
+                    return "The selected bundle changed while this editor was open. Close it and review the latest draft."
+                }
+                guard updated.bundle?.scope == bundleSelectionScope else { return CatalogBundleError.originalBusiness.localizedDescription }
+                selectedBundleSnapshots[request.snapshot.catalogItemID] = updated
+                return nil
+            }
     }
 
     private func effectiveUnitPrice(for item: Item) -> Double {
@@ -8732,6 +8865,14 @@ GunnAire
 
     private func createDocument() {
         guard !isCreatingDocument, !selectedLineItems.isEmpty else { return }
+        guard loadedCatalogIssue == nil else { actionMessage = loadedCatalogIssue ?? ""; return }
+        do {
+            for root in selectedBundleSnapshots.values { try CatalogBundlePolicy.validate(root) }
+            if !selectedBundleSnapshots.isEmpty {
+                guard let scope = bundleSelectionScope else { throw CatalogBundleError.originalBusiness }
+                try CatalogBundlePolicy.validateScope(selectedCatalogSnapshotJSON, expected: scope)
+            }
+        } catch { actionMessage = error.localizedDescription; return }
         if startsNewDocument, !canViewFinancials || completedNewDocument != nil {
             actionMessage = "Your current business access does not allow another document from this composer."
             return
@@ -10114,19 +10255,23 @@ private struct DocumentationItemSelectorView: View {
     let selectedItemizedAssemblyIDs: Set<UUID>
     let documentScopedReviewItemIDs: Set<UUID>
     let onToggle: (Item) -> Void
+    let catalogScope: QuickBooksChangeHistoryScope?
+    let priceLabel: (Item) -> String
+    let selectionMessage: String?
 
     @State private var searchText = ""
     @State private var expandedItemTypes = Set(CatalogItemType.allCases)
+    @State private var categoryID: UUID?
 
-    private var filteredItems: [Item] {
+    private func filteredItems(using categoryIndex: CatalogCategoryIndex) -> [Item] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let sortedItems = items
             .filter {
-                CatalogItemSelectionPolicy.canDisplay(
+                ($0.itemType == .group || CatalogItemSelectionPolicy.canDisplay(
                     $0,
                     isSelected: isSelected($0),
                     documentScopedReviewItemIDs: documentScopedReviewItemIDs
-                )
+                )) && categoryIndex.matches($0, category: categoryID)
             }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         guard !query.isEmpty else { return sortedItems }
@@ -10145,16 +10290,30 @@ private struct DocumentationItemSelectorView: View {
         }
     }
 
-    private var groupedItems: [(type: CatalogItemType, items: [Item])] {
-        CatalogItemType.allCases.compactMap { type in
-            let matches = filteredItems.filter { $0.itemType == type }
-            return matches.isEmpty ? nil : (type, matches)
-        }
-    }
-
     var body: some View {
+        // Build and filter once per render, not once for every row and type.
+        // A business catalog can contain thousands of imported products.
+        let categoryIndex = CatalogCategoryIndex(items: items, scope: catalogScope)
+        let filteredItems = filteredItems(using: categoryIndex)
+        let byType = Dictionary(grouping: filteredItems, by: \.itemType)
+        let groupedItems: [(type: CatalogItemType, items: [Item])] = CatalogItemType.allCases.compactMap { type in
+            byType[type].map { (type, $0) }
+        }
         NavigationStack {
             List {
+                if !categoryIndex.categories.isEmpty {
+                    Picker("Category", selection: $categoryID) {
+                        Text("All Categories").tag(nil as UUID?)
+                        ForEach(categoryIndex.categories) { category in
+                            Text(category.title).tag(category.id as UUID?)
+                        }
+                    }
+                    .accessibilityIdentifier("BillingCatalogCategory")
+                }
+                if let selectionMessage {
+                    Text(selectionMessage).font(.callout).foregroundStyle(.orange)
+                        .accessibilityIdentifier("BillingCatalogSelectionError")
+                }
                 if filteredItems.isEmpty {
                     Text("No matching items.")
                         .foregroundColor(.secondary)
@@ -10173,11 +10332,11 @@ private struct DocumentationItemSelectorView: View {
                             )
                         ) {
                             ForEach(group.items) { item in
-                                itemRow(item)
+                                itemRow(item, categoryLabel: categoryIndex.label(for: item))
                             }
                         } label: {
                             HStack {
-                                Text(group.type.rawValue)
+                                Text(group.type.label)
                                 Spacer()
                                 Text("\(selectedCount(in: group.items))/\(group.items.count)")
                                     .font(.caption)
@@ -10213,7 +10372,7 @@ private struct DocumentationItemSelectorView: View {
         return selectedItems.contains(item.id)
     }
 
-    private func itemRow(_ item: Item) -> some View {
+    private func itemRow(_ item: Item, categoryLabel: String?) -> some View {
         Button {
             onToggle(item)
         } label: {
@@ -10223,6 +10382,9 @@ private struct DocumentationItemSelectorView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(item.name)
                         .font(.headline)
+                    if let category = categoryLabel {
+                        Text(category).font(.caption).foregroundStyle(.secondary)
+                    }
                     if let description = item.itemDescription, !description.isEmpty {
                         Text(description)
                             .font(.caption)
@@ -10253,7 +10415,7 @@ private struct DocumentationItemSelectorView: View {
                         .foregroundStyle(Color.brandGold)
                         .accessibilityIdentifier("ItemAssemblyContext-\(item.id.uuidString)")
                     }
-                    Text(item.isTaxable ? "Taxable" : "Non-taxable")
+                    Text(item.itemType == .group ? "Bundle · review included items after adding" : (item.isTaxable ? "Taxable" : "Non-taxable"))
                         .font(.caption2)
                         .foregroundColor(.secondary)
                     if item.isCatalogArchived {
@@ -10263,11 +10425,12 @@ private struct DocumentationItemSelectorView: View {
                     }
                 }
                 Spacer()
-                Text(item.unitPrice, format: .currency(code: "USD"))
+                Text(priceLabel(item))
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("SelectBillingCatalogItem-\(item.id)")
     }
 }
 

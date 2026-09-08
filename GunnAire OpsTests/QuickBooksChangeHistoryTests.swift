@@ -157,6 +157,34 @@ struct QuickBooksChangeHistoryTests {
         #expect(server.requests.count == 2)
     }
 
+    @Test func invoicePickerCatalogRefreshRevalidatesOnlyItsCompleteItemCensus() async throws {
+        let server = Server(scope), lifecycle = QuickBooksSyncLifecycle()
+        server.versions[.item] = [try version()]
+        let (run, api) = try run(server, lifecycle: lifecycle)
+        await #expect(throws: QuickBooksChangeHistoryError.incomplete) { try await run.prepareCatalogImport() }
+        let items: [QuickBooksItem] = try await run.receiveResource(id: "catalog", fetch: api.fetchItems)
+        try run.markSucceeded("catalog")
+        let prepared = try await run.prepareCatalogImport()
+        let history = try #require(prepared)
+        try history.validate(records: items)
+        #expect(run.successfulResourceIDs == ["catalog"])
+        #expect(server.requests.count == 3)
+        #expect(server.requests.allSatisfy { $0.2["entityType"] == "Item" })
+        await #expect(throws: QuickBooksChangeHistoryError.incomplete) { try await run.prepareLocalImport() }
+        lifecycle.cancel()
+        await #expect(throws: CancellationError.self) { try await run.prepareCatalogImport() }
+    }
+
+    @Test func changedCatalogCensusCannotCommitAPickerRefresh() async throws {
+        let server = Server(scope), lifecycle = QuickBooksSyncLifecycle()
+        server.versions[.item] = [try version()]
+        let (run, api) = try run(server, lifecycle: lifecycle)
+        let _: [QuickBooksItem] = try await run.receiveResource(id: "catalog", fetch: api.fetchItems)
+        try run.markSucceeded("catalog")
+        server.connection = String(repeating: "f", count: 64)
+        await #expect(throws: (any Error).self) { try await run.prepareCatalogImport() }
+    }
+
     @Test(arguments: ["companyID", "realmID", "environment", "entityType", "connectionRevision", "revision",
                       "applicationState", "versionCount", "afterSequence", "throughSequence", "nextAfterSequence",
                       "baselineAt", "capturedThrough", "issueCode", "legacyEventsNeedingReview"])

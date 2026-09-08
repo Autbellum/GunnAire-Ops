@@ -141,6 +141,17 @@ final class QuickBooksSyncRun {
         return try sharedHistory.catalogHistory()
     }
 
+    /// The invoice picker refreshes only the catalog. It still revalidates the
+    /// original complete Item census; it cannot pretend thirteen resources ran.
+    func prepareCatalogImport() async throws -> QuickBooksCatalogHistoryBatch? {
+        try check()
+        guard let sharedHistory else { return nil }
+        guard successfulResourceIDs.contains("catalog") else { throw QuickBooksChangeHistoryError.incomplete }
+        try await perform { try await sharedHistory.revalidate([.item]) }
+        try check()
+        return try sharedHistory.catalogHistory()
+    }
+
     func commit(_ body: () throws -> Void) throws {
         try check()
         try body()

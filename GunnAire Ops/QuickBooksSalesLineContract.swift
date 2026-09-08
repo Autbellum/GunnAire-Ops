@@ -90,6 +90,13 @@ enum QuickBooksSalesLineContract {
         return result
     }
 
+    /// NSDecimalNumber.doubleValue can expose a value one ULP below the
+    /// canonical decimal (15.47 -> 15.469999999999999). Round-trip its decimal
+    /// spelling so subsequent strict precision checks see the same cents.
+    static func double(_ value: Decimal) -> Double {
+        Double(NSDecimalNumber(decimal: value).stringValue) ?? .nan
+    }
+
     static func validReference(_ value: String) -> Bool {
         value != "." && value != ".." && value.range(of: "^[A-Za-z0-9._:-]{1,128}$", options: .regularExpression) != nil
     }

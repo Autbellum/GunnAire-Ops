@@ -289,7 +289,7 @@ enum BillingDocumentDiscountPolicy {
     static func netSubtotal(snapshotJSON: String?) -> Double? {
         let lines = CatalogLineItemSnapshot.decoded(from: snapshotJSON)
         guard !lines.isEmpty else { return nil }
-        let grossSubtotal = lines.reduce(0) { $0 + ($1.unitPrice * $1.quantity) }
+        let grossSubtotal = lines.reduce(0) { $0 + $1.extendedAmount }
         guard grossSubtotal.isFinite, grossSubtotal >= 0 else { return nil }
         if let discount = CatalogLineItemSnapshot.documentDiscount(from: snapshotJSON) {
             guard let discountAmount = discount.amount(for: grossSubtotal) else { return nil }
@@ -301,7 +301,7 @@ enum BillingDocumentDiscountPolicy {
     static func grossSubtotal(snapshotJSON: String?) -> Double? {
         let lines = CatalogLineItemSnapshot.decoded(from: snapshotJSON)
         guard !lines.isEmpty else { return nil }
-        let total = lines.reduce(0) { $0 + ($1.unitPrice * $1.quantity) }
+        let total = lines.reduce(0) { $0 + $1.extendedAmount }
         return total.isFinite && total >= 0 ? roundCurrency(total) : nil
     }
 
@@ -413,6 +413,7 @@ enum BillingPriceAdjustmentAudit {
             entries.append(existing)
         }
         let adjustmentEntries = CatalogLineItemSnapshot.decoded(from: snapshotJSON)
+            .flatMap(\.soldLeaves)
             .filter(\.hasAuthorizedPriceAdjustment)
             .compactMap { snapshot -> String? in
                 guard let reason = normalized(snapshot.priceAdjustmentReason),
@@ -429,6 +430,7 @@ enum BillingPriceAdjustmentAudit {
 
     static func customerDocumentSummary(snapshotJSON: String?) -> String? {
         let summaries = CatalogLineItemSnapshot.decoded(from: snapshotJSON)
+            .flatMap(\.soldLeaves)
             .filter(\.hasAuthorizedPriceAdjustment)
             .compactMap { snapshot -> String? in
                 guard let reason = normalized(snapshot.priceAdjustmentReason) else { return nil }
@@ -583,6 +585,9 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
     let priceAdjustmentAuthorizedAt: Date?
     let servicedEquipment: CatalogLineEquipmentSnapshot?
     let assembly: CatalogLineAssemblySnapshot?
+    /// Ordered sold QBO members. Unlike service assemblies, repeated item IDs
+    /// remain separate rows with their own stable position identity.
+    let bundle: CatalogBundleSnapshot?
 
     var id: UUID { catalogItemID }
 
@@ -591,7 +596,8 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
         quantity: Double = 1,
         priceAdjustment: AuthorizedLinePriceAdjustment? = nil,
         servicedEquipment: CatalogLineEquipmentSnapshot? = nil,
-        assembly: CatalogLineAssemblySnapshot? = nil
+        assembly: CatalogLineAssemblySnapshot? = nil,
+        bundle: CatalogBundleSnapshot? = nil
     ) {
         catalogItemID = item.id
         itemTypeRawValue = item.itemTypeRawValue
@@ -608,13 +614,14 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
             ? (assembly?.unitPurchaseCost ?? item.purchaseCost)
             : item.purchaseCost
         isTaxable = item.isTaxable
-        self.quantity = max(quantity, 0.0001)
+        self.quantity = quantity
         catalogUpdatedAt = item.timestamp
         priceAdjustmentReason = priceAdjustment?.reason
         priceAdjustmentAuthorizedByEmail = priceAdjustment?.authorizedByEmail
         priceAdjustmentAuthorizedAt = priceAdjustment?.authorizedAt
         self.servicedEquipment = servicedEquipment
         self.assembly = assembly
+        self.bundle = bundle
     }
 
     private init(
@@ -634,7 +641,8 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
         priceAdjustmentAuthorizedByEmail: String?,
         priceAdjustmentAuthorizedAt: Date?,
         servicedEquipment: CatalogLineEquipmentSnapshot?,
-        assembly: CatalogLineAssemblySnapshot?
+        assembly: CatalogLineAssemblySnapshot?,
+        bundle: CatalogBundleSnapshot? = nil
     ) {
         self.catalogItemID = catalogItemID
         self.itemTypeRawValue = itemTypeRawValue
@@ -646,13 +654,14 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
         self.unitPrice = unitPrice
         self.purchaseCost = purchaseCost
         self.isTaxable = isTaxable
-        self.quantity = max(quantity, 0.0001)
+        self.quantity = quantity
         self.catalogUpdatedAt = catalogUpdatedAt
         self.priceAdjustmentReason = priceAdjustmentReason
         self.priceAdjustmentAuthorizedByEmail = priceAdjustmentAuthorizedByEmail
         self.priceAdjustmentAuthorizedAt = priceAdjustmentAuthorizedAt
         self.servicedEquipment = servicedEquipment
         self.assembly = assembly
+        self.bundle = bundle
     }
 
     var hasAuthorizedPriceAdjustment: Bool {
@@ -695,11 +704,12 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
         priceAdjustments: [UUID: AuthorizedLinePriceAdjustment] = [:],
         servicedEquipment: [UUID: CatalogLineEquipmentSnapshot] = [:],
         assemblies: [UUID: CatalogLineAssemblySnapshot] = [:],
+        bundles: [UUID: CatalogLineItemSnapshot] = [:],
         documentDiscount: AuthorizedDocumentDiscount? = nil
     ) -> String? {
         let snapshots = items
             .map {
-                CatalogLineItemSnapshot(
+                bundles[$0.id] ?? CatalogLineItemSnapshot(
                     item: $0,
                     quantity: quantities[$0.id] ?? 1,
                     priceAdjustment: priceAdjustments[$0.id],
@@ -750,8 +760,64 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
             priceAdjustmentAuthorizedByEmail: priceAdjustmentAuthorizedByEmail,
             priceAdjustmentAuthorizedAt: priceAdjustmentAuthorizedAt,
             servicedEquipment: servicedEquipment,
-            assembly: assembly
+            assembly: assembly,
+            bundle: bundle
         )
+    }
+
+    func replacingBundle(_ bundle: CatalogBundleSnapshot, quantity: Double? = nil) -> Self {
+        Self(catalogItemID: catalogItemID, itemTypeRawValue: itemTypeRawValue,
+             quickBooksItemID: quickBooksItemID, name: name, description: description, sku: sku,
+             pricebookUnitPrice: pricebookUnitPrice, unitPrice: unitPrice, purchaseCost: purchaseCost,
+             isTaxable: isTaxable, quantity: quantity ?? self.quantity, catalogUpdatedAt: catalogUpdatedAt,
+             priceAdjustmentReason: priceAdjustmentReason,
+             priceAdjustmentAuthorizedByEmail: priceAdjustmentAuthorizedByEmail,
+             priceAdjustmentAuthorizedAt: priceAdjustmentAuthorizedAt, servicedEquipment: servicedEquipment,
+             assembly: assembly, bundle: bundle)
+    }
+
+    func replacingSale(quantity: Double, adjustment: AuthorizedLinePriceAdjustment?, taxable: Bool) -> Self {
+        Self(catalogItemID: catalogItemID, itemTypeRawValue: itemTypeRawValue,
+             quickBooksItemID: quickBooksItemID, name: name, description: description, sku: sku,
+             pricebookUnitPrice: pricebookUnitPrice, unitPrice: adjustment?.unitPrice ?? unitPrice,
+             purchaseCost: purchaseCost, isTaxable: taxable, quantity: quantity, catalogUpdatedAt: catalogUpdatedAt,
+             priceAdjustmentReason: adjustment?.reason ?? priceAdjustmentReason,
+             priceAdjustmentAuthorizedByEmail: adjustment?.authorizedByEmail ?? priceAdjustmentAuthorizedByEmail,
+             priceAdjustmentAuthorizedAt: adjustment?.authorizedAt ?? priceAdjustmentAuthorizedAt,
+             servicedEquipment: servicedEquipment, assembly: assembly, bundle: bundle)
+    }
+
+    func replacingEquipment(_ equipment: CatalogLineEquipmentSnapshot?) -> Self {
+        Self(catalogItemID: catalogItemID, itemTypeRawValue: itemTypeRawValue,
+             quickBooksItemID: quickBooksItemID, name: name, description: description, sku: sku,
+             pricebookUnitPrice: pricebookUnitPrice, unitPrice: unitPrice, purchaseCost: purchaseCost,
+             isTaxable: isTaxable, quantity: quantity, catalogUpdatedAt: catalogUpdatedAt,
+             priceAdjustmentReason: priceAdjustmentReason, priceAdjustmentAuthorizedByEmail: priceAdjustmentAuthorizedByEmail,
+             priceAdjustmentAuthorizedAt: priceAdjustmentAuthorizedAt, servicedEquipment: equipment,
+             assembly: assembly, bundle: bundle)
+    }
+
+    /// The same sold leaves drive tax, cost, stock and audit. Never count a
+    /// zero-price bundle header or multiply already-extended members again.
+    var soldLeaves: [Self] { bundle?.members.map(\.line) ?? [self] }
+    var extendedAmount: Double {
+        if let bundle {
+            var total = Decimal.zero
+            for member in bundle.members {
+                guard let amount = QuickBooksSalesLineContract.decimal(member.line.extendedAmount, places: 2) else { return .nan }
+                total += amount
+            }
+            return QuickBooksSalesLineContract.double(total)
+        }
+        guard let qty = QuickBooksSalesLineContract.decimal(quantity, places: 5, maximum: 999_999),
+              let price = QuickBooksSalesLineContract.decimal(unitPrice, places: 5) else { return .nan }
+        return QuickBooksSalesLineContract.double(QuickBooksSalesLineContract.rounded(qty * price))
+    }
+    var customerSummary: String {
+        let base = "\(name) - \(extendedAmount.formatted(.currency(code: "USD"))) • Qty \(quantity.formatted(.number.precision(.fractionLength(0...5))))"
+        let equipment = servicedEquipment.map { " • System: \($0.customerLabel)" } ?? ""
+        guard let bundle, bundle.printGroupedItems else { return base + equipment }
+        return ([base + equipment] + bundle.members.map { "  " + $0.line.customerSummary }).joined(separator: "\n")
     }
 
     static func decoded(from json: String?) -> [CatalogLineItemSnapshot] {
@@ -777,7 +843,7 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
     private enum CodingKeys: String, CodingKey {
         case catalogItemID, name, description, sku, pricebookUnitPrice, unitPrice, purchaseCost, isTaxable, quantity, catalogUpdatedAt
         case priceAdjustmentReason, priceAdjustmentAuthorizedByEmail, priceAdjustmentAuthorizedAt
-        case servicedEquipment, assembly
+        case servicedEquipment, assembly, bundle
         case itemTypeRawValue, quickBooksItemID
     }
 
@@ -793,13 +859,19 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
         pricebookUnitPrice = try values.decodeIfPresent(Double.self, forKey: .pricebookUnitPrice) ?? unitPrice
         purchaseCost = try values.decodeIfPresent(Double.self, forKey: .purchaseCost)
         isTaxable = try values.decode(Bool.self, forKey: .isTaxable)
-        quantity = max(try values.decodeIfPresent(Double.self, forKey: .quantity) ?? 1, 0.0001)
+        quantity = try values.decodeIfPresent(Double.self, forKey: .quantity) ?? 1
         catalogUpdatedAt = try values.decode(Date.self, forKey: .catalogUpdatedAt)
         priceAdjustmentReason = try values.decodeIfPresent(String.self, forKey: .priceAdjustmentReason)
         priceAdjustmentAuthorizedByEmail = try values.decodeIfPresent(String.self, forKey: .priceAdjustmentAuthorizedByEmail)
         priceAdjustmentAuthorizedAt = try values.decodeIfPresent(Date.self, forKey: .priceAdjustmentAuthorizedAt)
         servicedEquipment = try values.decodeIfPresent(CatalogLineEquipmentSnapshot.self, forKey: .servicedEquipment)
         assembly = try values.decodeIfPresent(CatalogLineAssemblySnapshot.self, forKey: .assembly)
+        // Reject recursive bundle evidence before decoding another member tree.
+        if values.contains(.bundle), !((try? values.decodeNil(forKey: .bundle)) ?? false),
+           decoder.codingPath.contains(where: { $0.stringValue == "bundle" }) {
+            throw DecodingError.dataCorruptedError(forKey: .bundle, in: values, debugDescription: "Nested bundles are unsupported")
+        }
+        bundle = try values.decodeIfPresent(CatalogBundleSnapshot.self, forKey: .bundle)
     }
 }
 

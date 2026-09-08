@@ -301,7 +301,7 @@ enum BusinessReporting {
         var materialCost = 0.0
         var missingMaterialCostLineCount = 0
         for invoice in periodInvoices {
-            let lines = invoice.catalogLineSnapshots
+            let lines = invoice.catalogLineSnapshots.flatMap(\.soldLeaves)
             if lines.isEmpty && invoice.amount > 0 {
                 missingMaterialCostLineCount += 1
             }
@@ -628,7 +628,7 @@ enum BusinessReporting {
             var materialCost = 0.0
             var missingMaterialCostLineCount = 0
             for invoice in groupedInvoices {
-                let lines = invoice.catalogLineSnapshots
+                let lines = invoice.catalogLineSnapshots.flatMap(\.soldLeaves)
                 if lines.isEmpty && invoice.amount > 0 {
                     missingMaterialCostLineCount += 1
                 }

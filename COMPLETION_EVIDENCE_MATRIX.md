@@ -1,3 +1,19 @@
+Native bundle composer candidate, 2026-09-08: NATIVE_BUNDLE_COMPOSITION.md
+records native category paths, ordered immutable bundle selection and independent
+member editing/removal for invoices and estimates, customer/system boundaries,
+exact line cents, leaf tax/cost/stock/reporting and real publication/recovery
+through isolated transports. Retained tests exposed and corrected a Save-blocking
+iPad numeric-keyboard issue and an unrelated disclosure opening during bundle
+review. New CI execution verification rejects missing selected UI tests even
+when the other tests pass. Final corrected source passes 1,365 logic tests on
+each native platform, eight iPad UI journeys, 546 Backend tests, 51 Tools tests
+and unsigned universal Mac Release. Exact execution checks confirm all selected
+UI methods. Source hashes match the original project; publication/hosted checks
+remain separate. Milestone billing, editable provider imports, signed CloudKit
+and mixed-version safety, live sandbox acceptance, remaining Google/vendor and
+access-level workflows, ten-competitor coverage, and physical Handoff/Tap to Pay
+remain required. The full business-suite objective is not complete.
+
 Bundle transaction checkpoint, 2026-09-08: QBO_BUNDLE_TRANSACTION_CONTRACT.md
 records actual GroupLineDetail support in shared publication, fixed-origin
 preflight, original-business mappings, field approval, existing-link adoption,
