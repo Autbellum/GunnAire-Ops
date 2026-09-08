@@ -51,7 +51,31 @@ class NativeBilling:
             intent["project_milestone_id"] = canonical_uuid(value["projectMilestoneID"])
         return intent
 
-    def inspect(self, connection, session, intent):
+    def connection(self, session, query):
+        """Discover the server-owned grant using only an authorized saved identity.
+
+        No OAuth material, customer data or provider call is returned. Admins
+        can prepare an as-yet unmapped customer; publication still separately
+        enforces its original administrator/customer/catalog prerequisites.
+        """
+        required = {"companyID", "documentType", "localDocumentID", "localCustomerID"}
+        if not isinstance(query, dict) or set(query) not in (
+                required, required | {"serviceCallID"}, required | {"serviceCallID", "projectMilestoneID"}):
+            raise failure("invalid_query", "Choose the original saved billing document.", 400)
+        p = self.publisher
+        with p.database() as database:
+            p.actor(database, session)
+            grant = database.execute("SELECT * FROM qbo_connections WHERE id=1").fetchone()
+            if grant is None:
+                raise failure("provider_changed", "Ask the administrator to connect this business to QuickBooks.")
+            intent = self.query({**query, "realmID": grant["realm_id"], "environment": grant["environment"]})
+            value, _ = self.inspect(database, session, intent, require_customer=False)
+            return {**{key: value[key] for key in (
+                "companyID", "realmID", "environment", "documentType", "localDocumentID", "localCustomerID",
+                "serviceCallID", "connectionRevision")}, "protocolVersion": 1,
+                "projectMilestoneID": intent.get("project_milestone_id")}
+
+    def inspect(self, connection, session, intent, *, require_customer=True):
         p = self.publisher
         actor, fingerprint = p.assignments.context(connection, session, intent)
         office = billing.office_role(actor["role"], intent["document_type"])
@@ -68,7 +92,7 @@ class NativeBilling:
             raise failure("job_changed", "Retain this document's original job and customer.")
         customer = connection.execute("SELECT provider_id FROM customer_entity_mappings WHERE company_id=? AND realm_id=? AND environment=? AND local_customer_id=?",
                                       (*scope(intent), intent["local_customer_id"])).fetchone()
-        if customer is None:
+        if customer is None and require_customer:
             raise failure("customer_review", "Ask the office to review this customer's shared QuickBooks link.")
         mapping = connection.execute("SELECT * FROM billing_entity_mappings WHERE company_id=? AND realm_id=? AND environment=? AND document_type=? AND local_document_id=?",
                                      billing.document_scope(intent)).fetchone()
@@ -79,7 +103,7 @@ class NativeBilling:
         value = {"companyID": intent["company_id"], "realmID": intent["realm_id"], "environment": intent["environment"],
             "documentType": intent["document_type"], "localDocumentID": intent["local_document_id"], "localCustomerID": intent["local_customer_id"],
             "serviceCallID": intent.get("service_call_id"), "connectionRevision": assignments.connection_revision(fingerprint),
-            "customerProviderID": customer[0], "providerID": mapping["provider_id"] if mapping else None,
+            "customerProviderID": customer[0] if customer else None, "providerID": mapping["provider_id"] if mapping else None,
             "authority": "office" if office else "assigned",
             "assignment": p.assignments.public(connection, assignment, fingerprint) if assignment else None}
         if "project_milestone_id" in intent:

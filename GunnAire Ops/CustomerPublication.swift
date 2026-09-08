@@ -21,6 +21,7 @@ struct CustomerPublicationRequest: Encodable {
     let environment: String
     let localCustomerID: UUID
     let customer: QuickBooksCustomerCreate
+    var connectionRevision: String? = nil
 }
 
 struct CustomerPublicationRecord: Decodable, Identifiable {
@@ -79,6 +80,7 @@ enum CustomerPublicationBoundary {
         guard let companyID = workflow.companyID, let realmID = workflow.realmID, !realmID.isEmpty,
               ["sandbox", "production"].contains(workflow.environment) else { throw CustomerPublicationError.accessRequired }
         return .init(companyID: companyID, realmID: realmID, environment: workflow.environment,
-                     localCustomerID: draft.localCustomerID, customer: QuickBooksCustomerCreateOperation.payload(for: draft))
+                     localCustomerID: draft.localCustomerID, customer: QuickBooksCustomerCreateOperation.payload(for: draft),
+                     connectionRevision: workflow.sharedBillingConnectionRevision)
     }
 }

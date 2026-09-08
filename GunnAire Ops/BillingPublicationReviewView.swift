@@ -185,12 +185,15 @@ import SwiftData
             if flow == nil {
                 #if DEBUG
                 if GunnAireCloudKit.usesTestDatabase, ProcessInfo.processInfo.arguments.contains("-uiTestNativeBillingReview") {
-                    try loadFixture()
+                    try await loadFixture()
                 }
                 #endif
             }
             if flow == nil {
-                let value = try QuickBooksBillingWorkflow(document: document, context: context, api: .shared, lifecycle: lifecycle)
+                let preparation = try SharedBillingPreparation(document: document, context: context,
+                    isCurrent: { visit == visitID })
+                let value = try await preparation.makeWorkflow(lifecycle: lifecycle)
+                guard visit == visitID else { throw CancellationError() }
                 flow = value; shared = try value.openSharedReview()
             }
             try await refresh()
@@ -292,7 +295,7 @@ import SwiftData
     }
 
     #if DEBUG
-    private func loadFixture() throws {
+    private func loadFixture() async throws {
         let company = UUID(uuidString: "10000000-0000-4000-8000-000000000001")!
         let attempt = UUID(uuidString: "10000000-0000-4000-8000-000000000002")!
         let stage = UUID(uuidString: "10000000-0000-4000-8000-000000000007")!
@@ -318,6 +321,13 @@ import SwiftData
         var saved: BillingNativeJournal?
         let store = BillingNativeJournalStore(read: { scope in saved ?? .init(scope: scope) }, write: { saved = $0 })
         let client = BillingPublicationClient { path, method, _ in
+            if method == "GET", path.hasPrefix("/api/billing-publications/connection?") {
+                let query = Dictionary(uniqueKeysWithValues: (URLComponents(string: path)?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+                var response: [String: Any] = query
+                response.merge(["realmID": "billing-review-fixture", "environment": Config.QuickBooks.environment,
+                    "connectionRevision": String(repeating: "a", count: 64), "protocolVersion": 1]) { _, new in new }
+                return try JSONSerialization.data(withJSONObject: response)
+            }
             guard let request else { throw BillingNativeError.pending }
             let row: [String: Any] = ["id": attempt.uuidString, "companyID": company.uuidString, "realmID": request.realmID,
                 "environment": request.environment, "documentType": request.documentType.rawValue,
@@ -355,9 +365,6 @@ import SwiftData
             // No fixture may fall through to real accounting or any send.
             throw BillingPublicationError.unavailable
         }
-        let api = QuickBooksDataAPI(testTokens: .init(accessToken: "fixture", expiration: .distantFuture),
-            realmID: "billing-review-fixture", environment: Config.QuickBooks.environment, catalogCompanyID: company,
-            billingPublisher: client, transport: { _ in throw BillingPublicationError.unavailable })
         let fixtureItems = try context.fetch(FetchDescriptor<Item>())
         let selected = Set(CatalogLineItemSnapshot.decoded(from: document.snapshotJSON).map(\.catalogItemID))
         for item in fixtureItems where selected.contains(item.id) && item.quickBooksID == nil {
@@ -365,7 +372,12 @@ import SwiftData
         }
         if document.customer?.quickBooksID == nil { document.customer?.quickBooksID = "BILLING-UI-CUSTOMER" }
         try context.save()
-        let value = try QuickBooksBillingWorkflow(document: document, context: context, api: api, lifecycle: lifecycle, billingJournal: store)
+        let visit = visitID
+        let preparation = try SharedBillingPreparation(document: document, context: context,
+            isCurrent: { visit == visitID }, client: client,
+            catalog: { _ in throw CatalogPublicationError.unavailable },
+            customer: { _ in throw CustomerPublicationError.unavailable }, fixtureCompanyID: company)
+        let value = try await preparation.makeWorkflow(lifecycle: lifecycle, billingJournal: store)
         guard let customer = document.customer else { throw BillingNativeError.pending }
         var lines = try QuickBooksDocumentLinePublication.lines(snapshotJSON: document.snapshotJSON,
             expectedSubtotal: document.subtotal, catalogItems: fixtureItems)

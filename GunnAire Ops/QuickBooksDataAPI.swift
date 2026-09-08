@@ -143,6 +143,8 @@ final class QuickBooksDataAPI: ObservableObject {
     let billingPublicationClient: BillingPublicationClient?
     let catalogRecoveryTransport: (UUID) async throws -> CatalogPublicationResponse
     private let catalogFixtureCompanyID: UUID?
+    private var sharedBillingOperation: WorkspaceProviderOperation?
+    private(set) var sharedBillingConnectionRevision: String?
     private struct WorkflowScope: Sendable {
         let owner: ObjectIdentifier
         let operation: WorkspaceProviderOperation
@@ -166,6 +168,25 @@ final class QuickBooksDataAPI: ObservableObject {
         catalogFixtureCompanyID = nil
         loadTokens()
         startAutomaticTokenRefresh()
+    }
+
+    /// Ephemeral business-session billing, never an OAuth connection. It cannot
+    /// issue a direct Intuit request, load credentials, or start a refresh timer.
+    init(sharedBilling connection: SharedBillingConnection, operation: WorkspaceProviderOperation,
+         billingPublisher: BillingPublicationClient,
+         catalogPublisher: @escaping CatalogPublicationBoundary.Transport,
+         customerPublisher: @escaping CustomerPublicationBoundary.Transport) {
+        requestTransport = { _ in throw BillingPublicationError.accessRequired }
+        persistsCredentials = false
+        catalogFixtureCompanyID = connection.identity.companyID
+        catalogPublicationTransport = catalogPublisher
+        customerPublicationTransport = customerPublisher
+        billingPublicationClient = billingPublisher
+        catalogRecoveryTransport = { _ in throw CatalogPublicationError.needsReview }
+        storedRealmID = connection.realmID
+        storedEnvironment = connection.environment
+        sharedBillingConnectionRevision = connection.connectionRevision
+        sharedBillingOperation = operation
     }
 
     #if DEBUG
@@ -705,6 +726,10 @@ final class QuickBooksDataAPI: ObservableObject {
             try scope.operation.check()
             return scope.operation
         }
+        if let sharedBillingOperation {
+            try sharedBillingOperation.check()
+            return sharedBillingOperation
+        }
         let generation = connectionGeneration
         let context = retryContext
         return try WorkspaceProviderOperation.capture {
@@ -728,6 +753,7 @@ final class QuickBooksDataAPI: ObservableObject {
         let realmID: String?
         let environment: String
         let companyID: UUID?
+        var sharedBillingConnectionRevision: String? { api.sharedBillingConnectionRevision }
 
         var successfulSyncDateKey: String? {
             guard let companyID, let realmID, !realmID.isEmpty else { return nil }

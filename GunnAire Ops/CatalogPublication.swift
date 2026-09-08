@@ -21,6 +21,7 @@ struct CatalogPublicationRequest: Encodable {
     let localItemID: UUID
     let operation: String
     let item: Payload
+    var connectionRevision: String? = nil
 
     enum Payload: Encodable {
         case create(QuickBooksItemCreate), update(QuickBooksItemUpdate)
@@ -92,6 +93,7 @@ enum CatalogPublicationBoundary {
         let operation: String
         switch payload { case .create: operation = "create"; case .update: operation = "update" }
         return .init(companyID: companyID, realmID: realmID, environment: workflow.environment,
-                     localItemID: itemID, operation: operation, item: payload)
+                     localItemID: itemID, operation: operation, item: payload,
+                     connectionRevision: workflow.sharedBillingConnectionRevision)
     }
 }

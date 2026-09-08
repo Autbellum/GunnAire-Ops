@@ -14,10 +14,10 @@ import uuid
 from datetime import datetime, timezone
 
 try:
-    from Backend.catalog_publications import canonical, failure, scope
+    from Backend.catalog_publications import canonical, failure, scope, connection_pin, validate_connection_pin
     from Backend.payment_attempts import AttemptError, canonical_uuid, grant_fingerprint, reference
 except ModuleNotFoundError:
-    from catalog_publications import canonical, failure, scope
+    from catalog_publications import canonical, failure, scope, connection_pin, validate_connection_pin
     from payment_attempts import AttemptError, canonical_uuid, grant_fingerprint, reference
 
 SCHEMA = """
@@ -86,13 +86,14 @@ def validate_customer(value):
 
 
 def validated_request(payload):
-    if not isinstance(payload, dict) or set(payload) != {"companyID", "realmID", "environment", "localCustomerID", "customer"}:
+    required = {"companyID", "realmID", "environment", "localCustomerID", "customer"}
+    if not isinstance(payload, dict) or set(payload) not in (required, required | {"connectionRevision"}):
         raise failure("invalid_request", "Use the supported customer publication fields only.", 400)
     if payload["environment"] not in ("sandbox", "production"):
         raise failure("invalid_request", "Choose a valid QuickBooks environment.", 400)
     return {"company_id": canonical_uuid(payload["companyID"]), "realm_id": reference(payload["realmID"]),
             "environment": payload["environment"], "local_customer_id": canonical_uuid(payload["localCustomerID"]),
-            "customer": validate_customer(payload["customer"])}
+            "customer": validate_customer(payload["customer"]), **connection_pin(payload)}
 
 
 def validated_remote(remote):
@@ -159,6 +160,7 @@ class CustomerPublisher:
         if grant is None or grant["realm_id"] != intent["realm_id"] or grant["environment"] != intent["environment"]:
             raise failure("provider_changed", "Reconnect the original QuickBooks company.")
         fingerprint = grant_fingerprint(grant)
+        validate_connection_pin(intent, fingerprint)
         if require_grant and fingerprint != intent["grant_fingerprint"]:
             raise failure("grant_changed", "QuickBooks was reconnected. Review the original customer attempt before retrying.")
         return actor, {**dict(grant), "grant_fingerprint": fingerprint}
@@ -176,7 +178,10 @@ class CustomerPublisher:
 
     def reserve(self, session_id, payload):
         intent = validated_request(payload)
-        digest = hashlib.sha256(canonical(intent).encode()).hexdigest()
+        # Preserve the existing encrypted-proposal integrity format. The pin
+        # is authorization evidence, checked in the reservation transaction
+        # and retained by the attempt's original grant_fingerprint.
+        digest = hashlib.sha256(canonical({key: value for key, value in intent.items() if key != "connection_revision"}).encode()).hexdigest()
         ciphertext = self.encrypt(canonical(intent["customer"]))
         with self.database() as connection:
             connection.execute("BEGIN IMMEDIATE")

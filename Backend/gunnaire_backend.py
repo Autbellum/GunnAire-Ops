@@ -53,7 +53,7 @@ except ModuleNotFoundError:
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.08.39"
+SERVICE_VERSION = "2026.09.08.40"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -6022,7 +6022,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         suffix = parsed.path.removeprefix("/api/billing-publications")
         parts = suffix[1:].split("/") if suffix.startswith("/") else []
         try:
-            if method == "GET" and (assignments or not suffix or parts == ["context"]):
+            if method == "GET" and (assignments or not suffix or parts in (["context"], ["connection"])):
                 query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
                 if any(len(value) != 1 for value in query.values()):
                     raise billing_publications.failure("invalid_query", "Choose one original job or billing document.", 400)
@@ -6031,6 +6031,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                     result = publisher.assignments.read(session_id, query)
                 elif parts == ["context"]:
                     result = native.context(session_id, query)
+                elif parts == ["connection"]:
+                    result = native.connection(session_id, query)
                 else:
                     result = publisher.list_for_document(session_id, query)
             elif method == "GET" and len(parts) == 1 and not parsed.query:

@@ -1932,7 +1932,7 @@ struct QuickBooksManagementView: View {
                                             .buttonStyle(.borderedProminent)
                                             .tint(Color.brandGold)
                                             .foregroundStyle(Color.primaryBlack)
-                                            .disabled(!isAuthenticated || activeLocalEstimatePublicationID != nil)
+                                            .disabled(activeLocalEstimatePublicationID != nil)
 
                                             BillingPublicationReviewLink(document: .estimate(estimate), context: modelContext)
 
@@ -2008,7 +2008,7 @@ struct QuickBooksManagementView: View {
                                             .buttonStyle(.borderedProminent)
                                             .tint(Color.brandGold)
                                             .foregroundStyle(Color.primaryBlack)
-                                            .disabled(!isAuthenticated || activeLocalInvoicePublicationID != nil)
+                                            .disabled(activeLocalInvoicePublicationID != nil)
 
                                             BillingPublicationReviewLink(document: .invoice(invoice), context: modelContext)
 
@@ -4827,26 +4827,23 @@ struct QuickBooksManagementView: View {
     }
 
     private func retryBillingPublication(_ document: QuickBooksBillingDocument) {
-        guard isAuthenticated else {
-            actionMessage = "Reconnect QuickBooks before retrying publication."
-            return
-        }
         let owner = QuickBooksSyncLifecycle()
         let key = "\(document.label)-\(document.id)"
         guard billingPublicationLifecycles[key] == nil else { return }
+        billingPublicationLifecycles[key] = owner
         do {
-            let workflow = try QuickBooksBillingWorkflow(document: document, context: modelContext,
-                api: quickBooksDataAPI, lifecycle: owner,
+            let preparation = try SharedBillingPreparation(document: document, context: modelContext,
+                isCurrent: { billingPublicationLifecycles[key] === owner },
                 validateAccess: { try QuickBooksSyncAccessPolicy.validate(context: modelContext) })
-            billingPublicationLifecycles[key] = owner
             switch document {
             case .invoice: activeLocalInvoicePublicationID = document.id
             case .estimate: activeLocalEstimatePublicationID = document.id
             }
             actionMessage = "Checking the saved document in QuickBooks..."
             Task { @MainActor in
+                var workflow: QuickBooksBillingWorkflow?
                 defer {
-                    owner.finish(workflow.run)
+                    owner.cancel()
                     if billingPublicationLifecycles[key] === owner {
                         billingPublicationLifecycles.removeValue(forKey: key)
                         switch document {
@@ -4856,6 +4853,9 @@ struct QuickBooksManagementView: View {
                     }
                 }
                 do {
+                    let prepared = try await preparation.makeWorkflow(lifecycle: owner)
+                    workflow = prepared
+                    let workflow = prepared
                     try await workflow.run.perform {
                         await accountingConfigurationStore.refresh(realmID: workflow.run.workflow.realmID,
                             environment: workflow.run.workflow.environment, validate: workflow.check)
@@ -4875,6 +4875,8 @@ struct QuickBooksManagementView: View {
                     do { try await workflow.uploadLinkedAttachments() }
                     catch { actionMessage = outcome.message + " Supporting files remain pending: " + error.localizedDescription }
                 } catch {
+                    guard billingPublicationLifecycles[key] === owner else { return }
+                    guard let workflow else { actionMessage = error.localizedDescription; return }
                     do { try workflow.recordFailure(error) }
                     catch QuickBooksBillingWorkflowError.saveFailed {
                         actionMessage = QuickBooksBillingWorkflowError.saveFailed.localizedDescription
@@ -4883,7 +4885,10 @@ struct QuickBooksManagementView: View {
                     actionMessage = workflow.failureMessage(error)
                 }
             }
-        } catch { actionMessage = error.localizedDescription }
+        } catch {
+            if billingPublicationLifecycles[key] === owner { billingPublicationLifecycles.removeValue(forKey: key) }
+            actionMessage = error.localizedDescription
+        }
     }
 
     private func quickBooksCustomer(for estimate: QuickBooksEstimate) -> QuickBooksCustomer? {

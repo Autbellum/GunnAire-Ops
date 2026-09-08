@@ -3570,7 +3570,7 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["QuickBooks update pending"].waitForExistence(timeout: 3))
         XCTAssertTrue(
-            app.staticTexts["QuickBooks is not connected. Reconnect and update this invoice again to publish its current line items."].exists
+            app.staticTexts["Saved locally. Open this document in your verified business workspace and use Sync Saved Document when online."].exists
         )
         XCTAssertTrue(app.buttons["Update Invoice"].exists)
     }
@@ -4543,7 +4543,7 @@ final class GunnAire_OpsUITests: XCTestCase {
     private func exerciseNativeBillingReview(recover: Bool, bundle: Bool = false, milestone: Bool = false, missingOriginal: Bool = false, retain: Bool = false, jobHandoff: String? = nil) throws {
         let app = XCUIApplication()
         app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-appStoreScreenshotFixtures",
-            "-uiTestSeedCollectibleJob", "-uiTestNativeBillingReview"]
+            "-uiTestSeedCollectibleJob", "-uiTestNativeBillingReview", "-uiTestForceQuickBooksDisconnected"]
         // A launch-domain route stays pinned even after a runtime handoff.
         // Cross-workspace journeys must enter through ordinary navigation.
         if jobHandoff == nil { app.launchArguments += ["-GunnAirePendingAppRoute", "invoices"] }

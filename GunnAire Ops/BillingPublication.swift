@@ -324,6 +324,9 @@ struct BillingPublicationClient {
 
     func publish(_ request: BillingPublicationRequest, workflow: QuickBooksDataAPI.CapturedWorkspaceWorkflow) async throws -> BillingPublicationResponse {
         try request.scope.validate(workflow); try request.validate()
+        if let pin = workflow.sharedBillingConnectionRevision, request.connectionRevision != pin {
+            throw BillingPublicationError.reviewRequired
+        }
         let result = try await perform(BillingPublicationResponse.self, path: "/api/billing-publications",
                                        body: encode(request), workflow: workflow)
         try result.validate(request.scope, customerID: request.localCustomerID, providerCustomerID: request.document.CustomerRef.value)
@@ -385,6 +388,9 @@ struct BillingPublicationClient {
         }
         let result = try await perform(BillingNativeContext.self, path: path("/api/billing-publications/context", query), workflow: workflow)
         try result.validate(scope, customerID: customerID, jobID: jobID, milestoneID: milestoneID)
+        if let pin = workflow.sharedBillingConnectionRevision, result.connectionRevision != pin {
+            throw BillingPublicationError.reviewRequired
+        }
         return result
     }
 

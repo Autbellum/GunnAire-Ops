@@ -30,6 +30,65 @@ class NativeBillingTests(BillingFixture, unittest.TestCase):
     def context(self, role="Admin", query=None):
         return self.native.context(self.sessions[role], query or self.query())
 
+    def connection_query(self, **changes):
+        return {key: value for key, value in self.query(**changes).items() if key not in ("realmID", "environment")}
+
+    def test_shared_connection_discovery_has_only_original_identity_and_public_epoch(self):
+        query = self.connection_query()
+        result = self.native.connection(self.admin, query)
+        self.assertEqual(result, {**query, "realmID": "realm", "environment": "sandbox", "protocolVersion": 1,
+                                 "connectionRevision": self.payload()["connectionRevision"], "projectMilestoneID": None})
+        self.assertFalse(self.writes)
+        self.preflight.assert_not_called()
+
+    def test_connection_discovery_allows_unmapped_admin_customer_without_creating_it(self):
+        with backend.db() as connection:
+            connection.execute("DELETE FROM customer_entity_mappings")
+        self.native.connection(self.admin, self.connection_query())
+        self.expect("customer_review", lambda: self.context())
+        self.assertFalse(self.writes)
+
+    def test_connection_discovery_enforces_kind_roles_and_current_job_assignment(self):
+        query = self.connection_query()
+        for role in ("Standard", "Dispatcher", "Field Technician"):
+            self.expect("access_denied", lambda: self.native.connection(self.sessions[role], query))
+        self.native.connection(self.sessions["Accounting"], query)
+        self.native.connection(self.sessions["Dispatcher"], self.connection_query(documentType="Estimate"))
+        self.save_assignment()
+        self.native.connection(self.sessions["Field Technician"], query)
+        with backend.db() as connection:
+            connection.execute("UPDATE qbo_connections SET authorized_at='replacement'")
+        self.expect("access_denied", lambda: self.native.connection(self.sessions["Field Technician"], query))
+        self.assertFalse(self.writes)
+
+    def test_connection_discovery_cannot_rebind_existing_invoice_or_adopt_supplied_realm(self):
+        self.save_assignment()
+        self.mapped()
+        self.expect("access_denied", lambda: self.native.connection(self.sessions["Field Technician"], self.connection_query()))
+        self.expect("company_changed", lambda: self.native.connection(self.admin, self.connection_query(companyID=str(uuid.uuid4()))))
+        for extra in ({"realmID": "realm"}, {"environment": "sandbox"}, {"connectionRevision": "a" * 64}, {"ignored": "1"}):
+            self.expect("invalid_query", lambda: self.native.connection(self.admin, {**self.connection_query(), **extra}))
+        self.assertFalse(self.writes)
+
+    def test_discovered_grant_cannot_be_replaced_before_publication(self):
+        epoch = self.native.connection(self.admin, self.connection_query())["connectionRevision"]
+        with backend.db() as connection:
+            connection.execute("UPDATE qbo_connections SET authorized_at='replacement'")
+        self.expect("grant_changed", lambda: self.publish(self.payload(connectionRevision=epoch)))
+        self.assertFalse(self.writes)
+
+    def test_http_shared_connection_requires_session_and_exact_query(self):
+        with self.http() as request:
+            path = "/api/billing-publications/connection?" + urllib.parse.urlencode(self.connection_query())
+            status, result = request(path)
+            self.assertEqual(status, 200)
+            self.assertEqual(result["protocolVersion"], 1)
+            self.assertEqual(request(path, role="Standard")[0], 403)
+            self.assertEqual(request(path + "&companyID=" + self.company)[0], 400)
+            self.assertEqual(request(path + "&realmID=realm")[0], 400)
+            self.assertEqual(request("/api/billing-publications/connection", {})[0], 400)
+        self.assertFalse(self.writes)
+
     def mapped(self, kind="Invoice"):
         with backend.db() as connection:
             connection.execute("INSERT INTO billing_entity_mappings VALUES (?,'realm','sandbox',?,?,?,'D1')",

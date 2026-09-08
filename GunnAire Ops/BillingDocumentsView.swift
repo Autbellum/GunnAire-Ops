@@ -1035,6 +1035,12 @@ struct BillingDocumentsView: View {
         return liveAPI.isAuthenticated
     }
 
+    private var canAttemptSharedBilling: Bool {
+        // Ordinary preview/UI fixtures never contact the real business server.
+        if GunnAireCloudKit.usesTestDatabase { return false }
+        return CompanyWorkspaceAccessController.shared.authorizedContainer === modelContext.container
+    }
+
     private var accountingConfiguration: BackendQuickBooksAccountingConfiguration? {
         guard let configuration = accountingConfigurationStore.configuration,
               configuration.matches(
@@ -1641,7 +1647,7 @@ GunnAire
                                 }
                                 BillingPublicationReviewLink(document: document, context: modelContext)
                                 Button("Sync Saved \(document.label)") { publishBillingDocument(document) }
-                                    .disabled(!isQuickBooksConnected || billingSyncLifecycles["\(document.label)-\(document.id)"] != nil)
+                                    .disabled(!canAttemptSharedBilling || billingSyncLifecycles["\(document.label)-\(document.id)"] != nil)
                             } else {
                                 Button("Retry Saving Original Draft") { retryNewDocumentSave(document) }
                                     .disabled(isCreatingDocument)
@@ -1823,7 +1829,7 @@ GunnAire
                             candidate: candidate,
                             billingItem: billingItem,
                             paymentTerms: configuredDefaultInvoicePaymentTerms,
-                            quickBooksConnected: isQuickBooksConnected
+                            quickBooksConnected: canAttemptSharedBilling
                         ) {
                             try createMaintenanceAgreementInvoice(for: candidate)
                         }
@@ -2180,7 +2186,7 @@ GunnAire
                         candidate: candidate,
                         billingItem: billingItem,
                         paymentTerms: configuredDefaultInvoicePaymentTerms,
-                        quickBooksConnected: isQuickBooksConnected
+                        quickBooksConnected: canAttemptSharedBilling
                     ) {
                         try createMaintenanceAgreementInvoice(for: candidate)
                     }
@@ -5061,7 +5067,7 @@ GunnAire
             throw MaintenanceAgreementBillingWorkflowError.saveFailed(error.localizedDescription)
         }
 
-        actionMessage = isQuickBooksConnected
+        actionMessage = canAttemptSharedBilling
             ? "Agreement invoice created locally. Publishing its approved item and invoice to QuickBooks..."
             : "Agreement invoice created locally. QuickBooks publication is pending until the connection is available."
         syncInvoiceIfNeeded(invoice, customer: agreement.customer, items: [billingItem])
@@ -5158,7 +5164,7 @@ GunnAire
             do {
                 try modelContext.save()
                 linkExistingInvoiceAttachments(to: invoice, serviceCallID: call.id)
-                actionMessage = isQuickBooksConnected
+                actionMessage = canAttemptSharedBilling
                     ? "Progress invoice created locally. Syncing the approved milestone allocation to QuickBooks..."
                     : "Progress invoice created locally. QuickBooks publication is pending."
                 let restoredItems = restoredCatalogItems(
@@ -7814,13 +7820,13 @@ GunnAire
         let restoredItems = restoredCatalogItems(snapshotJSON: estimate.catalogSnapshotJSON, lineItemSummary: estimate.lineItemSummary)
         if let reportErrorMessage = conversion.reportErrorMessage {
             actionMessage = reportErrorMessage
-            if isQuickBooksConnected, !restoredItems.isEmpty {
+            if canAttemptSharedBilling, !restoredItems.isEmpty {
                 syncInvoiceIfNeeded(invoice, customer: estimate.customer, items: restoredItems)
             }
-        } else if isQuickBooksConnected, !restoredItems.isEmpty {
+        } else if canAttemptSharedBilling, !restoredItems.isEmpty {
             actionMessage = "Invoice created from estimate. Syncing to QuickBooks..."
             syncInvoiceIfNeeded(invoice, customer: estimate.customer, items: restoredItems)
-        } else if isQuickBooksConnected {
+        } else if canAttemptSharedBilling {
             actionMessage = "Invoice created from estimate. QuickBooks sync skipped because the estimate lines do not match local catalog items."
         } else {
             actionMessage = "Invoice created from estimate."
@@ -8959,7 +8965,7 @@ GunnAire
             activeServiceCall?.linkedEstimateID = estimate.id
             linkExistingEstimateAttachments(to: estimate, serviceCallID: activeServiceCall?.id)
             let documentTitle = estimate.isChangeOrder ? "Change order" : "Estimate"
-            actionMessage = isQuickBooksConnected
+            actionMessage = canAttemptSharedBilling
                 ? "\(documentTitle) created locally. Syncing to QuickBooks..."
                 : "\(documentTitle) created locally."
             if startsNewDocument { completedNewDocument = .estimate(estimate) }
@@ -9026,10 +9032,10 @@ GunnAire
                 invoice.dueDate = resolvedInvoiceDueDate
                 invoice.notes = trimmedNotes.isEmpty ? nil : trimmedNotes
                 invoice.quickBooksSyncStatus = "pending"
-                invoice.quickBooksSyncDetail = isQuickBooksConnected
+                invoice.quickBooksSyncDetail = canAttemptSharedBilling
                     ? "Invoice update is waiting for QuickBooks confirmation."
-                    : "Invoice changed while QuickBooks was unavailable. Reconnect and update this invoice again to publish it."
-                actionMessage = isQuickBooksConnected
+                    : "Invoice saved. Use Sync Saved Document from your business workspace when online."
+                actionMessage = canAttemptSharedBilling
                     ? "Invoice updated locally. Syncing the complete line-item set to QuickBooks..."
                     : "Invoice updated locally. QuickBooks publication is pending."
             } else {
@@ -9053,7 +9059,7 @@ GunnAire
                 activeServiceCall?.status = .invoiced
                 let reportErrorMessage = prepareLinkedOnsiteReportForInvoiceCreation(invoice, serviceCall: activeServiceCall)
                 let creationMessage = activeServiceCall == nil ? "Invoice saved locally." : "Invoice created locally with onsite report."
-                actionMessage = reportErrorMessage ?? (isQuickBooksConnected ? "\(creationMessage) Syncing to QuickBooks..." : creationMessage)
+                actionMessage = reportErrorMessage ?? (canAttemptSharedBilling ? "\(creationMessage) Syncing to QuickBooks..." : creationMessage)
             }
             if startsNewDocument { completedNewDocument = .invoice(invoice) }
             guard saveBillingContext(failureMessage: isUpdatingExistingInvoice ? "Could not update invoice locally" : "Could not save invoice locally") else {
@@ -9156,9 +9162,9 @@ GunnAire
     }
 
     private func syncInvoiceIfNeeded(_ invoice: Invoice, customer: Customer, items: [Item]) {
-        guard isQuickBooksConnected else {
+        guard canAttemptSharedBilling else {
             invoice.quickBooksSyncStatus = "pending"
-            invoice.quickBooksSyncDetail = "QuickBooks is not connected. Reconnect and update this invoice again to publish its current line items."
+            invoice.quickBooksSyncDetail = "Saved locally. Open this document in your verified business workspace and use Sync Saved Document when online."
             saveQuickBooksSyncState()
             return
         }
@@ -9166,24 +9172,29 @@ GunnAire
     }
 
     private func publishBillingDocument(_ document: QuickBooksBillingDocument) {
-        guard isQuickBooksConnected else { return }
+        guard canAttemptSharedBilling else { return }
         let key = "\(document.label)-\(document.id)"
         guard billingSyncLifecycles[key] == nil else {
             actionMessage = QuickBooksBillingWorkflowError.busy.localizedDescription
             return
         }
         let owner = QuickBooksSyncLifecycle()
+        billingSyncLifecycles[key] = owner
         do {
             // Capture synchronously, before Task scheduling can adopt another account.
-            let workflow = try QuickBooksBillingWorkflow(document: document, context: modelContext,
-                api: liveAPI, lifecycle: owner)
-            billingSyncLifecycles[key] = owner
+            let preparation = try SharedBillingPreparation(document: document, context: modelContext,
+                isCurrent: { billingSyncLifecycles[key] === owner })
+            actionMessage = document.label + " saved. Checking the business connection…"
             Task { @MainActor in
+                var workflow: QuickBooksBillingWorkflow?
                 defer {
-                    owner.finish(workflow.run)
+                    owner.cancel()
                     if billingSyncLifecycles[key] === owner { billingSyncLifecycles.removeValue(forKey: key) }
                 }
                 do {
+                    let prepared = try await preparation.makeWorkflow(lifecycle: owner)
+                    workflow = prepared
+                    let workflow = prepared
                     try await workflow.run.perform {
                         await accountingConfigurationStore.refresh(realmID: workflow.run.workflow.realmID,
                             environment: workflow.run.workflow.environment, validate: workflow.check)
@@ -9197,6 +9208,11 @@ GunnAire
                         actionMessage = outcome.message + " Supporting files remain pending: " + error.localizedDescription
                     }
                 } catch {
+                    guard billingSyncLifecycles[key] === owner else { return }
+                    guard let workflow else {
+                        actionMessage = document.label + " saved locally. " + error.localizedDescription
+                        return
+                    }
                     do { try workflow.recordFailure(error) }
                     catch QuickBooksBillingWorkflowError.saveFailed {
                         actionMessage = QuickBooksBillingWorkflowError.saveFailed.localizedDescription
@@ -9206,6 +9222,7 @@ GunnAire
                 }
             }
         } catch {
+            if billingSyncLifecycles[key] === owner { billingSyncLifecycles.removeValue(forKey: key) }
             actionMessage = document.label + " saved locally. " + error.localizedDescription
         }
     }

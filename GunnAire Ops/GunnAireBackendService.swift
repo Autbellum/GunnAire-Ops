@@ -805,7 +805,38 @@ enum GunnAireBackendService {
     }
 
     static var billingPublicationClient: BillingPublicationClient {
-        .init { path, method, body in try await send(path: path, method: method, body: body) }
+        .init(transport: billingPublicationRequest)
+    }
+
+    static func billingPublicationRequest(path: String, method: String, body: Data?) async throws -> Data {
+        guard BillingPublicationTransportPolicy.allows(path: path, method: method, bodyBytes: body?.count)
+        else { throw BillingPublicationError.invalidProposal }
+        guard let identity = CompanyWorkspaceSession.current else { throw BillingPublicationError.accessRequired }
+        var request = try makeRequest(path: path, method: method, body: body)
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        guard bearer.hasPrefix("Bearer "), CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == identity.tokenFingerprint,
+              request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil else { throw BillingPublicationError.accessRequired }
+        request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
+        let controller = CompanyWorkspaceAccessController.shared, generation = controller.generation
+        func check() throws {
+            try Task.checkCancellation()
+            guard CompanyWorkspaceSession.current == identity, controller.generation == generation,
+                  controller.authorizedContainer != nil else { throw BillingPublicationError.accessRequired }
+        }
+        try check()
+        do {
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request,
+                maximum: URLComponents(string: path)?.path == "/api/billing-publications/connection" ? 16_384 : 2 * 1024 * 1024)
+            try check()
+            return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let status) = error {
+                throw GunnAireBackendError.server(statusCode: status, message: "Shared billing was not confirmed.")
+            }
+            if error is GmailServerHTTPError { throw BillingPublicationError.invalidResponse }
+            throw error
+        }
     }
 
     static func documentUploadClient(check: @escaping () throws -> Void) -> QBODocumentUploadClient {

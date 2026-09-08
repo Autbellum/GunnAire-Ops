@@ -15,6 +15,7 @@ from unittest import mock
 from cryptography.fernet import Fernet
 from Backend import gunnaire_backend as backend
 from Backend import customer_publications as customer
+from Backend.billing_assignments import connection_revision
 
 
 class CustomerPublicationTests(unittest.TestCase):
@@ -82,6 +83,29 @@ class CustomerPublicationTests(unittest.TestCase):
 
     def publish(self, payload=None):
         return self.publisher.publish(self.admin, payload or self.payload())
+
+    def test_shared_billing_pin_preserves_customer_idempotency(self):
+        with backend.db() as connection:
+            epoch = connection_revision(customer.grant_fingerprint(connection.execute("SELECT * FROM qbo_connections").fetchone()))
+        payload = self.payload(connectionRevision=epoch)
+        first = self.publish(payload)
+        second = self.publish(payload)
+        self.assertEqual(first["publication"]["id"], second["publication"]["id"])
+        self.assertEqual(len(self.writes), 1)
+
+    def test_shared_billing_pin_rejects_replacement_grant_before_customer_reservation(self):
+        with backend.db() as connection:
+            epoch = connection_revision(customer.grant_fingerprint(connection.execute("SELECT * FROM qbo_connections").fetchone()))
+            connection.execute("UPDATE qbo_connections SET authorized_at='replacement'")
+        self.expect_code("grant_changed", lambda: self.publish(self.payload(connectionRevision=epoch)))
+        self.assertFalse(self.writes)
+        with backend.db() as connection:
+            self.assertEqual(connection.execute("SELECT count(*) FROM customer_publications").fetchone()[0], 0)
+
+    def test_customer_connection_pin_shape_is_strict(self):
+        for value in (None, "", "a" * 63, "A" * 64, 1):
+            self.expect_code("invalid_request", lambda: self.publish(self.payload(connectionRevision=value)))
+        self.assertFalse(self.writes)
 
     def row(self):
         with backend.db() as connection:

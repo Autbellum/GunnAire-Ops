@@ -1,3 +1,29 @@
+Shared business-session billing qualification, 2026-09-08:
+NATIVE_SHARED_BILLING_CONNECTION.md records candidate backend 2026.09.08.40
+and the actual native invoice/estimate, agreement/progress, Management retry and
+Billing Review cutover. Device QBO OAuth is no longer the billing prerequisite;
+the original verified business, document, customer, job, role and authorization
+revision remain pinned. Offline drafts and sold prices remain intact, field
+items still require approval, and uncertain requests use original-only recovery.
+Customer/catalog prerequisite pins retain existing encrypted proposal integrity
+and duplicate prevention. The explicit transport route matrix preserves existing
+job assignment and draft approval/revocation paths without a general API proxy.
+Final Mac and iPad logic each pass 1,513 tests; all ten selected iPad UI journeys
+pass (1,523 total), with actual-execution verification and no failures or skips.
+All 12 final screenshots are visually reviewed: simple Mail and original billing
+remain readable without raw API payloads or an account-email footer. All 648
+Backend tests (local Python 3.9.6), 56 Tools tests and both workflow lint checks
+pass. Unsigned universal Mac Release passes and both architectures are verified.
+The first run's old-copy assertion failure and the initial backend integrity
+failures are retained with their corrective evidence. Hosted CI must qualify
+the newly published head; no workflow definitions changed in this checkpoint.
+Original-project preflight verifies 21 scoped paths, 241 unrelated changed files,
+the original empty index and 268 other byte-identical tracked source files.
+No merge, deployment, financial mutation, customer message, signing/schema change
+or physical installation is part of this checkpoint. Shared data convergence,
+remaining direct OAuth-only operations, real approved Tap to Pay/Handoff and the
+full competitor/Google/QBO-item/vendor suite remain part of the active goal.
+
 Saved accounting check sync/recovery qualification, 2026-09-08:
 FIELD_PAYMENT_RECEIPT_RECONCILIATION.md records fresh scoped observation refresh
 after successful-resource import, original payment recovery/accounting follow-up

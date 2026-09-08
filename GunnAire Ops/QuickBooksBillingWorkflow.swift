@@ -211,7 +211,7 @@ enum QuickBooksBillingAccessPolicy {
     }
 }
 
-private struct QuickBooksBillingPaymentRevision: Equatable {
+struct QuickBooksBillingPaymentRevision: Equatable {
     let object: ObjectIdentifier
     let id: UUID
     let amount: Double

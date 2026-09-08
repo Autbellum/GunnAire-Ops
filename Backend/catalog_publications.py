@@ -161,9 +161,27 @@ def validate_item(item, operation):
     return result
 
 
+def connection_pin(payload):
+    if "connectionRevision" not in payload:
+        return {}
+    value = payload["connectionRevision"]
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+        raise failure("invalid_request", "Review the original business connection.", 400)
+    return {"connection_revision": value}
+
+
+def validate_connection_pin(intent, fingerprint):
+    # SQLite rows from older immutable attempts retain their internal grant
+    # fingerprint. New preparations may additionally pin the public epoch.
+    if "connection_revision" in intent.keys():
+        expected = hashlib.sha256(canonical(["job-billing-connection-v1", fingerprint]).encode()).hexdigest()
+        if intent["connection_revision"] != expected:
+            raise failure("grant_changed", "The business connection changed. Review the original saved work.")
+
+
 def validated_request(payload):
     required = {"companyID", "realmID", "environment", "localItemID", "operation", "item"}
-    if not isinstance(payload, dict) or set(payload) != required:
+    if not isinstance(payload, dict) or set(payload) not in (required, required | {"connectionRevision"}):
         raise failure("invalid_request", "Use the supported catalog publication fields only.", 400)
     if payload["environment"] not in ("sandbox", "production") or payload["operation"] not in ("create", "update"):
         raise failure("invalid_request", "Choose a valid catalog operation and environment.", 400)
@@ -171,6 +189,7 @@ def validated_request(payload):
         "company_id": canonical_uuid(payload["companyID"]), "realm_id": reference(payload["realmID"]),
         "environment": payload["environment"], "local_item_id": canonical_uuid(payload["localItemID"]),
         "operation": payload["operation"], "item": validate_item(payload["item"], payload["operation"]),
+        **connection_pin(payload),
     }
 
 
@@ -240,6 +259,7 @@ class CatalogPublisher:
         if grant is None or grant["realm_id"] != intent["realm_id"] or grant["environment"] != intent["environment"]:
             raise failure("provider_changed", "Reconnect the original QuickBooks company before reviewing this item.")
         fingerprint = grant_fingerprint(grant)
+        validate_connection_pin(intent, fingerprint)
         if require_grant and fingerprint != intent["grant_fingerprint"]:
             raise failure("grant_changed", "QuickBooks was reconnected. The original catalog attempt needs administrator review.")
         return actor, {**dict(grant), "grant_fingerprint": fingerprint}
@@ -258,7 +278,10 @@ class CatalogPublisher:
 
     def reserve(self, session_id, payload):
         intent = validated_request(payload)
-        digest = hashlib.sha256(canonical(intent).encode()).hexdigest()
+        # Authorization evidence is checked atomically below, then persisted
+        # in grant_fingerprint. Keep the original business-payload hash format
+        # so its encrypted item and older device retries remain verifiable.
+        digest = hashlib.sha256(canonical({key: value for key, value in intent.items() if key != "connection_revision"}).encode()).hexdigest()
         # Encrypt before a reservation can become dispatchable.
         ciphertext = self.encrypt(canonical(intent["item"]))
         with self.database() as connection:
