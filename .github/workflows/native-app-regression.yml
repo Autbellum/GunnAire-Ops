@@ -77,6 +77,8 @@ jobs:
               testNativeBillingReviewCancelsUnsentProposalAndReturnsToOriginalInvoice \
               testNativeBillingBundleReviewShowsRepeatedComponentsAndCancelsOriginalProposal \
               testNativeBillingReviewRecoversAcceptedInvoiceWithoutPublishingAgain \
+              testMilestoneBillingReviewOpensOriginalInvoiceAndReturnsWithoutDuplicating \
+              testMilestoneBillingReviewRetainsDraftWhileOriginalCloudKitRecordIsMissing \
               testManagementBillingComposerCancelsWithoutCreatingOrSending \
               testManagementBillingComposerSavesOriginalInvoiceAndEstimateOffline \
               testInvoiceComposerBrowsesCategoriesEditsRepeatedBundleMembersAndSavesOriginal \
