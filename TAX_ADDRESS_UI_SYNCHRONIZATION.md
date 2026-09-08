@@ -1,5 +1,11 @@
 # Tax-address input synchronization
 
+Follow-up: hosted head `6a0a38e` later failed on the initial `Cancelled address`
+input remaining at its placeholder, not this earlier partial-street snapshot.
+`NATIVE_CI.md` records the exact new failure and unresolved cause. The local
+repetitions below and the original recording do not establish current hosted
+acceptance; further reproduction is required.
+
 ## Observed failure and discriminating evidence
 
 The hosted iPad job for PR head `a9dd55c` failed the existing

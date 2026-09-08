@@ -1,5 +1,13 @@
 # QuickBooks sync workflow lifecycle
 
+Server capture follow-up, September 7, 2026: `QBO_SERVER_CHANGE_CAPTURE.md`
+records the implemented encrypted census/CDC journal, late-event recovery and
+merge/deletion identity retention. It has its own application-session/scoped
+server endpoint and explicitly returns `applicationState: not_applied`.
+The native import and all-ID acknowledgement gap below is **not yet closed**.
+The next native consumer must preserve provider version evidence through actual
+model application and only then create event-specific application receipts.
+
 ## Current-source revalidation — September 7, 2026
 
 Read-only inspection of review head `442e9d7` confirms a concrete remaining

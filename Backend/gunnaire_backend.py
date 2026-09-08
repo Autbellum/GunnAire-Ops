@@ -34,7 +34,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 try:
     from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications, billing_native, qbo_link_adoption
     from Backend.billing_provider import BillingQBOProvider
-    from Backend import google_connections, google_mail
+    from Backend import google_connections, google_mail, qbo_change_capture
 except ModuleNotFoundError:
     import payment_attempts  # Direct launch from the Backend directory.
     import catalog_publications
@@ -45,10 +45,11 @@ except ModuleNotFoundError:
     from billing_provider import BillingQBOProvider
     import google_connections
     import google_mail
+    import qbo_change_capture
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.07.32"
+SERVICE_VERSION = "2026.09.07.33"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -1337,16 +1338,18 @@ def verify_qbo_webhook_signature(payload: bytes, signature: str | None) -> bool:
     return hmac.compare_digest(expected, signature.strip())
 
 
-def parse_qbo_cloudevents(payload: bytes) -> list[dict[str, str]]:
-    """Parse current Intuit CloudEvents v1 metadata without retaining event data."""
-    decoded = json.loads(payload.decode("utf-8"))
+def parse_qbo_cloudevents(payload: bytes) -> list[dict[str, object]]:
+    """Retain reconciliation identifiers, never arbitrary webhook customer data."""
+    decoded = qbo_change_capture.strict_json(payload.decode("utf-8"))
     if not isinstance(decoded, list) or not 1 <= len(decoded) <= 200:
         raise ValueError("QuickBooks webhook must contain 1 to 200 CloudEvents")
 
-    records: list[dict[str, str]] = []
+    records: list[dict[str, object]] = []
     for event in decoded:
         if not isinstance(event, dict) or event.get("specversion") != "1.0":
             raise ValueError("Unsupported QuickBooks webhook format")
+        if not all(isinstance(event.get(key), str) for key in ("id", "type", "intuitentityid", "intuitaccountid", "time")):
+            raise ValueError("Invalid QuickBooks event identifiers")
         event_id = str(event.get("id") or "").strip()
         event_type = str(event.get("type") or "").strip().lower()
         entity_id = str(event.get("intuitentityid") or "").strip()
@@ -1365,6 +1368,25 @@ def parse_qbo_cloudevents(payload: bytes) -> list[dict[str, str]]:
             raise ValueError("Invalid QuickBooks event time") from error
         if occurred.tzinfo is None:
             raise ValueError("QuickBooks event time must include a timezone")
+        metadata = event.get("data", {})
+        if not isinstance(metadata, dict):
+            raise ValueError("Invalid QuickBooks event metadata")
+        deleted_id = metadata.get("deletedid")
+        if deleted_id is not None and (not isinstance(deleted_id, str)
+                or not re.fullmatch(r"[A-Za-z0-9._:-]{1,200}", deleted_id)
+                or type_match.group(2) != "merged" or deleted_id == entity_id):
+            raise ValueError("Invalid QuickBooks merge identity")
+        alternatives = metadata.get("alternative_ids", [])
+        if not isinstance(alternatives, list) or len(alternatives) > 20:
+            raise ValueError("Invalid QuickBooks alternative identifiers")
+        normalized_alternatives = []
+        for alternative in alternatives:
+            if (not isinstance(alternative, dict) or set(alternative) != {"id", "namespace"}
+                    or not all(isinstance(alternative[key], str) and
+                               re.fullmatch(r"[A-Za-z0-9._:-]{1,200}", alternative[key]) for key in ("id", "namespace"))):
+                raise ValueError("Invalid QuickBooks alternative identifier")
+            if alternative not in normalized_alternatives:
+                normalized_alternatives.append(alternative)
         records.append(
             {
                 "eventID": event_id,
@@ -1373,6 +1395,8 @@ def parse_qbo_cloudevents(payload: bytes) -> list[dict[str, str]]:
                 "entityID": entity_id,
                 "operation": type_match.group(2),
                 "occurredAt": occurred.astimezone(timezone.utc).isoformat(),
+                "deletedEntityID": deleted_id,
+                "alternativeIDs": normalized_alternatives,
             }
         )
     return records
@@ -2470,6 +2494,7 @@ def initialize_database() -> None:
         qbo_link_adoption.initialize_schema(connection)
         google_connections.initialize_schema(connection)
         google_mail.initialize_schema(connection)
+        qbo_change_capture.initialize_schema(connection)
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS customer_communications (
@@ -2627,6 +2652,13 @@ def initialize_database() -> None:
         connection.execute(
             "CREATE INDEX IF NOT EXISTS qbo_webhook_events_realm_pending ON qbo_webhook_events(realm_id, acknowledged_at, received_at)"
         )
+        # Existing rows have no trustworthy environment/company provenance.
+        # Leave them unbound for review rather than guess during migration.
+        ensure_column(connection, "qbo_webhook_events", "company_id", "TEXT")
+        ensure_column(connection, "qbo_webhook_events", "environment", "TEXT")
+        ensure_column(connection, "qbo_webhook_events", "grant_fingerprint", "TEXT")
+        ensure_column(connection, "qbo_webhook_events", "deleted_entity_id", "TEXT")
+        ensure_column(connection, "qbo_webhook_events", "alternative_ids_json", "TEXT NOT NULL DEFAULT '[]'")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS supplier_order_attempts (
@@ -3375,6 +3407,8 @@ def qbo_webhook_event_record(row: sqlite3.Row) -> dict[str, object]:
         "operation": row["operation"],
         "occurredAt": row["occurred_at"],
         "receivedAt": row["received_at"],
+        "deletedEntityID": row["deleted_entity_id"],
+        "alternativeIDs": json.loads(row["alternative_ids_json"]),
     }
 
 
@@ -3530,6 +3564,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/qbo-link-reviews" or parsed.path.startswith("/api/qbo-link-reviews/"):
             self.handle_qbo_link_review(parsed, method="GET")
+            return
+        if parsed.path == "/api/qbo/change-capture":
+            self.handle_qbo_change_capture(parsed, method="GET")
             return
         if parsed.path == "/api/billing-publications" or parsed.path.startswith("/api/billing-publications/") or parsed.path == "/api/job-billing-assignments":
             self.handle_billing_publication(parsed, method="GET")
@@ -3741,6 +3778,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/qbo-link-reviews" or parsed.path.startswith("/api/qbo-link-reviews/"):
             self.handle_qbo_link_review(parsed, method="POST")
+            return
+        if parsed.path == "/api/qbo/change-capture":
+            self.handle_qbo_change_capture(parsed, method="POST")
             return
         if parsed.path == "/api/billing-publications" or parsed.path.startswith("/api/billing-publications/") or parsed.path == "/api/job-billing-assignments":
             self.handle_billing_publication(parsed, method="POST")
@@ -4497,25 +4537,30 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             self.write_json({"error": "Invalid QuickBooks CloudEvents payload"}, status=HTTPStatus.BAD_REQUEST, require_auth=False)
             return
 
-        expected_realm = current_qbo_realm_id()
         received_at = utc_now()
         stored = 0
-        if expected_realm is not None:
-            with db() as connection:
+        with db() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            grant = connection.execute("SELECT * FROM qbo_connections WHERE id=1").fetchone()
+            company = connection.execute("SELECT company_id FROM company_identity WHERE singleton=1").fetchone()
+            if grant is not None and company is not None:
                 for event in events:
-                    if event["realmID"] != expected_realm:
+                    if event["realmID"] != grant["realm_id"]:
                         continue
                     stored += connection.execute(
                         """
                         INSERT INTO qbo_webhook_events(
                             event_id, realm_id, entity_type, entity_id, operation,
-                            occurred_at, received_at, acknowledged_at, acknowledged_by
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+                            occurred_at, received_at, acknowledged_at, acknowledged_by,
+                            company_id, environment, grant_fingerprint, deleted_entity_id, alternative_ids_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)
                         ON CONFLICT(event_id) DO NOTHING
                         """,
                         (
                             event["eventID"], event["realmID"], event["entityType"],
                             event["entityID"], event["operation"], event["occurredAt"], received_at,
+                            company["company_id"], grant["environment"], payment_attempts.grant_fingerprint(grant),
+                            event["deletedEntityID"], catalog_publications.canonical(event["alternativeIDs"]),
                         ),
                     ).rowcount
         # Always acknowledge a valid signed delivery. Realm-mismatched or duplicate
@@ -5812,6 +5857,38 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         record_audit_event(actor, "cancel", "field-payment", assignment_id)
         self.write_json({"assignment": field_payment_assignment_record(row)})
 
+    def handle_qbo_change_capture(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        capture = qbo_change_capture.ChangeCapture(
+            db, lambda context, authorize: qbo_change_capture.ChangeCaptureQBOProvider(context, authorize, qbo_authorized_bearer),
+            encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
+        )
+        try:
+            if method == "POST" and not parsed.query:
+                payload = qbo_change_capture.strict_json(self.read_limited_body(4096).decode("utf-8"))
+                result = capture.capture(self._application_session_id, payload)
+            elif method == "GET":
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+                if any(len(value) != 1 for value in query.values()):
+                    raise ValueError()
+                payload = {key: value[0] for key, value in query.items()}
+                after_raw, through_raw = payload.pop("afterSequence", "0"), payload.pop("throughSequence", None)
+                if not re.fullmatch(r"0|[1-9][0-9]{0,18}", after_raw) or (through_raw is not None and not re.fullmatch(r"0|[1-9][0-9]{0,18}", through_raw)):
+                    raise ValueError()
+                result = capture.read(self._application_session_id, payload, after=int(after_raw),
+                                      through=int(through_raw) if through_raw is not None else None)
+            else:
+                raise ValueError()
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError, OverflowError):
+            self.write_json({"error": "Invalid accounting change capture request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Accounting history storage is unavailable. Keep the original cursor for recovery.",
+                             "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+
     def handle_qbo_link_review(self, parsed, *, method):
         if not self.require_application_session():
             return
@@ -6589,6 +6666,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         message = redact_capability_tokens(format % args)
         # Search terms and provider resource IDs can identify customer mail.
         message = re.sub(r"/api/google/mail/[^\s\"]*", "/api/google/mail/[redacted]", message)
+        message = re.sub(r"/api/qbo/change-capture(?:\?[^\s\"]*)?", "/api/qbo/change-capture", message)
         print(f"{timestamp} {self.address_string()} {message}")
 
 

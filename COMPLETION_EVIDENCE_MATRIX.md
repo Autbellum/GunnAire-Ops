@@ -1,3 +1,21 @@
+QBO server change-capture checkpoint, 2026-09-07: candidate `2026.09.07.33`
+implements the thirteen current native accounting collections' census/CDC
+transport, scoped encrypted observation history, late-event look-back, actual
+deletion/merge identity retention and paginated recovery. Frozen local acceptance
+passes 488 Backend and 37 Tools tests, including 44 focused capture/webhook tests
+and real fixture backup/restore. `QBO_SERVER_CHANGE_CAPTURE.md` distinguishes
+captured versions from applied financial changes: native cutover, per-event
+application receipts, complete lifecycle/ledger reconciliation and shared-device
+consumption remain required. No deployment or native source/schema change.
+
+Completed hosted head `6a0a38e` passes Backend and Mac, and all 1,271 iPad logic
+tests. Two iPad UI assertions fail: existing-link switch selection stays off;
+the initial cancelled tax-address entry stays at its placeholder through the
+exact-value deadline. Their root causes are not established by the job log.
+`NATIVE_CI.md` records exact job/log evidence. The old recording diagnosis below
+is valid for `a9dd55c`, not proof that these new failures are resolved. Full
+application, physical-device, provider and distribution acceptance remains open.
+
 Tax-address CI diagnosis, 2026-09-07: the original hosted `a9dd55c` recording
 shows the full street value arriving after the test's immediate partial-value
 snapshot, with no second typing request. The test entry helper now waits for

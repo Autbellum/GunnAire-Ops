@@ -1,5 +1,33 @@
 # Native GitHub Actions checks
 
+## Latest completed hosted result: `6a0a38e`
+
+[Native run 34178309515](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34178309515)
+is terminal, not still running: Mac succeeds; iPad fails.
+[Backend run 34178309514](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34178309514)
+succeeds on Python 3.13 and 3.14. The completed iPad job is `101912163707`.
+Its log reports all 1,271 native logic tests passing, followed by two UI failures:
+
+- `testExistingQuickBooksLinkReviewCancelsAndReturnsToManagement`: line 4330,
+  the selected customer switch is `0` instead of `1` after a coordinate tap.
+- `testTaxAddressReviewKeepsDraftPricesAndReturnsToBilling`: line 4071,
+  the exact-value wait for the initial `Cancelled address` input times out;
+  the field still reports the `Street address` placeholder.
+
+These are not the earlier recording's partial `12 Main` snapshot. The log does
+not prove whether input missed its target, presentation/focus was incomplete,
+or app state reset. Exact recordings and a discriminating reproduction are still
+required; no timeout/assertion/selector was weakened and no run was restarted.
+This failure predates the backend-only QBO capture checkpoint; native source is
+unchanged by that checkpoint.
+
+Read-only retained log:
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-07/QBO Change Capture.r3lvH4/HostedIPad-6a0a38e.log`,
+1,148,520 bytes, SHA-256
+`ae53eae508d79b0d3d731b96d071ed02b1a763b1a19210713acfc84876d01318`.
+
+## Earlier input synchronization change
+
 The tax-address entry test now waits for the exact completed field value before
 continuing. The original hosted recording showed its immediate snapshot racing
 unfinished typing; the complete address appeared without another input event.

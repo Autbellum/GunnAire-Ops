@@ -2,6 +2,15 @@
 
 This is a small backend for sharing app users, roles, uploaded field receipts, and field payment records across iPads.
 
+Candidate **2026.09.07.33** adds company-scoped, read-only QuickBooks initial
+collection/CDC capture with encrypted version history, deletion/merge metadata,
+late-event recovery and fixed-upper-bound history pages. Final local acceptance
+passes 488 Backend tests and 37 Tools tests. This is not a completed native
+reconciliation cutover: the old all-ID acknowledgement path still needs actual
+application receipts. See [the change-capture contract](../QBO_SERVER_CHANGE_CAPTURE.md)
+for supported collections, recovery limits, evidence and remaining rollout work.
+No deployment, accounting mutation or native/CloudKit schema change is implied.
+
 Candidate **2026.09.07.30** implements user/company-bound server Google OAuth,
 encrypted offline credentials, single-use code exchanges, coordinated refresh,
 partial-scope handling and metadata-only connection APIs. This is the server
