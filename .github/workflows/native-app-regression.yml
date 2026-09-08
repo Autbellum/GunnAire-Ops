@@ -82,6 +82,8 @@ jobs:
               testInvoiceComposerBrowsesCategoriesEditsRepeatedBundleMembersAndSavesOriginal \
               testEstimateBundleComposerSavesEditsWithKeyboardActive \
               testBundleComposerSavesAfterHardwareKeyboardSelectAll \
+              testAdministratorCreatesExactLockedProgressInvoiceFromApprovedProjectMilestone \
+              testAdministratorCreatesLockedBundleMilestoneInvoiceAndReturnsToOriginalJob \
               testBillingIdentityReviewKeepsReportsSafeAndHandsOffToInvoices \
               testCatalogPublicationReviewCancelsOnlyAnUnsentProposalAndReturnsToCatalog \
               testAdministratorCreatesInventoryOfflineAndReopensExactSetup \
