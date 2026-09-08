@@ -1,5 +1,29 @@
 # Native GitHub Actions checks
 
+## Original-file recovery and bounded iPad groups
+
+The current workflow selects **52** iPad UI journeys: the previous 48 plus the
+Receipts & Bills workspace and three original-file recovery journeys. It splits
+that declared list into two disjoint groups of 26, with the complete native logic
+target on each. Mac retains its full logic suite and unsigned universal Release
+build. All assertions, the actual-execution verifier, read-only permissions,
+existing job limits and evidence retention remain. Artifact names include the
+group index to prevent collisions.
+
+`Tools/test_native_workflow_shards.py` executes the workflow's real selection
+script (without xcodebuild/network) and verifies complete, disjoint coverage,
+existing method names, retained Mac coverage and rejection of invalid group IDs.
+The complete Tools suite runs in both hosted Backend jobs.
+
+This addresses explicit hosted evidence: native run `34245007258` at published
+head `c9af5d7` passes Mac but its iPad job is **cancelled after exceeding 60
+minutes**. Backend run `34245007214` passes both Python versions. It is not a
+complete green head, and this new source/workflow still needs exact-head hosted
+qualification. No previous selector is removed to fit the time limit.
+
+See [native file recovery](NATIVE_QBO_DOCUMENT_RECOVERY.md) for candidate source,
+local acceptance and the remaining provider, shared-device and full-suite gates.
+
 ## Native category and bundle composer coverage
 
 The workflow adds three actual composer journeys (37 selected UI tests):

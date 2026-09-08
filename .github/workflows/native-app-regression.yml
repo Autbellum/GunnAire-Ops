@@ -17,16 +17,26 @@ concurrency:
 
 jobs:
   test:
-    name: ${{ matrix.platform }} native tests
+    name: ${{ matrix.name }} native tests
     runs-on: macos-26
     timeout-minutes: ${{ matrix.platform == 'iPad' && 60 || 45 }}
     strategy:
       fail-fast: false
       matrix:
-        platform: [iPad, Mac]
+        include:
+          - name: iPad 1 of 2
+            platform: iPad
+            shard: 0
+          - name: iPad 2 of 2
+            platform: iPad
+            shard: 1
+          - name: Mac
+            platform: Mac
+            shard: 0
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       CI_PLATFORM: ${{ matrix.platform }}
+      CI_SHARD: ${{ matrix.shard }}
     defaults:
       run:
         shell: bash
@@ -50,6 +60,10 @@ jobs:
           selectors=(-only-testing:"GunnAire OpsTests")
           if [[ "$CI_PLATFORM" == "iPad" ]]; then
             destination="platform=iOS Simulator,name=iPad Pro 13-inch (M5),OS=26.2"
+            if [[ "$CI_SHARD" != "0" && "$CI_SHARD" != "1" ]]; then
+              exit 64
+            fi
+            index=0
             for test in \
               testInvoiceWorkspaceOpensWithoutTerminating \
               testMailWorkspaceUsesASimpleInboxInterface \
@@ -86,6 +100,10 @@ jobs:
               testDocumentationQueueRetainsJobsWhileTheirCustomersSync \
               testDocumentationBillingReviewReturnsToTheOriginalWorkspace \
               testReceiptJobAndTransactionChangesKeepAttachmentTypeAndIDTogether \
+              testReceiptsBillsUsesRoleAwareOperationalWorkspaces \
+              testOriginalFileRecoverySurvivesLostReplyRelaunchAndExportCancellation \
+              testOriginalFileCancellationRetainsBytesAndCannotResendAfterRelaunch \
+              testOriginalFileRecoveryRequiresVerifiedBusinessAccess \
               testManagementBillingComposerCancelsWithoutCreatingOrSending \
               testManagementBillingComposerSavesOriginalInvoiceAndEstimateOffline \
               testInvoiceComposerBrowsesCategoriesEditsRepeatedBundleMembersAndSavesOriginal \
@@ -99,7 +117,10 @@ jobs:
               testPricebookReviewCorrectsFieldItemBeforeApprovalWithoutLosingDocumentPriority \
               testScheduleDeletionRetainsTheConfirmedTargetAndProtectsBilledJobs \
               testUnreconciledStatementExplainsReviewAndHandsOffToInvoices; do
-              selectors+=("-only-testing:GunnAire OpsUITests/GunnAire_OpsUITests/$test")
+              if (( index % 2 == CI_SHARD )); then
+                selectors+=("-only-testing:GunnAire OpsUITests/GunnAire_OpsUITests/$test")
+              fi
+              index=$((index + 1))
             done
           else
             destination="platform=macOS,variant=Mac Catalyst,arch=arm64"
@@ -151,7 +172,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ${{ matrix.platform }}-native-${{ github.run_attempt }}
+          name: ${{ matrix.platform }}-${{ matrix.shard }}-native-${{ github.run_attempt }}
           path: ${{ runner.temp }}/native-results/
           if-no-files-found: warn
           retention-days: 7

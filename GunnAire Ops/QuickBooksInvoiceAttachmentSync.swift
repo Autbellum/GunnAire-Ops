@@ -45,8 +45,8 @@ enum QuickBooksInvoiceAttachmentSync {
         payments: [Payment] = [],
         attachments: [ServiceDocumentAttachment],
         modelContext: ModelContext
-    ) {
-        syncPendingServiceReports(
+    ) throws {
+        try syncPendingServiceReports(
             estimates: estimates,
             invoices: invoices,
             serviceCalls: serviceCalls,
@@ -64,9 +64,15 @@ enum QuickBooksInvoiceAttachmentSync {
         payments: [Payment] = [],
         attachments: [ServiceDocumentAttachment],
         modelContext: ModelContext,
-        api: QuickBooksDataAPI
-    ) {
+        api: QuickBooksDataAPI,
+        save: (ModelContext) throws -> Void = { try $0.save() }
+    ) throws {
         guard api.isAuthenticated else { return }
+
+        let originalLinks = attachments.map { attachment in
+            (attachment, attachment.invoiceID, attachment.estimateID, attachment.quickBooksAttachableID,
+             attachment.quickBooksAttachedEntityKeysRaw, attachment.quickBooksSyncError)
+        }
 
         if linkServiceCallAttachmentsToBillingDocuments(
             estimates: estimates,
@@ -75,7 +81,15 @@ enum QuickBooksInvoiceAttachmentSync {
             payments: payments,
             attachments: attachments
         ) > 0 {
-            try? modelContext.save()
+            do { try save(modelContext) }
+            catch {
+                for (attachment, invoice, estimate, provider, keys, error) in originalLinks {
+                    attachment.invoiceID = invoice; attachment.estimateID = estimate
+                    attachment.quickBooksAttachableID = provider; attachment.quickBooksAttachedEntityKeysRaw = keys
+                    attachment.quickBooksSyncError = error
+                }
+                throw QBODocumentError.storage
+            }
         }
 
         for attachment in pendingQuickBooksAttachmentUploads(estimates: estimates, invoices: invoices, attachments: attachments) {
@@ -84,23 +98,7 @@ enum QuickBooksInvoiceAttachmentSync {
                 continue
             }
 
-            api.uploadDocument(
-                fileURL: attachment.localFileURL,
-                note: attachment.caption,
-                attachableReferences: references
-            ) { result in
-                DispatchQueue.main.async {
-                    switch result {
-                    case .success(let attachableID):
-                        attachment.quickBooksAttachableID = attachableID
-                        attachment.markQuickBooksAttached(to: references)
-                        attachment.quickBooksSyncError = nil
-                    case .failure(let error):
-                        attachment.quickBooksSyncError = error.localizedDescription
-                    }
-                    try? modelContext.save()
-                }
-            }
+            QBODocumentNativeWorkflow.enqueue(attachment, references: references, context: modelContext, api: api)
         }
     }
 

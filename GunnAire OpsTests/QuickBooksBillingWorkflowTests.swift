@@ -21,6 +21,7 @@ struct QuickBooksBillingWorkflowTests {
         var customerPublisher: CustomerPublicationBoundary.Transport?
         var billingPublisher: BillingPublicationClient?
         var billingJournal: BillingNativeJournalStore?
+        var documentFixture: QuickBooksDocumentWorkflowFixture?
         var beforeResponse: ((URLRequest) throws -> Void)?
         var transformDocument: (([String: Any]) -> [String: Any])?
         lazy var api = QuickBooksDataAPI(testTokens: .init(accessToken: "billing-fixture", expiration: .distantFuture),
@@ -53,6 +54,9 @@ struct QuickBooksBillingWorkflowTests {
                 validateAccess: { if !self.authorized { throw QuickBooksBillingWorkflowError.accessDenied } },
                 validateCatalogAccess: { if !self.catalogAuthorized { throw CompanyWorkspaceFailure.administratorRequired } },
                 billingJournal: billingJournal,
+                documentUploads: documentFixture?.dependencies(check: {
+                    if !self.authorized { throw QuickBooksBillingWorkflowError.accessDenied }
+                }),
                 save: save)
         }
 
@@ -644,6 +648,8 @@ struct QuickBooksBillingWorkflowTests {
 
     @Test func fileFollowupUsesTheSameWorkflowAndSavesReferenceEvidence() async throws {
         let f = try Fixture()
+        let files = try QuickBooksDocumentWorkflowFixture(); defer { files.cleanup() }
+        f.documentFixture = files
         let attachment = try f.addAttachment()
         defer { try? FileManager.default.removeItem(at: attachment.localFileURL) }
         let flow = try f.flow()
@@ -651,24 +657,30 @@ struct QuickBooksBillingWorkflowTests {
         try await flow.uploadLinkedAttachments()
         #expect(attachment.quickBooksAttachableID == "A1")
         #expect(attachment.quickBooksAttachedEntityKeysRaw?.contains("D1") == true)
-        #expect(f.requests.last?.url?.path.hasSuffix("/billing-realm/upload") == true)
+        #expect(files.requests.last?.path.hasSuffix("/send") == true)
+        #expect(try files.store.list(files.owner).first?.file.filename == "Fixture report.txt")
+        #expect(f.requests.allSatisfy { !$0.url!.path.hasSuffix("/upload") })
         try await flow.uploadLinkedAttachments()
-        #expect(f.requests.filter { $0.url!.path.hasSuffix("/upload") }.count == 1)
+        #expect(files.sends == 1); #expect(files.reservations == 1)
     }
 
     @Test func editedFileCannotReceiveALateUploadConfirmation() async throws {
         let f = try Fixture()
+        let files = try QuickBooksDocumentWorkflowFixture(); defer { files.cleanup() }
+        f.documentFixture = files
         let attachment = try f.addAttachment()
         defer { try? FileManager.default.removeItem(at: attachment.localFileURL) }
         let flow = try f.flow()
         _ = try await flow.execute()
-        f.beforeResponse = { request in
-            if request.url!.path.hasSuffix("/upload") { attachment.caption = "Newer file description" }
+        files.beforeResponse = { path in
+            if path.hasSuffix("/send") { attachment.caption = "Newer file description" }
         }
         await fails { try await flow.uploadLinkedAttachments() }
         #expect(attachment.quickBooksAttachableID == nil)
         #expect(attachment.quickBooksSyncError == nil)
         #expect(f.invoice.quickBooksID == "D1")
         #expect(f.invoice.quickBooksSyncStatus == "synced")
+        #expect(files.sends == 1)
+        #expect(try files.store.list(files.owner).first?.dispatchStarted == true)
     }
 }

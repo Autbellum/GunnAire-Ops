@@ -2390,9 +2390,9 @@ struct OnsiteDocumentationView: View {
                 attachment = generated
             }
 
-            try? modelContext.save()
+            try modelContext.save()
             syncGeneratedOnsiteReportToCompanyStorage(attachment, data: data)
-            QuickBooksInvoiceAttachmentSync.syncPendingServiceReports(
+            try QuickBooksInvoiceAttachmentSync.syncPendingServiceReports(
                 estimates: estimates,
                 invoices: invoices,
                 serviceCalls: serviceCalls,
@@ -2552,9 +2552,9 @@ struct OnsiteDocumentationView: View {
                 modelContext.insert(generated)
                 attachment = generated
             }
-            try? modelContext.save()
+            try modelContext.save()
             syncGeneratedBillingDocumentToCompanyStorage(attachment, data: data)
-            QuickBooksInvoiceAttachmentSync.syncPendingServiceReports(
+            try QuickBooksInvoiceAttachmentSync.syncPendingServiceReports(
                 estimates: estimates,
                 invoices: invoices,
                 serviceCalls: serviceCalls,

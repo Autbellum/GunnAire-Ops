@@ -256,6 +256,7 @@ final class QuickBooksBillingWorkflow {
     private var completed = false
     private(set) var attemptedWrite = false
     private let billingJournal: BillingNativeJournalStore
+    private let documentUploads: QBODocumentNativeWorkflow.Dependencies?
     private(set) var sharedPublication: BillingNativePublication?
 
     init(document: QuickBooksBillingDocument, context: ModelContext, api: QuickBooksDataAPI,
@@ -263,6 +264,7 @@ final class QuickBooksBillingWorkflow {
          validateAccess: (() throws -> Void)? = nil,
          validateCatalogAccess: (() throws -> Void)? = nil,
          billingJournal: BillingNativeJournalStore? = nil,
+         documentUploads: QBODocumentNativeWorkflow.Dependencies? = nil,
          save: @escaping (ModelContext) throws -> Void = { try $0.save() },
          actorEmail: String? = nil) throws {
         guard lifecycle.activeID == nil else { throw QuickBooksBillingWorkflowError.busy }
@@ -275,6 +277,7 @@ final class QuickBooksBillingWorkflow {
         customerID = customer.quickBooksID
         self.save = save
         self.billingJournal = billingJournal ?? .device
+        self.documentUploads = documentUploads
         self.validateCatalogAccess = validateCatalogAccess ?? { try QuickBooksSyncAccessPolicy.validate(context: context) }
         validateDocument = document.validation(context: context)
         try validateDocument()
@@ -842,7 +845,7 @@ final class QuickBooksBillingWorkflow {
                 let path = attachment.localFilePath, caption = attachment.caption, kind = attachment.kindRaw
                 let oldID = attachment.quickBooksAttachableID, oldKeys = attachment.quickBooksAttachedEntityKeysRaw
                 let oldError = attachment.quickBooksSyncError
-                let bytes = try Data(contentsOf: attachment.localFileURL)
+                let bytes = try QBODocumentNativeWorkflow.fileData(attachment.localFileURL)
                 let validate = {
                     try self.check()
                     let matches = try self.context.fetch(FetchDescriptor<ServiceDocumentAttachment>()).filter { $0.id == identifier }
@@ -851,33 +854,17 @@ final class QuickBooksBillingWorkflow {
                           attachment.localFilePath == path, attachment.caption == caption, attachment.kindRaw == kind,
                           attachment.quickBooksAttachableID == oldID, attachment.quickBooksAttachedEntityKeysRaw == oldKeys,
                           attachment.quickBooksSyncError == oldError,
-                          try Data(contentsOf: attachment.localFileURL) == bytes else {
+                          try QBODocumentNativeWorkflow.fileData(attachment.localFileURL) == bytes else {
                         throw QuickBooksBillingWorkflowError.changed
                     }
                 }
-                let owner = QuickBooksSyncLifecycle()
-                let upload = try owner.begin(api: self.api, validateAccess: validate)
-                defer { owner.finish(upload) }
                 do {
-                    let attachableID: String = try await upload.receive {
-                        self.api.uploadDocument(fileURL: attachment.localFileURL, note: caption,
-                                                attachableReferences: references, completion: $0)
-                    }
-                    try validate()
-                    attachment.quickBooksAttachableID = attachableID
-                    attachment.markQuickBooksAttached(to: references)
-                    attachment.quickBooksSyncError = nil
-                    do { try self.save(self.context) }
-                    catch {
-                        attachment.quickBooksAttachableID = oldID
-                        attachment.quickBooksAttachedEntityKeysRaw = oldKeys
-                        attachment.quickBooksSyncError = oldError
-                        throw QuickBooksBillingWorkflowError.saveFailed
-                    }
+                    _ = try await QBODocumentNativeWorkflow.upload(attachment, references: references, context: self.context,
+                        api: self.api, validate: validate, dependencies: self.documentUploads, save: self.save)
                 } catch {
                     // Do not label a replacement/edited file with an old result.
                     try validate()
-                    attachment.quickBooksSyncError = "QuickBooks file upload is unconfirmed. Review this file before retrying. " + error.localizedDescription
+                    attachment.quickBooksSyncError = QBODocumentNativeWorkflow.message(error)
                     do { try self.save(self.context) }
                     catch { attachment.quickBooksSyncError = oldError; throw QuickBooksBillingWorkflowError.saveFailed }
                     throw error

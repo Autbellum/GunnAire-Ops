@@ -8454,6 +8454,108 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    private func originalFilesApp(extra: [String] = []) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-uiTestAuthenticatedAdmin",
+            "-uiTestOriginalFiles", "-GunnAirePendingAppRoute", "receiptsBills"] + extra
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launchEnvironment["GUNNAIRE_ORIGINAL_FILE_FIXTURE"] = UUID().uuidString
+        return app
+    }
+
+    @MainActor
+    private func openOriginalFiles(_ app: XCUIApplication, completed: Bool = false) {
+        XCTAssertTrue(app.navigationBars["Receipts & Bills"].waitForExistence(timeout: 8))
+        app.segmentedControls["ReceiptsBillsWorkspacePicker"].buttons["Recovery"].tap()
+        XCTAssertTrue(app.staticTexts["File Recovery"].waitForExistence(timeout: 5))
+        if completed {
+            let recent = app.buttons["Recent Uploads"]
+            XCTAssertTrue(recent.waitForExistence(timeout: 4)); recent.tap()
+        }
+        let row = app.buttons["OriginalUpload-D1000000-0000-4000-8000-000000000002"]
+        XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
+        let opened = app.navigationBars["Original File"].waitForExistence(timeout: 4)
+        if !opened {
+            let image = XCTAttachment(screenshot: app.screenshot()); image.name = "Original file presentation failure"
+            image.lifetime = .keepAlways; add(image)
+            let tree = XCTAttachment(string: app.debugDescription); tree.name = "Original file accessibility tree"
+            tree.lifetime = .keepAlways; add(tree)
+        }
+        XCTAssertTrue(opened)
+    }
+
+    @MainActor
+    func testOriginalFileRecoverySurvivesLostReplyRelaunchAndExportCancellation() throws {
+        let app = originalFilesApp(extra: ["-uiTestOriginalFilesLostReply"])
+        app.launch(); openOriginalFiles(app)
+        XCTAssertEqual(app.staticTexts["OriginalUploadStatus"].label, "Saved on this device")
+        app.buttons["OriginalUploadSend"].tap()
+        let unknown = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Check original upload"),
+                                                 object: app.staticTexts["OriginalUploadStatus"])
+        XCTAssertEqual(XCTWaiter.wait(for: [unknown], timeout: 6), .completed)
+        XCTAssertFalse(app.buttons["OriginalUploadSend"].exists)
+        XCTAssertFalse(app.buttons["OriginalUploadCancel"].exists)
+        app.terminate(); app.launch(); openOriginalFiles(app)
+        XCTAssertEqual(app.staticTexts["OriginalUploadStatus"].label, "Check original upload")
+        XCTAssertFalse(app.buttons["OriginalUploadSend"].exists)
+        XCTAssertFalse(app.buttons["OriginalUploadCancel"].exists)
+        app.buttons["OriginalUploadCheck"].tap()
+        let confirmed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Saved in QuickBooks"),
+                                                   object: app.staticTexts["OriginalUploadStatus"])
+        XCTAssertEqual(XCTWaiter.wait(for: [confirmed], timeout: 6), .completed)
+        XCTAssertFalse(app.buttons["OriginalUploadSend"].exists)
+        XCTAssertFalse(app.buttons["OriginalUploadCancel"].exists)
+        app.buttons["OriginalUploadExport"].tap()
+        XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 5))
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(app.navigationBars["Original File"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["OriginalUploadExport"].exists)
+        let evidence = XCTAttachment(screenshot: app.screenshot())
+        evidence.name = "Original file recovered after lost reply and relaunch"
+        evidence.lifetime = .keepAlways; add(evidence)
+        app.navigationBars["Original File"].buttons["Done"].tap()
+        XCTAssertTrue(app.navigationBars["Receipts & Bills"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["No uploads need attention"].exists)
+        app.terminate(); app.launch(); openOriginalFiles(app, completed: true)
+        XCTAssertEqual(app.staticTexts["OriginalUploadStatus"].label, "Saved in QuickBooks")
+        XCTAssertFalse(app.buttons["OriginalUploadSend"].exists)
+    }
+
+    @MainActor
+    func testOriginalFileCancellationRetainsBytesAndCannotResendAfterRelaunch() throws {
+        let app = originalFilesApp()
+        app.launch(); openOriginalFiles(app)
+        app.buttons["OriginalUploadCancel"].tap()
+        let confirm = app.sheets["Cancel this unsent upload?"].buttons["Cancel Unsent Upload"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 4)); confirm.tap()
+        let cancelled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Cancelled — original retained"),
+                                                   object: app.staticTexts["OriginalUploadStatus"])
+        XCTAssertEqual(XCTWaiter.wait(for: [cancelled], timeout: 6), .completed)
+        XCTAssertTrue(app.buttons["OriginalUploadExport"].exists)
+        XCTAssertFalse(app.buttons["OriginalUploadSend"].exists)
+        app.terminate(); app.launch(); openOriginalFiles(app, completed: true)
+        XCTAssertEqual(app.staticTexts["OriginalUploadStatus"].label, "Cancelled — original retained")
+        XCTAssertTrue(app.buttons["OriginalUploadExport"].exists)
+        XCTAssertFalse(app.buttons["OriginalUploadSend"].exists)
+        XCTAssertFalse(app.buttons["OriginalUploadCancel"].exists)
+        let evidence = XCTAttachment(screenshot: app.screenshot())
+        evidence.name = "Cancelled original file retained after relaunch"
+        evidence.lifetime = .keepAlways; add(evidence)
+    }
+
+    @MainActor
+    func testOriginalFileRecoveryRequiresVerifiedBusinessAccess() throws {
+        let app = originalFilesApp(extra: ["-uiTestOriginalFilesDenied"])
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Receipts & Bills"].waitForExistence(timeout: 8))
+        app.segmentedControls["ReceiptsBillsWorkspacePicker"].buttons["Recovery"].tap()
+        XCTAssertTrue(app.staticTexts["Verify administrator access to this business to review saved files."].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["OriginalUpload-D1000000-0000-4000-8000-000000000002"].exists)
+        XCTAssertFalse(app.buttons["OriginalUploadSend"].exists)
+        XCTAssertFalse(app.buttons["OriginalUploadExport"].exists)
+    }
+
+    @MainActor
     func testReceiptsBillsUsesRoleAwareOperationalWorkspaces() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
@@ -8487,7 +8589,10 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         workspacePicker.buttons["Recovery"].tap()
         XCTAssertTrue(workspacePicker.buttons["Recovery"].isSelected)
-        XCTAssertTrue(app.staticTexts["Failed Upload Queue"].exists)
+        XCTAssertTrue(app.staticTexts["File Recovery"].exists)
+        XCTAssertFalse(app.buttons["Retry Pending Uploads"].exists)
+        XCTAssertFalse(app.buttons["Purge Missing Files"].exists)
+        XCTAssertFalse(app.buttons["Clear Queue"].exists)
         XCTAssertFalse(app.staticTexts["Stock & Replenishment"].exists)
     }
 

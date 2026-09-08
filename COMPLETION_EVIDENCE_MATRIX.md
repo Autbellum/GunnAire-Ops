@@ -1,3 +1,26 @@
+Native original-file recovery qualification, 2026-09-08:
+NATIVE_QBO_DOCUMENT_RECOVERY.md records encrypted device originals, strict
+business/Admin/original-job authority, migrated native attachment entry points,
+lost-reply recovery without resending, retained cancellation and export, exact
+local receipt application and durable acknowledgement. Confirmed uploads with
+unfinished local links remain visible for attention. The final accepted source
+passes 1,457 logic cases on Mac and iPad, plus all seven selected iPad UI journeys
+(1,464 total). Actual execution trees, 18 frozen Swift hashes and all seven final
+screenshots were checked. Unsigned universal Mac Release passes with both
+architectures; 610 Backend tests, 55 Tools tests and workflow lint pass.
+The new workflow retains all 48 preceding UI selectors and adds four; two
+26-journey iPad groups each retain full logic coverage. Its real selection script
+is tested for disjoint coverage and invalid-group rejection. The prior published
+head c9af5d7 has successful Backend/Mac checks, but its iPad job ended at the
+60-minute limit; it is not still running or fully green. New exact-head hosted
+qualification remains separate from local acceptance. The 23-path original copy
+is verified against 220 unrelated changed files and its empty index before
+commit. Shared-server file history/adoption, reviewed later document linking,
+older-backup restore protection, real provider/signed CloudKit/multi-device
+acceptance and the full HVAC/Google/QBO-item/Handoff/Tap-to-Pay goal remain open.
+No real provider send, financial mutation, customer email, deployment, signing,
+schema promotion, merge or physical installation occurred.
+
 Original QuickBooks file recovery checkpoint, 2026-09-08:
 QBO_DOCUMENT_UPLOAD_RECOVERY.md records candidate backend 2026.09.08.38:
 encrypted retained original files, company/realm/grant ownership, operation

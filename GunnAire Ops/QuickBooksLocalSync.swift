@@ -484,7 +484,7 @@ enum QuickBooksLocalSync {
         let syncedInvoices = try modelContext.fetch(FetchDescriptor<Invoice>())
         let syncedServiceCalls = try modelContext.fetch(FetchDescriptor<ServiceCall>())
         let serviceAttachments = try modelContext.fetch(FetchDescriptor<ServiceDocumentAttachment>())
-        QuickBooksInvoiceAttachmentSync.syncPendingServiceReports(
+        try QuickBooksInvoiceAttachmentSync.syncPendingServiceReports(
             estimates: syncedEstimates,
             invoices: syncedInvoices,
             serviceCalls: syncedServiceCalls,

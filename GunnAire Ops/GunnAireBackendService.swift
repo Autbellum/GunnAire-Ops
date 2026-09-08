@@ -808,6 +808,51 @@ enum GunnAireBackendService {
         .init { path, method, body in try await send(path: path, method: method, body: body) }
     }
 
+    static func documentUploadClient(check: @escaping () throws -> Void) -> QBODocumentUploadClient {
+        .init(transport: documentUploadRequest, check: check)
+    }
+
+    static func documentUploadRequest(path: String, method: String, body: Data?) async throws -> Data {
+        let base = "/api/qbo-document-uploads"
+        guard let endpoint = URLComponents(string: path), endpoint.scheme == nil, endpoint.host == nil,
+              endpoint.fragment == nil, endpoint.path == base || endpoint.path.hasPrefix(base + "/"),
+              let identity = CompanyWorkspaceSession.current else { throw QBODocumentError.access }
+        let suffix = String(endpoint.path.dropFirst(base.count))
+        let parts = suffix.split(separator: "/", omittingEmptySubsequences: false)
+        let exactID = parts.count >= 2 && UUID(uuidString: String(parts[1])).map { $0.uuidString.lowercased() == parts[1] } == true
+        let collection = suffix.isEmpty
+        let read = method == "GET" && body == nil && (collection || (endpoint.query == nil && exactID &&
+            (parts.count == 2 || (parts.count == 3 && parts[2] == "file"))))
+        let write = method == "POST" && body != nil && endpoint.query == nil && (collection ||
+            (exactID && parts.count == 3 && ["send", "recover", "cancel"].contains(String(parts[2]))))
+        guard read || write, (body?.count ?? 0) <= (collection ? ((QBODocumentFileInfo.maximum + 2) / 3) * 4 + 8192 : 4096)
+        else { throw QBODocumentError.invalid }
+        var request = try makeRequest(path: path, method: method, body: body)
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        guard bearer.hasPrefix("Bearer "), CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == identity.tokenFingerprint,
+              request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil else { throw QBODocumentError.access }
+        request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
+        let controller = CompanyWorkspaceAccessController.shared, generation = controller.generation
+        func check() throws {
+            guard CompanyWorkspaceSession.current == identity, controller.generation == generation,
+                  controller.authorizedContainer != nil else { throw QBODocumentError.access }
+        }
+        try check()
+        do {
+            let maximum = endpoint.path.hasSuffix("/file") ? QBODocumentUploadClient.maximumResponseBytes : 512 * 1024
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: maximum)
+            try check()
+            return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let status) = error {
+                throw GunnAireBackendError.server(statusCode: status, message: "Original file recovery was not confirmed.")
+            }
+            if error is GmailServerHTTPError { throw QBODocumentError.invalid }
+            throw error
+        }
+    }
+
     static var qboLinkReviewClient: QuickBooksLinkReviewClient {
         .init { path, method, body in try await send(path: path, method: method, body: body) }
     }

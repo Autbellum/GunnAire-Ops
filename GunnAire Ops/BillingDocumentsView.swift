@@ -7463,23 +7463,7 @@ GunnAire
         )
         guard !references.isEmpty else { return }
 
-        QuickBooksDataAPI.shared.uploadDocument(
-            fileURL: attachment.localFileURL,
-            note: attachment.caption,
-            attachableReferences: references
-        ) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let attachableID):
-                    attachment.quickBooksAttachableID = attachableID
-                    attachment.quickBooksSyncError = nil
-                    try? modelContext.save()
-                case .failure(let error):
-                    attachment.quickBooksSyncError = error.localizedDescription
-                    try? modelContext.save()
-                }
-            }
-        }
+        QBODocumentNativeWorkflow.enqueue(attachment, references: references, context: modelContext)
     }
 
     private func contentType(for url: URL) -> String {
