@@ -1,5 +1,35 @@
 # QuickBooks sync workflow lifecycle
 
+## Current-source revalidation — September 7, 2026
+
+Read-only inspection of review head `442e9d7` confirms a concrete remaining
+event-reconciliation dependency. `BackendQuickBooksWebhookEvent` retains entity
+type, entity ID, operation and occurrence time. However,
+`QuickBooksManagementView.syncAllQuickBooksData` passes only `events.map(\.id)`
+into resource sync, and `finishQuickBooksResourceSync` acknowledges every
+captured ID when the overall resource/import failure list is empty.
+`QuickBooksLocalSync.importSnapshot` accepts six resource arrays, not event
+operations or per-event outcomes. Its item loop also deliberately preserves
+pending local catalog changes and ambiguous mappings instead of applying them.
+These protections are useful, but a generic successful refresh does not prove
+that each queued entity change has been reconciled.
+
+The next implementation must retain event identity and operation through the
+captured run, produce explicit per-entity reconciliation evidence, and acknowledge
+only the original events whose effects are proved. Unsupported, missing,
+deleted/voided, ambiguous or still-under-review changes must remain pending with
+an actionable explanation until an appropriate recovery/reconciliation path
+handles them. Deletion handling must preserve sold-document history rather than
+erase local invoices or reprice their snapshots. Mixed-event, stale-event,
+role/realm-change, failed-import and partial-success tests are required.
+
+This is a source-observed gap, not a new implementation or a claim about live
+provider data. Current Intuit event/entity semantics must be verified against
+primary documentation before changing provider requests or choosing deletion
+and ordering rules. No live accounting read/write or event acknowledgement was
+performed during this review. Complete item/entity synchronization, shared
+server authority and physical multi-device acceptance remain required.
+
 September 7, 2026. Review-branch implementation checkpoint; not a production
 deployment or full application acceptance declaration.
 
