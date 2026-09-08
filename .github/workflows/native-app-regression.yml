@@ -80,6 +80,8 @@ jobs:
               testMilestoneBillingReviewOpensOriginalInvoiceAndReturnsWithoutDuplicating \
               testMilestoneBillingReviewRetainsDraftWhileOriginalCloudKitRecordIsMissing \
               testOfficeRetainsUnusedMilestoneDraftAndReopensOriginalFromInvoices \
+              testRetainedMilestoneScheduleCollectsTheOriginalInvoice \
+              testRetainedMilestoneDocumentationQueueCollectsTheOriginalInvoice \
               testManagementBillingComposerCancelsWithoutCreatingOrSending \
               testManagementBillingComposerSavesOriginalInvoiceAndEstimateOffline \
               testInvoiceComposerBrowsesCategoriesEditsRepeatedBundleMembersAndSavesOriginal \
