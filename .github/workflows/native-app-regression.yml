@@ -104,6 +104,8 @@ jobs:
               testOriginalFileRecoverySurvivesLostReplyRelaunchAndExportCancellation \
               testOriginalFileCancellationRetainsBytesAndCannotResendAfterRelaunch \
               testOriginalFileRecoveryRequiresVerifiedBusinessAccess \
+              testSharedOriginalFileRestoresAndExportsOfflineAfterRelaunchWithoutResending \
+              testSharedOriginalHistoryOfflineFailureReturnsToRecoveryWithoutAnEmptySuccess \
               testManagementBillingComposerCancelsWithoutCreatingOrSending \
               testManagementBillingComposerSavesOriginalInvoiceAndEstimateOffline \
               testInvoiceComposerBrowsesCategoriesEditsRepeatedBundleMembersAndSavesOriginal \
