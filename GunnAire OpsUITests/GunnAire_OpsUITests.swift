@@ -3738,6 +3738,16 @@ final class GunnAire_OpsUITests: XCTestCase {
 
     @MainActor
     func testAdministratorCreatesExactLockedProgressInvoiceFromApprovedProjectMilestone() throws {
+        try exerciseProjectMilestoneInvoice(bundle: false)
+    }
+
+    @MainActor
+    func testAdministratorCreatesLockedBundleMilestoneInvoiceAndReturnsToOriginalJob() throws {
+        try exerciseProjectMilestoneInvoice(bundle: true)
+    }
+
+    @MainActor
+    private func exerciseProjectMilestoneInvoice(bundle: Bool) throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
         app.launchArguments = [
@@ -3746,6 +3756,7 @@ final class GunnAire_OpsUITests: XCTestCase {
             "-uiTestAuthenticatedAdmin",
             "-uiTestSeedProjectMilestones"
         ]
+        if bundle { app.launchArguments.append("-uiTestProjectBundleMilestones") }
         app.launch()
 
         let invoices = revealSidebarDestination("Invoices", in: app)
@@ -3790,14 +3801,34 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(reviewInvoice.waitForExistence(timeout: 5))
         reviewInvoice.tap()
 
-        let lockedAllocation = app.staticTexts.matching(
-            NSPredicate(format: "label BEGINSWITH 'Progress-invoice lines are locked'")
-        ).firstMatch
+        let lockedAllocation = app.descendants(matching: .any)["ProjectMilestoneAllocationLocked"]
         for _ in 0..<12 where !lockedAllocation.exists {
             app.swipeUp()
         }
         XCTAssertTrue(lockedAllocation.waitForExistence(timeout: 3))
-        XCTAssertFalse(app.buttons["InvoicePrimaryAction"].isEnabled)
+        XCTAssertFalse(app.buttons["InvoicePrimaryAction"].exists)
+        let savedSubtotal = app.descendants(matching: .any)["ProjectMilestoneSavedSubtotal"]
+        XCTAssertTrue(savedSubtotal.waitForExistence(timeout: 3))
+        XCTAssertEqual(savedSubtotal.value as? String, "$5,550.00")
+        XCTAssertFalse(app.buttons["Create New Item"].exists)
+        if bundle {
+            let included = app.buttons["Included Items (2)"]
+            for _ in 0..<6 where !included.exists || !included.isHittable { app.swipeDown() }
+            XCTAssertTrue(included.waitForExistence(timeout: 3))
+            XCTAssertTrue(included.isHittable)
+            included.tap()
+            for position in 0..<2 {
+                let member = app.descendants(matching: .any)["ProjectMilestoneMember-0-\(position)"]
+                XCTAssertTrue(member.waitForExistence(timeout: 3))
+                XCTAssertTrue(member.label.contains("Saved diagnostic labor"))
+                XCTAssertTrue(member.label.contains("$2,775.00"))
+                XCTAssertTrue(member.label.contains("0.3"))
+            }
+        }
+        let allocationScreen = XCTAttachment(screenshot: app.screenshot())
+        allocationScreen.name = bundle ? "Saved bundle allocation and exact subtotal" : "Saved allocation and exact subtotal"
+        allocationScreen.lifetime = .keepAlways
+        add(allocationScreen)
 
         let progressInvoice = app.staticTexts["Progress Invoice 1"]
         for _ in 0..<24 where !progressInvoice.exists {
@@ -3811,6 +3842,10 @@ final class GunnAire_OpsUITests: XCTestCase {
             app.swipeUp()
         }
         XCTAssertTrue(progressInvoiceStatus.waitForExistence(timeout: 3))
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = bundle ? "Original bundle milestone invoice" : "Original milestone invoice"
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     @MainActor

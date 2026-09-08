@@ -10,9 +10,10 @@ import SwiftData
         companyID: UUID(uuidString: "10000000-0000-4000-8000-000000000001")!,
         realmID: "bundle-composer-fixture", environment: Config.QuickBooks.environment)
     static let rootID = UUID(uuidString: "90000000-0000-4000-8000-000000000044")!
-    static func makeCatalog(scope: QuickBooksChangeHistoryScope = scope,
+    static func makeCatalog(scope requestedScope: QuickBooksChangeHistoryScope? = nil,
                             overrides: [String: [String: Any]] = [:],
                             additionalDefinitions: [[String: Any]] = []) throws -> [Item] {
+        let scope = requestedScope ?? Self.scope
         let definitions: [[String: Any]] = [
             ["Id": "BC-C1", "Name": "Repairs", "Type": "Category", "Level": 0],
             ["Id": "BC-C2", "Name": "Electrical", "Type": "Category", "Level": 1, "ParentRef": ["value": "BC-C1"]],

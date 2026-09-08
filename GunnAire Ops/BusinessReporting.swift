@@ -264,7 +264,7 @@ enum BusinessReporting {
         }
         let milestoneInvoiceIDs = Set(periodProjectMilestones.compactMap(\.invoiceID))
         let projectInvoices = invoices.filter { milestoneInvoiceIDs.contains($0.id) }
-        let projectInvoicedAmount = projectInvoices.reduce(0) { $0 + $1.amount }
+        let projectInvoicedAmount = projectInvoices.reduce(0) { $0 + $1.subtotalAmount }
         let projectReadyToBillCount = periodProjectMilestones.filter { milestone in
             milestone.invoiceID == nil && (milestone.completedAt != nil || milestone.billingTrigger == .customerApproval)
         }.count

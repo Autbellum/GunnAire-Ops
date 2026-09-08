@@ -2249,7 +2249,8 @@ GunnAire
             .sheet(isPresented: $showingProjectPlanSetup) {
                 if let call = activeServiceCall, let estimate = currentJobEstimate {
                     ProjectBillingPlanSetupSheet(
-                        contractAmount: estimate.amount,
+                        contractAmount: estimate.subtotalAmount,
+                        snapshotJSON: estimate.catalogSnapshotJSON,
                         initialDate: call.scheduledDate
                     ) { drafts in
                         createProjectBillingPlan(drafts: drafts, for: call, estimate: estimate)
@@ -3964,6 +3965,10 @@ GunnAire
                             }
                         }
 
+                        if let invoice = currentJobInvoice, selectedDocumentKind == .invoice,
+                           invoice.isProjectProgressInvoice {
+                            ProjectProgressInvoiceReview(invoice: invoice)
+                        } else {
                         HStack {
                             Text("Customer")
                             Spacer()
@@ -4196,6 +4201,7 @@ GunnAire
                             Text(actionMessage)
                                 .font(.caption)
                                 .foregroundColor(.secondary)
+                        }
                         }
                         }
                         if selectedJobStage == .billing {
@@ -5052,10 +5058,9 @@ GunnAire
         }
 
         do {
-            try ProjectBillingPolicy.validatePersistedPlan(currentProjectMilestones, contractAmount: estimate.amount)
             let snapshotJSON = try ProjectBillingPolicy.progressDocumentSnapshotJSON(
-                from: estimate.catalogSnapshotJSON,
-                targetAmount: milestone.plannedAmount
+                for: milestone, estimate: estimate,
+                milestones: currentProjectMilestones, invoices: invoices
             )
             guard BillingDocumentDiscountPolicy.currencyCents(
                 BillingDocumentDiscountPolicy.netSubtotal(snapshotJSON: snapshotJSON) ?? -1
@@ -5078,18 +5083,20 @@ GunnAire
                 projectMilestoneID: milestone.id,
                 projectMilestoneSequence: milestone.sequence,
                 projectMilestoneTitle: milestone.title,
-                projectContractAmount: estimate.amount,
+                projectContractAmount: estimate.subtotalAmount,
                 projectBillingPercent: milestone.billingPercent,
                 status: "unpaid",
                 dueDate: invoiceDueDate,
                 notes: "Progress billing against approved estimate \(estimate.id.uuidString.prefix(8)).",
                 createdAt: invoiceCreatedAt
             )
+            _ = try BillingTaxAddressContext.forPublication(.invoice(invoice))
             let priorStatus = milestone.status
             let priorCompletedAt = milestone.completedAt
             let priorCompletedBy = milestone.completedByEmail
             let priorLinkedInvoiceID = call.linkedInvoiceID
             let priorEstimateStatus = estimate.status
+            let priorCallStatus = call.status
             if milestone.billingTrigger == .milestoneCompletion, milestone.completedAt == nil {
                 _ = milestone.markCompleted(by: currentUserEmail)
             }
@@ -5132,6 +5139,7 @@ GunnAire
                 milestone.completedByEmail = priorCompletedBy
                 call.linkedInvoiceID = priorLinkedInvoiceID
                 estimate.status = priorEstimateStatus
+                call.status = priorCallStatus
                 modelContext.delete(invoice)
                 modelContext.delete(activity)
                 actionMessage = "Could not save the progress invoice: \(error.localizedDescription)"
@@ -5150,7 +5158,6 @@ GunnAire
         call.linkedInvoiceID = invoice.id
         selectedDocumentKind = .invoice
         selectedJobStage = .billing
-        loadInvoiceIntoBuilder(invoice, announce: false)
         try? modelContext.save()
         actionMessage = "Loaded \(invoice.projectBillingDisplayTitle ?? "progress invoice") for review. Its approved milestone allocation is locked."
     }

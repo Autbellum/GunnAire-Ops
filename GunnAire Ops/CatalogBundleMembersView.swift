@@ -56,7 +56,7 @@ struct CatalogBundleMembersView: View {
 
 /// SwiftUI's automatic disclosure tap handling can activate another disclosure
 /// inside the same composite List row. A scoped button toggles only this group.
-private struct CatalogBundleDisclosureStyle: DisclosureGroupStyle {
+struct CatalogBundleDisclosureStyle: DisclosureGroupStyle {
     func makeBody(configuration: Configuration) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Button { configuration.isExpanded.toggle() } label: {

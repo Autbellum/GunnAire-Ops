@@ -1,3 +1,19 @@
+Bundle milestone candidate, 2026-09-08: PROJECT_BUNDLE_MILESTONE_BILLING.md
+records whole-plan cent/quantity/discount conservation, original bundle and
+member evidence, prior-invoice reconciliation, before-tax staged scope, and
+full-job material requirements, retained reviewed tax addresses, and a read-only
+saved-invoice review. Final Mac and iPad logic each pass 1,378 tests, all five
+selected iPad journeys pass, and unsigned universal Release, 546 Backend and
+51 Tools tests pass. Exact execution trees and the final screenshot were checked.
+Retained failed allocation tests exposed a Foundation Decimal conversion issue;
+visual inspection also found an empty $0 editable builder despite green tests,
+leading to the saved-record review and stronger assertions. Publication is still
+separate while the preceding exact-head hosted iPad run remains live. General
+feasible-plan allocation, older issued-history reconciliation, shared milestone
+issuance uniqueness, signed CloudKit/mixed-version safety, provider acceptance and
+the full ten-competitor/Google/vendor/access/Handoff/Tap-to-Pay objective remain
+required. No merge, deployment, live accounting write or schema promotion.
+
 Native bundle composer candidate, 2026-09-08: NATIVE_BUNDLE_COMPOSITION.md
 records native category paths, ordered immutable bundle selection and independent
 member editing/removal for invoices and estimates, customer/system boundaries,

@@ -212,6 +212,8 @@ enum ProjectBillingValidationError: LocalizedError, Equatable {
     case approvalTriggerMustComeFirst
     case invalidPersistedPlan
     case missingCatalogSnapshot
+    case allocationPrecision(String)
+    case issuedAllocationChanged
 
     var errorDescription: String? {
         switch self {
@@ -226,6 +228,8 @@ enum ProjectBillingValidationError: LocalizedError, Equatable {
         case .approvalTriggerMustComeFirst: "Approval-triggered billing can only be used for the first milestone."
         case .invalidPersistedPlan: "The saved milestone plan no longer reconciles to the approved contract. Review it before invoicing."
         case .missingCatalogSnapshot: "The approved estimate does not contain the durable line-item snapshot required for progress billing."
+        case .allocationPrecision(let name): "The selected stages cannot split \(name) into exact invoice amounts at its approved price. Review the milestone percentages. No invoice or price has been changed."
+        case .issuedAllocationChanged: "A previously issued milestone is missing or differs from this billing plan. Sync and review its original invoice before creating another."
         }
     }
 }
@@ -312,8 +316,10 @@ enum ProjectBillingPolicy {
         guard estimate.hasRecordedCustomerApproval else {
             throw ProjectBillingValidationError.approvalRequired
         }
-        try validate(drafts: drafts, contractAmount: estimate.amount)
-        let amounts = allocatedAmounts(total: estimate.amount, percentages: drafts.map(\.billingPercent))
+        try validate(drafts: drafts, contractAmount: estimate.subtotalAmount)
+        _ = try BillingTaxAddressContext.forPublication(.estimate(estimate))
+        let amounts = allocatedAmounts(total: estimate.subtotalAmount, percentages: drafts.map(\.billingPercent))
+        _ = try ProjectProgressAllocation.documents(from: estimate.catalogSnapshotJSON, targetAmounts: amounts)
         return zip(drafts.indices, zip(drafts, amounts)).map { index, pair in
             let draft = pair.0
             return ProjectMilestone(
@@ -351,8 +357,12 @@ enum ProjectBillingPolicy {
         } catch {
             throw ProjectBillingValidationError.invalidPersistedPlan
         }
-        let amountTotal = milestones.reduce(0) { $0 + $1.plannedAmount }
-        guard abs(amountTotal - contractAmount) < 0.01 else {
+        let expected = allocatedAmounts(total: contractAmount, percentages: sorted.map(\.billingPercent))
+        guard Set(sorted.map(\.id)).count == sorted.count,
+              sorted.map(\.sequence) == Array(sorted.indices),
+              Set(sorted.map(\.projectServiceCallID)).count == 1,
+              Set(sorted.map(\.estimateID)).count == 1,
+              zip(sorted, expected).allSatisfy({ ProjectProgressAllocation.exactCents($0.plannedAmount) == ProjectProgressAllocation.exactCents($1) && $0.plannedAmount > 0 }) else {
             throw ProjectBillingValidationError.invalidPersistedPlan
         }
     }
@@ -414,19 +424,8 @@ enum ProjectBillingPolicy {
         targetAmount: Double
     ) throws -> [CatalogLineItemSnapshot] {
         guard !source.isEmpty else { throw ProjectBillingValidationError.missingCatalogSnapshot }
-        let extendedAmounts = source.map { max($0.unitPrice * $0.quantity, 0) }
-        let sourceTotal = extendedAmounts.reduce(0, +)
-        guard sourceTotal > 0, targetAmount > 0 else {
-            throw ProjectBillingValidationError.missingCatalogSnapshot
-        }
-        let percentages = extendedAmounts.map { $0 / sourceTotal * 100 }
-        let lineAmounts = allocatedAmounts(total: targetAmount, percentages: percentages)
-        return zip(source, lineAmounts).map { snapshot, lineAmount in
-            guard snapshot.unitPrice > 0 else {
-                return snapshot.replacingQuantity(with: snapshot.quantity * targetAmount / sourceTotal)
-            }
-            return snapshot.replacingQuantity(with: lineAmount / snapshot.unitPrice)
-        }
+        let json = try progressDocumentSnapshotJSON(from: CatalogLineItemSnapshot.encoded(snapshots: source), targetAmount: targetAmount)
+        return CatalogLineItemSnapshot.decoded(from: json)
     }
 
     /// Produces a durable progress-invoice snapshot whose net subtotal equals
@@ -437,74 +436,62 @@ enum ProjectBillingPolicy {
         from sourceJSON: String?,
         targetAmount: Double
     ) throws -> String {
-        let source = CatalogLineItemSnapshot.decoded(from: sourceJSON)
-        guard !source.isEmpty,
-              targetAmount.isFinite,
-              targetAmount > 0 else {
+        guard let net = BillingDocumentDiscountPolicy.netSubtotal(snapshotJSON: sourceJSON),
+              let sourceCents = ProjectProgressAllocation.exactCents(net),
+              let targetCents = ProjectProgressAllocation.exactCents(targetAmount),
+              targetCents > 0, targetCents <= sourceCents else {
             throw ProjectBillingValidationError.missingCatalogSnapshot
         }
+        var targets = [targetAmount]
+        if targetCents < sourceCents {
+            targets.append(QuickBooksSalesLineContract.double(Decimal(sourceCents - targetCents) / 100))
+        }
+        return try ProjectProgressAllocation.documents(from: sourceJSON, targetAmounts: targets)[0]
+    }
 
-        guard let sourceDiscount = CatalogLineItemSnapshot.documentDiscount(from: sourceJSON) else {
-            let snapshots = try progressSnapshots(from: source, targetAmount: targetAmount)
-            guard let encoded = CatalogLineItemSnapshot.encoded(snapshots: snapshots),
-                  BillingDocumentDiscountPolicy.currencyCents(
-                    BillingDocumentDiscountPolicy.netSubtotal(snapshotJSON: encoded) ?? -1
-                  ) == BillingDocumentDiscountPolicy.currencyCents(targetAmount) else {
-                throw ProjectBillingValidationError.invalidPersistedPlan
+    /// Actual issuance uses the full plan, never repeated independent shares of
+    /// the source. Already-issued documents are immutable reconciliation evidence.
+    static func progressDocumentSnapshotJSON(
+        for milestone: ProjectMilestone, estimate: Estimate,
+        milestones: [ProjectMilestone], invoices: [Invoice]
+    ) throws -> String {
+        try validatePersistedPlan(milestones, contractAmount: estimate.subtotalAmount)
+        let sorted = milestones.sorted { $0.sequence < $1.sequence }
+        guard estimate.hasRecordedCustomerApproval,
+              sorted.allSatisfy({ $0.estimateID == estimate.id && $0.projectServiceCallID == milestone.projectServiceCallID }),
+              let index = sorted.firstIndex(where: { $0 === milestone }), milestone.invoiceID == nil else {
+            throw ProjectBillingValidationError.invalidPersistedPlan
+        }
+        let documents = try ProjectProgressAllocation.documents(from: estimate.catalogSnapshotJSON,
+            targetAmounts: sorted.map(\.plannedAmount))
+        _ = try BillingTaxAddressContext.forPublication(.estimate(estimate))
+        guard let customerID = estimate.customer?.id else { throw ProjectBillingValidationError.issuedAllocationChanged }
+        let relevant = invoices.filter { $0.serviceCallID == milestone.projectServiceCallID && $0.projectMilestoneID != nil }
+        let knownIDs = Set(sorted.map(\.id))
+        guard relevant.allSatisfy({ $0.projectMilestoneID.map(knownIDs.contains) == true }),
+              Set(sorted.compactMap(\.invoiceID)).count == sorted.compactMap(\.invoiceID).count else {
+            throw ProjectBillingValidationError.issuedAllocationChanged
+        }
+        for (stage, saved) in sorted.enumerated() {
+            let matches = invoices.filter { $0.id == saved.invoiceID || $0.projectMilestoneID == saved.id }
+            guard let invoiceID = saved.invoiceID else {
+                guard matches.isEmpty, saved.status != .invoiced else { throw ProjectBillingValidationError.issuedAllocationChanged }
+                continue
             }
-            return encoded
-        }
-
-        let sourceGross = source.reduce(0) { $0 + $1.unitPrice * $1.quantity }
-        guard sourceGross.isFinite,
-              sourceGross > 0,
-              let sourceDiscountAmount = sourceDiscount.amount(for: sourceGross),
-              sourceDiscountAmount > 0,
-              sourceDiscountAmount < sourceGross else {
-            throw ProjectBillingValidationError.invalidPersistedPlan
-        }
-
-        let netFraction = (sourceGross - sourceDiscountAmount) / sourceGross
-        guard netFraction.isFinite, netFraction > 0 else {
-            throw ProjectBillingValidationError.invalidPersistedPlan
-        }
-        let targetGross = BillingDocumentDiscountPolicy.roundCurrency(targetAmount / netFraction)
-        let snapshots = try progressSnapshots(from: source, targetAmount: targetGross)
-        let allocatedGross = BillingDocumentDiscountPolicy.roundCurrency(
-            snapshots.reduce(0) { $0 + $1.unitPrice * $1.quantity }
-        )
-        let allocatedDiscountAmount = BillingDocumentDiscountPolicy.roundCurrency(allocatedGross - targetAmount)
-        if BillingDocumentDiscountPolicy.currencyCents(allocatedDiscountAmount) == 0 {
-            guard let encoded = CatalogLineItemSnapshot.encoded(snapshots: snapshots),
-                  BillingDocumentDiscountPolicy.currencyCents(
-                    BillingDocumentDiscountPolicy.netSubtotal(snapshotJSON: encoded) ?? -1
-                  ) == BillingDocumentDiscountPolicy.currencyCents(targetAmount) else {
-                throw ProjectBillingValidationError.invalidPersistedPlan
+            guard matches.count == 1, let invoice = matches.first,
+                  invoice.id == invoiceID, invoice.projectMilestoneID == saved.id,
+                  invoice.serviceCallID == saved.projectServiceCallID, invoice.customer?.id == customerID,
+                  invoice.projectMilestoneSequence == saved.sequence,
+                  let totalCents = ProjectProgressAllocation.exactCents(invoice.amount),
+                  let taxCents = ProjectProgressAllocation.exactCents(invoice.salesTaxAmount), totalCents >= taxCents,
+                  totalCents - taxCents == ProjectProgressAllocation.exactCents(saved.plannedAmount),
+                  invoice.catalogLineSnapshots == CatalogLineItemSnapshot.decoded(from: documents[stage]),
+                  invoice.documentDiscount == CatalogLineItemSnapshot.documentDiscount(from: documents[stage]),
+                  BillingTaxAddressContext.read(invoice.catalogSnapshotJSON) == BillingTaxAddressContext.read(documents[stage]) else {
+                throw ProjectBillingValidationError.issuedAllocationChanged
             }
-            return encoded
         }
-        guard allocatedDiscountAmount > 0,
-              allocatedDiscountAmount < allocatedGross else {
-            throw ProjectBillingValidationError.invalidPersistedPlan
-        }
-
-        let milestoneDiscount = AuthorizedDocumentDiscount(
-            kind: .fixedAmount,
-            value: allocatedDiscountAmount,
-            grossSubtotalAtAuthorization: allocatedGross,
-            reason: sourceDiscount.reason,
-            authorizedByEmail: sourceDiscount.authorizedByEmail,
-            authorizedAt: sourceDiscount.authorizedAt
-        )
-        guard let encoded = CatalogLineItemSnapshot.encoded(
-            snapshots: snapshots,
-            documentDiscount: milestoneDiscount
-        ), BillingDocumentDiscountPolicy.currencyCents(
-            BillingDocumentDiscountPolicy.netSubtotal(snapshotJSON: encoded) ?? -1
-        ) == BillingDocumentDiscountPolicy.currencyCents(targetAmount) else {
-            throw ProjectBillingValidationError.invalidPersistedPlan
-        }
-        return encoded
+        return documents[index]
     }
 
     static func summary(
@@ -517,9 +504,13 @@ enum ProjectBillingPolicy {
             milestone.invoiceID.flatMap { invoiceByID[$0] }
         }
         let contractAmount = milestones.reduce(0) { $0 + $1.plannedAmount }
-        let invoicedAmount = linkedInvoices.reduce(0) { $0 + $1.amount }
+        let invoicedAmount = linkedInvoices.reduce(0) { $0 + $1.subtotalAmount }
         let paidAmount = linkedInvoices.reduce(0) { partial, invoice in
-            partial + max(invoice.amount - Invoice.outstandingBalance(for: invoice, payments: payments), 0)
+            let collected = max(invoice.amount - Invoice.outstandingBalance(for: invoice, payments: payments), 0)
+            // Project progress is before tax. Attribute a partial payment in
+            // proportion to the invoice's confirmed subtotal and tax, not FIFO.
+            return partial + (invoice.amount > 0 ? BillingDocumentDiscountPolicy.roundCurrency(
+                min(collected / invoice.amount, 1) * invoice.subtotalAmount) : 0)
         }
         let readyToBillCount = milestones.filter { milestone in
             milestone.invoiceID == nil && (milestone.completedAt != nil || milestone.billingTrigger == .customerApproval)

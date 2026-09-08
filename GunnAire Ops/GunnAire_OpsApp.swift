@@ -1361,6 +1361,16 @@ private enum GunnAireUITestFixtures {
                 customerApprovalRecordedByEmail: AppAccess.primaryAdminEmail,
                 notes: "Customer approved the replacement proposal and 30/50/20 billing schedule."
             )
+            if arguments.contains("-uiTestProjectBundleMilestones") {
+                let catalog = try CatalogBundleFixture.makeCatalog(overrides: [
+                    "BC-L1": ["UnitPrice": 9_250],
+                    "BC-G1": ["Name": "Heat Pump Replacement Bundle"]])
+                let bundle = try CatalogBundlePolicy.resolve(root: catalog[3], catalog: catalog,
+                    scope: CatalogBundleFixture.scope)
+                projectEstimate.catalogSnapshotJSON = CatalogLineItemSnapshot.encoded(snapshots: [bundle])
+                projectEstimate.lineItemSummary = bundle.customerSummary
+                for item in catalog { context.insert(item) }
+            }
             let projectDates = [
                 scheduledDate,
                 Calendar.current.date(byAdding: .day, value: 1, to: scheduledDate) ?? scheduledDate,
