@@ -17,6 +17,7 @@ import Testing
     var authorized = true
     var requests: [(path: String, method: String, body: Data?)] = []
     var remote: [String: Any]?
+    var remoteBytes: Data?
     var beforeResponse: ((String) throws -> Void)?
     var sends: Int { requests.filter { $0.path.hasSuffix("/send") }.count }
     var reservations: Int { requests.filter { $0.path == "/api/qbo-document-uploads" && $0.method == "POST" }.count }
@@ -65,14 +66,16 @@ import Testing
                 "jobDocument": request["jobDocument"] ?? NSNull(), "createdAt": "2026-09-08T12:00:00Z",
                 "updatedAt": "2026-09-08T12:00:01Z", "connectionChanged": false]
             remote = value
+            remoteBytes = original
         } else {
             value = try #require(remote)
             if route.hasSuffix("/send") {
                 #expect(value["state"] as? String == "reserved")
                 value["state"] = "confirmed"; value["providerID"] = "A1"
             } else if route.hasSuffix("/cancel") { value["state"] = "cancelled" }
-            else { #expect(route.hasSuffix("/recover")) }
+            else { #expect(route.hasSuffix("/recover") || route.hasSuffix("/file") || (method == "GET" && !route.hasSuffix("/send"))) }
             remote = value
+            if route.hasSuffix("/file") { value["data"] = try #require(remoteBytes).base64EncodedString() }
         }
         try beforeResponse?(path)
         return try JSONSerialization.data(withJSONObject: value)

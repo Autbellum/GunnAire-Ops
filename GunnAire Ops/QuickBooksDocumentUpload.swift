@@ -2,7 +2,7 @@ import Foundation
 import CryptoKit
 
 enum QBODocumentError: LocalizedError, Equatable {
-    case access, invalid, unavailable, review, storage, changed, file, limit, jobDestination, photoRequired
+    case access, invalid, unavailable, review, storage, changed, file, limit, jobDestination, photoRequired, syncPending
     var errorDescription: String? {
         switch self {
         case .access: "Verify administrator access to the original business before continuing. Your file is retained."
@@ -15,6 +15,7 @@ enum QBODocumentError: LocalizedError, Equatable {
         case .limit: "This device's file queue is full. Keep the original file and review saved uploads."
         case .jobDestination: "Choose this job's original invoice or estimate before uploading to QuickBooks. For an unbilled job, save the document in the job's Files first."
         case .photoRequired: "Before and after photos require an image. Choose Supporting Docs for this document."
+        case .syncPending: "The original job file is still waiting for CloudKit. Its downloaded original is retained; check again when the record arrives."
         }
     }
 }
@@ -144,6 +145,16 @@ struct QBODocumentUploadRecord: Codable, Equatable, Identifiable {
     func matchesOriginal(_ other: Self) -> Bool {
         id == other.id && scope == other.scope && operationID == other.operationID && revision == other.revision &&
         file == other.file && targets == other.targets && jobDocument == other.jobDocument && createdAt == other.createdAt
+    }
+    func validateUpdate(from original: Self) throws {
+        try validate(original.scope)
+        guard matchesOriginal(original),
+              let updated = CompanyWorkspaceClock.parse(updatedAt),
+              let previous = CompanyWorkspaceClock.parse(original.updatedAt), updated >= previous,
+              original.state != .confirmed || (state == .confirmed && providerID == original.providerID),
+              original.state != .cancelled || state == .cancelled,
+              ![.sending, .uncertain].contains(original.state) || [.sending, .uncertain, .confirmed].contains(state)
+        else { throw QBODocumentError.changed }
     }
 }
 

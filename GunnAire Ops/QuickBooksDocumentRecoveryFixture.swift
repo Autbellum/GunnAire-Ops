@@ -28,6 +28,7 @@ import Foundation
         }, store: store, transport: request)
     }
     static func seed() throws {
+        if ProcessInfo.processInfo.arguments.contains("-uiTestSharedOriginalFiles") { return }
         guard try store.read(owner, localID) == nil else { return }
         let data = Data("Original service report. Equipment checked; customer findings retained.".utf8)
         let row = QBODocumentCapture(id: localID, owner: owner, scope: scope,
@@ -37,6 +38,7 @@ import Foundation
     }
     static func request(_ path: String, _ method: String, _ body: Data?) async throws -> Data {
         try check()
+        if ProcessInfo.processInfo.arguments.contains("-uiTestSharedOriginalFiles") { return try sharedRequest(path, method) }
         guard let row = try store.read(owner, localID), let route = URLComponents(string: path)?.path else { throw QBODocumentError.invalid }
         let data = UserDefaults.standard.data(forKey: key)
         var remote = try data.map { try JSONDecoder().decode(QBODocumentUploadRecord.self, from: $0) }
@@ -72,6 +74,31 @@ import Foundation
             throw URLError(.networkConnectionLost)
         }
         return result
+    }
+
+    private static func sharedRequest(_ path: String, _ method: String) throws -> Data {
+        if ProcessInfo.processInfo.arguments.contains("-uiTestSharedOriginalFilesOffline") { throw URLError(.notConnectedToInternet) }
+        let route = URLComponents(string: path)?.path
+        let original = Data("Shared original from the first device. No replacement upload.".utf8)
+        let row = QBODocumentUploadRecord(protocolVersion: 1, id: serverID, companyID: owner.companyID,
+            realmID: scope.realmID, environment: scope.environment, operationID: localID,
+            revision: String(repeating: "a", count: 64), state: .confirmed, providerID: "shared-original-file",
+            file: try .init(filename: "Shared service report.txt", contentType: "text/plain", data: original),
+            targets: [.init(type: "Invoice", id: "original-invoice")], jobDocument: nil,
+            createdAt: "2026-09-08T12:00:00Z", updatedAt: "2026-09-08T12:00:01Z", connectionChanged: false)
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(row)) as! [String: Any]
+        if route == "/api/qbo-document-uploads", method == "GET" {
+            object = ["protocolVersion": 1, "maxFileBytes": QBODocumentFileInfo.maximum,
+                "companyID": owner.companyID.uuidString, "realmID": scope.realmID, "environment": scope.environment,
+                "connectionRevision": String(repeating: "b", count: 64), "uploads": [object], "nextCursor": NSNull()]
+        } else if route == "/api/qbo-document-uploads/" + serverID.uuidString.lowercased() + "/file", method == "GET" {
+            object["data"] = original.base64EncodedString()
+        } else if route == "/api/qbo-document-uploads/" + serverID.uuidString.lowercased(), method == "GET" {
+            // Metadata read retains the first device's original identity.
+        } else if route == "/api/qbo-document-uploads/" + serverID.uuidString.lowercased() + "/recover", method == "POST" {
+            // Read-only provider recovery; never allow reserve/send in this fixture.
+        } else { throw QBODocumentError.invalid }
+        return try JSONSerialization.data(withJSONObject: object)
     }
 }
 #endif

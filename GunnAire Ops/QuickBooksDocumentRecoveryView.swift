@@ -24,6 +24,9 @@ struct QBODocumentRecoverySection: View {
     @State private var export: QBODocumentExport?
     @State private var showingExport = false
     @State private var confirmingCancel = false
+    private struct SharedBrowser: Identifiable { let id = UUID(); let model: QBODocumentSharedRecovery }
+    @State private var sharedBrowser: SharedBrowser?
+    @State private var restoredRow: QBODocumentCapture?
     private let dependencies: QBODocumentNativeWorkflow.Dependencies
     private var store: QBODocumentCaptureStore { dependencies.store }
 
@@ -57,6 +60,8 @@ struct QBODocumentRecoverySection: View {
                 }
                 Button("Refresh Saved Uploads", systemImage: "arrow.clockwise") { load() }
                     .disabled(working)
+                Button("Files from Other Devices", systemImage: "icloud") { browseShared() }
+                    .disabled(working).accessibilityIdentifier("BrowseSharedOriginalFiles")
                 if hasLegacyQueue {
                     Text("Older upload records on this device need review in the original QuickBooks account. Their files have not been removed, and they will not be retried automatically.")
                         .font(.footnote).foregroundStyle(.secondary)
@@ -74,6 +79,16 @@ struct QBODocumentRecoverySection: View {
         .task(id: workspace.generation) { closePrivateDetail(); load() }
         .onChange(of: allowed) { _, _ in closePrivateDetail(); load() }
         .sheet(item: $selected) { row in detail(row) }
+        .sheet(item: $sharedBrowser, onDismiss: {
+            load()
+            if let row = restoredRow, (try? verify(row)) != nil { selected = row }
+            restoredRow = nil
+        }) { browser in
+            QBODocumentSharedRecoveryView(model: browser.model) { row in
+                guard sharedBrowser?.id == browser.id else { return }
+                restoredRow = row
+            }
+        }
     }
 
     private func rowButton(_ row: QBODocumentCapture) -> some View {
@@ -92,7 +107,7 @@ struct QBODocumentRecoverySection: View {
             Form {
                 if allowed {
                     Section {
-                        Text(row.file.filename).font(.headline)
+                        Text(row.file.filename).font(.headline).accessibilityIdentifier("OriginalUploadFilename")
                         Text(row.status).foregroundStyle(.secondary)
                             .accessibilityIdentifier("OriginalUploadStatus")
                         Text(ByteCountFormatter.string(fromByteCount: Int64(row.file.size), countStyle: .file))
@@ -107,8 +122,12 @@ struct QBODocumentRecoverySection: View {
                         }
                     }
                     Section {
+                        if row.needsLocalApplication {
+                            Button("Finish Local Link", systemImage: "link") { applyLocal(row) }
+                                .accessibilityIdentifier("OriginalUploadApply")
+                        }
                         if !row.cancelledLocally && row.server?.state != .cancelled {
-                            if row.connectionRevision != nil {
+                            if row.connectionRevision != nil || row.server != nil {
                                 Button("Check Original Upload", systemImage: "arrow.clockwise") { run(row, action: .recover) }
                                     .accessibilityIdentifier("OriginalUploadCheck")
                             }
@@ -154,13 +173,36 @@ struct QBODocumentRecoverySection: View {
               try store.read(row.owner, row.id) == row else { throw QBODocumentError.changed }
     }
     private func closePrivateDetail() {
-        selected = nil; export = nil; showingExport = false; confirmingCancel = false; message = nil
+        selected = nil; sharedBrowser = nil; restoredRow = nil
+        export = nil; showingExport = false; confirmingCancel = false; message = nil
+    }
+    private func browseShared() {
+        do {
+            let captured = try dependencies.access(context, .shared), generation = workspace.generation
+            let checked = QBODocumentNativeWorkflow.Access(owner: captured.owner, scope: captured.scope, check: {
+                try captured.check()
+                guard workspace.generation == generation, allowed,
+                      try dependencies.owner(context) == captured.owner else { throw QBODocumentError.access }
+            })
+            sharedBrowser = SharedBrowser(model: try .init(access: checked, store: store, transport: dependencies.transport))
+            message = nil
+        } catch { message = QBODocumentNativeWorkflow.message(error) }
     }
     private func load() {
         do {
             let owner = try dependencies.owner(context)
             rows = try store.list(owner)
         } catch { rows = []; message = QBODocumentNativeWorkflow.message(error) }
+    }
+    private func applyLocal(_ row: QBODocumentCapture) {
+        do {
+            try verify(row)
+            let session = try QBODocumentCaptureSession(record: row, store: store, check: { try verify(row) })
+            try QBODocumentNativeWorkflow.applyConfirmed(row, context: context,
+                retainedOriginal: store.bytes(row.owner, row.id))
+            try session.markLocalApplied()
+            selected = session.record; message = nil; load()
+        } catch { message = QBODocumentNativeWorkflow.message(error) }
     }
     private func run(_ row: QBODocumentCapture, action: QBODocumentUploadClient.Action) {
         guard !working else { return }
@@ -172,7 +214,8 @@ struct QBODocumentRecoverySection: View {
                 guard original.owner == row.owner, original.scope == row.scope else { throw QBODocumentError.access }
                 access = {
                     try original.check()
-                    try QBODocumentNativeWorkflow.checkLocalOriginal(row, context: context)
+                    try QBODocumentNativeWorkflow.checkLocalOriginal(row, context: context,
+                        retainedOriginal: row.sharedSource == nil ? nil : store.bytes(row.owner, row.id))
                 }
             } else {
                 let generation = workspace.generation
@@ -193,12 +236,13 @@ struct QBODocumentRecoverySection: View {
                     case .cancel: try await session.cancel(client: client)
                     }
                     try access()
-                    try QBODocumentNativeWorkflow.applyConfirmed(session.record, context: context)
+                    try QBODocumentNativeWorkflow.applyConfirmed(session.record, context: context,
+                        retainedOriginal: session.record.sharedSource == nil ? nil : store.bytes(row.owner, row.id))
                     try session.markLocalApplied()
-                    selected = session.record
+                    if selected?.id == row.id { selected = session.record }
                 } catch {
                     message = QBODocumentNativeWorkflow.message(error)
-                    if (try? access()) != nil { selected = try? store.read(row.owner, row.id) }
+                    if (try? access()) != nil, selected?.id == row.id { selected = try? store.read(row.owner, row.id) }
                     else { selected = nil }
                 }
             }

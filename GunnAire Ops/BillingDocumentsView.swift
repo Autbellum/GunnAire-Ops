@@ -6740,10 +6740,15 @@ GunnAire
                         .accessibilityIdentifier("AnnotateAttachment-\(attachment.id)")
                     }
 
-                    ShareLink(item: attachment.localFileURL) {
-                        Label("Share", systemImage: "square.and.arrow.up")
+                    if FileManager.default.fileExists(atPath: attachment.localFileURL.path) {
+                        ShareLink(item: attachment.localFileURL) { Label("Share", systemImage: "square.and.arrow.up") }
+                            .frame(minHeight: 44)
+                    } else {
+                        Button { previewJobAttachment(attachment) } label: {
+                            Label("Open to Share", systemImage: "square.and.arrow.up")
+                        }
+                        .frame(minHeight: 44)
                     }
-                    .frame(minHeight: 44)
                 }
                 .font(.caption)
                 .buttonStyle(.borderless)
@@ -6763,13 +6768,10 @@ GunnAire
     }
 
     private func previewJobAttachment(_ attachment: ServiceDocumentAttachment) {
-        let url = attachment.localFileURL
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            attachmentMessage = "\(attachment.displayName) is no longer available on this device."
-            return
-        }
-        attachmentPendingMarkup = nil
-        attachmentPreviewURL = url
+        do {
+            let url = try QBODocumentNativeWorkflow.previewURL(for: attachment, context: modelContext)
+            attachmentPendingMarkup = nil; attachmentPreviewURL = url; attachmentMessage = nil
+        } catch { attachmentMessage = QBODocumentNativeWorkflow.message(error) }
     }
 
     private func annotateJobAttachment(_ attachment: ServiceDocumentAttachment) {
@@ -6781,13 +6783,10 @@ GunnAire
             attachmentMessage = "Open the attachment's current job before annotating it."
             return
         }
-        let url = attachment.localFileURL
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            attachmentMessage = "\(attachment.displayName) is no longer available on this device."
-            return
-        }
-        attachmentPendingMarkup = attachment
-        attachmentPreviewURL = url
+        do {
+            let url = try QBODocumentNativeWorkflow.previewURL(for: attachment, context: modelContext)
+            attachmentPendingMarkup = attachment; attachmentPreviewURL = url; attachmentMessage = nil
+        } catch { attachmentMessage = QBODocumentNativeWorkflow.message(error) }
     }
 
     private func saveAnnotatedAttachmentCopy(

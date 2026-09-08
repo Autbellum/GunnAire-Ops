@@ -98,7 +98,8 @@ import UniformTypeIdentifiers
         return name
     }
 
-    static func snapshot(_ attachment: ServiceDocumentAttachment, targets: [QBODocumentTarget], context: ModelContext) throws -> AttachmentSnapshot {
+    static func snapshot(_ attachment: ServiceDocumentAttachment, targets: [QBODocumentTarget], context: ModelContext,
+                         retainedOriginal: Data? = nil) throws -> AttachmentSnapshot {
         let files = try context.fetch(FetchDescriptor<ServiceDocumentAttachment>()).filter { $0.id == attachment.id }
         guard files.count == 1, files.first === attachment, !attachment.isDeleted else { throw QBODocumentError.changed }
         let customers = try context.fetch(FetchDescriptor<Customer>())
@@ -135,10 +136,19 @@ import UniformTypeIdentifiers
                         customerQuickBooksID: customerReference, kind: attachment.kindRaw, stage: stage, documents: documents)
             try job?.validate(targets: targets)
         } else { job = nil }
+        let bytes: Data
+        if FileManager.default.fileExists(atPath: attachment.localFileURL.path) || retainedOriginal == nil {
+            bytes = try fileData(attachment.localFileURL)
+        } else {
+            // A CloudKit path from another device is not a local file. Only
+            // explicitly verified retained bytes can stand in for that path.
+            guard let original = retainedOriginal, original.count == attachment.fileSizeBytes else { throw QBODocumentError.changed }
+            bytes = original
+        }
         return try .init(id: attachment.id, customerID: customer.id, customerQuickBooksID: customerReference, serviceCallID: attachment.serviceCallID,
             invoiceID: attachment.invoiceID, estimateID: attachment.estimateID, kind: attachment.kindRaw,
             filename: attachment.displayName, path: attachment.localFilePath,
-            file: .init(filename: filename(attachment), contentType: attachment.contentType, data: fileData(attachment.localFileURL)), job: job)
+            file: .init(filename: filename(attachment), contentType: attachment.contentType, data: bytes), job: job)
     }
 
     /// All attachment entry points share this operation. A late result cannot
@@ -190,6 +200,41 @@ import UniformTypeIdentifiers
     static func message(_ error: Error) -> String {
         (error as? QBODocumentError)?.localizedDescription ??
             (error as? WorkspaceProviderAccessError)?.localizedDescription ?? "The original file needs review. Your saved file has not been removed."
+    }
+
+    /// Resolve retained media for the current authorized container without
+    /// changing the device-specific path stored in the shared CloudKit model.
+    static func retainedData(for attachment: ServiceDocumentAttachment, context: ModelContext,
+                             dependencies: Dependencies? = nil) throws -> (QBODocumentCapture, Data) {
+        let dependencies = dependencies ?? .live
+        let owner = try dependencies.owner(context)
+        let originals = try dependencies.store.list(owner).filter {
+            ($0.localAttachment?.attachmentID ?? $0.jobDocument?.attachmentID) == attachment.id
+        }
+        guard originals.count == 1, let row = originals.first else { throw QBODocumentError.review }
+        let bytes = try dependencies.store.bytes(owner, row.id)
+        try checkLocalOriginal(row, context: context, retainedOriginal: bytes)
+        guard try dependencies.owner(context) == owner else { throw QBODocumentError.access }
+        return (row, bytes)
+    }
+
+    static func previewURL(for attachment: ServiceDocumentAttachment, context: ModelContext,
+                           dependencies: Dependencies? = nil, directory: URL? = nil) throws -> URL {
+        let original = attachment.localFileURL
+        if FileManager.default.fileExists(atPath: original.path) { return original }
+        let (row, data) = try retainedData(for: attachment, context: context, dependencies: dependencies)
+        let root = directory ?? FileManager.default.temporaryDirectory.appendingPathComponent("GunnAireOriginalPreviews-v1", isDirectory: true)
+        let folder = root.appendingPathComponent(row.owner.storageKey, isDirectory: true)
+            .appendingPathComponent(row.id.uuidString.lowercased(), isDirectory: true)
+        let url = folder.appendingPathComponent(row.file.filename)
+        do {
+            if FileManager.default.fileExists(atPath: url.path) { try row.file.verify(fileData(url)); return url }
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
+            try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            try row.file.verify(fileData(url))
+            return url
+        } catch { throw QBODocumentError.storage }
     }
 
     static func captureManual(access: Access, url: URL, call: ServiceCall?, stage: String,
@@ -259,21 +304,24 @@ import UniformTypeIdentifiers
         return row
     }
 
-    static func checkLocalOriginal(_ row: QBODocumentCapture, context: ModelContext) throws {
+    static func checkLocalOriginal(_ row: QBODocumentCapture, context: ModelContext, retainedOriginal: Data? = nil) throws {
+        if let retainedOriginal { try row.file.verify(retainedOriginal) }
         guard let id = row.localAttachment?.attachmentID ?? row.jobDocument?.attachmentID else { return }
         let files = try context.fetch(FetchDescriptor<ServiceDocumentAttachment>()).filter { $0.id == id }
+        guard !files.isEmpty else { throw QBODocumentError.syncPending }
         guard files.count == 1 else { throw QBODocumentError.changed }
-        let original = try snapshot(files[0], targets: row.targets, context: context)
+        let original = try snapshot(files[0], targets: row.targets, context: context, retainedOriginal: retainedOriginal)
         guard original.job == row.jobDocument, original.file == row.file,
               row.localAttachment == nil || original.localAttachment == row.localAttachment else { throw QBODocumentError.changed }
     }
 
     static func applyConfirmed(_ row: QBODocumentCapture, context: ModelContext,
+                               retainedOriginal: Data? = nil,
                                save: (ModelContext) throws -> Void = { try $0.save() }) throws {
         try row.validate()
         guard let id = row.localAttachment?.attachmentID ?? row.jobDocument?.attachmentID,
               let server = row.server, server.state == .confirmed, let identifier = server.providerID else { return }
-        try checkLocalOriginal(row, context: context)
+        try checkLocalOriginal(row, context: context, retainedOriginal: retainedOriginal)
         let files = try context.fetch(FetchDescriptor<ServiceDocumentAttachment>()).filter { $0.id == id }
         guard files.count == 1 else { throw QBODocumentError.changed }
         let attachment = files[0]

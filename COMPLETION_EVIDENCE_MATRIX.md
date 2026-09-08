@@ -1,3 +1,25 @@
+Shared original-file recovery qualification, 2026-09-08:
+NATIVE_QBO_DOCUMENT_RECOVERY.md now records verified-business shared metadata
+paging, explicit hash-verified download into encrypted device storage, immutable
+original operation/state, offline restore/export and pending original CloudKit
+application. No replacement upload is created by restoration. Job/customer
+preview, annotation and Google archive source can reuse retained originals
+without mutating shared device paths. The final 14-file source manifest matches
+1,468 passing logic cases on each platform and all seven selected iPad UI journeys
+(1,475 cases), with exact execution trees and all eight screenshots reviewed.
+The initial duplicate-filename UI selector failure is retained; a specific sheet
+identifier resolves it without dropping assertions. All 55 Tools tests, both
+workflow lint checks and unsigned universal Mac Release pass; both architectures
+are verified.
+The workflow adds two journeys to the previous 52, keeping two disjoint 27-test
+iPad groups, complete logic targets and unchanged Mac Release/security gates.
+Published predecessor a02e838 has Backend and Mac success; its two hosted iPad
+jobs were still live at prepublication verification. New exact-head hosted
+acceptance, signed same-record CloudKit convergence, standalone local identity,
+retention/restore barriers, real providers and the full HVAC/Google/QBO-item/
+physical Handoff/Tap-to-Pay goal remain open. No merge, production deployment,
+financial mutation, customer email, signing change or physical install occurred.
+
 Native original-file recovery qualification, 2026-09-08:
 NATIVE_QBO_DOCUMENT_RECOVERY.md records encrypted device originals, strict
 business/Admin/original-job authority, migrated native attachment entry points,

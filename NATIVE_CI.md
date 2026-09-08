@@ -1,8 +1,28 @@
 # Native GitHub Actions checks
 
+## Shared original-file recovery coverage
+
+The prepared shared-recovery workflow selects **54** iPad UI journeys, retaining
+all previous 52 and adding shared-original restore/offline export and unavailable
+shared-history recovery. Two disjoint groups each execute 27 journeys plus the
+complete logic target. Mac still runs its complete logic target and unsigned
+universal Release build. Read-only permissions, job limits, pinned actions/Xcode,
+actual execution verification and evidence retention are unchanged.
+
+The real workflow selection script passes all three shard tests within the full
+55-test Tools suite. Local final-source acceptance confirms 1,468 logic cases on
+each platform and all seven selected iPad UI journeys (1,475 actual cases).
+See [shared-file qualification](NATIVE_QBO_DOCUMENT_RECOVERY.md) for exact evidence
+and remaining signed-device, provider and full-suite gates.
+
+Prepublication status at `a02e838`: Backend run `34260770295` succeeds on both
+Python versions; native run `34260770325` has a successful Mac job and two iPad
+jobs still in progress. These results do not qualify later source. Publication
+to existing PR #18 and exact-head hosted status must be checked separately.
+
 ## Original-file recovery and bounded iPad groups
 
-The current workflow selects **52** iPad UI journeys: the previous 48 plus the
+The preceding workflow selects **52** iPad UI journeys: the previous 48 plus the
 Receipts & Bills workspace and three original-file recovery journeys. It splits
 that declared list into two disjoint groups of 26, with the complete native logic
 target on each. Mac retains its full logic suite and unsigned universal Release

@@ -8544,6 +8544,54 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testSharedOriginalFileRestoresAndExportsOfflineAfterRelaunchWithoutResending() throws {
+        let app = originalFilesApp(extra: ["-uiTestSharedOriginalFiles"])
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Receipts & Bills"].waitForExistence(timeout: 8))
+        app.segmentedControls["ReceiptsBillsWorkspacePicker"].buttons["Recovery"].tap()
+        app.buttons["BrowseSharedOriginalFiles"].tap()
+        XCTAssertTrue(app.navigationBars["Business Files"].waitForExistence(timeout: 5))
+        let shared = app.buttons["SharedOriginal-D1000000-0000-4000-8000-000000000003"]
+        XCTAssertTrue(shared.waitForExistence(timeout: 6)); shared.tap()
+        XCTAssertTrue(app.buttons["SharedOriginalRestore"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["SharedOriginalStatus"].label, "Saved in QuickBooks")
+        XCTAssertFalse(app.buttons["OriginalUploadSend"].exists)
+        app.buttons["SharedOriginalRestore"].tap()
+        XCTAssertTrue(app.staticTexts["OriginalUploadStatus"].waitForExistence(timeout: 8))
+        XCTAssertEqual(app.staticTexts["OriginalUploadStatus"].label, "Saved in QuickBooks")
+        XCTAssertFalse(app.buttons["OriginalUploadSend"].exists)
+        XCTAssertFalse(app.buttons["OriginalUploadCancel"].exists)
+        app.terminate(); app.launchArguments.append("-uiTestSharedOriginalFilesOffline")
+        app.launch(); openOriginalFiles(app, completed: true)
+        XCTAssertEqual(app.staticTexts["OriginalUploadFilename"].label, "Shared service report.txt")
+        app.buttons["OriginalUploadExport"].tap()
+        XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 5)); app.buttons["Cancel"].tap()
+        XCTAssertTrue(app.buttons["OriginalUploadExport"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["OriginalUploadSend"].exists)
+        let image = XCTAttachment(screenshot: app.screenshot()); image.name = "Shared original retained and exportable offline"
+        image.lifetime = .keepAlways; add(image)
+        app.navigationBars["Original File"].buttons["Done"].tap()
+        XCTAssertTrue(app.navigationBars["Receipts & Bills"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    func testSharedOriginalHistoryOfflineFailureReturnsToRecoveryWithoutAnEmptySuccess() throws {
+        let app = originalFilesApp(extra: ["-uiTestSharedOriginalFiles", "-uiTestSharedOriginalFilesOffline"])
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Receipts & Bills"].waitForExistence(timeout: 8))
+        app.segmentedControls["ReceiptsBillsWorkspacePicker"].buttons["Recovery"].tap()
+        app.buttons["BrowseSharedOriginalFiles"].tap()
+        XCTAssertTrue(app.navigationBars["Business Files"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["File recovery is unavailable. Your original file is retained; no direct QuickBooks retry was sent."].waitForExistence(timeout: 6))
+        XCTAssertFalse(app.staticTexts["No saved files on this page."].exists)
+        XCTAssertFalse(app.buttons["SharedOriginalRestore"].exists)
+        let image = XCTAttachment(screenshot: app.screenshot()); image.name = "Shared file history offline recovery"
+        image.lifetime = .keepAlways; add(image)
+        app.navigationBars["Business Files"].buttons["Done"].tap()
+        XCTAssertTrue(app.buttons["BrowseSharedOriginalFiles"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     func testOriginalFileRecoveryRequiresVerifiedBusinessAccess() throws {
         let app = originalFilesApp(extra: ["-uiTestOriginalFilesDenied"])
         app.launch()
@@ -8553,6 +8601,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertFalse(app.buttons["OriginalUpload-D1000000-0000-4000-8000-000000000002"].exists)
         XCTAssertFalse(app.buttons["OriginalUploadSend"].exists)
         XCTAssertFalse(app.buttons["OriginalUploadExport"].exists)
+        XCTAssertFalse(app.buttons["BrowseSharedOriginalFiles"].exists)
     }
 
     @MainActor

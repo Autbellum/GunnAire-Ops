@@ -68,6 +68,9 @@ struct QBODocumentCapture: Codable, Equatable, Identifiable {
     var cancelledLocally = false
     var localAttachment: QBODocumentLocalAttachment? = nil
     var localAppliedAt: Date? = nil
+    // A downloaded copy preserves the server's original operation and intent.
+    // It never invents the original device's connection revision or authorship.
+    var sharedSource: QBODocumentUploadRecord? = nil
 
     var needsLocalApplication: Bool {
         server?.state == .confirmed && (localAttachment != nil || jobDocument != nil) && localAppliedAt == nil
@@ -83,7 +86,7 @@ struct QBODocumentCapture: Codable, Equatable, Identifiable {
     func sameOriginal(as other: Self) -> Bool {
         version == other.version && id == other.id && owner == other.owner && scope == other.scope &&
         file == other.file && targets == other.targets && jobDocument == other.jobDocument && createdAt == other.createdAt &&
-        localAttachment == other.localAttachment
+        localAttachment == other.localAttachment && sharedSource == other.sharedSource
     }
     func validate() throws {
         try owner.validate(); try scope.validate(); try file.validate(); try jobDocument?.validate(targets: targets)
@@ -95,7 +98,11 @@ struct QBODocumentCapture: Codable, Equatable, Identifiable {
         guard version == 1, owner.companyID == scope.companyID, revision >= 0, revision < Int.max,
               createdAt.timeIntervalSince1970.isFinite, try QBODocumentTarget.normalized(targets) == targets,
               connectionRevision.map(JobBillingAssignmentSnapshot.validConnectionRevision) ?? true,
-              !dispatchStarted || server != nil, server == nil || connectionRevision != nil else { throw QBODocumentError.storage }
+              !dispatchStarted || server != nil, server == nil || connectionRevision != nil || sharedSource != nil else { throw QBODocumentError.storage }
+        if let source = sharedSource {
+            guard id == source.operationID, let server else { throw QBODocumentError.storage }
+            try server.validateUpdate(from: source)
+        }
         if let server {
             try server.validate(scope)
             guard server.file == file, server.targets == targets, server.jobDocument == jobDocument else { throw QBODocumentError.storage }
@@ -186,10 +193,18 @@ struct QBODocumentCapture: Codable, Equatable, Identifiable {
                           saved.state != .cancelled || next.state == .cancelled,
                           ![.sending, .uncertain].contains(saved.state) || [.sending, .uncertain, .confirmed].contains(next.state)
                     else { throw QBODocumentError.changed }
+                    try next.validateUpdate(from: saved)
                 }
             } else {
-                guard row.revision == 0, row.server == nil, row.connectionRevision == nil, !row.dispatchStarted, !row.cancelledLocally, row.localAppliedAt == nil,
+                guard row.revision == 0, row.connectionRevision == nil, !row.cancelledLocally, row.localAppliedAt == nil,
                       let original else { throw QBODocumentError.changed }
+                if let source = row.sharedSource {
+                    guard row.server == source,
+                          row.dispatchStarted == [.sending, .uncertain, .confirmed].contains(source.state)
+                    else { throw QBODocumentError.changed }
+                } else {
+                    guard row.server == nil, !row.dispatchStarted else { throw QBODocumentError.changed }
+                }
                 try row.file.verify(original)
                 let rows = try list(row.owner)
                 guard rows.count < 512, rows.reduce(row.file.size, { $0 + $1.file.size }) <= 512 * 1024 * 1024 else { throw QBODocumentError.limit }
@@ -256,6 +271,13 @@ struct QBODocumentCapture: Codable, Equatable, Identifiable {
         guard value.file == record.file, value.targets == record.targets, value.jobDocument == record.jobDocument else { throw QBODocumentError.invalid }
         var next = record; next.server = value
         try save(next)
+    }
+    /// Incorporate a fresh read of the same server original, not a new proposal.
+    func observe(_ value: QBODocumentUploadRecord) throws {
+        try verify()
+        guard let original = record.server else { throw QBODocumentError.changed }
+        try value.validateUpdate(from: original)
+        try accept(value)
     }
     func send(client: QBODocumentUploadClient) async throws {
         try verify()

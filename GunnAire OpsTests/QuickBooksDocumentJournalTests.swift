@@ -175,4 +175,28 @@ import Testing
         await #expect(throws: QBODocumentError.storage) { try await session.send(client: client) }
         #expect(calls == 0)
     }
+
+    @Test func legacyCaptureWithoutSharedSourceRemainsReadable() throws {
+        let original = try capture()
+        var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as? [String: Any])
+        object.removeValue(forKey: "sharedSource")
+        let restored = try JSONDecoder().decode(QBODocumentCapture.self, from: serialized(object))
+        try restored.validate()
+        #expect(restored == original && restored.sharedSource == nil)
+    }
+
+    @Test func sharedSourceCannotChangeOrBypassObservedServerState() throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let secret = key(); var row = try capture()
+        let remote = try JSONDecoder().decode(QBODocumentUploadRecord.self, from: serialized(server(row, id: UUID(), state: "confirmed")))
+        row.server = remote; row.sharedSource = remote; row.dispatchStarted = true
+        let store = QBODocumentCaptureStore.encrypted(directory: root, key: { _ in secret })
+        try store.write(row, nil, data)
+        var stripped = row; stripped.revision += 1; stripped.sharedSource = nil
+        #expect(throws: (any Error).self) { try store.write(stripped, row.revision, nil) }
+        var rewound = row; rewound.revision += 1
+        rewound.server = try JSONDecoder().decode(QBODocumentUploadRecord.self, from: serialized(server(row, id: remote.id, state: "reserved")))
+        #expect(throws: (any Error).self) { try store.write(rewound, row.revision, nil) }
+        #expect(try store.read(owner, row.id) == row && store.bytes(owner, row.id) == data)
+    }
 }

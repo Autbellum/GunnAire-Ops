@@ -1,5 +1,74 @@
 # Native original-file recovery
 
+## Shared-device recovery checkpoint — 2026-09-08
+
+The native Recovery workspace now offers **Files from Other Devices** for a
+verified administrator in the current business and original QBO company. Its
+Business Files sheet reads one 50-record metadata page at a time; originals are
+downloaded only by an explicit Restore action. Failed paging retains the current
+page, and an unavailable service is not presented as an empty successful result.
+
+Restoring verifies the original file hash, scope, operation, destination and
+monotonic server state before retaining encrypted bytes under the current local
+owner. The original server envelope remains immutable; no first-device connection
+revision or author is fabricated. Browsing, restoring and local application do not
+reserve a replacement operation or upload another file. An explicitly sent,
+previously reserved original uses its existing server operation. Uncertain,
+confirmed and cancelled originals cannot be reset into a new send.
+
+The restore sheet returns to the exact retained original, including after offline
+relaunch. Finish Local Link retries only the original model receipt and durable
+acknowledgement, without a network request. Missing CloudKit records remain
+pending, not recreated or attached to a convenient replacement job. Changed local
+bytes, customer/document identity, access or stale journal versions are rejected.
+Job and customer Preview, job annotation and the Google Drive archive source can
+use verified retained bytes when the original device path is absent. Preview uses
+a protected owner/operation-specific temporary cache; it does not overwrite a
+shared model's device path. An existing corrupt cache is rejected, not trusted.
+
+Final local evidence is in
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-08/Shared Files.Uf7D81`:
+
+- `SharedPreviewMac.xcresult`: 1,468 logic cases passed without failures/skips.
+- `SharedPreviewIPad.xcresult`: the same 1,468 logic cases and all seven selected
+  UI journeys passed on the 13-inch M5 iPad simulator, iOS 26.2 (1,475 cases).
+  These include shared restore/offline export and offline history, all three
+  preceding local recovery journeys, invoice-tab stability and the simple Mail UI.
+- Actual execution-tree verification confirms 1 Mac selector/1,468 cases and
+  8 iPad selectors/1,475 cases. All 14 Swift hashes match
+  `SharedPreviewSource.sha256` after both completed runs.
+- Earlier `SharedIPad.xcresult` retained a selector failure: the filename appeared
+  both in the sheet and in the list behind it after successful restoration. The
+  sheet filename now has a unique accessibility identifier. Assertions remain;
+  the corrected complete journey passes. Original failure artifacts are retained.
+- All eight final screenshots were visually checked: Mail inbox, compose,
+  message and trash confirmation; cancelled/recovered local originals; restored
+  shared original and unavailable shared history. No account-email footer, raw
+  response payload or device path appears in these screens.
+- `SharedPreviewTools.log`: all 55 Tools tests pass. The workflow retains its
+  previous 52 UI journeys and adds two, divided into two disjoint groups of 27.
+  Complete logic targets, execution verification and Mac Release coverage remain.
+- `SharedPreviewRelease.log`: unsigned universal Mac Release passes with Xcode
+  26.6 (17F113); `lipo -verify_arch` confirms arm64 and x86_64. Both workflows pass
+  actionlint and the final diff passes whitespace validation.
+
+This is synthetic local acceptance, not a signed multi-device CloudKit or real
+provider qualification. Backend protocol 1 / candidate `2026.09.08.38` is unchanged.
+The preceding published PR #18 head `a02e838` has successful Backend checks on
+Python 3.13/3.14 (run `34260770295`) and a successful Mac job in native run
+`34260770325`; both iPad jobs were still running at this prepublication check.
+Later source requires its own exact-head hosted checks. Publication and the
+original-project copy are verified separately; no merge or deployment is implied.
+
+Still open: standalone server records lack a portable local-attachment identity
+for automatic CloudKit adoption; no local model is invented for them. Signed
+same-record convergence, missing-model repair, later Invoice metadata linking,
+richer job/Bill provenance, other file consumers, preview-cache lifecycle and
+retention policy, older-backup restore protection, live provider acceptance and
+the full HVAC/Google/QBO-item/Handoff/Tap-to-Pay goal remain release requirements.
+
+## Earlier device-local checkpoint
+
 2026-09-08 locally qualified checkpoint. This migrates native attachment entry points to the server
 contract in [original-file recovery](QBO_DOCUMENT_UPLOAD_RECOVERY.md), backend
 `2026.09.08.38`, protocol 1. It is not a production deployment or full-suite
@@ -126,11 +195,10 @@ or multi-device CloudKit merge.
 1. Publish/review the backend-first protocol change and qualify real sandbox file
    types, typed references, recovery queries and authentication boundaries before
    production use. This client deliberately has no unsafe compatibility fallback.
-2. Add shared-server history/download/adoption to the native recovery lane. Today
-   it lists the current actor's original files captured on this device. The server
-   supports same-business administrator lookup/download, but this screen does not
-   yet surface another device's capture. Signed CloudKit convergence and controlled
-   multi-device tests remain necessary.
+2. Qualify the shared-server history/download/adoption added in the checkpoint
+   above on signed devices. Standalone server records still lack portable local
+   attachment identity; signed CloudKit convergence and controlled multi-device
+   tests remain necessary.
 3. Define a reviewed metadata-link operation for adding a later Invoice to an
    existing Estimate attachment; current code retains/reviews the existing file
    instead of uploading a duplicate. Manual job-associated Bill uploads also need

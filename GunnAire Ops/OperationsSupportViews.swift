@@ -1657,6 +1657,10 @@ struct SyncIntegrationsView: View {
             }
         }
 
+        if let (_, retained) = try? QBODocumentNativeWorkflow.retainedData(for: attachment, context: modelContext) {
+            return retained
+        }
+
         if let backendDocumentID = attachment.backendDocumentID?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !backendDocumentID.isEmpty,
@@ -5415,8 +5419,12 @@ private struct CustomerEditorView: View {
                         Label("Preview", systemImage: attachment.isImage ? "photo" : "doc.text.magnifyingglass")
                     }
 
-                    ShareLink(item: attachment.localFileURL) {
-                        Label("Share", systemImage: "square.and.arrow.up")
+                    if FileManager.default.fileExists(atPath: attachment.localFileURL.path) {
+                        ShareLink(item: attachment.localFileURL) { Label("Share", systemImage: "square.and.arrow.up") }
+                    } else {
+                        Button { previewCustomerAttachment(attachment) } label: {
+                            Label("Open to Share", systemImage: "square.and.arrow.up")
+                        }
                     }
                 }
                 .font(.caption)
@@ -5436,12 +5444,10 @@ private struct CustomerEditorView: View {
     }
 
     private func previewCustomerAttachment(_ attachment: ServiceDocumentAttachment) {
-        let url = attachment.localFileURL
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            customerAttachmentMessage = "\(attachment.displayName) is no longer available on this device."
-            return
-        }
-        customerAttachmentPreviewURL = url
+        do {
+            customerAttachmentPreviewURL = try QBODocumentNativeWorkflow.previewURL(for: attachment, context: modelContext)
+            customerAttachmentMessage = nil
+        } catch { customerAttachmentMessage = QBODocumentNativeWorkflow.message(error) }
     }
 
     @ViewBuilder
