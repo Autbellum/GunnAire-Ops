@@ -1,3 +1,19 @@
+Tax-address CI diagnosis, 2026-09-07: the original hosted `a9dd55c` recording
+shows the full street value arriving after the test's immediate partial-value
+snapshot, with no second typing request. The test entry helper now waits for
+the exact value with a five-second deadline and retains the original assertion.
+Repeated local validation also exposed an empty transitional snapshot while
+reopening the sheet; dismissal/presentation and reopened exact values now have
+explicit waits. The intermediate failure is retained, not counted as a pass.
+Final qualification passes all nine executions: tax-address, Invoice-open and
+simple-Mail journeys three times each, without failures or skips. App source and
+workflow bytes remain unchanged; this is not a new production acceptance claim.
+No app behavior, validation, sold prices, selector or failure gate changes.
+`TAX_ADDRESS_UI_SYNCHRONIZATION.md` records the digest-verified artifact,
+frame timing and qualification. The earlier unconfirmed-cause notes below are
+historical; this follow-up identifies the cause for that exact hosted failure.
+The full application and production acceptance requirements remain open.
+
 Native shared Mail checkpoint, 2026-09-07: the existing office mailbox now uses
 the captured company/actor/grant service for pages, reads, attachments, actions
 and general composition, without requiring a native Google token. Existing

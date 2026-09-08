@@ -1,5 +1,13 @@
 # Native GitHub Actions checks
 
+The tax-address entry test now waits for the exact completed field value before
+continuing. The original hosted recording showed its immediate snapshot racing
+unfinished typing; the complete address appeared without another input event.
+The same exact-value checks cover reopened fields, with explicit sheet
+dismissal/presentation waits after a second recorded transitional snapshot.
+All value, cancellation, save, price and reopen assertions remain. See
+`TAX_ADDRESS_UI_SYNCHRONIZATION.md` for original evidence and qualification.
+
 The native shared-Mail checkpoint adds two iPad journeys: reading/replying through
 the shared transport with natural mailbox/Outbox navigation, and recovering the
 original interrupted send after relaunch without another copy. All earlier

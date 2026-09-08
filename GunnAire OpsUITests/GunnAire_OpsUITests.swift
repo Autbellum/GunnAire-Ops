@@ -4059,12 +4059,27 @@ final class GunnAire_OpsUITests: XCTestCase {
     @MainActor
     func testTaxAddressReviewKeepsDraftPricesAndReturnsToBilling() throws {
         let app = XCUIApplication()
+        func requireValue(_ identifier: String, _ text: String) {
+            let field = app.textFields[identifier]
+            XCTAssertTrue(field.waitForExistence(timeout: 4))
+            // Retained recordings show typing and sheet presentation finishing
+            // after immediate accessibility snapshots. Require the exact value;
+            // never retype or accept partial data to make this test pass.
+            let completeValue = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "value == %@", text), object: field
+            )
+            XCTAssertEqual(
+                XCTWaiter.wait(for: [completeValue], timeout: 5), .completed,
+                "Address value did not settle for \(identifier): \(String(describing: field.value))"
+            )
+            XCTAssertEqual(field.value as? String, text)
+        }
         func enter(_ identifier: String, _ text: String) {
             let field = app.textFields[identifier]
             XCTAssertTrue(field.waitForExistence(timeout: 4))
             field.tap()
             field.typeText(text)
-            XCTAssertEqual(field.value as? String, text)
+            requireValue(identifier, text)
         }
         app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting",
             "-uiTestAuthenticatedAdmin", "-uiTestSeedPendingQuickBooksTax"]
@@ -4084,9 +4099,11 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertFalse(app.buttons["BillingTaxUseAddresses"].isEnabled)
         enter("BillingTaxServiceStreet", "Cancelled address")
         app.buttons["BillingTaxCancel"].tap()
+        XCTAssertTrue(app.navigationBars["Tax addresses"].waitForNonExistence(timeout: 4))
         XCTAssertTrue(app.navigationBars["Job Documentation"].exists)
         review.tap()
-        XCTAssertEqual(app.textFields["BillingTaxServiceStreet"].value as? String, "Street address")
+        XCTAssertTrue(app.navigationBars["Tax addresses"].waitForExistence(timeout: 4))
+        requireValue("BillingTaxServiceStreet", "Street address")
         enter("BillingTaxServiceStreet", "12 Main Street")
         enter("BillingTaxServiceCity", "Raleigh")
         enter("BillingTaxServiceState", "NC")
@@ -4103,12 +4120,15 @@ final class GunnAire_OpsUITests: XCTestCase {
         let capture = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         capture.name = "Reviewed service and sale locations"; capture.lifetime = .keepAlways; add(capture)
         use.tap()
+        XCTAssertTrue(app.navigationBars["Tax addresses"].waitForNonExistence(timeout: 4))
         XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 4))
         XCTAssertEqual(app.staticTexts["DocumentNetSubtotal"].label, originalSubtotal)
         XCTAssertTrue(review.label.contains("Reviewed"))
         review.tap()
-        XCTAssertEqual(app.textFields["BillingTaxServiceStreet"].value as? String, "12 Main Street")
+        XCTAssertTrue(app.navigationBars["Tax addresses"].waitForExistence(timeout: 4))
+        requireValue("BillingTaxServiceStreet", "12 Main Street")
         app.buttons["BillingTaxCancel"].tap()
+        XCTAssertTrue(app.navigationBars["Tax addresses"].waitForNonExistence(timeout: 4))
         let update = app.buttons["InvoicePrimaryAction"]
         for _ in 0..<6 where !update.exists || !update.isHittable { app.swipeUp() }
         XCTAssertTrue(update.isEnabled); update.tap()
@@ -4121,8 +4141,10 @@ final class GunnAire_OpsUITests: XCTestCase {
         stages.buttons["Billing"].tap()
         for _ in 0..<8 where !review.exists || !review.isHittable { app.swipeUp() }
         review.tap()
-        XCTAssertEqual(app.textFields["BillingTaxServiceCity"].value as? String, "Raleigh")
+        XCTAssertTrue(app.navigationBars["Tax addresses"].waitForExistence(timeout: 4))
+        requireValue("BillingTaxServiceCity", "Raleigh")
         app.buttons["BillingTaxCancel"].tap()
+        XCTAssertTrue(app.navigationBars["Tax addresses"].waitForNonExistence(timeout: 4))
         XCTAssertTrue(app.navigationBars["Job Documentation"].exists)
     }
 
