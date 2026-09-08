@@ -79,6 +79,7 @@ jobs:
               testNativeBillingReviewRecoversAcceptedInvoiceWithoutPublishingAgain \
               testMilestoneBillingReviewOpensOriginalInvoiceAndReturnsWithoutDuplicating \
               testMilestoneBillingReviewRetainsDraftWhileOriginalCloudKitRecordIsMissing \
+              testOfficeRetainsUnusedMilestoneDraftAndReopensOriginalFromInvoices \
               testManagementBillingComposerCancelsWithoutCreatingOrSending \
               testManagementBillingComposerSavesOriginalInvoiceAndEstimateOffline \
               testInvoiceComposerBrowsesCategoriesEditsRepeatedBundleMembersAndSavesOriginal \
