@@ -1,3 +1,4 @@
+
 name: Native app regression
 
 on:
@@ -78,6 +79,9 @@ jobs:
               testNativeBillingReviewRecoversAcceptedInvoiceWithoutPublishingAgain \
               testManagementBillingComposerCancelsWithoutCreatingOrSending \
               testManagementBillingComposerSavesOriginalInvoiceAndEstimateOffline \
+              testInvoiceComposerBrowsesCategoriesEditsRepeatedBundleMembersAndSavesOriginal \
+              testEstimateBundleComposerSavesEditsWithKeyboardActive \
+              testBundleComposerSavesAfterHardwareKeyboardSelectAll \
               testBillingIdentityReviewKeepsReportsSafeAndHandsOffToInvoices \
               testCatalogPublicationReviewCancelsOnlyAnUnsentProposalAndReturnsToCatalog \
               testAdministratorCreatesInventoryOfflineAndReopensExactSetup \
@@ -107,6 +111,14 @@ jobs:
             --path "$RUNNER_TEMP/native-results/$CI_PLATFORM.xcresult" |
             tee "$RUNNER_TEMP/native-results/summary.json" |
             jq -e '.failedTests == 0 and .passedTests > 0'
+
+          xcrun xcresulttool get test-results tests \
+            --path "$RUNNER_TEMP/native-results/$CI_PLATFORM.xcresult" |
+            tee "$RUNNER_TEMP/native-results/tests.json" > /dev/null
+          python3 Tools/verify_native_test_execution.py \
+            --summary "$RUNNER_TEMP/native-results/summary.json" \
+            --tests "$RUNNER_TEMP/native-results/tests.json" \
+            -- "${selectors[@]}"
 
       - name: Build universal Mac Release
         if: matrix.platform == 'Mac'
