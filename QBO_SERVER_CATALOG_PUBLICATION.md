@@ -1,5 +1,10 @@
 # Shared catalog publication — candidate 2026.09.07.23
 
+September 8 follow-up: [inventory publication contract](QBO_INVENTORY_PUBLICATION_CONTRACT.md)
+extends the server publisher with reviewed Inventory creation and stock-preserving
+price updates. Its separate native/CloudKit continuation and acceptance remain
+required. The original checkpoint and its qualification follow below.
+
 Status: local logic, backend, selected iPad interface and optimized universal
 Mac acceptance pass. This is a dependency of invoice synchronization, not
 completion of the full application goal.

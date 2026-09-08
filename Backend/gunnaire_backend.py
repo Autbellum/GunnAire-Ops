@@ -49,7 +49,7 @@ except ModuleNotFoundError:
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.08.34"
+SERVICE_VERSION = "2026.09.08.35"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -1084,7 +1084,7 @@ def qbo_catalog_transport(request):
             or parsed.username is not None or parsed.password is not None
             or parsed.port not in (None, 443) or parsed.fragment):
             raise ValueError("unsupported origin")
-        if not re.fullmatch(r"/v3/company/[A-Za-z0-9._:-]+/(?:query|item(?:/[A-Za-z0-9._:-]+)?|vendor/[A-Za-z0-9._:-]+)", parsed.path):
+        if not re.fullmatch(r"/v3/company/[A-Za-z0-9._:-]+/(?:query|item(?:/[A-Za-z0-9._:-]+)?|(?:vendor|account)/[A-Za-z0-9._:-]+)", parsed.path):
             raise ValueError("unsupported resource")
         if request.get_method() not in ("GET", "POST") or (request.get_method() == "POST" and not parsed.path.endswith("/item")):
             raise ValueError("unsupported method")
@@ -1130,7 +1130,7 @@ class CatalogQBOProvider:
         return result
 
     def read(self, entity, identifier):
-        if entity not in ("item", "vendor"):
+        if entity not in ("item", "vendor", "account"):
             raise payment_attempts.AttemptError("invalid_resource", "Unsupported catalog read.", 400)
         payment_attempts.reference(identifier)
         result = self.request(entity + "/" + urllib.parse.quote(identifier, safe="")).get(entity.title())
@@ -1170,7 +1170,10 @@ class CatalogQBOProvider:
     def write(self, item, request_id, before_send):
         if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9-]{1,50}", request_id):
             raise payment_attempts.AttemptError("invalid_request", "The catalog request identity is invalid.", 400)
-        result = self.request("item", {"requestid": request_id}, item, before_send).get("Item")
+        query = {"requestid": request_id}
+        if "Id" in item:
+            query["include"] = "donotupdateaccountontxns"
+        result = self.request("item", query, item, before_send).get("Item")
         if not isinstance(result, dict):
             raise payment_attempts.AttemptError("provider_unconfirmed", "QuickBooks returned incomplete publication evidence.")
         return result

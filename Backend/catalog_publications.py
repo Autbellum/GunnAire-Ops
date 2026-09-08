@@ -8,9 +8,10 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 try:
     from Backend.payment_attempts import AttemptError, canonical_uuid, grant_fingerprint, reference
@@ -61,10 +62,55 @@ def scope(row):
     return row["company_id"], row["realm_id"], row["environment"]
 
 
+INVENTORY_CREATE_FIELDS = {"QtyOnHand", "InvStartDate", "TrackQtyOnHand", "AssetAccountRef"}
+
+
+def inventory_fields(value, *, opening=False):
+    """Validate inventory evidence without turning a read balance into an adjustment.
+
+    Only an explicitly reviewed create carries an opening balance. Existing
+    inventory can legitimately go negative after sales; reads must retain it.
+    The quantity bound is this application's limit, not a claimed Intuit limit.
+    """
+    quantity = value.get("QtyOnHand")
+    if (type(quantity) not in (int, float) or not math.isfinite(quantity)
+            or not (-99999999999 <= quantity <= 99999999999)
+            or (opening and quantity < 0) or value.get("TrackQtyOnHand") is not True):
+        raise failure("inventory_review", "Review the inventory quantity and quantity-tracking setting.", 400 if opening else 409)
+    start = value.get("InvStartDate")
+    try:
+        if not isinstance(start, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", start):
+            raise ValueError()
+        date.fromisoformat(start)
+    except ValueError:
+        raise failure("inventory_review", "Choose a valid inventory opening date.", 400 if opening else 409) from None
+    for field in ("AssetAccountRef", "IncomeAccountRef", "ExpenseAccountRef"):
+        account = value.get(field)
+        if not isinstance(account, dict):
+            raise failure("inventory_review", "Choose the inventory asset, product income and cost-of-goods-sold accounts.", 400 if opening else 409)
+        reference(account.get("value"))
+
+
+def validate_inventory_accounts(item, provider):
+    """Read only the three explicit references in this original scoped proposal."""
+    requirements = (
+        ("AssetAccountRef", "Other Current Asset", "Inventory"),
+        ("IncomeAccountRef", "Income", "SalesOfProductIncome"),
+        ("ExpenseAccountRef", "Cost of Goods Sold", None),
+    )
+    for field, kind, subtype in requirements:
+        identifier = item[field]["value"]
+        account = provider.read("account", identifier)
+        if (not isinstance(account, dict) or account.get("Id") != identifier
+                or account.get("Active") is not True or account.get("AccountType") != kind
+                or (subtype is not None and account.get("AccountSubType") != subtype)):
+            raise failure("inventory_account_review", "Review the active inventory asset, product income and cost-of-goods-sold accounts in this QuickBooks company.")
+
+
 def validate_item(item, operation):
     common = {"Name", "Description", "Sku", "PurchaseDesc", "UnitPrice", "PurchaseCost", "Taxable", "PrefVendorRef"}
-    allowed = common | ({"Type", "IncomeAccountRef", "ExpenseAccountRef"} if operation == "create"
-                        else {"Id", "SyncToken", "sparse", "Active"})
+    allowed = common | ({"Type", "IncomeAccountRef", "ExpenseAccountRef"} | INVENTORY_CREATE_FIELDS if operation == "create"
+                        else {"Id", "SyncToken", "sparse", "Active", "Type"})
     required = {"Name"} | ({"Type", "IncomeAccountRef"} if operation == "create" else
                           {"Id", "SyncToken", "sparse", "Active", "Description", "Sku", "PurchaseDesc", "UnitPrice", "PurchaseCost", "Taxable"})
     if not isinstance(item, dict) or set(item) - allowed or not required <= set(item):
@@ -84,7 +130,7 @@ def validate_item(item, operation):
     for key in ("Taxable", "Active", "sparse"):
         if key in item and type(item[key]) is not bool:
             raise failure("invalid_item", "Use boolean catalog flags.", 400)
-    for key in ("IncomeAccountRef", "ExpenseAccountRef", "PrefVendorRef"):
+    for key in ("IncomeAccountRef", "ExpenseAccountRef", "AssetAccountRef", "PrefVendorRef"):
         if key in item:
             value = item[key]
             if not isinstance(value, dict) or set(value) - {"value", "name"} or "value" not in value:
@@ -95,11 +141,19 @@ def validate_item(item, operation):
             # Names are presentation metadata, never accounting identity.
             result[key] = {"value": value["value"]}
     if operation == "create":
-        if item["Type"] not in ("Service", "NonInventory"):
-            raise failure("invalid_item", "Publish service or non-inventory items through this workflow.", 400)
+        if item["Type"] not in ("Service", "NonInventory", "Inventory"):
+            raise failure("invalid_item", "Publish service, non-inventory or inventory items through this workflow.", 400)
+        if item["Type"] == "Inventory":
+            inventory_fields(result, opening=True)
+        elif INVENTORY_CREATE_FIELDS & set(item):
+            raise failure("invalid_item", "Opening balances and inventory accounts belong only to inventory items.", 400)
     elif operation == "update":
         reference(item["Id"])
         reference(item["SyncToken"])
+        # Type is review evidence, not permission to convert an item. Legacy
+        # Service/NonInventory proposals remain readable without this field.
+        if "Type" in item and item["Type"] not in ("Service", "NonInventory", "Inventory"):
+            raise failure("invalid_item", "Review the original item type before updating it.", 400)
         if item["sparse"] is not True:
             raise failure("invalid_item", "Use reviewed sparse catalog updates.", 400)
     else:
@@ -125,7 +179,7 @@ def validated_remote(remote):
         raise failure("provider_unconfirmed", "QuickBooks returned incomplete item evidence.")
     reference(remote.get("Id"))
     reference(remote.get("SyncToken"))
-    if not isinstance(remote.get("Name"), str) or not remote["Name"].strip() or remote.get("Type") not in ("Service", "NonInventory"):
+    if not isinstance(remote.get("Name"), str) or not remote["Name"].strip() or remote.get("Type") not in ("Service", "NonInventory", "Inventory"):
         raise failure("provider_unconfirmed", "QuickBooks returned incomplete item evidence.")
     if type(remote.get("Active")) is not bool:
         raise failure("provider_unconfirmed", "QuickBooks did not confirm whether this item is active.")
@@ -133,6 +187,8 @@ def validated_remote(remote):
         value = remote.get(key, 0)
         if type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 99999999999:
             raise failure("provider_unconfirmed", "QuickBooks returned invalid catalog amounts.")
+    if remote["Type"] == "Inventory":
+        inventory_fields(remote)
     return remote
 
 
@@ -284,7 +340,7 @@ class CatalogPublisher:
             if row["state"] != "reserved":
                 raise failure("publication_pending", "This catalog attempt is already being sent or reviewed. No second request was sent.")
             item = self.item_payload(row)
-            if row["operation"] == "create":
+            if row["operation"] == "create" and item["Type"] != "Inventory":
                 config = connection.execute(
                     "SELECT * FROM qbo_accounting_config WHERE realm_id=? AND environment=?",
                     (row["realm_id"], row["environment"]),
@@ -292,7 +348,7 @@ class CatalogPublisher:
                 for field, column in (("IncomeAccountRef", "default_income_account_ref"), ("ExpenseAccountRef", "default_expense_account_ref")):
                     if field in item and (config is None or item[field]["value"] != config[column]):
                         raise failure("account_mapping_changed", "Review the current QuickBooks accounting mappings before publishing.")
-            else:
+            elif row["operation"] == "update":
                 self.mapping(connection, row, item["Id"])
             connection.execute("UPDATE catalog_publications SET state='sending',updated_at=? WHERE id=?",
                                (self.now().isoformat(), identifier))
@@ -319,6 +375,7 @@ class CatalogPublisher:
         row, context = self.check(session_id, identifier)
         item = self.item_payload(row)
         provider = self.provider_factory(context, lambda: self.check(session_id, identifier))
+        expected_type = item.get("Type")
         if row["state"] == "confirmed":
             # Never label the original POST response as a current snapshot.
             remote = validated_remote(provider.read("item", row["provider_id"]))
@@ -346,15 +403,26 @@ class CatalogPublisher:
                 return {**result, "created": False}
         else:
             remote = validated_remote(provider.read("item", item["Id"]))
+            expected_type = remote["Type"]
             self.check(session_id, identifier)
             if remote["Id"] != item["Id"]:
                 raise failure("identity_conflict", "QuickBooks returned a different catalog identity.")
+            if "Type" in item and item["Type"] != remote["Type"]:
+                raise failure("identity_conflict", "The QuickBooks item type changed after review. Keep the original proposal for review.")
+            if remote["Type"] == "Inventory" and item.get("Type") != "Inventory":
+                raise failure("inventory_review", "Refresh and explicitly review this inventory item's type before publishing its changes.")
             if same_values(item, remote):
                 return {**self.confirm(session_id, identifier, remote), "created": False}
             if remote["SyncToken"] != item["SyncToken"]:
                 raise failure("review_changed", "QuickBooks changed after review. Cancel this unsent attempt and compare the new values.")
+            if remote["Type"] == "Inventory" and item["Active"] != remote["Active"]:
+                raise failure("inventory_lifecycle_review", "Inventory activation changes require a separate stock and accounting review in QuickBooks. This proposal has not been sent.")
         if not allow_send or row["state"] != "reserved":
             raise failure("outcome_unknown", "QuickBooks has not confirmed the original request. Keep this attempt for review; do not create another item.")
+        if row["operation"] == "create" and item["Type"] == "Inventory":
+            # These are per-item, explicitly reviewed accounts, not silently
+            # borrowed service defaults. Validate in the original realm/grant.
+            validate_inventory_accounts(item, provider)
         if "PrefVendorRef" in item:
             vendor = provider.read("vendor", item["PrefVendorRef"]["value"])
             if vendor.get("Id") != item["PrefVendorRef"]["value"] or vendor.get("Active") is not True:
@@ -366,9 +434,12 @@ class CatalogPublisher:
             self.claim(session_id, identifier)
             claimed = True
         try:
-            remote = validated_remote(provider.write(item, row["request_id"], claim))
+            outbound = dict(item)
             if row["operation"] == "update":
-                valid = remote["Id"] == item["Id"] and same_values(item, remote)
+                outbound.pop("Type", None)
+            remote = validated_remote(provider.write(outbound, row["request_id"], claim))
+            if row["operation"] == "update":
+                valid = remote["Id"] == item["Id"] and remote["Type"] == expected_type and same_values(item, remote)
             else:
                 valid = same_identity(item, remote) and same_values(item, remote)
             if not valid:

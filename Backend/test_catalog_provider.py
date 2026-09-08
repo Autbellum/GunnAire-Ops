@@ -28,8 +28,8 @@ class CatalogProviderTests(unittest.TestCase):
             return payload
         return mock.patch.object(backend, "qbo_catalog_transport", side_effect=send)
 
-    def test_item_and_vendor_reads_use_only_original_fixed_accounting_origin(self):
-        for entity in ("item", "vendor"):
+    def test_item_vendor_and_account_reads_use_only_original_fixed_accounting_origin(self):
+        for entity in ("item", "vendor", "account"):
             with self.transport({entity.title(): {"Id": "fixture-id"}}):
                 self.provider.read(entity, "fixture-id")
             request = self.requests[-1]
@@ -68,6 +68,23 @@ class CatalogProviderTests(unittest.TestCase):
             self.provider.write({"Name": "Service"}, "ga-item-fixture", claim)
         claim.assert_not_called()
         self.assertFalse(self.requests)
+
+    def test_sparse_update_suppresses_retroactive_transaction_account_changes(self):
+        item = {"Id": "inventory", "SyncToken": "3", "sparse": True, "Name": "Repair part", "UnitPrice": 22.125}
+        with self.transport({"Item": {"Id": "inventory"}}):
+            self.provider.write(item, "ga-item-update-fixture", lambda: None)
+        request = self.requests[-1]
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(request.full_url).query)
+        self.assertEqual(query["include"], ["donotupdateaccountontxns"])
+        self.assertEqual(json.loads(request.data), item)
+
+    def test_account_preflight_does_not_enable_account_mutations(self):
+        with mock.patch.object(backend.urllib.request, "build_opener") as opener:
+            for method in ("POST", "DELETE", "PUT", "PATCH"):
+                with self.subTest(method=method), self.assertRaises(catalog.AttemptError):
+                    backend.qbo_catalog_transport(urllib.request.Request(
+                        "https://quickbooks.api.intuit.com/v3/company/realm/account/inventory-asset", method=method))
+            opener.assert_not_called()
 
     def test_revocation_after_refresh_prevents_claim(self):
         def refresh(*args):

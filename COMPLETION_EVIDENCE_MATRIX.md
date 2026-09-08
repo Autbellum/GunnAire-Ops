@@ -1,3 +1,16 @@
+QBO inventory server prerequisite, 2026-09-08: candidate 2026.09.08.35 adds
+explicit opening quantity/date and verified per-item inventory accounts to the
+shared catalog publisher, plus immutable-type-reviewed sparse price updates.
+Retries recover original identities and present stock without reposting opening
+balances. Frozen local qualification passes 513 Backend tests (69 focused
+catalog/provider tests) and 40 Tools tests; compileall, actionlint and diff checks
+pass. QBO_INVENTORY_PUBLICATION_CONTRACT.md records exact evidence, authorization,
+account/stock boundaries and the REQUIRED native continuation: type preservation,
+inventory forms, sold-item snapshots, additive CloudKit receipts, categories,
+bundles and full iPad/Mac/provider acceptance. This server prerequisite does not
+fix the still-existing native unknown-type-to-Service fallback. No deployment,
+native/schema/signing change or full-application completion is claimed.
+
 Versioned QBO catalog application, 2026-09-08: the follow-up source applies
 verified dated Item projections and persists scoped version/digest receipts in
 the same local save. It preserves pending edits, sold prices and stock metadata;
