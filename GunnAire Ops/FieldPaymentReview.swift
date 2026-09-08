@@ -45,7 +45,7 @@ struct FieldPaymentReviewIdentity: Codable, Equatable {
     }
 }
 
-struct FieldPaymentReviewScope: Decodable, Equatable {
+struct FieldPaymentReviewScope: Codable, Equatable {
     let companyID: UUID
     let invoiceID: UUID
     let localCustomerID: UUID
@@ -69,8 +69,8 @@ struct FieldPaymentReviewScope: Decodable, Equatable {
     }
 }
 
-struct FieldPaymentReviewSnapshot: Decodable {
-    struct Allocation: Decodable, Equatable {
+struct FieldPaymentReviewSnapshot: Codable, Equatable {
+    struct Allocation: Codable, Equatable {
         let paymentQuickBooksID: String
         let syncToken: String
         let postingDate: String
@@ -112,6 +112,24 @@ struct FieldPaymentReviewSnapshot: Decodable {
         fundsSettlementVerified = try v.decode(Bool.self, forKey: .fundsSettlementVerified)
         authority = try v.decode(String.self, forKey: .authority)
         payments = try v.decode([Allocation].self, forKey: .payments)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        try scope.encode(to: encoder)
+        var v = encoder.container(keyedBy: CodingKeys.self)
+        try v.encode(protocolVersion, forKey: .protocolVersion)
+        try v.encodeIfPresent(invoiceNumber, forKey: .invoiceNumber)
+        try v.encode(invoiceDate, forKey: .invoiceDate)
+        try v.encode(syncToken, forKey: .syncToken)
+        try v.encode(observedAt, forKey: .observedAt)
+        try v.encode(currency, forKey: .currency)
+        try v.encode(totalCents, forKey: .totalCents)
+        try v.encode(balanceCents, forKey: .balanceCents)
+        try v.encode(collectionLimitCents, forKey: .collectionLimitCents)
+        try v.encode(hasOpenAttempt, forKey: .hasOpenAttempt)
+        try v.encode(fundsSettlementVerified, forKey: .fundsSettlementVerified)
+        try v.encode(authority, forKey: .authority)
+        try v.encode(payments, forKey: .payments)
     }
 
     func validate(_ expected: FieldPaymentReviewScope, now: Date) throws {
@@ -192,6 +210,8 @@ struct FieldPaymentReviewSnapshot: Decodable {
             invoiceQuickBooksID: invoiceID, customerQuickBooksID: customerID, serviceCallID: invoice.serviceCallID)
         let modelCheck = QuickBooksBillingDocument.invoice(invoice).validation(context: context)
         let amount = invoice.amount, balance = invoice.quickBooksBalanceDue, status = invoice.status
+        let syncedAt = invoice.quickBooksLastSyncedAt, receipt = invoice.quickBooksPaymentReviewJSON
+        let paymentDigest = try FieldPaymentReceiptReconciliation.paymentDigest(invoice: invoice, context: context)
         return try .init(identity: identity, check: {
             try modelCheck()
             guard controller.operationStamp == stamp, controller.verifiedRole == role,
@@ -199,7 +219,10 @@ struct FieldPaymentReviewSnapshot: Decodable {
                   invoice.customer === customer, customer.id == identity.localCustomerID,
                   invoice.quickBooksID == identity.invoiceQuickBooksID, customer.quickBooksID == identity.customerQuickBooksID,
                   invoice.serviceCallID == identity.serviceCallID, invoice.amount == amount,
-                  invoice.quickBooksBalanceDue == balance, invoice.status == status else { throw FieldPaymentReviewError.access }
+                  invoice.quickBooksBalanceDue == balance, invoice.status == status,
+                  invoice.quickBooksLastSyncedAt == syncedAt, invoice.quickBooksPaymentReviewJSON == receipt,
+                  try FieldPaymentReceiptReconciliation.paymentDigest(invoice: invoice, context: context) == paymentDigest
+            else { throw FieldPaymentReviewError.access }
         }, request: GunnAireBackendService.fieldPaymentReviewRequest)
     }
 }

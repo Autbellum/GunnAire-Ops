@@ -251,8 +251,10 @@ struct QuickBooksCatalogHistoryTests {
         try GunnAireCloudKitSchemaBootstrap.seedDevelopmentSchemaForTesting(in: context)
         let seeded = try #require(context.fetch(FetchDescriptor<Item>()).first { $0.quickBooksCatalogReceiptJSON != nil })
         #expect(throws: Error.self) { try QuickBooksCatalogApplicationReceipt.decode(#require(seeded.quickBooksCatalogReceiptJSON)) }
-        #expect(GunnAireCloudKitSchemaBootstrap.schemaVersion == 26)
+        #expect(GunnAireCloudKitSchemaBootstrap.schemaVersion == 27)
         #expect(seeded.quickBooksInventorySetupJSON != nil && seeded.quickBooksCatalogDetailsJSON != nil)
+        let invoice = try #require(context.fetch(FetchDescriptor<Invoice>()).first { $0.quickBooksPaymentReviewJSON != nil })
+        #expect(FieldPaymentReceiptReconciliation.decode(invoice.quickBooksPaymentReviewJSON) == nil)
     }
 
     @Test func versionOneReceiptsUpgradeWithoutLosingTimeOrLocalDetailBarriers() throws {

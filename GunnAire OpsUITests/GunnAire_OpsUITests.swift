@@ -8354,15 +8354,64 @@ final class GunnAire_OpsUITests: XCTestCase {
             } else {
                 XCTAssertFalse(app.buttons["CopyInvoiceNumberAndOpenQuickBooks"].exists)
             }
-            if flag == "-uiTestFieldPaymentReviewPaid" { XCTAssertTrue(expected.label.contains("$0.00")) }
+            if flag == "-uiTestFieldPaymentReviewPaid" {
+                XCTAssertTrue(expected.label.contains("$0.00"))
+                let savedBalance = app.descendants(matching: .any)["ContactlessSavedBalance"]
+                XCTAssertTrue(savedBalance.label.contains("$189.00"))
+                let save = app.buttons["SaveContactlessAccountingReview"]
+                for _ in 0..<4 where !save.isHittable { app.swipeUp() }
+                XCTAssertTrue(save.isHittable)
+                save.tap()
+                let savedMessage = app.staticTexts["ContactlessSaveMessage"]
+                XCTAssertTrue(savedMessage.waitForExistence(timeout: 8))
+                XCTAssertTrue(savedMessage.label.contains("No new payment"))
+                for _ in 0..<4 where !savedBalance.isHittable { app.swipeDown() }
+                XCTAssertTrue(savedBalance.label.contains("$0.00"))
+                XCTAssertTrue(app.staticTexts["ContactlessSavedReceipt"].exists)
+                // A repeat is a fresh read of the same original invoice, not a
+                // second Payment. The saved balance stays zero.
+                for _ in 0..<4 where !save.isHittable { app.swipeUp() }
+                XCTAssertTrue(save.isHittable)
+                save.tap()
+                XCTAssertTrue(savedMessage.waitForExistence(timeout: 8))
+                XCTAssertTrue(savedMessage.label.contains("No new payment"))
+                for _ in 0..<4 where !savedBalance.isHittable { app.swipeDown() }
+                let verifiedBalance = app.descendants(matching: .any)["ContactlessVerifiedBalance"]
+                XCTAssertTrue(verifiedBalance.waitForExistence(timeout: 8))
+                XCTAssertTrue(verifiedBalance.label.contains("$0.00"))
+                XCTAssertTrue(savedBalance.label.contains("$0.00"))
+            }
             let image = XCTAttachment(screenshot: app.screenshot())
             image.name = "Shared contactless review " + flag
             image.lifetime = .keepAlways; add(image)
             let other = app.buttons["Record Cash, Check, or Another Verified Payment"]
             for _ in 0..<6 where !other.exists { app.swipeUp() }
             XCTAssertTrue(other.exists)
-            if flag == "-uiTestFieldPaymentReviewHold" || flag == "-uiTestFieldPaymentReviewPaid" {
+            if flag == "-uiTestFieldPaymentReviewHold" || flag == "-uiTestFieldPaymentReviewPaid" || flag == "-uiTestFieldPaymentReviewOffline" {
                 XCTAssertFalse(other.isEnabled)
+            }
+            if flag == "-uiTestFieldPaymentReviewPaid" {
+                app.buttons["Done"].tap()
+                revealSidebarDestination("Invoices", in: app).tap()
+                XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 8))
+                // Resolve the original row's actionable button, not its
+                // combined static label, which shares the row identifier.
+                let invoice = app.buttons["InvoiceDisclosure-\(screenshotInvoiceID)"]
+                for _ in 0..<8 where !invoice.isHittable { app.swipeUp() }
+                XCTAssertTrue(invoice.isHittable, app.debugDescription)
+                invoice.tap()
+                // Open the visible nested control after resolving the exact
+                // original invoice. Its action must not collapse the parent.
+                let savedCheck = app.buttons["Saved accounting check"]
+                for _ in 0..<5 where !savedCheck.isHittable { app.swipeUp() }
+                XCTAssertTrue(savedCheck.isHittable, app.debugDescription)
+                savedCheck.tap()
+                XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "1069")).firstMatch.waitForExistence(timeout: 5), app.debugDescription)
+                XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Balance at check")).firstMatch.exists)
+                XCTAssertTrue(app.navigationBars["Invoices"].exists)
+                let evidence = XCTAttachment(screenshot: app.screenshot())
+                evidence.name = "Original invoice retains its accounting check after field handoff"
+                evidence.lifetime = .keepAlways; add(evidence)
             }
             app.terminate()
         }

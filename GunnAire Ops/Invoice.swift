@@ -86,6 +86,9 @@ final class Invoice {
     var quickBooksSyncStatus: String = "pending"
     var quickBooksSyncDetail: String?
     var quickBooksLastSyncedAt: Date?
+    /// Latest invoice-scoped accounting observation, not a cash/processor receipt.
+    /// Optional for existing CloudKit records. Capture history remains in Payment.
+    var quickBooksPaymentReviewJSON: String?
     var workTypeRaw: String = InvoiceWorkType.service.rawValue
     var lineItemSummary: String = ""
     var catalogSnapshotJSON: String?
@@ -304,7 +307,7 @@ final class Invoice {
     }
 
     var quickBooksReconciliationReviewMessage: String? {
-        quickBooksIdentityReviewMessage ?? quickBooksBalanceReviewMessage
+        quickBooksIdentityReviewMessage ?? quickBooksBalanceReviewMessage ?? FieldPaymentReceiptReconciliation.reviewMessage(for: self)
     }
 
     var paymentCollectionBlockedMessage: String? {

@@ -8,7 +8,7 @@ enum FieldPaymentReviewFixture {
         guard let customer = invoice.customer, let providerID = invoice.quickBooksID else { throw FieldPaymentReviewError.invalid }
         let identity = FieldPaymentReviewIdentity(companyID: UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")!,
             invoiceID: invoice.id, localCustomerID: customer.id, invoiceQuickBooksID: providerID,
-            customerQuickBooksID: "fixture-customer", serviceCallID: invoice.serviceCallID)
+            customerQuickBooksID: customer.quickBooksID ?? "fixture-customer", serviceCallID: invoice.serviceCallID)
         return try .init(identity: identity, check: {
             guard invoice.customer === customer, invoice.quickBooksID == providerID else { throw FieldPaymentReviewError.access }
         }, request: { path in

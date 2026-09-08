@@ -3702,6 +3702,7 @@ GunnAire
                                         Text(invoice.lineItemSummary)
                                             .font(.caption)
                                             .foregroundColor(.secondary)
+                                        SavedFieldPaymentReceiptDisclosure(invoice: invoice)
                                         if let review = invoice.quickBooksReconciliationReviewMessage {
                                             Text(review)
                                                 .font(.caption)
@@ -3739,6 +3740,7 @@ GunnAire
                                                 .foregroundColor(.green)
                                         }
                                         BillingPublicationReviewLink(document: .invoice(invoice), context: modelContext)
+                                            .buttonStyle(.plain)
                                         if canEditInvoice(invoice) {
                                             Button("Edit Line Items") {
                                                 beginEditingInvoice(invoice)
@@ -3795,6 +3797,7 @@ GunnAire
                                             Text(invoice.amount, format: .currency(code: "USD"))
                                         }
                                     }
+                                    .accessibilityElement(children: .combine)
                                     .accessibilityIdentifier("InvoiceDisclosure-\(invoice.id.uuidString)")
                                 }
                                 .padding(.vertical, 4)

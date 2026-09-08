@@ -1,3 +1,34 @@
+Invoice-scoped saved accounting check qualification, 2026-09-08:
+FIELD_PAYMENT_RECEIPT_RECONCILIATION.md records explicit fresh authorized receipt
+application to the original invoice, matching original document/payment digests,
+version ordering, synchronous save recovery and mixed-field collection/statement
+holds. Original captured payments, pending ACH and refunds are never synthesized,
+replaced or deleted. The saved balance and accounting evidence are available on
+the invoice offline; neither proves bank settlement or permits another collection.
+The saved-check disclosure and its adjacent Billing Review link now use scoped
+tap behavior, fixing a reproduced iPad navigation collision. The pinned save
+confirmation resets for every new check; offline published invoices cannot open
+unchecked verified payment entry. No regression assertions were removed.
+Final local evidence passes 1,494 logic cases on Mac, 1,494 logic plus all eight
+selected iPad UI journeys (1,502 cases), 56 Tools tests and 636 unchanged Backend
+tests. Actual-execution verification confirms all requested selectors. All 14
+final screenshots were visually reviewed; no account-email footer or raw Mail
+payload is shown. Unsigned universal Mac Release and both architecture checks
+pass. Fourteen non-document source hashes are frozen in the evidence directory.
+The existing 58-selector workflow is unchanged. Published predecessor 6cf99fb has
+Backend/Mac/second-iPad-group success, but first-group Mail accessibility timeout
+and fourteen follow-on accessibility IPC failures; it is not a green hosted run.
+The Mail attachment journey passes locally. New exact-head hosted qualification
+remains required. The 16 scoped files were copied back to the original project
+and verified byte-for-byte; all 241 unrelated changed files and the original
+empty index were preserved.
+The additive v27 CloudKit field remains a candidate only. Coherent supersession
+by other accounting writers, mixed-version/signed CloudKit convergence, existing
+document actor-isolation warnings, live settlement/returns, real approved Tap to
+Pay, physical Handoff and the complete competitor/Google/QBO-item/vendor suite
+remain open. No merge, deployment, charge/refund, customer email, signing change,
+schema bootstrap/promotion or physical installation occurred in this checkpoint.
+
 Shared field-payment review qualification, 2026-09-08:
 FIELD_PAYMENT_SHARED_REVIEW.md records candidate backend 2026.09.08.39 and its
 native Contactless Payment cutover: actual QBO invoice numbers, original shared
