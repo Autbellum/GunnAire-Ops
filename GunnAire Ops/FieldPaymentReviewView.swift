@@ -225,25 +225,67 @@ struct FieldPaymentReviewView: View {
 /// Archived amounts are never presented as a new collection authorization.
 struct SavedFieldPaymentReceiptDisclosure: View {
     let invoice: Invoice
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var refreshID: UUID?
+    @State private var refreshing = false
+    @State private var message = ""
     var body: some View {
-        if let receipt = FieldPaymentReceiptReconciliation.receipt(for: invoice) {
-            DisclosureGroup("Saved accounting check") {
-                if let number = receipt.snapshot.invoiceNumber {
-                    LabeledContent("QuickBooks invoice", value: number)
+        if invoice.quickBooksPaymentReviewJSON != nil {
+            DisclosureGroup {
+                if let receipt = FieldPaymentReceiptReconciliation.receipt(for: invoice) {
+                    if let number = receipt.snapshot.invoiceNumber {
+                        LabeledContent("QuickBooks invoice", value: number)
+                    }
+                    if let date = CompanyWorkspaceClock.parse(receipt.snapshot.observedAt) {
+                        LabeledContent("Checked", value: date.formatted(date: .abbreviated, time: .shortened))
+                    }
+                    LabeledContent("Balance at check", value: (Double(receipt.snapshot.balanceCents) / 100).formatted(.currency(code: "USD")))
+                    ForEach(receipt.snapshot.payments, id: \.paymentQuickBooksID) { payment in
+                        LabeledContent(payment.includesCreditOrAdjustment ? "Accounting credit / adjustment" : "Accounting payment applied",
+                            value: (Double(payment.appliedCents) / 100).formatted(.currency(code: "USD")))
+                    }
+                    Text("Saved QuickBooks accounting evidence, not proof of bank settlement or permission to collect again. Original payment captures are kept separately.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("The saved check no longer matches this invoice. Refresh it, or ask Accounting to review its original records.")
+                        .font(.callout).foregroundStyle(.secondary)
                 }
-                if let date = CompanyWorkspaceClock.parse(receipt.snapshot.observedAt) {
-                    LabeledContent("Checked", value: date.formatted(date: .abbreviated, time: .shortened))
+                Button("Refresh accounting check") { message = ""; refreshID = UUID() }
+                    .buttonStyle(.plain).disabled(refreshing)
+                    .accessibilityIdentifier("RefreshSavedInvoiceAccountingCheck")
+                if refreshing { ProgressView("Refreshing accounting check…") }
+                if !message.isEmpty {
+                    Text(message).font(.callout).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("SavedInvoiceAccountingRefreshMessage")
                 }
-                LabeledContent("Balance at check", value: (Double(receipt.snapshot.balanceCents) / 100).formatted(.currency(code: "USD")))
-                ForEach(receipt.snapshot.payments, id: \.paymentQuickBooksID) { payment in
-                    LabeledContent(payment.includesCreditOrAdjustment ? "Accounting credit / adjustment" : "Accounting payment applied",
-                        value: (Double(payment.appliedCents) / 100).formatted(.currency(code: "USD")))
-                }
-                Text("Saved QuickBooks accounting evidence, not proof of bank settlement or permission to collect again. Original payment captures are kept separately.")
-                    .font(.caption).foregroundStyle(.secondary)
+            } label: {
+                Text("Saved accounting check")
+                    .accessibilityIdentifier("SavedInvoiceAccountingCheck-\(invoice.id.uuidString)")
             }
             .disclosureGroupStyle(CatalogBundleDisclosureStyle())
-            .accessibilityIdentifier("SavedInvoiceAccountingCheck-\(invoice.id.uuidString)")
+            .task(id: refreshID) {
+                guard let id = refreshID else { return }
+                refreshing = true
+                defer { if refreshID == id { refreshing = false } }
+                do {
+                    let client = try FieldPaymentReviewFixture.client(invoice: invoice) ?? FieldPaymentReviewClient.live(invoice: invoice)
+                    let stamp = CompanyWorkspaceAccessController.shared.operationStamp
+                    let review = try await FieldPaymentReceiptRefresh.ifSaved(invoice: invoice, check: {
+                        guard refreshID == id, scenePhase == .active,
+                              CompanyWorkspaceAccessController.shared.operationStamp == stamp
+                        else { throw FieldPaymentReviewError.access }
+                    }, makeClient: { _ in client })
+                    guard refreshID == id, !Task.isCancelled else { return }
+                    message = review ?? "Accounting check refreshed. No new payment was created."
+                } catch {
+                    guard refreshID == id, !Task.isCancelled else { return }
+                    message = FieldPaymentReviewError.safe(error).localizedDescription
+                }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase != .active { refreshID = nil; refreshing = false; message = "" }
+            }
+            .onDisappear { refreshID = nil; refreshing = false }
         }
     }
 }

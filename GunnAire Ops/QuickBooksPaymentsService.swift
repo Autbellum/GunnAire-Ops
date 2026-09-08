@@ -67,6 +67,7 @@ struct QuickBooksProcessedRefundResult {
 struct QuickBooksWorkspaceResult<Value> {
     let value: Value
     let operation: WorkspaceProviderOperation
+    var accountingReviewMessage: String? = nil
     func validateWorkspace() throws { try operation.check() }
 }
 
@@ -75,6 +76,7 @@ final class QuickBooksPaymentsService {
 
     private let api: QuickBooksDataAPI
     private let journal: any PaymentAttemptCoordinating
+    private var receiptReviewClient: FieldPaymentReceiptRefresh.ClientFactory?
 
     private init() {
         api = .shared
@@ -83,11 +85,13 @@ final class QuickBooksPaymentsService {
 
 #if DEBUG
     private var testSalesItemReference: String?
-    init(api: QuickBooksDataAPI, journal: any PaymentAttemptCoordinating, salesItemReference: String? = nil) {
+    init(api: QuickBooksDataAPI, journal: any PaymentAttemptCoordinating, salesItemReference: String? = nil,
+         receiptReviewClient: FieldPaymentReceiptRefresh.ClientFactory? = nil) {
         precondition(GunnAireCloudKit.usesTestDatabase)
         self.api = api
         self.journal = journal
         testSalesItemReference = salesItemReference
+        self.receiptReviewClient = receiptReviewClient
     }
 #endif
 
@@ -341,14 +345,20 @@ final class QuickBooksPaymentsService {
         }
     }
 
-    func cancelPaymentReservation(_ id: UUID, for invoice: Invoice) async throws {
+    @discardableResult
+    func cancelPaymentReservation(_ id: UUID, for invoice: Invoice) async throws -> QuickBooksWorkspaceResult<UUID> {
         try await api.withWorkspaceOperation { operation in
             try validateInvoiceWorkspace(invoice)
+            let checkOriginal = try recoveryValidation(invoice: invoice, operation: operation)
             let record = try await journal.get(id)
+            try checkOriginal()
             try validateAttempt(record, invoice: invoice)
             let cancelled = try await journal.action("cancel", attemptID: id, reference: nil)
-            try operation.check()
+            try checkOriginal()
             try cancelled.validate(for: record.intent, states: [.cancelled], previous: record)
+            let review = try await FieldPaymentReceiptRefresh.ifSaved(invoice: invoice,
+                check: { try operation.check() }, makeClient: receiptReviewClient)
+            return QuickBooksWorkspaceResult(value: id, operation: operation, accountingReviewMessage: review)
         }
     }
 
@@ -363,18 +373,36 @@ final class QuickBooksPaymentsService {
               ["charge", "refund"].contains(record.intent.kind) else { throw PaymentAttemptError.needsReview }
     }
 
+    private func recoveryValidation(invoice: Invoice, operation: WorkspaceProviderOperation) throws -> () throws -> Void {
+        guard let context = invoice.modelContext else { throw WorkspaceProviderAccessError.unavailable }
+        let document = QuickBooksBillingDocument.invoice(invoice).validation(context: context)
+        try document()
+        let customerID = invoice.customer?.quickBooksID
+        let digest = try FieldPaymentReceiptReconciliation.paymentDigest(invoice: invoice, context: context)
+        let receipt = invoice.quickBooksPaymentReviewJSON
+        return {
+            try operation.check(); try document()
+            guard invoice.modelContext === context, invoice.customer?.quickBooksID == customerID,
+                  invoice.quickBooksPaymentReviewJSON == receipt,
+                  try FieldPaymentReceiptReconciliation.paymentDigest(invoice: invoice, context: context) == digest
+            else { throw PaymentAttemptError.needsReview }
+        }
+    }
+
     /// Recovery never resends a charge/refund. Server GET evidence precedes
     /// accounting-only recovery and a local upsert by the original attempt UUID.
     func recoverPaymentAttempt(_ id: UUID, for invoice: Invoice, providerReference: String? = nil)
         async throws -> QuickBooksWorkspaceResult<UUID> {
         try await api.withWorkspaceOperation { operation in
             guard let context = invoice.modelContext else { throw WorkspaceProviderAccessError.unavailable }
+            let checkOriginal = try recoveryValidation(invoice: invoice, operation: operation)
             var attempt = try await journal.get(id)
+            try checkOriginal()
             try validateAttempt(attempt, invoice: invoice)
             guard let providerID = attempt.providerID ?? attempt.candidateProviderID ?? providerReference,
                   PaymentAttemptRecord.isReference(providerID) else { throw PaymentAttemptError.needsReview }
             let verified = try await journal.action("confirm", attemptID: id, reference: providerID)
-            try operation.check()
+            try checkOriginal()
             try verified.validate(for: attempt.intent, states: [.confirmed, .completed], previous: attempt)
             guard verified.providerID == providerID else { throw PaymentAttemptError.needsReview }
             attempt = verified
@@ -387,6 +415,7 @@ final class QuickBooksPaymentsService {
                 guard let salesItem = await resolvedSalesItemRef() else {
                     throw QuickBooksPaymentsServiceError.missingSalesItemReference
                 }
+                try checkOriginal()
                 let receipt = await syncRefundReceipt(localPaymentID: id, invoice: invoice,
                     customerQBID: attempt.intent.customerQuickBooksID, salesItemRef: salesItem,
                     amount: amount, note: nil, clientTransactionID: attempt.clientTransactionID)
@@ -397,12 +426,14 @@ final class QuickBooksPaymentsService {
                     customerQBID: attempt.intent.customerQuickBooksID, amount: amount, note: nil,
                     paymentRef: providerID, clientTransactionID: attempt.clientTransactionID,
                     paymentKind: attempt.intent.rail == "ach" ? .ach(chargeID: providerID) : .card(chargeID: providerID))
+                try checkOriginal()
                 accountingID = try await recoverOrCreateAccountingPayment(localPaymentID: id, payload: payload).Id
             }
+            try checkOriginal()
             guard await finishAttempt(attempt, accountingID: accountingID) == nil else {
                 throw PaymentAttemptError.needsReview
             }
-            try validateInvoiceWorkspace(invoice)
+            try checkOriginal()
             let existing = try context.fetch(FetchDescriptor<Payment>(predicate: #Predicate { $0.id == id }))
             guard existing.count <= 1 else { throw PaymentAttemptError.needsReview }
             if let payment = existing.first {
@@ -425,14 +456,16 @@ final class QuickBooksPaymentsService {
                     quickBooksRefundReceiptID: isRefund ? accountingID : nil,
                     quickBooksAccountingSyncStatus: "synced",
                     processorSyncStatus: attempt.providerStatus?.lowercased(),
-                    amount: isRefund ? -amount : amount, method: attempt.intent.rail,
+                    amount: amount, method: attempt.intent.rail,
                     authorizationReference: providerID, processor: OnsitePaymentProcessor.quickBooksPayments.rawValue,
                     isRefund: isRefund, refundedPaymentID: attempt.intent.sourcePaymentID)
                 context.insert(payment)
                 invoice.applyLocalPaymentAmount(amount, isRefund: isRefund)
             }
             try context.save()
-            return QuickBooksWorkspaceResult(value: id, operation: operation)
+            let review = try await FieldPaymentReceiptRefresh.ifSaved(invoice: invoice,
+                check: { try operation.check() }, makeClient: receiptReviewClient)
+            return QuickBooksWorkspaceResult(value: id, operation: operation, accountingReviewMessage: review)
         }
     }
 
@@ -495,7 +528,9 @@ final class QuickBooksPaymentsService {
                 payment.quickBooksAccountingSyncStatus = "synced"
                 payment.quickBooksAccountingSyncDetail = nil
                 try payment.modelContext?.save()
-                return QuickBooksWorkspaceResult(value: identifier, operation: operation)
+                let review = try await FieldPaymentReceiptRefresh.ifSaved(invoice: invoice,
+                    check: { try operation.check() }, makeClient: receiptReviewClient)
+                return QuickBooksWorkspaceResult(value: identifier, operation: operation, accountingReviewMessage: review)
             } catch {
                 // A late error must not mutate old models under a new session.
                 try validateInvoiceWorkspace(invoice)

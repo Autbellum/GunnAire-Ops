@@ -4278,7 +4278,7 @@ struct QuickBooksManagementView: View {
                         .syncAndRecordAccountingFollowUp(for: localPayment, manual: true)
                     try await MainActor.run {
                         try result.validateWorkspace()
-                        actionMessage = "Payment saved locally and linked to QuickBooks: \(result.value)."
+                        actionMessage = result.accountingReviewMessage ?? "Payment saved locally and linked to QuickBooks: \(result.value)."
                         syncAllQuickBooksData()
                     }
                 } catch {
@@ -4502,7 +4502,7 @@ struct QuickBooksManagementView: View {
                     let result = try await QuickBooksPaymentsService.shared.syncAndRecordAccountingFollowUp(for: payment)
                     try await MainActor.run {
                         try result.validateWorkspace()
-                        actionMessage = "QuickBooks accounting follow-up completed."
+                        actionMessage = result.accountingReviewMessage ?? "QuickBooks accounting follow-up completed."
                         syncAllQuickBooksData()
                     }
                 } catch {
@@ -5129,6 +5129,21 @@ struct QuickBooksManagementView: View {
         } catch {
             try syncRun.check()
             completedFailures.append("Local app sync: \(error.localizedDescription)")
+        }
+
+        // Bulk Invoice/Payment pages cannot replace a scoped saved observation.
+        // Reread after local import, including a committed import with warnings.
+        let importedInvoices = QuickBooksSnapshotImportPolicy.records(invoices, resource: "invoices",
+            successfulResourceIDs: successfulResources)
+        let importedPayments = QuickBooksSnapshotImportPolicy.records(payments, resource: "payments",
+            successfulResourceIDs: successfulResources)
+        let affectedIDs = Set(importedInvoices.map(\.Id)).union(importedPayments.flatMap {
+            QuickBooksPaymentAllocation.amountsByInvoiceID(for: $0).keys
+        })
+        let pendingChecks = try await FieldPaymentReceiptRefresh.afterImport(context: context,
+            invoiceIDs: affectedIDs, check: { try syncRun.check() })
+        if pendingChecks > 0 {
+            completedFailures.append("\(pendingChecks) saved invoice accounting check(s) still need review. In Invoices, expand Saved accounting check and choose Refresh accounting check.")
         }
 
         try syncRun.check()

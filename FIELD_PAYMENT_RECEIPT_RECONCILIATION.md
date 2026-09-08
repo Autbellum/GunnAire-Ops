@@ -1,5 +1,103 @@
 # Invoice-scoped accounting receipt application
 
+## Sync and recovery follow-up, 2026-09-08
+
+The current increment connects saved observations to the existing QuickBooks
+Management sync and original payment recovery/follow-up. Once those workflows
+save their original records, they perform fresh scoped reads for invoices that
+already have a saved accounting check. Successful reads atomically replace that
+observation with the current document/payment digests and provider balance. Bulk
+resource pages and capture responses never fabricate a shared observation.
+Ordinary invoices without a saved observation do not incur this additional read.
+
+An unavailable or conflicting follow-up retains the prior observation and its
+collection/statement hold. It does not relabel a confirmed captured payment as
+failed, erase its accounting ID, or offer to send it again. The existing recovery
+and payment status surfaces carry the remaining review message. Releasing an
+unsent reservation also refreshes any saved hold from fresh server evidence;
+cancellation alone does not invent a paid or clear state.
+
+The original invoice's existing **Saved accounting check** disclosure now has a
+read-only **Refresh accounting check** action. The disclosure remains reachable
+when the invoice is paid or held, and remains visible when an old observation no
+longer matches the local document. This removes the discovered dead end where
+collection eligibility prevented opening the guide that the error recommended.
+The action never opens a payment form or another workspace; its status stays
+beside the saved evidence. Scene/view changes cancel the initiating refresh, and
+each request rechecks the original business, client, invoice and payment state.
+
+Recovery and unsent cancellation also freeze the original invoice/customer,
+payment digest and prior receipt across journal and accounting awaits. A local
+edit, deleted invoice, remapped customer or newer payment/receipt writer prevents
+the older result from being applied. This preserves original server recovery
+evidence without committing it into a changed local record.
+
+The audit also found a concrete sign mismatch: original-attempt refund recovery
+created a negative `Payment.amount`, whereas the other refund entry points and
+statement/invoice policies use a positive amount with `isRefund` determining the
+direction. New recovery records now use that existing convention. Existing
+negative historical records are not rewritten by this increment and still need
+reviewed reconciliation; no ledger migration or live refund occurred.
+
+Qualification evidence is retained under
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-08/Receipt Sync.C3UmYm`.
+The first compile's escaping-check closure diagnostic is retained and corrected.
+The next focused run passed all new cases but caught an existing detached,
+receipt-free accounting fixture entering the new context requirement; the
+receipt-free path now remains a no-op. No existing test assertion was removed.
+The corrected focused suites pass **49/49** on both Mac and iPad, covering actual
+import, repeated charge/refund recovery, unsent cancellation, offline follow-up,
+changed originals, storage failure and original connection boundaries.
+
+The first full iPad run (`CompleteIPad.xcresult`) passed all 1,503 logic cases and
+eight of nine UI journeys. The added original-invoice refresh assertion failed
+because the disclosure's accessibility identifier propagated into its contents;
+the retained recording shows the button was visible, not an invoice app crash.
+Moving the group identifier onto its label preserves the child action/status
+identifiers. `NavigationCorrected.xcresult` then passes the unchanged refresh,
+confirmation and stay-in-Invoices assertions. No assertion was removed or
+replaced by a coordinate tap. The final source also passes all 1,503 Mac logic
+cases, and the actual-execution verifier confirms the full requested target.
+`FinalIPad.xcresult` passes all 1,503 logic cases and all nine selected UI journeys
+(1,512 total, zero failures/skips). Its actual-execution tree verifies all ten
+requested target/method selectors. The original invoice opening, simple Mail,
+attachment preview/forward, recovery and contactless handoffs pass. All 15 final
+screenshots were visually reviewed: original-invoice refresh confirmation remains
+beside its evidence, and no account-email footer or raw Mail payload is shown.
+`FinalRelease.log` records a successful unsigned universal Mac Release build;
+`lipo -verify_arch arm64 x86_64` passes for the resulting executable.
+
+All 56 Tools tests and both workflow lint checks pass. The workflow is exactly
+the published `58ca6be` version: 58 existing named UI journeys split into disjoint
+29-journey iPad groups, complete logic targets, universal Mac Release, read-only
+permissions and retained result evidence. The new direct refresh assertion is
+inside an already-selected journey; no workflow weakening was needed.
+`FinalSourceHashes.json` freezes all nine changed non-document source paths.
+The preceding failed/superseded runs remain available rather than being counted
+as final acceptance. Current provider semantics were rechecked in Safari
+against the Intuit Invoice API linked below. The backend, schema candidate v27,
+signing and existing workflow selectors are unchanged.
+
+Original-project preflight verifies all 11 scoped paths, 248 unrelated changed
+files and its empty index. A further 296 other tracked native/project/Tools/
+Backend paths are byte-identical between the review checkout and original. Only
+the scoped increment is intended for copy-back and commit; unrelated changes and
+untracked Python caches are excluded. No merge, deployment, real provider or
+financial mutation, customer message, signing/schema change or physical install
+was performed by this qualification.
+
+This does not prove coherent handling by older app builds, the unused legacy
+ContentView import method, every billing publication path, server historical
+ledger/settlement/return handling or signed CloudKit delivery. The full suite's
+provider, physical Tap to Pay/Handoff, Google/item/vendor and release gates remain
+open. At the latest prepublication read, exact published predecessor `6036f2f`
+has successful Backend and Mac checks; both iPad jobs are still running. Its
+successes do not qualify a later commit. Four existing document-concurrency
+warnings and the optional Metal toolchain search-path warning remain tracked;
+this checkpoint does not claim a warning-free build.
+
+## Original receipt checkpoint
+
 2026-09-08. Native review-branch increment; backend remains the previously
 qualified `2026.09.08.39`. This is not a deployment, production payment acceptance,
 bank-settlement ledger, or completion of the full HVAC business-suite goal.

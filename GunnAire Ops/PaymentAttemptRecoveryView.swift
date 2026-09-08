@@ -147,7 +147,8 @@ struct PaymentAttemptRecoveryView: View {
                 providerReference: references[record.id])
             try result.validateWorkspace()
             await refresh()
-            message = "Payment records restored. No new charge or refund was sent."
+            try result.validateWorkspace()
+            message = result.accountingReviewMessage ?? "Payment records restored. No new charge or refund was sent."
         } catch { message = error.localizedDescription }
     }
 
@@ -156,9 +157,10 @@ struct PaymentAttemptRecoveryView: View {
         isBusy = true
         defer { isBusy = false; cancelTarget = nil }
         do {
-            try await QuickBooksPaymentsService.shared.cancelPaymentReservation(id, for: invoice)
+            let result = try await QuickBooksPaymentsService.shared.cancelPaymentReservation(id, for: invoice)
             await refresh()
-            message = "Unsent reservation released."
+            try result.validateWorkspace()
+            message = result.accountingReviewMessage ?? "Unsent reservation released."
         } catch { message = error.localizedDescription }
     }
 }

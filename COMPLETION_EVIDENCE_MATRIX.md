@@ -1,3 +1,36 @@
+Saved accounting check sync/recovery qualification, 2026-09-08:
+FIELD_PAYMENT_RECEIPT_RECONCILIATION.md records fresh scoped observation refresh
+after successful-resource import, original payment recovery/accounting follow-up
+and unsent reservation cancellation. Offline/conflicting follow-up retains the
+old check and review hold without inventing another payment or discarding a
+confirmed capture. Recovery validates the original invoice/customer/payment and
+receipt across awaits; newly recovered refunds use positive amount plus isRefund,
+consistent with other native entry points. Historical negative records are not
+rewritten. Paid/held invoices can refresh their saved check directly in Invoices,
+without collection eligibility or opening another payment form.
+The first full iPad run caught propagated disclosure accessibility identifiers.
+The recording shows the visible control; scoping its identifier to the label
+restores the child refresh/status identifiers. The unchanged assertions then
+press Refresh, confirm success and remain in Invoices. Failures are retained.
+Final source passes 1,503 logic tests on Mac and 1,503 logic plus all nine selected
+iPad UI journeys (1,512 total), with actual-execution verification and no skips.
+All 15 final screenshots are visually reviewed. The original-invoice result,
+simple Mail and attachment preview/forward are preserved without an account-email
+footer or raw payload. All 56 Tools tests, workflow lint and unsigned universal
+Mac Release pass, including arm64/x86_64 verification. FinalSourceHashes.json in
+the Receipt Sync.C3UmYm evidence directory freezes nine non-document paths.
+The published workflow commit 58ca6be remains unchanged: 58 named UI journeys,
+two disjoint 29-journey iPad groups and the existing full-logic/Release gates.
+Published predecessor 6036f2f has Backend/Mac success; both iPad groups were live
+at the prepublication read. A later head needs its own hosted qualification.
+Copy-back preflight confirms 11 scoped paths, 248 unrelated changed files, an
+empty original index and 296 other byte-identical tracked source files. No merge,
+deployment, financial mutation, customer message, signing/schema change or
+physical installation occurred. Older writers, remaining billing entry points,
+mixed-version signed CloudKit delivery, historical settlement/refunds, real
+approved Tap to Pay/Handoff and the complete competitor/Google/QBO-item/vendor
+suite remain open. Existing document-concurrency/Metal path warnings remain.
+
 Invoice-scoped saved accounting check qualification, 2026-09-08:
 FIELD_PAYMENT_RECEIPT_RECONCILIATION.md records explicit fresh authorized receipt
 application to the original invoice, matching original document/payment digests,

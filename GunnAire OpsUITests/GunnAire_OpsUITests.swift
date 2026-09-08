@@ -8409,6 +8409,17 @@ final class GunnAire_OpsUITests: XCTestCase {
                 XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "1069")).firstMatch.waitForExistence(timeout: 5), app.debugDescription)
                 XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Balance at check")).firstMatch.exists)
                 XCTAssertTrue(app.navigationBars["Invoices"].exists)
+                // A paid/held invoice must not need collection eligibility to
+                // refresh its own accounting evidence. Stay in this invoice.
+                let refreshCheck = app.buttons["RefreshSavedInvoiceAccountingCheck"]
+                for _ in 0..<5 where !refreshCheck.isHittable { app.swipeUp() }
+                XCTAssertTrue(refreshCheck.isHittable, app.debugDescription)
+                refreshCheck.tap()
+                let refreshMessage = app.staticTexts["SavedInvoiceAccountingRefreshMessage"]
+                XCTAssertTrue(refreshMessage.waitForExistence(timeout: 8))
+                XCTAssertTrue(refreshMessage.label.contains("No new payment"))
+                XCTAssertTrue(app.navigationBars["Invoices"].exists)
+                XCTAssertFalse(app.navigationBars["Contactless Payment"].exists)
                 let evidence = XCTAttachment(screenshot: app.screenshot())
                 evidence.name = "Original invoice retains its accounting check after field handoff"
                 evidence.lifetime = .keepAlways; add(evidence)

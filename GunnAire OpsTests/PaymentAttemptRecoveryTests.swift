@@ -131,7 +131,7 @@ struct PaymentAttemptRecoveryTests {
             #expect(payments.count == 1)
             let payment = try #require(payments.first)
             #expect(payment.id == record.id && payment.collectionAttemptID == record.id)
-            #expect(payment.amount == (kind == "refund" ? -1.23 : 1.23))
+            #expect(payment.amount == 1.23)
             #expect(payment.quickBooksClientTransID == record.clientTransactionID)
             #expect(payment.isRefund == (kind == "refund"))
             #expect(payment.refundedPaymentID == record.intent.sourcePaymentID)
@@ -162,6 +162,128 @@ struct PaymentAttemptRecoveryTests {
         }
         #expect(journal.events == events)
         #expect(try container.mainContext.fetch(FetchDescriptor<Payment>()).isEmpty)
+    }
+
+    @Test func recoveryRefreshesSavedAccountingHoldAndOfflineReadCannotFailConfirmedCapture() async throws {
+        for mode in ["charge", "refund", "offline", "cancel", "cancel-offline"] {
+            let schema = GunnAireModelSchema.schema
+            let container = try ModelContainer(for: schema, configurations: [
+                ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
+            let context = container.mainContext
+            let invoice = invoice()
+            invoice.taxCalculationStatusRawValue = BillingTaxCalculationStatus.notApplicable.rawValue
+            context.insert(invoice.customer); context.insert(invoice); try context.save()
+            let journal = FixturePaymentJournal()
+            let cancelling = mode.hasPrefix("cancel"), offline = mode.hasSuffix("offline")
+            let record: PaymentAttemptRecord
+            if cancelling {
+                record = try await journal.reserve(.init(id: UUID(), companyID: journal.businessID,
+                    realmID: "fixture-realm", environment: Config.QuickBooks.environment, invoiceID: invoice.id,
+                    invoiceQuickBooksID: "fixture-invoice", customerQuickBooksID: "fixture-customer",
+                    amountCents: 123, rail: "card", kind: "charge"))
+            } else {
+                record = try await seed(journal, invoice: invoice, kind: mode == "refund" ? "refund" : "charge")
+            }
+            let identity = FieldPaymentReviewIdentity(companyID: journal.businessID, invoiceID: invoice.id,
+                localCustomerID: invoice.customer.id, invoiceQuickBooksID: "fixture-invoice",
+                customerQuickBooksID: "fixture-customer", serviceCallID: nil)
+            func snapshot(held: Bool) throws -> FieldPaymentReviewSnapshot {
+                let now = Date().addingTimeInterval(held ? -5 : 0)
+                let allocations: [[String: Any]] = held || mode == "refund" || cancelling ? [] : [[
+                    "paymentQuickBooksID": "fixture-accounting", "syncToken": "1",
+                    "postingDate": "2026-09-08", "appliedCents": 123, "includesCreditOrAdjustment": false]]
+                let balance = allocations.isEmpty ? 1000 : 877
+                let payload = identity.query.mapValues { $0 as Any }.merging([
+                    "realmID": "fixture-realm", "environment": Config.QuickBooks.environment.lowercased(),
+                    "connectionRevision": String(repeating: "a", count: 64), "protocolVersion": 1,
+                    "invoiceNumber": "1069", "invoiceDate": "2026-09-08", "syncToken": held ? "1" : "2",
+                    "observedAt": ISO8601DateFormatter().string(from: now), "currency": "USD",
+                    "totalCents": 1000, "balanceCents": balance, "collectionLimitCents": held ? 0 : balance,
+                    "hasOpenAttempt": held, "fundsSettlementVerified": false, "authority": "office", "payments": allocations
+                ]) { _, new in new }
+                return try JSONDecoder().decode(FieldPaymentReviewSnapshot.self,
+                    from: JSONSerialization.data(withJSONObject: payload))
+            }
+            try FieldPaymentReceiptReconciliation.apply(snapshot(held: true), to: invoice, identity: identity,
+                context: context, check: {}, persist: { try context.save() })
+            var providerSends = 0, sharedReads = 0
+            let api = QuickBooksDataAPI(testTokens: .init(accessToken: "fixture", expiration: .distantFuture),
+                realmID: "fixture-realm", environment: Config.QuickBooks.environment) { _ in
+                providerSends += 1; throw URLError(.unsupportedURL)
+            }
+            let service = QuickBooksPaymentsService(api: api, journal: journal, receiptReviewClient: { original in
+                #expect(original === invoice)
+                let fresh = try snapshot(held: false)
+                return try .init(identity: identity, check: {}, request: { path in
+                    sharedReads += 1
+                    if offline { throw URLError(.notConnectedToInternet) }
+                    return try path.contains("/context?") ? JSONEncoder().encode(fresh.scope) : JSONEncoder().encode(fresh)
+                })
+            })
+            let iterations = cancelling ? 1 : 2
+            for _ in 0..<iterations {
+                let result = try await (cancelling
+                    ? service.cancelPaymentReservation(record.id, for: invoice)
+                    : service.recoverPaymentAttempt(record.id, for: invoice))
+                #expect(result.value == record.id)
+                #expect((result.accountingReviewMessage != nil) == offline)
+            }
+            let payments = try context.fetch(FetchDescriptor<Payment>())
+            #expect(providerSends == 0 && sharedReads == iterations * (offline ? 1 : 2))
+            #expect((invoice.quickBooksReconciliationReviewMessage != nil) == offline)
+            #expect(journal.events.filter { $0 == "begin" }.count == (cancelling ? 0 : 1))
+            if cancelling {
+                #expect(payments.isEmpty)
+                #expect(try await journal.get(record.id).state == .cancelled)
+                #expect(invoice.quickBooksBalanceDue == 10)
+                continue
+            }
+            let saved = try #require(payments.first)
+            #expect(payments.count == 1 && saved.id == record.id)
+            #expect(saved.amount == 1.23 && saved.quickBooksAccountingSyncStatus == "synced")
+            #expect(saved.isRefund == (mode == "refund"))
+            if !offline {
+                let statement = CustomerAccountStatementPolicy.snapshot(customer: invoice.customer,
+                    invoices: [invoice], payments: payments, asOf: nil, calendar: .current, now: Date())
+                #expect(statement.reviewMessages.isEmpty)
+                #expect(statement.entries.first?.balanceDue == (mode == "refund" ? 10 : 8.77))
+            }
+        }
+    }
+
+    @Test func invoiceOrPaymentChangesDuringRecoveryCannotCommitAnOldResult() async throws {
+        for mode in ["invoice", "customer", "payment", "receipt", "deleted"] {
+            let schema = GunnAireModelSchema.schema
+            let container = try ModelContainer(for: schema, configurations: [
+                ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)])
+            let context = container.mainContext
+            let invoice = invoice()
+            context.insert(invoice.customer); context.insert(invoice); try context.save()
+            let journal = FixturePaymentJournal()
+            let record = try await seed(journal, invoice: invoice)
+            journal.beforeAction = { action in
+                guard action == "confirm" else { return }
+                switch mode {
+                case "invoice": invoice.amount = 11
+                case "customer": invoice.customer.quickBooksID = "another-customer"
+                case "payment": context.insert(Payment(invoice: invoice, amount: 2))
+                case "receipt": invoice.quickBooksPaymentReviewJSON = "Newer writer"
+                default: context.delete(invoice)
+                }
+            }
+            var providerSends = 0
+            let api = QuickBooksDataAPI(testTokens: .init(accessToken: "fixture", expiration: .distantFuture),
+                realmID: "fixture-realm", environment: Config.QuickBooks.environment) { _ in
+                providerSends += 1; throw URLError(.unsupportedURL)
+            }
+            let service = QuickBooksPaymentsService(api: api, journal: journal)
+            await #expect(throws: (any Error).self) {
+                try await service.recoverPaymentAttempt(record.id, for: invoice)
+            }
+            #expect(providerSends == 0)
+            #expect(try context.fetch(FetchDescriptor<Payment>()).allSatisfy { $0.id != record.id })
+            #expect(journal.events.filter { $0 == "complete" }.count == 1)
+        }
     }
 
     @Test func refundReceiptRecoveryFailsClosedOnIncompleteConflictingAndDuplicateEvidence() async throws {

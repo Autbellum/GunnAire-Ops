@@ -1787,7 +1787,7 @@ GunnAire
                 try await MainActor.run {
                     try result.validateWorkspace()
                     syncingPaymentID = nil
-                    actionMessage = "Payment synced to QuickBooks: \(result.value)."
+                    actionMessage = result.accountingReviewMessage ?? "Payment synced to QuickBooks: \(result.value)."
                 }
             } catch {
                 await MainActor.run {
@@ -1811,7 +1811,7 @@ GunnAire
                 try await MainActor.run {
                     try result.validateWorkspace()
                     syncingPaymentID = nil
-                    actionMessage = "QuickBooks accounting follow-up completed."
+                    actionMessage = result.accountingReviewMessage ?? "QuickBooks accounting follow-up completed."
                 }
             } catch {
                 await MainActor.run {
