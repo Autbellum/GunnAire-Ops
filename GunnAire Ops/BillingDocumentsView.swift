@@ -80,6 +80,7 @@ struct BillingDocumentsView: View {
     @State private var selectedItemPriceAdjustments: [UUID: AuthorizedLinePriceAdjustment] = [:]
     @State private var selectedDocumentDiscount: AuthorizedDocumentDiscount?
     @State private var selectedTaxAddresses: BillingTaxAddressContext?
+    @State private var taxAddressReview: BillingTaxAddressReviewRequest?
     @State private var selectedItemEquipmentIDs: [UUID: UUID] = [:]
     @State private var selectedItemAssemblySnapshots: [UUID: CatalogLineAssemblySnapshot] = [:]
     @State private var selectedItemizedAssemblyMemberships: [UUID: Set<UUID>] = [:]
@@ -1871,7 +1872,22 @@ GunnAire
 
     @ViewBuilder
     var body: some View {
-        billingBody
+        AnyView(billingBody)
+        .sheet(item: $taxAddressReview) { request in
+            BillingTaxAddressReview(scope: request.scope, initial: request.initial) { value in
+                guard taxAddressReview?.id == request.id,
+                      value.scope == selectedTaxAddressScope,
+                      selectedHasTaxableLines, !isCreatingDocument else {
+                    throw BillingTaxAddressError.changed
+                }
+                try value.validate(for: request.scope)
+                selectedTaxAddresses = value
+            }
+            .id(request.id)
+        }
+        .onChange(of: selectedTaxAddressScope) { _, scope in
+            if let request = taxAddressReview, scope != request.scope { taxAddressReview = nil }
+        }
         .interactiveDismissDisabled(startsNewDocument && (hasNewDocumentEdits || isCreatingDocument))
         .alert("Discard unsaved document?", isPresented: $showingNewDocumentDismissConfirmation) {
             Button("Discard Unsaved Document", role: .destructive) { dismiss() }
@@ -4260,7 +4276,9 @@ GunnAire
     @ViewBuilder
     private var documentSubtotalSummary: some View {
         if selectedHasTaxableLines, let scope = selectedTaxAddressScope {
-            BillingTaxAddressReviewControl(scope: scope, addresses: $selectedTaxAddresses)
+            BillingTaxAddressReviewControl(scope: scope, addresses: selectedTaxAddresses) {
+                taxAddressReview = .init(scope: scope, initial: selectedTaxAddresses)
+            }
                 .disabled(isCreatingDocument)
         }
         if selectedDocumentDiscount != nil {

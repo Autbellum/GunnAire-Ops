@@ -119,10 +119,25 @@ import SwiftData
                     Picker("Record type", selection: $kind) { ForEach(QuickBooksLinkKind.allCases) { value in Text(value.plural).tag(value) } }
                     TextField("Search saved names", text: $search).accessibilityIdentifier("ExistingQBOLinkSearch")
                     ForEach(Array(visible.prefix(limit))) { value in
-                        Toggle(value.localName, isOn: Binding(get: { selected.contains(value.id) }, set: { on in
-                            if on { selected.insert(value.id) } else { selected.remove(value.id) }
-                        }))
+                        Button {
+                            if selected.contains(value.id) { selected.remove(value.id) }
+                            else { selected.insert(value.id) }
+                        } label: {
+                            HStack {
+                                Text(value.localName).foregroundStyle(.primary)
+                                Spacer()
+                                Image(systemName: selected.contains(value.id) ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(selected.contains(value.id) ? Color.accentColor : Color.secondary)
+                                    .accessibilityHidden(true)
+                            }
+                            .frame(minHeight: 44)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
                         .disabled(busy || (!selected.contains(value.id) && selected.count >= 25))
+                        .accessibilityLabel(value.localName)
+                        .accessibilityValue(selected.contains(value.id) ? "Selected" : "Not selected")
+                        .accessibilityAddTraits(selected.contains(value.id) ? .isSelected : [])
                         .accessibilityIdentifier("ExistingQBOSelect-" + value.id)
                     }
                     if visible.count > limit { Button("Show more records") { limit += 50 } }

@@ -1,6 +1,18 @@
 # Native GitHub Actions checks
 
-## Latest completed hosted result: `6a0a38e`
+## Latest completed hosted result: `d804dd6`
+
+[Native run 34180882997](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34180882997)
+passes both iPad and Mac. [Backend run 34180882993](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34180882993)
+passes Python 3.13 and 3.14. These exact-head results precede the current local
+interaction candidate and do not prove that candidate's hosted acceptance.
+
+`IPAD_RECORD_SELECTION_AND_ADDRESS_EDITING.md` records the retained failure
+artifacts, direct keyboard-focus reproduction, stable billing-workspace sheet
+ownership, full-row selection, and exact-source validation of the new candidate.
+No existing workflow selector or failure gate is removed.
+
+## Earlier failed hosted result: `6a0a38e`
 
 [Native run 34178309515](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34178309515)
 is terminal, not still running: Mac succeeds; iPad fails.
@@ -16,8 +28,9 @@ Its log reports all 1,271 native logic tests passing, followed by two UI failure
 
 These are not the earlier recording's partial `12 Main` snapshot. The log does
 not prove whether input missed its target, presentation/focus was incomplete,
-or app state reset. Exact recordings and a discriminating reproduction are still
-required; no timeout/assertion/selector was weakened and no run was restarted.
+or app state reset. The subsequent exact recordings and discriminating focus
+reproduction are now retained in `IPAD_RECORD_SELECTION_AND_ADDRESS_EDITING.md`;
+no timeout/assertion/selector was weakened and no hosted run was restarted.
 This failure predates the backend-only QBO capture checkpoint; native source is
 unchanged by that checkpoint.
 

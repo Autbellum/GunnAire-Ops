@@ -33,7 +33,7 @@ struct AppStoreScreenshotPrivacyPolicy: Equatable, Sendable {
 /// Registers the numbered workspace shortcuts with UIKit on native iPadOS.
 /// SwiftUI scene commands render correctly in the Mac menu bar, but they are
 /// not consistently inserted into the responder chain for an iPad split view.
-private struct GunnAireIPadKeyCommandBridge: UIViewRepresentable {
+struct GunnAireIPadKeyCommandBridge: UIViewRepresentable {
     let onRoute: (GunnAireAppRoute) -> Void
 
     func makeUIView(context: Context) -> KeyCommandResponderView {
@@ -47,8 +47,9 @@ private struct GunnAireIPadKeyCommandBridge: UIViewRepresentable {
         uiView.activateIfAvailable()
     }
 
-    final class KeyCommandResponderView: UIView {
+    class KeyCommandResponderView: UIView {
         var onRoute: ((GunnAireAppRoute) -> Void)?
+        private var activationRetryScheduled = false
 
         override var canBecomeFirstResponder: Bool { true }
 
@@ -71,21 +72,37 @@ private struct GunnAireIPadKeyCommandBridge: UIViewRepresentable {
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
-            guard window != nil, !isFirstResponder else { return }
-            // The command host can become visible before SwiftUI's next update
-            // pass. Claim the responder synchronously so an attached keyboard
-            // works as soon as the workspace is visible, with the async retry
-            // retained for UIKit transitions that temporarily reject it.
-            if !becomeFirstResponder() {
-                activateIfAvailable()
-            }
+            activateIfAvailable()
         }
 
         func activateIfAvailable() {
-            guard window != nil, !isFirstResponder else { return }
+            // SwiftUI updates this bridge while a field is being edited, too.
+            // A shortcut fallback must never evict that field's responder or
+            // intercept navigation while a sheet owns the interaction.
+            guard mayActivate, !becomeFirstResponder(), !activationRetryScheduled else { return }
+            activationRetryScheduled = true
             DispatchQueue.main.async { [weak self] in
-                _ = self?.becomeFirstResponder()
+                guard let self else { return }
+                self.activationRetryScheduled = false
+                // Focus/window/presentation may have changed since scheduling.
+                guard self.mayActivate else { return }
+                _ = self.becomeFirstResponder()
             }
+        }
+
+        private var mayActivate: Bool {
+            guard let window, window.isKeyWindow, !isFirstResponder,
+                  !containsFirstResponder(window) else { return false }
+            return !hasPresentedController(window.rootViewController)
+        }
+
+        private func containsFirstResponder(_ view: UIView) -> Bool {
+            view.isFirstResponder || view.subviews.contains(where: containsFirstResponder)
+        }
+
+        private func hasPresentedController(_ controller: UIViewController?) -> Bool {
+            guard let controller else { return false }
+            return controller.presentedViewController != nil || controller.children.contains(where: hasPresentedController)
         }
 
         @objc private func handleKeyCommand(_ command: UIKeyCommand) {

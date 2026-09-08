@@ -1844,10 +1844,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 3))
         app.typeKey("7", modifierFlags: .command)
         let reports = app.navigationBars["Business Reports"]
-        if !reports.waitForExistence(timeout: 2) {
-            app.typeKey("7", modifierFlags: .command)
-        }
-        XCTAssertTrue(reports.waitForExistence(timeout: 3))
+        XCTAssertTrue(reports.waitForExistence(timeout: 5))
     }
 
     @MainActor
@@ -4074,10 +4071,15 @@ final class GunnAire_OpsUITests: XCTestCase {
             )
             XCTAssertEqual(field.value as? String, text)
         }
-        func enter(_ identifier: String, _ text: String) {
+        func enter(_ identifier: String, _ text: String, tapToFocus: Bool = true) {
             let field = app.textFields[identifier]
             XCTAssertTrue(field.waitForExistence(timeout: 4))
-            field.tap()
+            if tapToFocus {
+                XCTAssertTrue(field.isHittable)
+                field.tap()
+            }
+            XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 4),
+                "Address editing must acquire keyboard focus before typing; do not replay lost input.")
             field.typeText(text)
             requireValue(identifier, text)
         }
@@ -4105,11 +4107,21 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Tax addresses"].waitForExistence(timeout: 4))
         requireValue("BillingTaxServiceStreet", "Street address")
         enter("BillingTaxServiceStreet", "12 Main Street")
-        enter("BillingTaxServiceCity", "Raleigh")
-        enter("BillingTaxServiceState", "NC")
-        enter("BillingTaxServiceZIP", "27601")
+        // Return advances through the real editor, without separately tapping
+        // or injecting state into each next field.
+        app.textFields["BillingTaxServiceStreet"].typeText("\n")
+        enter("BillingTaxServiceCity", "Raleigh", tapToFocus: false)
+        app.textFields["BillingTaxServiceCity"].typeText("\n")
+        enter("BillingTaxServiceState", "NC", tapToFocus: false)
+        app.textFields["BillingTaxServiceState"].typeText("\n")
+        enter("BillingTaxServiceZIP", "27601", tapToFocus: false)
+        let done = app.buttons["BillingTaxKeyboardDone"]
+        XCTAssertTrue(done.waitForExistence(timeout: 4)); done.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 4))
         let same = app.switches["BillingTaxSameLocation"]
-        let form = app.collectionViews.containing(.textField, identifier: "BillingTaxServiceStreet").firstMatch
+        // A lazy form stops exposing offscreen fields after scrolling. Locate
+        // the form itself so its identity does not depend on a visible child.
+        let form = app.collectionViews["BillingTaxAddressForm"]
         XCTAssertTrue(form.exists)
         for _ in 0..<6 where !same.isHittable || !form.frame.insetBy(dx: 0, dy: 24).contains(same.frame) { form.swipeUp() }
         XCTAssertTrue(same.isHittable)
@@ -4323,12 +4335,28 @@ final class GunnAire_OpsUITests: XCTestCase {
         for _ in 0..<8 where !link.isHittable { app.swipeUp() }
         XCTAssertTrue(link.waitForExistence(timeout: 4)); link.tap()
         XCTAssertTrue(app.navigationBars["Existing QuickBooks links"].waitForExistence(timeout: 4))
-        let choice = app.switches.matching(NSPredicate(format: "identifier BEGINSWITH %@", "ExistingQBOSelect-Customer:")).firstMatch
+        let choice = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "ExistingQBOSelect-Customer:")).firstMatch
         for _ in 0..<8 where !choice.isHittable { app.swipeUp() }
         XCTAssertTrue(choice.waitForExistence(timeout: 4))
-        choice.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
-        XCTAssertEqual(choice.value as? String, "1")
         let preview = app.buttons["ExistingQBOLinkPreview"]
+        func requireSelection(_ selected: Bool) {
+            let changed = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "value == %@", selected ? "Selected" : "Not selected"), object: choice)
+            XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 4), .completed)
+            XCTAssertEqual(choice.isSelected, selected)
+            XCTAssertEqual(preview.label, "Review selected (\(selected ? 1 : 0))")
+            XCTAssertEqual(preview.isEnabled, selected)
+        }
+        requireSelection(false)
+        XCTAssertTrue(choice.isEnabled)
+        // Selecting the record is a whole-row action, not a switch at a
+        // proportional screen coordinate. Each action must change exactly once.
+        choice.tap(); requireSelection(true)
+        choice.tap(); requireSelection(false)
+        choice.tap(); requireSelection(true)
+        let selectionEvidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        selectionEvidence.name = "Selected existing QuickBooks records"
+        selectionEvidence.lifetime = .keepAlways; add(selectionEvidence)
         for _ in 0..<6 where !preview.isHittable { app.swipeUp() }
         XCTAssertTrue(preview.isEnabled); preview.tap()
         let confirm = app.buttons["ExistingQBOLinkConfirm"]

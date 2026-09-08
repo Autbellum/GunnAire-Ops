@@ -1,3 +1,18 @@
+iPad interaction checkpoint, 2026-09-07: the global shortcut fallback no longer
+evicts text-field or multiline-editor focus, including in a delayed activation.
+The tax-address sheet is owned by the billing workspace, not a lazy scrolling
+row; labeled fields support Next/Done while Cancel, scope validation, prices and
+saved-address reopening remain intact. Existing-QBO-record selection uses full
+rows and visible/accessibility selection states. Final validation passes 1,277
+Mac logic tests, three full iPad logic runs (3,831 executions), three complete
+address workflows, and an unsigned universal Mac Release build. Eight adjacent
+UI journeys pass before the final accessibility-only form-identifier adjustment.
+`IPAD_RECORD_SELECTION_AND_ADDRESS_EDITING.md` records all retained intermediate
+failures, exact scope, source hashes and inspected final UI. Published preceding
+head `d804dd6` passes both hosted Native and Backend workflows; new-candidate
+hosted and physical-device qualification are separate. No merge, deployment,
+production data/schema/signing change, or full-goal completion is claimed.
+
 QBO server change-capture checkpoint, 2026-09-07: candidate `2026.09.07.33`
 implements the thirteen current native accounting collections' census/CDC
 transport, scoped encrypted observation history, late-event look-back, actual
