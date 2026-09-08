@@ -1,5 +1,17 @@
 # Native GitHub Actions checks
 
+## Shared field-payment handoff review coverage
+
+The candidate workflow selects **58** iPad UI journeys: all prior 54, plus the
+app-wide field prompt, shared financial verification without device QBO OAuth,
+offline/missing-number/open-attempt/paid states, and unpublished-invoice recovery.
+Two disjoint groups of 29 retain the complete logic target; Mac retains its full
+logic suite and unsigned universal Release. Existing assertions, read-only
+permissions, time limits and actual-execution verification remain intact.
+
+See [shared payment review](FIELD_PAYMENT_SHARED_REVIEW.md) for exact source and
+qualification. These new selectors are not yet published or hosted-qualified.
+
 ## Shared original-file recovery coverage
 
 The prepared shared-recovery workflow selects **54** iPad UI journeys, retaining

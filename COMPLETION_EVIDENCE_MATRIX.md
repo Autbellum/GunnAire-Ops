@@ -1,3 +1,30 @@
+Shared field-payment review qualification, 2026-09-08:
+FIELD_PAYMENT_SHARED_REVIEW.md records candidate backend 2026.09.08.39 and its
+native Contactless Payment cutover: actual QBO invoice numbers, original shared
+customer/invoice/job mappings, approved staff and current collection assignment,
+connection-version pins, targeted linked-payment reads and coherent rechecks.
+Accounting entries remain distinct from bank settlement. The old all-payment
+download and broad local import are removed from this guide; no collection,
+refund, assignment completion or local receipt application is inferred.
+The final source passes 636 Backend tests (26 new), 55 Tools tests, 1,478 logic
+cases on Mac and iPad, and all nine selected iPad UI journeys (1,487 cases).
+Actual-execution trees prove every requested selector. All ten final screenshots
+are visually reviewed, with simple Mail, no raw payloads and no account-email
+footer. The initial offscreen-button assertion failure is retained; the final
+journey scrolls back, presses Verify and confirms refresh. Unsigned universal Mac
+Release and both binary architectures pass. The candidate workflow retains all
+54 preceding journeys and adds four, with two disjoint 29-journey groups and
+unchanged full-logic/Mac-Release/security gates.
+Published predecessor 13df95f has successful Backend and Mac checks; its two iPad
+jobs were live at the latest prepublication check. New exact-head hosted
+acceptance, production deployment, narrowly applied accounting receipts,
+cross-channel payment safety, bank settlement/returns, real approved Tap to Pay,
+signed physical Handoff/CloudKit convergence and the complete comparator/Google/
+QBO-item/vendor suite remain open. Original-project preflight confirms all 17
+scoped paths and 237 unrelated changed files with the original empty index.
+No merge, production deployment, financial mutation, customer email, signing or
+CloudKit schema change, or physical installation occurred in this checkpoint.
+
 Shared original-file recovery qualification, 2026-09-08:
 NATIVE_QBO_DOCUMENT_RECOVERY.md now records verified-business shared metadata
 paging, explicit hash-verified download into encrypted device storage, immutable

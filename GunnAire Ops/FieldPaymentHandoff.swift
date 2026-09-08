@@ -100,7 +100,7 @@ final class FieldPaymentHandoff: ObservableObject {
 
     @discardableResult
     func begin(invoiceID: UUID, amount: Double) -> Bool {
-        guard canStartFromCurrentDevice, amount > 0 else { return false }
+        guard canStartFromCurrentDevice, amount.isFinite, amount > 0 else { return false }
 
         end()
         let activity = Self.makeActivity(invoiceID: invoiceID)

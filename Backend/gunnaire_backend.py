@@ -32,12 +32,13 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 
 try:
-    from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications, billing_native, qbo_link_adoption
+    from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications, billing_native, qbo_link_adoption, field_payment_review
     from Backend.billing_provider import BillingQBOProvider
     from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads
     from Backend.qbo_document_provider import DocumentQBOProvider
 except ModuleNotFoundError:
     import payment_attempts  # Direct launch from the Backend directory.
+    import field_payment_review
     import catalog_publications
     import customer_publications
     import billing_publications
@@ -52,7 +53,7 @@ except ModuleNotFoundError:
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.08.38"
+SERVICE_VERSION = "2026.09.08.39"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -1030,7 +1031,7 @@ def qbo_authorized_bearer(context, audit_actor="system:payment-verification"):
         return result["accessToken"]
 
 
-def read_payment_provider_record(context, category, record_id, *, kind="charge", rail="card", source_id=None):
+def read_payment_provider_record(context, category, record_id, *, kind="charge", rail="card", source_id=None, authorize=None):
     """Read from a fixed Intuit resource, using only the exact saved grant.
 
     This boundary does not send financial mutations. Its refresh is serialized
@@ -1047,7 +1048,11 @@ def read_payment_provider_record(context, category, record_id, *, kind="charge",
     if environment not in ("sandbox", "production") or environment != QBO_ENVIRONMENT:
         raise payment_attempts.AttemptError("provider_changed", "The original QuickBooks environment is not available.")
     expected_grant = context["grant_fingerprint"]
+    if authorize is not None:
+        authorize()
     bearer = qbo_authorized_bearer(context)
+    if authorize is not None:
+        authorize()
     if category in ("invoice", "accounting"):
         entity = "invoice" if category == "invoice" else ("payment" if kind == "charge" else "refundreceipt")
         base = "https://sandbox-quickbooks.api.intuit.com" if environment == "sandbox" else "https://quickbooks.api.intuit.com"
@@ -1065,7 +1070,11 @@ def read_payment_provider_record(context, category, record_id, *, kind="charge",
     else:
         raise payment_attempts.AttemptError("invalid_resource", "Unsupported provider verification resource.", 400)
     request = urllib.request.Request(url, method="GET", headers={"Authorization": "Bearer " + bearer, "Accept": "application/json"})
+    if authorize is not None:
+        authorize()
     status, payload = qbo_payment_read_transport(request)
+    if authorize is not None:
+        authorize()
     if not 200 <= status < 300:
         raise payment_attempts.AttemptError("provider_unavailable", "The provider record could not be verified.", 502)
     with db() as connection:
@@ -3562,6 +3571,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/payment-attempts" or parsed.path.startswith("/api/payment-attempts/"):
             self.handle_payment_attempt(parsed, method="GET")
+            return
+        if parsed.path in ("/api/field-payment-review", "/api/field-payment-review/context"):
+            self.handle_field_payment_review(parsed)
             return
         if parsed.path == "/api/catalog-publications" or parsed.path.startswith("/api/catalog-publications/"):
             self.handle_catalog_publication(parsed, method="GET")
@@ -6279,6 +6291,24 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                              "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
 
 
+    def handle_field_payment_review(self, parsed):
+        if not self.require_application_session():
+            return
+        try:
+            query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, max_num_fields=10)
+            if any(len(value) != 1 for value in query.values()):
+                raise ValueError()
+            service = field_payment_review.FieldPaymentReview(db, read_payment_provider_record, record_audit_event)
+            action = service.context if parsed.path.endswith("/context") else service.review
+            result = action(self._application_session_id, {key: value[0] for key, value in query.items()})
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError):
+            self.write_json({"error": "Choose one original business invoice.", "code": "invalid_query"}, status=400)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Payment review is unavailable. No payment was sent.", "code": "review_unavailable"}, status=503)
+
     def handle_payment_attempt(self, parsed, *, method):
         if not self.require_application_session():
             return
@@ -6727,6 +6757,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         message = re.sub(r"/api/google/mail/[^\s\"]*", "/api/google/mail/[redacted]", message)
         message = re.sub(r"/api/qbo/change-capture(?:\?[^\s\"]*)?", "/api/qbo/change-capture", message)
         message = re.sub(r"/api/qbo-document-uploads(?:[/?][^\s\"]*)?", "/api/qbo-document-uploads/[redacted]", message)
+        message = re.sub(r"/api/field-payment-review(?:/context)?(?:\?[^\s\"]*)?", "/api/field-payment-review", message)
         print(f"{timestamp} {self.address_string()} {message}")
 
 

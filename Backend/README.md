@@ -2,6 +2,14 @@
 
 This is a small backend for sharing app users, roles, uploaded field receipts, and field payment records across iPads.
 
+Candidate **2026.09.08.39** adds shared, read-only field-payment review: actual
+invoice numbers, exact linked-payment observations, current staff/assignment and
+original mapping checks, a pinned connection, and explicit collection holds.
+It sends no payment and makes no accounting or CloudKit schema change. See
+[shared field-payment review](../FIELD_PAYMENT_SHARED_REVIEW.md) for the contract,
+native handoff, qualification, rollback boundaries and remaining payment work.
+It is not deployed.
+
 Candidate **2026.09.08.37** adds shared milestone-invoice identity, an additive
 index of encrypted original proposals, concurrent dispatch exclusion, immutable
 issued allocations and read-only original-invoice lookup. The native app derives

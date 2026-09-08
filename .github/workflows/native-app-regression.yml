@@ -106,6 +106,10 @@ jobs:
               testOriginalFileRecoveryRequiresVerifiedBusinessAccess \
               testSharedOriginalFileRestoresAndExportsOfflineAfterRelaunchWithoutResending \
               testSharedOriginalHistoryOfflineFailureReturnsToRecoveryWithoutAnEmptySuccess \
+              testFieldCollectionPromptOpensAuthorizedInvoiceFromAnyWorkspace \
+              testFinancialContactlessGuideKeepsVerificationBesideTheHandoff \
+              testSharedContactlessReviewHandlesOfflineMissingNumberAndOpenPayment \
+              testContactlessCollectionExplainsQuickBooksPublicationAndRecoversToVerifiedEntry \
               testManagementBillingComposerCancelsWithoutCreatingOrSending \
               testManagementBillingComposerSavesOriginalInvoiceAndEstimateOffline \
               testInvoiceComposerBrowsesCategoriesEditsRepeatedBundleMembersAndSavesOriginal \

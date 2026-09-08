@@ -1672,6 +1672,36 @@ enum GunnAireBackendService {
         }
     }
 
+    static func fieldPaymentReviewRequest(path: String) async throws -> Data {
+        guard let endpoint = URLComponents(string: path), endpoint.scheme == nil, endpoint.host == nil,
+              ["/api/field-payment-review", "/api/field-payment-review/context"].contains(endpoint.path),
+              endpoint.fragment == nil, path.utf8.count < 4096,
+              let identity = CompanyWorkspaceSession.current else { throw FieldPaymentReviewError.access }
+        var request = try makeRequest(path: path, method: "GET", body: nil)
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        guard bearer.hasPrefix("Bearer "), CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == identity.tokenFingerprint,
+              request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil else { throw FieldPaymentReviewError.access }
+        request.timeoutInterval = 75; request.cachePolicy = .reloadIgnoringLocalCacheData
+        let controller = CompanyWorkspaceAccessController.shared, generation = controller.generation
+        func check() throws {
+            try Task.checkCancellation()
+            guard CompanyWorkspaceSession.current == identity, controller.generation == generation,
+                  controller.authorizedContainer != nil else { throw FieldPaymentReviewError.access }
+        }
+        try check()
+        do {
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: FieldPaymentReviewClient.maximumBytes)
+            try check()
+            return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let status) = error {
+                throw FieldPaymentReviewError.safe(GunnAireBackendError.server(statusCode: status, message: "Payment review unavailable."))
+            }
+            throw FieldPaymentReviewError.safe(error)
+        }
+    }
+
     private static func send(
         path: String,
         method: String,
