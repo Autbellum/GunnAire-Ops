@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import io
 import json
 import sqlite3
@@ -297,6 +298,72 @@ class ChangeCaptureServiceTests(unittest.TestCase):
             self.assertNotIn(key, json.dumps(result))
         self.assertIn("Private fixture", backend.decrypt_catalog_payload(rows[0]["payload_ciphertext"]))
 
+    def test_native_contract_preserves_canonical_unicode_numeric_bytes_and_count(self):
+        self.census = [record(when=self.now - timedelta(days=1), Name="Climatisation été 🔧", UnitPrice=1e-7)]
+        self.changes = []
+        result = self.run_capture()
+        version = result["versions"][0]
+        self.assertEqual(version["recordJSON"], capture.canonical(self.census[0]))
+        self.assertEqual(version["payloadSHA256"], hashlib.sha256(version["recordJSON"].encode()).hexdigest())
+        self.assertEqual(json.loads(version["recordJSON"]), version["record"])
+        self.assertEqual(result["afterSequence"], 0)
+        self.assertEqual(result["versionCount"], 1)
+        with backend.db() as connection:
+            grant = connection.execute("SELECT * FROM qbo_connections").fetchone()
+            self.assertEqual(result["connectionRevision"], capture.grant_fingerprint(grant))
+
+    def test_native_pages_and_later_collections_reject_a_replaced_grant_before_reading(self):
+        first = self.run_capture()
+        original = self.payload(connectionRevision=first["connectionRevision"])
+        with backend.db() as connection:
+            connection.execute("UPDATE qbo_connections SET authorized_at='replacement-grant'")
+        before = list(self.calls)
+        self.assert_code("grant_changed", lambda: self.service.read(self.admin, original))
+        self.assert_code("grant_changed", lambda: self.service.capture(self.admin, {**original, "entityType": "Invoice"}))
+        self.assertEqual(self.calls, before)
+        self.assertEqual(len(self.rows("qbo_capture_batches")), 1)
+
+    def test_original_native_page_revision_cannot_adopt_newer_capture_metadata(self):
+        self.changes = []
+        first = self.run_capture()
+        original = self.payload(connectionRevision=first["connectionRevision"])
+        self.run_capture()
+        self.assert_code("capture_superseded", lambda: self.service.read(self.admin, original,
+            through=first["throughSequence"], expected_revision=first["revision"]))
+        for revision in (-1, True, "1"):
+            self.assert_code("invalid_cursor", lambda: self.service.read(self.admin, original, expected_revision=revision))
+        for revision in ("", "A" * 64, "a" * 63, None, 1):
+            self.assert_code("invalid_request", lambda: self.run_capture(connectionRevision=revision))
+
+    def test_final_native_verification_rechecks_metadata_outside_the_read_transaction(self):
+        self.changes = []
+        first = self.run_capture()
+        with backend.db() as connection:
+            connection.execute("PRAGMA journal_mode=WAL")
+        original = self.service.decrypt
+        def change_during_decryption(ciphertext):
+            with backend.db() as connection:
+                connection.execute("UPDATE qbo_capture_cursors SET issue_code='history_gap'")
+            return original(ciphertext)
+        self.service.decrypt = change_during_decryption
+        self.assert_code("capture_superseded", lambda: self.service.read(self.admin,
+            self.payload(connectionRevision=first["connectionRevision"]), expected_revision=first["revision"]))
+
+    def test_native_page_budget_includes_both_objects_and_escaped_canonical_strings(self):
+        self.census = [record(str(index), when=self.now - timedelta(days=1), Name=("\\\nété" * 500))
+                       for index in range(20)]
+        self.changes = []
+        with mock.patch.object(capture, "MAX_RESPONSE_BYTES", 131072):
+            first = self.run_capture()
+            self.assertLessEqual(len(capture.canonical(first).encode()), 131072)
+            self.assertEqual(first["versionCount"], 20)
+            self.assertIsNotNone(first["nextAfterSequence"])
+            second = self.service.read(self.admin, self.payload(connectionRevision=first["connectionRevision"]),
+                after=first["nextAfterSequence"], through=first["throughSequence"], expected_revision=first["revision"])
+            self.assertEqual(second["afterSequence"], first["nextAfterSequence"])
+            self.assertEqual(second["versionCount"], 20)
+            self.assertLessEqual(len(capture.canonical(second).encode()), 131072)
+
     def insert_event(self, identifier, *, when=None, entity="item", environment="sandbox", company=None, legacy=False, acknowledged=False):
         with backend.db() as connection:
             connection.execute("""INSERT INTO qbo_webhook_events
@@ -581,10 +648,20 @@ class ChangeCaptureServiceTests(unittest.TestCase):
                 headers = {"Authorization": "Bearer " + self.tokens["Admin"], "Content-Type": "application/json"}
                 request = urllib.request.Request(url, data=json.dumps(self.payload()).encode(), headers=headers)
                 with urllib.request.urlopen(request, timeout=5) as response:
-                    self.assertEqual(json.load(response)["applicationState"], "not_applied")
+                    first = json.load(response)
+                    self.assertEqual(first["applicationState"], "not_applied")
                 request = urllib.request.Request(url + "?" + urllib.parse.urlencode(self.payload()), headers=headers)
                 with urllib.request.urlopen(request, timeout=5) as response:
                     self.assertEqual(len(json.load(response)["versions"]), 2)
+                query = {**self.payload(), "connectionRevision": first["connectionRevision"],
+                         "captureRevision": first["revision"], "afterSequence": first["throughSequence"],
+                         "throughSequence": first["throughSequence"]}
+                with urllib.request.urlopen(urllib.request.Request(url + "?" + urllib.parse.urlencode(query), headers=headers), timeout=5) as response:
+                    self.assertEqual(json.load(response)["versions"], [])
+                for key, value in (("captureRevision", -1), ("captureRevision", "01"), ("connectionRevision", "private")):
+                    with self.assertRaises(urllib.error.HTTPError) as caught:
+                        urllib.request.urlopen(urllib.request.Request(url + "?" + urllib.parse.urlencode({**query, key: value}), headers=headers), timeout=5)
+                    self.assertEqual(caught.exception.code, 400)
                 for body in (b'{"companyID":"one","companyID":"two"}', b'{}', json.dumps({**self.payload(), "url": "https://example.invalid"}).encode()):
                     with self.assertRaises(urllib.error.HTTPError) as caught:
                         urllib.request.urlopen(urllib.request.Request(url, data=body, headers=headers), timeout=5)

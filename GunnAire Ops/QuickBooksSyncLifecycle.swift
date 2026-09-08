@@ -28,7 +28,8 @@ enum QuickBooksSyncAccessPolicy {
 final class QuickBooksSyncLifecycle {
     private(set) var activeID: UUID?
 
-    func begin(api: QuickBooksDataAPI, validateAccess: @escaping () throws -> Void) throws -> QuickBooksSyncRun {
+    func begin(api: QuickBooksDataAPI, sharedHistoryRequest: QuickBooksChangeHistoryClient.Request? = nil,
+               validateAccess: @escaping () throws -> Void) throws -> QuickBooksSyncRun {
         try validateAccess()
         let id = UUID()
         let workflow = try api.captureWorkspaceWorkflow { [weak self] in
@@ -36,9 +37,16 @@ final class QuickBooksSyncLifecycle {
             do { try validateAccess(); return true } catch { return false }
         }
         activeID = id
-        return QuickBooksSyncRun(id: id, workflow: workflow) { [weak self] in
+        let run = QuickBooksSyncRun(id: id, workflow: workflow) { [weak self] in
             guard self?.activeID == id else { throw CancellationError() }
             try validateAccess()
+        }
+        do {
+            if let sharedHistoryRequest { try run.configureSharedHistory(request: sharedHistoryRequest) }
+            return run
+        } catch {
+            if activeID == id { activeID = nil }
+            throw error
         }
     }
 
@@ -59,6 +67,7 @@ final class QuickBooksSyncRun {
     let workflow: QuickBooksDataAPI.CapturedWorkspaceWorkflow
     private let validateAccess: () throws -> Void
     private(set) var successfulResourceIDs: Set<String> = []
+    private(set) var sharedHistory: QuickBooksChangeHistoryClient?
 
     fileprivate init(id: UUID, workflow: QuickBooksDataAPI.CapturedWorkspaceWorkflow,
                      validateAccess: @escaping () throws -> Void) {
@@ -99,6 +108,34 @@ final class QuickBooksSyncRun {
             try self.check()
             return try result.get()
         }
+    }
+
+    fileprivate func configureSharedHistory(request: @escaping QuickBooksChangeHistoryClient.Request) throws {
+        guard let companyID = workflow.companyID, let realmID = workflow.realmID
+        else { throw QuickBooksChangeHistoryError.access }
+        sharedHistory = try QuickBooksChangeHistoryClient(
+            scope: .init(companyID: companyID, realmID: realmID, environment: workflow.environment.lowercased()),
+            check: { [weak self] in
+                guard let self else { throw CancellationError() }
+                try self.check()
+            }, request: request)
+    }
+
+    func receiveResource<T: Decodable>(id: String,
+        fetch: (@escaping (Result<[T], Error>) -> Void) -> Void) async throws -> [T] {
+        if let sharedHistory, let entity = QuickBooksChangeEntity(resourceID: id) {
+            return try await perform { try await sharedHistory.records(entity: entity, as: T.self) }
+        }
+        return try await receive(fetch)
+    }
+
+    func prepareLocalImport() async throws {
+        try check()
+        guard let sharedHistory else { return }
+        let entities = Set(QuickBooksChangeEntity.allCases)
+        guard entities.allSatisfy({ successfulResourceIDs.contains($0.resourceID) })
+        else { throw QuickBooksChangeHistoryError.incomplete }
+        try await perform { try await sharedHistory.revalidate(entities) }
     }
 
     func commit(_ body: () throws -> Void) throws {

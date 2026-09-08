@@ -109,12 +109,19 @@ def entity_name(value):
 
 
 def validated_scope(payload):
-    if not isinstance(payload, dict) or set(payload) != {"companyID", "realmID", "environment", "entityType"}:
+    required = {"companyID", "realmID", "environment", "entityType"}
+    if not isinstance(payload, dict) or not required <= set(payload) or set(payload) - required - {"connectionRevision"}:
         raise failure("invalid_request", "Choose the original business, accounting company and collection.", 400)
     if payload["environment"] not in ("sandbox", "production"):
         raise failure("invalid_request", "Choose the original QuickBooks environment.", 400)
-    return {"company_id": canonical_uuid(payload["companyID"]), "realm_id": reference(payload["realmID"]),
-            "environment": payload["environment"], "entity_type": entity_name(payload["entityType"])}
+    intent = {"company_id": canonical_uuid(payload["companyID"]), "realm_id": reference(payload["realmID"]),
+              "environment": payload["environment"], "entity_type": entity_name(payload["entityType"])}
+    if "connectionRevision" in payload:
+        revision = payload["connectionRevision"]
+        if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{64}", revision):
+            raise failure("invalid_request", "Use the original accounting connection revision.", 400)
+        intent["grant_fingerprint"] = revision
+    return intent
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -437,18 +444,24 @@ class ChangeCapture:
                         (error.code, stamp(self.now()), *scope(intent), intent["entity_type"], original["revision"]))
             raise
 
-    def read(self, session_id, payload, *, after=0, through=None, expected_grant=None):
+    def read(self, session_id, payload, *, after=0, through=None, expected_grant=None, expected_revision=None):
         intent = validated_scope(payload)
         if expected_grant is not None:
+            if "grant_fingerprint" in intent and intent["grant_fingerprint"] != expected_grant:
+                raise failure("grant_changed", "Use the original accounting connection.")
             intent["grant_fingerprint"] = expected_grant
         if type(after) is not int or after < 0 or (through is not None and (type(through) is not int or through < after)):
             raise failure("invalid_cursor", "Use the original saved history page cursor.", 400)
+        if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 0):
+            raise failure("invalid_cursor", "Use the original collection capture revision.", 400)
         with self.database() as connection:
             # One read transaction pins metadata and pages to the same snapshot.
             connection.execute("BEGIN")
             actor, grant = self.authorize(connection, session_id, intent)
             intent["grant_fingerprint"] = grant["grant_fingerprint"]
             cursor = self.cursor(connection, intent)
+            if expected_revision is not None and expected_revision != (cursor["revision"] if cursor else 0):
+                raise failure("capture_superseded", "A newer capture completed. Read its saved history before applying changes.")
             legacy_count = connection.execute("""SELECT COUNT(*) FROM qbo_webhook_events
                 WHERE realm_id=? AND REPLACE(entity_type,'-','')=? AND
                 (company_id IS NULL OR environment IS NULL)""",
@@ -460,6 +473,9 @@ class ChangeCapture:
                 through = maximum
             if through > maximum or after > through:
                 raise failure("invalid_cursor", "The saved history page is not available for this company.", 400)
+            version_count = connection.execute("""SELECT COUNT(*) FROM qbo_capture_versions
+                WHERE company_id=? AND realm_id=? AND environment=? AND entity_type=? AND sequence<=?""",
+                (*scope(intent), intent["entity_type"], through)).fetchone()[0]
             rows = connection.execute("""SELECT sequence,entity_id,provider_updated_at,provider_status,payload_hash FROM qbo_capture_versions
                 WHERE company_id=? AND realm_id=? AND environment=? AND entity_type=? AND sequence>? AND sequence<=?
                 ORDER BY sequence LIMIT 51""", (*scope(intent), intent["entity_type"], after, through)).fetchall()
@@ -479,23 +495,36 @@ class ChangeCapture:
                         raise ValueError()
                 except (ValueError, TypeError, RuntimeError, AttemptError):
                     raise failure("history_unavailable", "The original accounting history could not be verified. Restore it before applying changes.", 503) from None
-                record_bytes = len(raw.encode())
+                # Supply the original canonical bytes as well as the legacy
+                # object. A native client must not recreate Python's Unicode /
+                # numeric JSON spelling before verifying this digest. Account
+                # for both payloads and JSON-string escaping on the wire.
+                version = {"sequence": row["sequence"], "entityID": identifier, "updatedAt": updated,
+                           "status": status, "record": envelope["record"],
+                           "recordJSON": raw, "payloadSHA256": row["payload_hash"]}
+                record_bytes = len(canonical(version).encode())
                 if record_bytes > MAX_RESPONSE_BYTES - 65536:
                     raise failure("history_record_too_large", "This accounting record needs a file-based history transfer.", 503)
                 if response_bytes + record_bytes > MAX_RESPONSE_BYTES - 65536:
                     break
                 response_bytes += record_bytes
-                versions.append({"sequence": row["sequence"], "entityID": identifier, "updatedAt": updated,
-                                 "status": status, "record": envelope["record"]})
+                versions.append(version)
             self.authorize(connection, session_id, intent)
         # Recheck against fresh state too: a SQLite read snapshot cannot observe
         # revocation committed during decryption.
         with self.database() as connection:
             self.authorize(connection, session_id, intent)
-        return {**payload, "revision": cursor["revision"] if cursor else 0,
+            if expected_revision is not None:
+                current = self.cursor(connection, intent)
+                keys = ("revision", "captured_through", "baseline_at", "issue_code", "grant_fingerprint")
+                if any((current[key] if current else None) != (cursor[key] if cursor else None) for key in keys):
+                    raise failure("capture_superseded", "The saved history changed during verification. Refresh before applying it.")
+        return {**payload, "connectionRevision": intent["grant_fingerprint"],
+                "revision": cursor["revision"] if cursor else 0,
                 "capturedThrough": cursor["captured_through"] if cursor else None,
                 "baselineAt": cursor["baseline_at"] if cursor else None,
                 "issueCode": cursor["issue_code"] if cursor else None,
                 "legacyEventsNeedingReview": legacy_count,
                 "applicationState": "not_applied", "versions": versions,
+                "versionCount": version_count, "afterSequence": after,
                 "throughSequence": through, "nextAfterSequence": versions[-1]["sequence"] if len(rows) > len(versions) else None}

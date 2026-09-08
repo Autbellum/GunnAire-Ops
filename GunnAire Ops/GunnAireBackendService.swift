@@ -1590,6 +1590,43 @@ enum GunnAireBackendService {
         }
     }
 
+    static func quickBooksChangeHistoryRequest(path: String, method: String, body: Data?) async throws -> Data {
+        guard let endpoint = URLComponents(string: path), endpoint.scheme == nil, endpoint.host == nil,
+              endpoint.path == "/api/qbo/change-capture", endpoint.fragment == nil,
+              (method == "GET" && body == nil) || (method == "POST" && endpoint.query == nil),
+              (body?.count ?? 0) <= 4096,
+              let identity = CompanyWorkspaceSession.current else { throw QuickBooksChangeHistoryError.access }
+        var request = try makeRequest(path: path, method: method, body: body)
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        guard bearer.hasPrefix("Bearer "), CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == identity.tokenFingerprint,
+              request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil
+        else { throw QuickBooksChangeHistoryError.access }
+        request.timeoutInterval = 100
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        let controller = CompanyWorkspaceAccessController.shared
+        let generation = controller.generation
+        func check() throws {
+            guard CompanyWorkspaceSession.current == identity, controller.generation == generation,
+                  controller.authorizedContainer != nil else { throw QuickBooksChangeHistoryError.access }
+        }
+        try check()
+        do {
+            // Reuse the existing bounded, ephemeral, no-redirect transfer.
+            // It stops at the byte boundary before allocating a large reply.
+            let (data, _) = try await GmailServerHTTPTransfer.data(
+                for: request, maximum: QuickBooksChangeHistoryClient.maximumPageBytes)
+            try check()
+            return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let code) = error {
+                throw GunnAireBackendError.server(statusCode: code, message: "Accounting history was not confirmed.")
+            }
+            if error is GmailServerHTTPError { throw QuickBooksChangeHistoryError.invalid }
+            throw error
+        }
+    }
+
     private static func send(
         path: String,
         method: String,

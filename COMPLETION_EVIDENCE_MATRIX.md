@@ -1,3 +1,26 @@
+Native QBO history checkpoint, 2026-09-08: the configured shared backend now
+supplies the existing Management refresh's thirteen accounting collections.
+Original company/realm/grant, capture revision, page counts, canonical digests
+and microsecond ordering are verified before records reach the existing import.
+Pending technician/admin item edits, stock metadata and sold prices remain
+protected. Missing financial amounts cannot become zero; incomplete histories,
+latest tombstones and conflicting versions do not produce a partial successful
+shared refresh. Management no longer clears all webhook alerts on generic
+refresh success. Per-model application receipts, lifecycle reconciliation and
+device-consumption/CloudKit conflict handling still need implementation.
+
+Frozen local acceptance passes 1,293 logic tests on both Mac and 13-inch M5
+iPad Simulator, plus four iPad UI journeys; the unsigned universal Mac Release
+and both architecture checks pass. Backend passes 493 tests; Tools passes 37.
+Native/Backend source copies match the original iCloud project, with unrelated
+work preserved. NATIVE_QBO_CHANGE_HISTORY.md records source hashes, exact
+evidence, the retained compiler failure, corrected concurrency warning, UI
+inspection and remaining scope. Preceding published head 29e124d passes both
+hosted Native and Backend workflows; this new candidate requires its own CI.
+No merge, deployment, live accounting change, schema promotion, signing change
+or physical installation occurred. The full-suite, all-QBO/Google, CloudKit,
+Handoff/Tap to Pay, vendor and distribution goal remains active and incomplete.
+
 iPad interaction checkpoint, 2026-09-07: the global shortcut fallback no longer
 evicts text-field or multiline-editor focus, including in a delayed activation.
 The tax-address sheet is owned by the billing workspace, not a lazy scrolling

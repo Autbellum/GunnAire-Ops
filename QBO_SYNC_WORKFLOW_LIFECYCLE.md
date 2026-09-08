@@ -1,5 +1,12 @@
 # QuickBooks sync workflow lifecycle
 
+Follow-up, September 8, 2026: [native history consumption](NATIVE_QBO_CHANGE_HISTORY.md)
+routes the configured shared backend's thirteen accounting collections through
+the captured run. Management no longer acknowledges all webhook IDs after a
+generic refresh. Individual application receipts and complete deletion/merge/
+void/payment reconciliation remain required; removing that unsafe acknowledgement
+does not establish them. The September 7 observations below are historical.
+
 Server capture follow-up, September 7, 2026: `QBO_SERVER_CHANGE_CAPTURE.md`
 records the implemented encrypted census/CDC journal, late-event recovery and
 merge/deletion identity retention. It has its own application-session/scoped

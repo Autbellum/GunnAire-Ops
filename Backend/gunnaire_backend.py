@@ -49,7 +49,7 @@ except ModuleNotFoundError:
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.07.33"
+SERVICE_VERSION = "2026.09.08.34"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -5874,10 +5874,13 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                     raise ValueError()
                 payload = {key: value[0] for key, value in query.items()}
                 after_raw, through_raw = payload.pop("afterSequence", "0"), payload.pop("throughSequence", None)
-                if not re.fullmatch(r"0|[1-9][0-9]{0,18}", after_raw) or (through_raw is not None and not re.fullmatch(r"0|[1-9][0-9]{0,18}", through_raw)):
+                revision_raw = payload.pop("captureRevision", None)
+                if any(value is not None and not re.fullmatch(r"0|[1-9][0-9]{0,18}", value)
+                       for value in (after_raw, through_raw, revision_raw)):
                     raise ValueError()
                 result = capture.read(self._application_session_id, payload, after=int(after_raw),
-                                      through=int(through_raw) if through_raw is not None else None)
+                                      through=int(through_raw) if through_raw is not None else None,
+                                      expected_revision=int(revision_raw) if revision_raw is not None else None)
             else:
                 raise ValueError()
             self.write_json(result)

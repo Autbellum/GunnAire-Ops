@@ -1,5 +1,12 @@
 # Server-owned QuickBooks change history
 
+Follow-up, September 8, 2026: [native history consumption](NATIVE_QBO_CHANGE_HISTORY.md)
+connects the existing Management refresh to these thirteen collections, adds
+grant/revision/count/canonical-byte page validation, and removes Management's
+generic all-ID acknowledgement. Durable application receipts and financial
+lifecycle reconciliation remain incomplete. The contract and evidence below
+describe the preceding server-only candidate; the follow-up records additions.
+
 September 7, 2026; backend candidate `2026.09.07.33`. This is an implementation
 checkpoint, not a deployed service or completed application acceptance.
 

@@ -2,6 +2,14 @@
 
 This is a small backend for sharing app users, roles, uploaded field receipts, and field payment records across iPads.
 
+Candidate **2026.09.08.34** adds the native change-history consumption contract:
+original-grant and capture-revision pins, exact history counts and canonical
+record bytes/digests with bounded wire pages. The existing Management refresh
+uses this contract and keeps webhook alerts pending until actual reconciliation.
+Read [native history consumption](../NATIVE_QBO_CHANGE_HISTORY.md) before rollout.
+This source checkpoint is not deployed and does not complete per-event
+application receipts, financial lifecycle handling or shared-device sync.
+
 Candidate **2026.09.07.33** adds company-scoped, read-only QuickBooks initial
 collection/CDC capture with encrypted version history, deletion/merge metadata,
 late-event recovery and fixed-upper-bound history pages. Final local acceptance

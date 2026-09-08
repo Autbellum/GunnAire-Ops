@@ -3327,7 +3327,14 @@ struct QuickBooksManagementView: View {
         let syncRun: QuickBooksSyncRun
         do {
             // Capture before the Task can be scheduled in a different session.
-            syncRun = try syncLifecycle.begin(api: quickBooksDataAPI) {
+            // Fixture runs use injected provider responses, never a live server.
+            var historyRequest: QuickBooksChangeHistoryClient.Request?
+            if GunnAireBackendService.isConfigured && !GunnAireCloudKit.usesTestDatabase {
+                historyRequest = { path, method, body in
+                    try await GunnAireBackendService.quickBooksChangeHistoryRequest(path: path, method: method, body: body)
+                }
+            }
+            syncRun = try syncLifecycle.begin(api: quickBooksDataAPI, sharedHistoryRequest: historyRequest) {
                 try QuickBooksSyncAccessPolicy.validate(context: context)
             }
         } catch {
@@ -3392,7 +3399,7 @@ struct QuickBooksManagementView: View {
         var failures: [String] = []
 
         @MainActor
-        func run<T>(
+        func run<T: Decodable>(
             id: String,
             required: Bool,
             fetch: (@escaping (Result<[T], Error>) -> Void) -> Void,
@@ -3406,9 +3413,12 @@ struct QuickBooksManagementView: View {
             updateSyncStatus(id: id, state: .syncing, detail: "Loading...", count: nil)
             let result: Result<[T], Error>
             do {
-                result = .success(try await syncRun.receive(fetch))
+                result = .success(try await syncRun.receiveResource(id: id, fetch: fetch))
             } catch {
                 try syncRun.check()
+                // Never fall back to a different source, import a partial
+                // shared ledger, or continue on a replacement server grant.
+                if syncRun.sharedHistory != nil, QuickBooksChangeEntity(resourceID: id) != nil { throw error }
                 result = .failure(error)
             }
             try syncRun.check()
@@ -5042,6 +5052,7 @@ struct QuickBooksManagementView: View {
         var completedFailures = failures
         let successfulResources = syncRun.successfulResourceIDs
         do {
+            try await syncRun.prepareLocalImport()
             try syncRun.commit {
                 try QuickBooksLocalSync.importSnapshot(
                     customers: QuickBooksSnapshotImportPolicy.records(customers, resource: "customers", successfulResourceIDs: successfulResources),
@@ -5070,7 +5081,7 @@ struct QuickBooksManagementView: View {
             }
             statusMessage = "QuickBooks data refreshed. Review any accounting or payment warnings below."
             if !webhookEventIDs.isEmpty {
-                try await acknowledgeQuickBooksWebhookEvents(webhookEventIDs, syncRun: syncRun)
+                webhookStatusMessage = "Change alerts are retained until each record is reconciled. Refreshing data does not clear them."
             }
         } else {
             statusMessage = "QuickBooks sync incomplete.\n" + completedFailures.joined(separator: "\n")
@@ -5100,23 +5111,6 @@ struct QuickBooksManagementView: View {
             try syncRun.check()
             webhookStatusMessage = "QuickBooks change alerts need attention in Shared Server Readiness."
             return []
-        }
-    }
-
-    @MainActor
-    private func acknowledgeQuickBooksWebhookEvents(_ eventIDs: [String], syncRun: QuickBooksSyncRun) async throws {
-        do {
-            try await syncRun.perform {
-                try await GunnAireBackendService.acknowledgeQuickBooksWebhookEvents(ids: eventIDs)
-            }
-            try syncRun.commit { quickBooksWebhookEvents.removeAll { eventIDs.contains($0.id) } }
-            webhookStatusMessage = quickBooksWebhookEvents.isEmpty
-                ? "Changes included in this sync were acknowledged."
-                : "New QuickBooks changes arrived during sync. Run sync again to include them."
-            _ = try await loadQuickBooksWebhookEvents(syncRun)
-        } catch {
-            try syncRun.check()
-            webhookStatusMessage = "QuickBooks data synced, but change alerts could not be acknowledged. Refresh and try again."
         }
     }
 

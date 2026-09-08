@@ -1,6 +1,19 @@
 # Native GitHub Actions checks
 
-## Latest completed hosted result: `d804dd6`
+## Latest completed hosted result: `29e124d`
+
+[Native run 34184842191](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34184842191)
+passes both iPad and Mac. [Backend run 34184842221](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34184842221)
+passes Python 3.13 and 3.14. The final exact-head status was verified September 8,
+2026. This qualifies the published iPad focus/address/selection checkpoint,
+not the later native QBO history changes or a production release.
+
+The new history tests belong to the existing complete logic target on both
+platforms; no workflow selector, assertion, or failure gate is removed.
+See [native change history](NATIVE_QBO_CHANGE_HISTORY.md) for separate local
+evidence and remaining reconciliation, shared-device and provider requirements.
+
+## Earlier completed hosted result: `d804dd6`
 
 [Native run 34180882997](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34180882997)
 passes both iPad and Mac. [Backend run 34180882993](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34180882993)
