@@ -1,3 +1,26 @@
+Original QuickBooks file recovery checkpoint, 2026-09-08:
+QBO_DOCUMENT_UPLOAD_RECOVERY.md records candidate backend 2026.09.08.38:
+encrypted retained original files, company/realm/grant ownership, operation
+aliases, single-dispatch claims, read-only recovery across reconnection and
+immutable optional job/customer/stage/document provenance validated against
+shared billing mappings. The initial route returned 404; original-job tests
+also failed before context support. Final frozen source passes 46 focused
+tests, 610 full backend tests on each of Python 3.9.6 and 3.12.14, 52 Tools
+tests, Python compilation, workflow lint and diff validation. No native or
+CloudKit schema source changed, and no new native qualification is claimed.
+The preceding published PR #18 head c9af5d7 has successful Backend and Mac
+checks, with its iPad job still running during verification; those hosted
+results do not qualify the new backend candidate. Six scoped paths match the
+original project, preserving its empty index and 226 unrelated changed files.
+Native receipt and
+automatic attachment cutover, encrypted local capture, original-context
+idempotent CloudKit application, legacy-queue quarantine, older-snapshot
+restore protection and real provider/signed-device acceptance remain open.
+The full top-ten-comparator business-suite, Google, QBO item, CloudKit and
+Handoff/Tap to Pay goal remains unproven and active. No live provider send,
+accounting write, customer email, deployment, signing/capability change,
+schema promotion, merge or physical installation occurred.
+
 Job document target and closeout checkpoint, 2026-09-08:
 JOB_DOCUMENT_TARGET_RECONCILIATION.md records saved-link precedence, exact
 customer/job/document identity, preserved historical file ownership, paired

@@ -34,7 +34,8 @@ from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 try:
     from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications, billing_native, qbo_link_adoption
     from Backend.billing_provider import BillingQBOProvider
-    from Backend import google_connections, google_mail, qbo_change_capture
+    from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads
+    from Backend.qbo_document_provider import DocumentQBOProvider
 except ModuleNotFoundError:
     import payment_attempts  # Direct launch from the Backend directory.
     import catalog_publications
@@ -46,10 +47,12 @@ except ModuleNotFoundError:
     import google_connections
     import google_mail
     import qbo_change_capture
+    import qbo_document_uploads
+    from qbo_document_provider import DocumentQBOProvider
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.08.37"
+SERVICE_VERSION = "2026.09.08.38"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -2498,6 +2501,7 @@ def initialize_database() -> None:
         google_connections.initialize_schema(connection)
         google_mail.initialize_schema(connection)
         qbo_change_capture.initialize_schema(connection)
+        qbo_document_uploads.initialize_schema(connection)
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS customer_communications (
@@ -3568,6 +3572,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/qbo-link-reviews" or parsed.path.startswith("/api/qbo-link-reviews/"):
             self.handle_qbo_link_review(parsed, method="GET")
             return
+        if parsed.path == "/api/qbo-document-uploads" or parsed.path.startswith("/api/qbo-document-uploads/"):
+            self.handle_qbo_document_upload(parsed, method="GET")
+            return
         if parsed.path == "/api/qbo/change-capture":
             self.handle_qbo_change_capture(parsed, method="GET")
             return
@@ -3781,6 +3788,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/qbo-link-reviews" or parsed.path.startswith("/api/qbo-link-reviews/"):
             self.handle_qbo_link_review(parsed, method="POST")
+            return
+        if parsed.path == "/api/qbo-document-uploads" or parsed.path.startswith("/api/qbo-document-uploads/"):
+            self.handle_qbo_document_upload(parsed, method="POST")
             return
         if parsed.path == "/api/qbo/change-capture":
             self.handle_qbo_change_capture(parsed, method="POST")
@@ -5860,6 +5870,49 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         record_audit_event(actor, "cancel", "field-payment", assignment_id)
         self.write_json({"assignment": field_payment_assignment_record(row)})
 
+    def handle_qbo_document_upload(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        service = qbo_document_uploads.DocumentUploads(
+            db, lambda context, authorize: DocumentQBOProvider(context, authorize, qbo_authorized_bearer),
+            encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
+        )
+        suffix = parsed.path.removeprefix("/api/qbo-document-uploads")
+        parts = suffix[1:].split("/") if suffix.startswith("/") else []
+        try:
+            if method == "GET" and not suffix:
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+                if any(len(value) != 1 for value in query.values()):
+                    raise ValueError()
+                result = service.lookup(self._application_session_id, {key: value[0] for key, value in query.items()})
+            elif method == "GET" and not parsed.query and (len(parts) == 1 or (len(parts) == 2 and parts[1] == "file")):
+                result = service.read(self._application_session_id, parts[0], include_file=len(parts) == 2)
+            elif method == "POST" and not parsed.query:
+                maximum = qbo_document_uploads.MAX_BODY_BYTES if not suffix else 4096
+                payload = qbo_change_capture.strict_json(self.read_limited_body(maximum).decode("utf-8"))
+                if not suffix:
+                    result = service.reserve(self._application_session_id, payload)
+                elif len(parts) == 2 and isinstance(payload, dict):
+                    if parts[1] in ("send", "cancel") and set(payload) == {"revision"}:
+                        action = service.send if parts[1] == "send" else service.cancel
+                        result = action(self._application_session_id, parts[0], payload["revision"])
+                    elif parts[1] == "recover" and not payload:
+                        result = service.recover(self._application_session_id, parts[0])
+                    else:
+                        raise ValueError()
+                else:
+                    raise ValueError()
+            else:
+                raise ValueError()
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeError, TypeError, OverflowError):
+            self.write_json({"error": "Invalid original-file upload request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "The original file upload could not be verified. Keep the saved operation for recovery.",
+                             "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+
     def handle_qbo_change_capture(self, parsed, *, method):
         if not self.require_application_session():
             return
@@ -6673,6 +6726,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         # Search terms and provider resource IDs can identify customer mail.
         message = re.sub(r"/api/google/mail/[^\s\"]*", "/api/google/mail/[redacted]", message)
         message = re.sub(r"/api/qbo/change-capture(?:\?[^\s\"]*)?", "/api/qbo/change-capture", message)
+        message = re.sub(r"/api/qbo-document-uploads(?:[/?][^\s\"]*)?", "/api/qbo-document-uploads/[redacted]", message)
         print(f"{timestamp} {self.address_string()} {message}")
 
 
