@@ -67,6 +67,9 @@ struct QuickBooksCatalogHistoryBatch {
     }
 
     func version(for record: QuickBooksItem) throws -> Version {
+        if record.ItemType == CatalogItemType.inventory.rawValue {
+            try QuickBooksCatalogDetails(record).validateInventory()
+        }
         guard let version = versions[record.Id],
               try QuickBooksCatalogApplicationReceipt.digest(record) == version.recordSHA256 else {
             throw QuickBooksChangeHistoryError.changed
@@ -75,9 +78,9 @@ struct QuickBooksCatalogHistoryBatch {
     }
 }
 
-/// Version 1 describes exactly the fields written by the existing catalog
-/// projection. Stock, account mappings, bundles and financial events are NOT
-/// claimed applied. A receipt is saved atomically with its Item; it is neither
+/// Version 2 also attests read-only inventory/accounts/hierarchy/bundle detail.
+/// Version 1 receipts remain verifiable with their original projection. Neither
+/// version claims stock movements or financial events applied. A receipt is neither
 /// a server attestation nor proof of delivery to another CloudKit device.
 struct QuickBooksCatalogApplicationReceipt: Codable {
     let projectionVersion: Int
@@ -99,13 +102,15 @@ struct QuickBooksCatalogApplicationReceipt: Codable {
         let vendorName: String?
         let vendorID: String?
         let reviewStatus: String?
+        let catalogDetailsJSON: String?
 
-        init(_ item: Item) {
+        init(_ item: Item, version: Int = 2) {
             quickBooksID = item.quickBooksID; name = item.name; itemType = item.itemTypeRawValue
             unitPrice = item.unitPrice; purchaseCost = item.purchaseCost; taxable = item.isTaxable
             description = item.itemDescription; sku = item.sku; purchaseDescription = item.purchaseDescription
             vendorName = item.preferredVendorName; vendorID = item.preferredVendorQuickBooksID
             reviewStatus = item.pricebookReviewStatusRawValue
+            catalogDetailsJSON = version >= 2 ? item.quickBooksCatalogDetailsJSON : nil
         }
 
         func restore(to item: Item) {
@@ -114,6 +119,7 @@ struct QuickBooksCatalogApplicationReceipt: Codable {
             item.itemDescription = description; item.sku = sku; item.purchaseDescription = purchaseDescription
             item.preferredVendorName = vendorName; item.preferredVendorQuickBooksID = vendorID
             item.pricebookReviewStatusRawValue = reviewStatus
+            item.quickBooksCatalogDetailsJSON = catalogDetailsJSON
         }
     }
 
@@ -140,7 +146,7 @@ struct QuickBooksCatalogApplicationReceipt: Codable {
         guard json.utf8.count <= 8192 else { throw QuickBooksChangeHistoryError.invalid }
         let value = try JSONDecoder().decode(Self.self, from: Data(json.utf8))
         try value.source.validate()
-        guard value.projectionVersion == 1,
+        guard [1, 2].contains(value.projectionVersion),
               QuickBooksChangeHistoryScope.validDigest(value.projectionSHA256),
               value.appliedAt.timeIntervalSince1970.isFinite else { throw QuickBooksChangeHistoryError.invalid }
         return value
@@ -148,7 +154,7 @@ struct QuickBooksCatalogApplicationReceipt: Codable {
 
     func matchesProjection(of item: Item, scope: QuickBooksChangeHistoryScope) -> Bool {
         localItemID == item.id && source.scope == scope && source.entityID == item.quickBooksID &&
-        projectionSHA256 == (try? Self.digest(Projection(item)))
+        projectionSHA256 == (try? Self.digest(Projection(item, version: projectionVersion)))
     }
 
     func isCurrent(on item: Item, scope: QuickBooksChangeHistoryScope) -> Bool {
@@ -176,6 +182,10 @@ struct QuickBooksCatalogApplicationReceipt: Codable {
         QuickBooksCatalogSnapshotApplication.apply(record, to: projected)
         let incomingDigest = try? digest(Projection(projected))
         let agreesWithIncoming = incomingDigest != nil && incomingDigest == (try? digest(Projection(item)))
+        if prior.projectionVersion == 1, let details = item.quickBooksCatalogDetailsJSON,
+           details != projected.quickBooksCatalogDetailsJSON {
+            return "Inventory or bundle details changed beyond the older saved version. Review them before refreshing."
+        }
         guard prior.matchesProjection(of: item, scope: incoming.scope) || agreesWithIncoming else {
             return "This item changed after its last applied QuickBooks version. Review the local changes before refreshing it."
         }
@@ -199,7 +209,7 @@ struct QuickBooksCatalogApplicationReceipt: Codable {
             throw QuickBooksChangeHistoryError.lifecycleReview
         }
         QuickBooksCatalogSnapshotApplication.apply(record, to: item, at: date)
-        let receipt = Self(projectionVersion: 1, localItemID: item.id, source: version,
+        let receipt = Self(projectionVersion: 2, localItemID: item.id, source: version,
             projectionSHA256: try digest(Projection(item)), appliedAt: date)
         item.quickBooksCatalogReceiptJSON = String(decoding: try JSONEncoder().encode(receipt), as: UTF8.self)
     }

@@ -576,7 +576,7 @@ struct BillingDocumentsView: View {
     }
 
     private func itemHasInventoryLedger(_ item: Item) -> Bool {
-        item.itemType == .nonInventory ||
+        item.itemType.isMaterial ||
             item.tracksInventory ||
             inventoryMovements.contains { $0.itemID == item.id }
     }
@@ -4462,7 +4462,7 @@ GunnAire
                             TextField("SKU", text: $newItemSKU)
                                 .textInputAutocapitalization(.characters)
                             Picker("Item Type", selection: $newItemType) {
-                                ForEach(CatalogItemType.allCases) { type in
+                                ForEach(CatalogItemType.creatableCases) { type in
                                     Text(type.rawValue).tag(type)
                                 }
                             }
@@ -4472,9 +4472,9 @@ GunnAire
                             Toggle("Taxable", isOn: $newItemTaxable)
                             HStack {
                                 TextField("Price (optional)", text: $newItemPrice)
-                                    .keyboardType(.decimalPad)
+                                    .catalogNumericKeyboard()
                                 TextField("Cost", text: $newItemCost)
-                                    .keyboardType(.decimalPad)
+                                    .catalogNumericKeyboard()
                             }
                             TextField("Typical purchase source", text: $newItemPreferredVendor)
                             if !vendors.isEmpty {
@@ -8460,7 +8460,7 @@ GunnAire
         case .service:
             return item.itemType == .service
         case .materials:
-            return item.itemType == .nonInventory
+            return item.itemType.isMaterial
         case .selected:
             return isCatalogItemSelected(item)
         case .all:
@@ -8482,7 +8482,7 @@ GunnAire
                 haystack.contains("system") ||
                 item.itemType == .service
         case .replacement, .install:
-            return item.itemType == .nonInventory ||
+            return item.itemType.isMaterial ||
                 haystack.contains("install") ||
                 haystack.contains("equipment") ||
                 haystack.contains("system")
@@ -10718,7 +10718,7 @@ private struct DocumentationItemCreatorView: View {
                         .textInputAutocapitalization(.characters)
                         .focused($isEditing)
                     Picker("Item Type", selection: $itemType) {
-                        ForEach(CatalogItemType.allCases) { type in
+                        ForEach(CatalogItemType.creatableCases) { type in
                             Text(type.rawValue).tag(type)
                         }
                     }
@@ -10728,7 +10728,7 @@ private struct DocumentationItemCreatorView: View {
                         .focused($isEditing)
                     Toggle("Taxable", isOn: $isTaxable)
                     TextField("Sales price (optional)", text: $price)
-                        .keyboardType(.decimalPad)
+                        .catalogNumericKeyboard()
                         .focused($isEditing)
                     if requiresPricebookReview {
                         Label(
@@ -10742,7 +10742,7 @@ private struct DocumentationItemCreatorView: View {
 
                 Section("Purchasing") {
                     TextField("Purchase price", text: $cost)
-                        .keyboardType(.decimalPad)
+                        .catalogNumericKeyboard()
                         .focused($isEditing)
                     TextField("Typical purchase source", text: $preferredVendor)
                         .focused($isEditing)

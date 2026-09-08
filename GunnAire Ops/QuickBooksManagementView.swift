@@ -56,6 +56,8 @@ enum QuickBooksDocumentLinePublicationError: LocalizedError, Equatable {
     case catalogItemArchived(String)
     case missingQuickBooksItemMapping(String)
     case invalidLineAmount(String)
+    case catalogIdentityChanged(String)
+    case unsupportedItemType(String)
     case invalidDocumentDiscount
     case amountMismatch(expected: Double, mapped: Double)
 
@@ -75,6 +77,10 @@ enum QuickBooksDocumentLinePublicationError: LocalizedError, Equatable {
             return "\(name) is not linked to a QuickBooks product or service. Review and publish the catalog item first."
         case .invalidLineAmount(let name):
             return "\(name) has an invalid quantity or price. Correct the line in Job Billing before publishing to QuickBooks."
+        case .catalogIdentityChanged(let name):
+            return "The accounting type or QuickBooks identity of \(name) changed after this line was saved. Review and replace the line explicitly; its saved price has been kept."
+        case .unsupportedItemType(let name):
+            return "\(name) is not an ordinary sales item. Categories organize the catalog; bundles require their component lines. Review this line before publishing."
         case .invalidDocumentDiscount:
             return "The document discount no longer matches its authorized line-item subtotal. Reauthorize or remove it in Job Billing before publishing to QuickBooks."
         case .amountMismatch(let expected, let mapped):
@@ -150,6 +156,13 @@ enum QuickBooksDocumentLinePublication {
         try QuickBooksCatalogMappingIntegrity.validateDocumentItems(documentItems, against: catalogItems)
 
         var lines = try zip(snapshots, documentItems).map { snapshot, item in
+            guard item.itemType.isDirectSalesItem else {
+                throw QuickBooksDocumentLinePublicationError.unsupportedItemType(snapshot.name)
+            }
+            guard snapshot.itemTypeRawValue == nil || snapshot.itemTypeRawValue == item.itemTypeRawValue,
+                  snapshot.quickBooksItemID == nil || snapshot.quickBooksItemID == item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines) else {
+                throw QuickBooksDocumentLinePublicationError.catalogIdentityChanged(snapshot.name)
+            }
             guard snapshot.quantity.isFinite,
                   snapshot.quantity > 0,
                   snapshot.unitPrice.isFinite,
@@ -471,7 +484,10 @@ struct QuickBooksCatalogPublicationConfirmation: Identifiable, Equatable {
         let normalizedSKU = sku?.trimmingCharacters(in: .whitespacesAndNewlines)
         let skuLabel = normalizedSKU.flatMap { $0.isEmpty ? nil : $0 } ?? "No SKU"
         let price = unitPrice.formatted(.currency(code: "USD"))
-        return "\(itemName) • \(itemType.rawValue) • \(skuLabel) • \(price). QuickBooks is checked first for one exact name/SKU match. If found, GunnAire links to it. If none exists, this creates a new product or service in the connected QuickBooks company. No invoice is created."
+        let inventory = itemType == .inventory
+            ? " Opening quantity \(revision.values.QtyOnHand?.formatted() ?? "needs setup") as of \(revision.values.InvStartDate ?? "date needs setup") is used only for a new item. Linking keeps the existing QuickBooks balance; it does not apply opening stock."
+            : ""
+        return "\(itemName) • \(itemType.rawValue) • \(skuLabel) • \(price). QuickBooks is checked first for one exact name/SKU match. If found, GunnAire links to it. If none exists, this creates a new product or service in the connected QuickBooks company. No invoice is created." + inventory
     }
 
     static func make(
@@ -683,6 +699,7 @@ enum PricebookReviewPublication {
         localItem.quickBooksID = remoteItem.Id.trimmingCharacters(in: .whitespacesAndNewlines)
         localItem.quickBooksLastSyncedAt = date
         localItem.timestamp = date
+        localItem.quickBooksCatalogDetailsJSON = QuickBooksCatalogJSON.encode(QuickBooksCatalogDetails(remoteItem))
         let differences = QuickBooksCatalogReconciliation.differences(
             localItem: localItem,
             remoteItem: remoteItem
@@ -933,6 +950,13 @@ enum QuickBooksCatalogReconciliation {
         localItem: Item,
         currentRemoteItem: QuickBooksItem
     ) throws -> QuickBooksItemUpdate {
+        guard localItem.itemType.isDirectSalesItem else { throw QuickBooksInventoryError.unsupportedType }
+        if localItem.itemType == .inventory {
+            try QuickBooksCatalogDetails(currentRemoteItem).validateInventory()
+            guard localItem.isAvailableForNewWork == (currentRemoteItem.Active ?? true) else {
+                throw QuickBooksInventoryError.lifecycleReview
+            }
+        }
         guard normalized(localItem.quickBooksID ?? "") == normalized(currentRemoteItem.Id) else {
             throw QuickBooksCatalogReconciliationError.identifierMismatch
         }
@@ -974,7 +998,8 @@ enum QuickBooksCatalogReconciliation {
             PrefVendorRef: localVendorID.flatMap { id in
                 id.isEmpty ? nil : QuickBooksReference(value: id, name: localItem.preferredVendorName)
             },
-            Active: localItem.isAvailableForNewWork
+            Active: localItem.isAvailableForNewWork,
+            ItemType: localItem.itemType.rawValue
         )
     }
 
@@ -3107,7 +3132,8 @@ struct QuickBooksManagementView: View {
                     }
                 }
                 .sheet(isPresented: $showingNewCatalogItemSheet) {
-                    QuickBooksCatalogItemComposeView(vendors: vendors) { draft in
+                    QuickBooksCatalogItemComposeView(vendors: vendors, accounts: accounts,
+                        inventoryScope: inventorySetupScope) { draft in
                         createCatalogItem(draft)
                     }
                     .tint(Color.brandGold)
@@ -3117,6 +3143,8 @@ struct QuickBooksManagementView: View {
                         item: item,
                         catalogItems: localCatalogItems,
                         vendors: vendors,
+                        accounts: accounts,
+                        inventoryScope: inventorySetupScope,
                         onSetArchived: { shouldArchive in
                             try setCatalogItem(item, archived: shouldArchive)
                         }
@@ -3574,6 +3602,12 @@ struct QuickBooksManagementView: View {
         }
     }
 
+    private var inventorySetupScope: QuickBooksChangeHistoryScope? {
+        guard let workflow = try? quickBooksDataAPI.captureWorkspaceWorkflow(),
+              let companyID = workflow.companyID, let realmID = workflow.realmID else { return nil }
+        return .init(companyID: companyID, realmID: realmID, environment: workflow.environment)
+    }
+
     private func createCatalogItem(_ draft: QuickBooksCatalogItemDraft) {
         guard catalogLifecycle.activeID == nil else { actionMessage = QuickBooksCatalogWorkflowError.busy.localizedDescription; return }
         do { try QuickBooksSyncAccessPolicy.validate(context: modelContext) }
@@ -3590,6 +3624,7 @@ struct QuickBooksManagementView: View {
             preferredVendor: draft.vendorRef,
             actorEmail: AppIdentity.currentEmail
         )
+        localItem.inventorySetup = draft.inventorySetup
         modelContext.insert(localItem)
         activeCatalogPublicationID = localItem.id
         showCatalogPublicationQueue = true
@@ -3611,6 +3646,9 @@ struct QuickBooksManagementView: View {
     }
 
     private func setCatalogItem(_ item: Item, archived: Bool) throws {
+        if item.itemType == .inventory, item.quickBooksID?.isEmpty == false {
+            throw QuickBooksInventoryError.lifecycleReview
+        }
         let priorReviewStatus = item.pricebookReviewStatus
         let priorReviewer = item.pricebookReviewedByEmail
         let priorReviewedAt = item.pricebookReviewedAt
@@ -3875,7 +3913,7 @@ struct QuickBooksManagementView: View {
                     items.append(outcome.remote)
                 }
                 catalogSnapshotWorkflow = snapshotOwner
-                let message: String
+                var message: String
                 switch outcome.link {
                 case .reconciliationRequired(let count):
                     showCatalogReconciliationQueue = true
@@ -3890,6 +3928,10 @@ struct QuickBooksManagementView: View {
                         ? "Approved and published \(item.name) to QuickBooks."
                         : "Approved and linked \(item.name). Its QuickBooks catalog values already match."
                     }
+                }
+                if item.itemType == .inventory {
+                    message += " QuickBooks quantity on hand: \(outcome.remote.QtyOnHand?.formatted() ?? "needs refresh")."
+                    if !outcome.created { message += " No opening stock was applied by this link or price review." }
                 }
                 let impact = PricebookReviewQueue.documentImpact(for: item,
                     estimates: localEstimates, invoices: localInvoices)
@@ -5943,6 +5985,8 @@ private struct QuickBooksLocalCatalogItemEditView: View {
     let item: Item
     let catalogItems: [Item]
     let vendors: [QuickBooksVendor]
+    let accounts: [QuickBooksAccount]
+    let inventoryScope: QuickBooksChangeHistoryScope?
     let onSetArchived: (Bool) throws -> Void
     let onSaved: () -> Void
 
@@ -5955,6 +5999,7 @@ private struct QuickBooksLocalCatalogItemEditView: View {
     @State private var isTaxable: Bool
     @State private var purchaseDescription: String
     @State private var preferredVendorID: String
+    @State private var inventorySetup: QuickBooksInventorySetup
     @State private var isAssemblyEnabled: Bool
     @State private var assemblyPresentation: CatalogAssemblyPresentation
     @State private var assemblyComponents: [CatalogAssemblyComponentDefinition]
@@ -5967,12 +6012,17 @@ private struct QuickBooksLocalCatalogItemEditView: View {
         item: Item,
         catalogItems: [Item],
         vendors: [QuickBooksVendor],
+        accounts: [QuickBooksAccount],
+        inventoryScope: QuickBooksChangeHistoryScope?,
         onSetArchived: @escaping (Bool) throws -> Void,
         onSaved: @escaping () -> Void
     ) {
         self.item = item
         self.catalogItems = catalogItems
         self.vendors = vendors
+        self.accounts = accounts
+        self.inventoryScope = inventoryScope
+        _inventorySetup = State(initialValue: item.inventorySetup ?? QuickBooksInventorySetup())
         self.onSetArchived = onSetArchived
         self.onSaved = onSaved
         let assembly = item.assemblyDefinition
@@ -5980,8 +6030,8 @@ private struct QuickBooksLocalCatalogItemEditView: View {
         _itemType = State(initialValue: item.itemType)
         _description = State(initialValue: item.itemDescription ?? "")
         _sku = State(initialValue: item.sku ?? "")
-        _unitPrice = State(initialValue: String(format: "%.2f", item.unitPrice))
-        _purchaseCost = State(initialValue: item.purchaseCost.map { String(format: "%.2f", $0) } ?? "")
+        _unitPrice = State(initialValue: String(item.unitPrice))
+        _purchaseCost = State(initialValue: item.purchaseCost.map { String($0) } ?? "")
         _isTaxable = State(initialValue: item.isTaxable)
         _purchaseDescription = State(initialValue: item.purchaseDescription ?? "")
         _preferredVendorID = State(initialValue: item.preferredVendorQuickBooksID ?? "")
@@ -6066,6 +6116,7 @@ private struct QuickBooksLocalCatalogItemEditView: View {
             .filter { candidate in
                 guard candidate.id != item.id,
                       candidate.isAvailableForNewWork,
+                      candidate.itemType.isDirectSalesItem,
                       candidate.assemblyDefinition == nil,
                       !selectedIDs.contains(candidate.id) else { return false }
                 if query.isEmpty { return true }
@@ -6087,8 +6138,8 @@ private struct QuickBooksLocalCatalogItemEditView: View {
                         .accessibilityIdentifier("CatalogEditName")
                     if isUnlinkedPricebookReview {
                         Picker("Item Type", selection: $itemType) {
-                            ForEach(CatalogItemType.allCases) { type in
-                                Text(type.rawValue).tag(type)
+                            ForEach(CatalogItemType.creatableCases) { type in
+                                Text(type.label).tag(type)
                             }
                         }
                         .pickerStyle(.segmented)
@@ -6109,7 +6160,7 @@ private struct QuickBooksLocalCatalogItemEditView: View {
                     TextField("SKU", text: $sku)
                         .textInputAutocapitalization(.characters)
                     TextField("Sales price", text: $unitPrice)
-                        .keyboardType(.decimalPad)
+                        .catalogNumericKeyboard()
                         .focused($isEditingNumericValue)
                         .accessibilityIdentifier("CatalogEditSalesPrice")
                     Toggle("Taxable", isOn: $isTaxable)
@@ -6117,7 +6168,7 @@ private struct QuickBooksLocalCatalogItemEditView: View {
 
                 Section("Purchasing") {
                     TextField("Purchase cost", text: $purchaseCost)
-                        .keyboardType(.decimalPad)
+                        .catalogNumericKeyboard()
                         .focused($isEditingNumericValue)
                     TextField("Purchase description", text: $purchaseDescription, axis: .vertical)
                         .lineLimit(2...4)
@@ -6135,6 +6186,14 @@ private struct QuickBooksLocalCatalogItemEditView: View {
                     Text("A linked preferred vendor can be replaced here. Removing it requires review in QuickBooks.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+
+                if editableItemType == .inventory {
+                    if item.quickBooksID?.isEmpty == false {
+                        QuickBooksInventoryBalanceSection(item: item)
+                    } else {
+                        QuickBooksInventorySetupSection(setup: $inventorySetup, accounts: accounts, scope: inventoryScope)
+                    }
                 }
 
                 Section("Availability") {
@@ -6374,6 +6433,9 @@ private struct QuickBooksLocalCatalogItemEditView: View {
             }
         }
         assemblyValidationMessage = nil
+        if editableItemType == .inventory, item.quickBooksID?.isEmpty != false {
+            item.inventorySetup = inventorySetup
+        }
         item.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if isUnlinkedPricebookReview {
             item.itemType = itemType
@@ -6414,12 +6476,15 @@ private struct QuickBooksCatalogItemDraft {
     let description: String?
     let purchaseDescription: String?
     let vendorRef: QuickBooksReference?
+    let inventorySetup: QuickBooksInventorySetup?
 }
 
 private struct QuickBooksCatalogItemComposeView: View {
     @Environment(\.dismiss) private var dismiss
 
     let vendors: [QuickBooksVendor]
+    let accounts: [QuickBooksAccount]
+    let inventoryScope: QuickBooksChangeHistoryScope?
     let onCreate: (QuickBooksCatalogItemDraft) -> Void
 
     @State private var name = ""
@@ -6431,6 +6496,7 @@ private struct QuickBooksCatalogItemComposeView: View {
     @State private var description = ""
     @State private var purchaseDescription = ""
     @State private var selectedVendorID = ""
+    @State private var inventorySetup = QuickBooksInventorySetup()
 
     var body: some View {
         NavigationStack {
@@ -6442,13 +6508,14 @@ private struct QuickBooksCatalogItemComposeView: View {
                         .textInputAutocapitalization(.characters)
                         .accessibilityIdentifier("QuickBooksCatalogItemSKU")
                     Picker("Item Type", selection: $itemType) {
-                        ForEach(CatalogItemType.allCases) { type in
-                            Text(type.rawValue).tag(type)
+                        ForEach(CatalogItemType.creatableCases) { type in
+                            Text(type.label).tag(type)
                         }
                     }
                     .pickerStyle(.segmented)
+                    .accessibilityIdentifier("QuickBooksCatalogItemType")
                     TextField("Price (optional)", text: $price)
-                        .keyboardType(.decimalPad)
+                        .catalogNumericKeyboard()
                         .accessibilityIdentifier("QuickBooksCatalogItemPrice")
                     Toggle("Taxable", isOn: $isTaxable)
                         .accessibilityIdentifier("QuickBooksCatalogItemTaxable")
@@ -6457,7 +6524,7 @@ private struct QuickBooksCatalogItemComposeView: View {
 
                 Section("Purchasing") {
                     TextField("Purchase price", text: $purchaseCost)
-                        .keyboardType(.decimalPad)
+                        .catalogNumericKeyboard()
                     if !vendors.isEmpty {
                         Picker("Preferred vendor", selection: $selectedVendorID) {
                             Text("None").tag("")
@@ -6468,6 +6535,9 @@ private struct QuickBooksCatalogItemComposeView: View {
                     }
                     TextField("Purchase notes", text: $purchaseDescription, axis: .vertical)
                         .lineLimit(2...3)
+                }
+                if itemType == .inventory {
+                    QuickBooksInventorySetupSection(setup: $inventorySetup, accounts: accounts, scope: inventoryScope)
                 }
             }
             .navigationTitle("Add Catalog Item")
@@ -6488,7 +6558,8 @@ private struct QuickBooksCatalogItemComposeView: View {
                             isTaxable: isTaxable,
                             description: description.nilIfBlank,
                             purchaseDescription: purchaseDescription.nilIfBlank,
-                            vendorRef: vendorRef
+                            vendorRef: vendorRef,
+                            inventorySetup: itemType == .inventory ? inventorySetup : nil
                         )
                         )
                         dismiss()
@@ -6513,7 +6584,9 @@ private enum QuickBooksCatalogAmountParser {
             .replacingOccurrences(of: "$", with: "")
             .replacingOccurrences(of: ",", with: "")
             .replacingOccurrences(of: " ", with: "")
-        return Double(normalized)
+        guard let amount = Double(normalized), amount.isFinite, amount >= 0,
+              amount <= 99_999_999_999 else { return nil }
+        return amount
     }
 
     static func parseOptional(_ value: String) -> Double? {

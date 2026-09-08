@@ -34,6 +34,9 @@ struct QuickBooksCatalogItemRevision: Equatable {
     let syncDetail: String?
     let syncedAt: Date?
     let timestamp: Date
+    let inventorySetupJSON: String?
+    let catalogDetailsJSON: String?
+    let catalogReceiptJSON: String?
 
     init(_ item: Item) {
         id = item.id
@@ -51,6 +54,9 @@ struct QuickBooksCatalogItemRevision: Equatable {
         syncDetail = item.quickBooksSyncDetail
         syncedAt = item.quickBooksLastSyncedAt
         timestamp = item.timestamp
+        inventorySetupJSON = item.quickBooksInventorySetupJSON
+        catalogDetailsJSON = item.quickBooksCatalogDetailsJSON
+        catalogReceiptJSON = item.quickBooksCatalogReceiptJSON
     }
 
     func restore(_ item: Item) {
@@ -72,6 +78,9 @@ struct QuickBooksCatalogItemRevision: Equatable {
         item.quickBooksSyncDetail = syncDetail
         item.quickBooksLastSyncedAt = syncedAt
         item.timestamp = timestamp
+        item.quickBooksInventorySetupJSON = inventorySetupJSON
+        item.quickBooksCatalogDetailsJSON = catalogDetailsJSON
+        item.quickBooksCatalogReceiptJSON = catalogReceiptJSON
     }
 }
 
@@ -134,7 +143,7 @@ final class QuickBooksCatalogWorkflow {
 
     private static func validateItemValues(_ item: Item) throws {
         guard !item.requiresPricebookReview,
-              CatalogItemType(rawValue: item.itemTypeRawValue) != nil,
+              item.itemType.isDirectSalesItem,
               !item.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               item.name == item.name.trimmingCharacters(in: .whitespacesAndNewlines),
               !item.name.contains(where: { ":\t\r\n".contains($0) }),
@@ -166,6 +175,18 @@ final class QuickBooksCatalogWorkflow {
             try self.checkItem()
             switch self.mode {
             case .publish:
+                if self.item.itemType == .inventory {
+                    guard let setup = self.item.inventorySetup else { throw QuickBooksInventoryError.setupRequired }
+                    let boundary = try CatalogPublicationBoundary.request(workflow: self.run.workflow,
+                        itemID: self.revision.id, payload: .create(self.revision.values))
+                    try setup.validate(scope: .init(companyID: boundary.companyID,
+                        realmID: boundary.realmID, environment: boundary.environment))
+                    // Inventory uses explicit original-business accounts. Only
+                    // the shared server may verify and dispatch opening stock.
+                    let payload = QuickBooksCatalogCreateOperation.payload(for: self.item,
+                        incomeAccountRef: setup.incomeAccount!, expenseAccountRef: setup.expenseAccount)
+                    return try await self.publishOnServer(.create(payload))
+                }
                 if self.api.catalogPublicationTransport != nil {
                     guard let configuration = configuration ?? self.configuration,
                           configuration.matches(realmID: self.run.workflow.realmID, environment: self.run.workflow.environment),
@@ -246,11 +267,14 @@ final class QuickBooksCatalogWorkflow {
             }
         }
         guard !remote.Id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              CatalogItemType(rawValue: remote.ItemType ?? "") != nil,
+              CatalogItemType(rawValue: remote.ItemType ?? "")?.isDirectSalesItem == true,
               !remote.Name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               (remote.UnitPrice ?? 0).isFinite, (remote.UnitPrice ?? 0) >= 0,
               (remote.PurchaseCost ?? 0).isFinite, (remote.PurchaseCost ?? 0) >= 0 else {
             throw QuickBooksCatalogWorkflowError.invalidResponse
+        }
+        if remote.ItemType == CatalogItemType.inventory.rawValue {
+            try QuickBooksCatalogDetails(remote).validateInventory()
         }
         var link = ApprovedPricebookLinkOutcome.synchronized
         try run.commit {

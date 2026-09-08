@@ -1,3 +1,14 @@
+Native inventory candidate, 2026-09-08: NATIVE_QBO_INVENTORY.md records native
+Inventory creation/review, original-business account choices, read-only provider
+balances, immutable sold type/identity and additive CloudKit v25/receipt v2.
+The unknown-type-to-Service fallback is removed. Final Mac and iPad logic each
+pass 1,324 tests; all six selected iPad UI journeys, 42 Tools tests and unsigned
+universal Mac Release pass. The workflow adds two regression journeys (33 total)
+without removing prior checks. Retained evidence separates the actual iPad
+decimal-keypad defect from the corrected test-catalog isolation assumption.
+Category/bundle transaction UX, signed multi-device/provider acceptance and the
+full suite goal remain incomplete. No merge, deployment or schema promotion.
+
 QBO inventory server prerequisite, 2026-09-08: candidate 2026.09.08.35 adds
 explicit opening quantity/date and verified per-item inventory accounts to the
 shared catalog publisher, plus immutable-type-reviewed sparse price updates.

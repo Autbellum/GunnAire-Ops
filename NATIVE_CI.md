@@ -1,6 +1,29 @@
 # Native GitHub Actions checks
 
-## Latest completed hosted result: `8aadb75`
+## Native inventory regression additions
+
+The current native inventory candidate adds two selected iPad journeys, bringing
+the total to **33**: offline inventory creation with exact saved price, quantity
+and date on reopen, and technician-item correction before administrator approval.
+The complete logic target includes inventory/account/scope, identity, receipt
+and SQLite migration tests on both platforms. The complete Tools suite covers
+the exact additive CloudKit v25 contract. No earlier selector or failure gate
+is removed; signing, deployment and production schema promotion are not enabled.
+
+See [native inventory qualification](NATIVE_QBO_INVENTORY.md) for local evidence
+and remaining provider, multi-device and full-suite requirements. The published
+candidate needs its own exact-head hosted checks; the prior green runs below
+do not qualify later changes.
+
+## Latest completed hosted result: `89c6ee7`
+
+[Native run 34193027111](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34193027111)
+passes iPad and Mac. [Backend run 34193027148](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34193027148)
+passes Python 3.13 and 3.14. Exact-head completion was verified September 8,
+2026. This qualifies the server inventory prerequisite and preceding native
+catalog receipts, not the later native inventory/v25 changes or production release.
+
+## Earlier completed hosted result: `8aadb75`
 
 [Native run 34188092219](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34188092219)
 passes iPad and Mac. [Backend run 34188092174](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34188092174)

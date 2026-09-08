@@ -11,8 +11,25 @@ import SwiftData
 enum CatalogItemType: String, Codable, CaseIterable, Identifiable {
     case service = "Service"
     case nonInventory = "NonInventory"
+    case inventory = "Inventory"
+    case group = "Group"
+    case category = "Category"
+    case unknown = "Unknown"
 
     var id: String { rawValue }
+    static var creatableCases: [Self] { [.service, .nonInventory, .inventory] }
+    var isDirectSalesItem: Bool { Self.creatableCases.contains(self) }
+    var isMaterial: Bool { self == .nonInventory || self == .inventory }
+    var label: String {
+        switch self {
+        case .service: "Service"
+        case .nonInventory: "Non-inventory"
+        case .inventory: "Inventory"
+        case .group: "Bundle"
+        case .category: "Category"
+        case .unknown: "Needs type review"
+        }
+    }
 }
 
 enum PricebookReviewStatus: String, Codable, CaseIterable {
@@ -545,6 +562,10 @@ enum CatalogLineEquipmentAssignmentPolicy {
 /// price, cost, tax treatment, part identity, and serviced system that were approved.
 struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
     let catalogItemID: UUID
+    /// New documents retain accounting meaning as well as price. Legacy lines
+    /// without these fields still require the current approved mapping.
+    let itemTypeRawValue: String?
+    let quickBooksItemID: String?
     let name: String
     let description: String?
     let sku: String?
@@ -573,6 +594,11 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
         assembly: CatalogLineAssemblySnapshot? = nil
     ) {
         catalogItemID = item.id
+        itemTypeRawValue = item.itemTypeRawValue
+        quickBooksItemID = item.quickBooksID.flatMap {
+            let value = $0.trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : value
+        }
         name = item.name
         description = item.itemDescription
         sku = item.sku
@@ -593,6 +619,8 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
 
     private init(
         catalogItemID: UUID,
+        itemTypeRawValue: String?,
+        quickBooksItemID: String?,
         name: String,
         description: String?,
         sku: String?,
@@ -609,6 +637,8 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
         assembly: CatalogLineAssemblySnapshot?
     ) {
         self.catalogItemID = catalogItemID
+        self.itemTypeRawValue = itemTypeRawValue
+        self.quickBooksItemID = quickBooksItemID
         self.name = name
         self.description = description
         self.sku = sku
@@ -705,6 +735,8 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
     func replacingQuantity(with quantity: Double) -> CatalogLineItemSnapshot {
         CatalogLineItemSnapshot(
             catalogItemID: catalogItemID,
+            itemTypeRawValue: itemTypeRawValue,
+            quickBooksItemID: quickBooksItemID,
             name: name,
             description: description,
             sku: sku,
@@ -746,11 +778,14 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
         case catalogItemID, name, description, sku, pricebookUnitPrice, unitPrice, purchaseCost, isTaxable, quantity, catalogUpdatedAt
         case priceAdjustmentReason, priceAdjustmentAuthorizedByEmail, priceAdjustmentAuthorizedAt
         case servicedEquipment, assembly
+        case itemTypeRawValue, quickBooksItemID
     }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         catalogItemID = try values.decode(UUID.self, forKey: .catalogItemID)
+        itemTypeRawValue = try values.decodeIfPresent(String.self, forKey: .itemTypeRawValue)
+        quickBooksItemID = try values.decodeIfPresent(String.self, forKey: .quickBooksItemID)
         name = try values.decode(String.self, forKey: .name)
         description = try values.decodeIfPresent(String.self, forKey: .description)
         sku = try values.decodeIfPresent(String.self, forKey: .sku)
@@ -788,6 +823,10 @@ final class Item {
     /// Evidence for the last applied catalog projection, not an all-fields or
     /// webhook acknowledgement. Optional for existing local/CloudKit records.
     var quickBooksCatalogReceiptJSON: String?
+    /// Original-business opening proposal, never a stock-adjustment queue.
+    var quickBooksInventorySetupJSON: String?
+    /// Read-only provider balances, account identities, hierarchy and bundles.
+    var quickBooksCatalogDetailsJSON: String?
     /// Field-created items remain usable on their originating job, but cannot
     /// become global QBO products/services until an administrator reviews the
     /// price, tax treatment, purchasing identity, and description.
@@ -875,7 +914,7 @@ final class Item {
     }
 
     var itemType: CatalogItemType {
-        get { CatalogItemType(rawValue: itemTypeRawValue) ?? .service }
+        get { CatalogItemType(rawValue: itemTypeRawValue) ?? .unknown }
         set { itemTypeRawValue = newValue.rawValue }
     }
 
@@ -1093,8 +1132,8 @@ enum CatalogItemSelectionPolicy {
         _ item: Item,
         documentScopedReviewItemIDs: Set<UUID>
     ) -> Bool {
-        item.isAvailableForNewWork ||
-            (item.requiresPricebookReview && documentScopedReviewItemIDs.contains(item.id))
+        item.itemType.isDirectSalesItem && (item.isAvailableForNewWork ||
+            (item.requiresPricebookReview && documentScopedReviewItemIDs.contains(item.id)))
     }
 
     static func canDisplay(
@@ -1222,6 +1261,7 @@ enum CatalogAssemblyPolicy {
             guard let item = catalogByID[component.itemID] else {
                 throw CatalogAssemblyValidationError.missingComponent(itemID: component.itemID)
             }
+            guard item.itemType.isDirectSalesItem else { throw QuickBooksInventoryError.unsupportedType }
             guard item.assemblyDefinition == nil else {
                 throw CatalogAssemblyValidationError.nestedAssembly(name: item.name)
             }
@@ -1255,6 +1295,7 @@ enum CatalogAssemblyPolicy {
     }
 
     static func selection(root: Item, catalogItems: [Item]) throws -> CatalogAssemblySelection {
+        guard root.itemType.isDirectSalesItem else { throw QuickBooksInventoryError.unsupportedType }
         guard root.assemblyDefinition != nil else {
             return CatalogAssemblySelection(
                 lineItems: [root],

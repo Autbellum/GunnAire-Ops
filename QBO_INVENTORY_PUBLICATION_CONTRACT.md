@@ -1,5 +1,8 @@
 # QBO inventory publication — server prerequisite
 
+Native follow-through and its separate qualification/remaining bundle gates:
+[Native QuickBooks inventory](NATIVE_QBO_INVENTORY.md).
+
 Candidate `2026.09.08.35`, September 8, 2026. This extends the actual shared
 catalog publisher with inventory creation and reviewed price updates. It is
 not completion of native item-type integration or of the business-app goal.

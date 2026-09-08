@@ -17,7 +17,7 @@ class CloudKitPromotionManifestTests(unittest.TestCase):
             for record_name in release_preflight.EXPECTED_CLOUDKIT_BASELINE_RECORD_TYPES
         }
         self.development = copy.deepcopy(self.production)
-        for record_name, fields in release_preflight.EXPECTED_CLOUDKIT_V24_ADDITIONS.items():
+        for record_name, fields in release_preflight.EXPECTED_CLOUDKIT_V25_ADDITIONS.items():
             self.development.setdefault(record_name, {}).update(fields)
 
         metadata = {
@@ -41,7 +41,7 @@ class CloudKitPromotionManifestTests(unittest.TestCase):
             production_sha256="production-hash",
         )
 
-    def test_exact_v24_delta_is_additive_and_safe_to_promote(self) -> None:
+    def test_exact_v25_delta_is_additive_and_safe_to_promote(self) -> None:
         manifest = self.manifest()
 
         self.assertTrue(manifest["summary"]["safeToPromote"])
@@ -51,7 +51,7 @@ class CloudKitPromotionManifestTests(unittest.TestCase):
             manifest["summary"]["addedFieldCount"],
             sum(
                 len(fields)
-                for fields in release_preflight.EXPECTED_CLOUDKIT_V24_ADDITIONS.values()
+                for fields in release_preflight.EXPECTED_CLOUDKIT_V25_ADDITIONS.values()
             ),
         )
         self.assertEqual(manifest["changes"]["changedOrRemovedFields"], [])
@@ -119,14 +119,33 @@ class CloudKitPromotionManifestTests(unittest.TestCase):
 
         self.assertEqual(restored, manifest)
 
-    def test_v24_adds_only_one_optional_item_field_to_complete_v23(self) -> None:
+    def test_v25_still_requires_the_original_receipt_field(self) -> None:
         production = copy.deepcopy(self.development)
         production["CD_Item"].pop("CD_quickBooksCatalogReceiptJSON")
         manifest = self.manifest(production=production, production_metadata=self.development_metadata)
         self.assertTrue(manifest["summary"]["safeToPromote"])
         self.assertEqual(manifest["summary"]["addedFieldCount"], 1)
         self.assertEqual(manifest["summary"]["addedRecordTypeCount"], 0)
-        self.assertEqual(manifest["targetBootstrapVersion"], 24)
+        self.assertEqual(manifest["targetBootstrapVersion"], 25)
+
+    def test_v25_adds_only_two_optional_item_fields_to_complete_v24(self) -> None:
+        production = copy.deepcopy(self.development)
+        production["CD_Item"].pop("CD_quickBooksInventorySetupJSON")
+        production["CD_Item"].pop("CD_quickBooksCatalogDetailsJSON")
+        manifest = self.manifest(production=production, production_metadata=self.development_metadata)
+        self.assertTrue(manifest["summary"]["safeToPromote"])
+        self.assertEqual(manifest["summary"]["addedFieldCount"], 2)
+        self.assertEqual(manifest["summary"]["addedRecordTypeCount"], 0)
+        for field in ["CD_quickBooksInventorySetupJSON", "CD_quickBooksCatalogDetailsJSON"]:
+            for definition in [None, ("DOUBLE", "QUERYABLE")]:
+                development = copy.deepcopy(self.development)
+                development["CD_Item"].pop(field)
+                if definition is not None:
+                    development["CD_Item"][field] = definition
+                candidate = self.manifest(development=development, production=production,
+                                          production_metadata=self.development_metadata)
+                self.assertFalse(candidate["summary"]["safeToPromote"])
+                self.assertIn("CD_Item." + field, candidate["changes"]["missingOrChangedDevelopmentV25Fields"])
 
     def test_missing_or_malformed_receipt_field_blocks_promotion(self) -> None:
         for definition in [None, ("DOUBLE", "QUERYABLE")]:

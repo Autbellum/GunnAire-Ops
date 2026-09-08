@@ -1065,8 +1065,8 @@ struct GunnAire_OpsTests {
         #expect(configuration.cloudKitContainerIdentifier == GunnAireCloudKit.containerIdentifier)
         #expect(configuration.isStoredInMemoryOnly == false)
         #expect(configuration.url.lastPathComponent == GunnAireCloudKitSchemaBootstrap.storeFileName)
-        #expect(GunnAireCloudKitSchemaBootstrap.schemaVersion == 24)
-        #expect(GunnAireCloudKitSchemaBootstrap.storeFileName.contains("V24"))
+        #expect(GunnAireCloudKitSchemaBootstrap.schemaVersion == 25)
+        #expect(GunnAireCloudKitSchemaBootstrap.storeFileName.contains("V25"))
     }
     #endif
 

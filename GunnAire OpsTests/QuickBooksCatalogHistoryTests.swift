@@ -150,7 +150,7 @@ struct QuickBooksCatalogHistoryTests {
             if mode == "future" || mode == "wrong-local-id" {
                 let json = try #require(item.quickBooksCatalogReceiptJSON)
                 var object = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
-                if mode == "future" { object["projectionVersion"] = 2 }
+                if mode == "future" { object["projectionVersion"] = 3 }
                 else { object["localItemID"] = UUID().uuidString }
                 item.quickBooksCatalogReceiptJSON = String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
             }
@@ -251,7 +251,65 @@ struct QuickBooksCatalogHistoryTests {
         try GunnAireCloudKitSchemaBootstrap.seedDevelopmentSchemaForTesting(in: context)
         let seeded = try #require(context.fetch(FetchDescriptor<Item>()).first { $0.quickBooksCatalogReceiptJSON != nil })
         #expect(throws: Error.self) { try QuickBooksCatalogApplicationReceipt.decode(#require(seeded.quickBooksCatalogReceiptJSON)) }
-        #expect(GunnAireCloudKitSchemaBootstrap.schemaVersion == 24)
+        #expect(GunnAireCloudKitSchemaBootstrap.schemaVersion == 25)
+        #expect(seeded.quickBooksInventorySetupJSON != nil && seeded.quickBooksCatalogDetailsJSON != nil)
+    }
+
+    @Test func versionOneReceiptsUpgradeWithoutLosingTimeOrLocalDetailBarriers() throws {
+        for diverged in [false, true] {
+            let context = try context()
+            let incoming = try batch()
+            try apply(incoming, into: context)
+            let item = try #require(context.fetch(FetchDescriptor<Item>()).first)
+            // Exact v1 wire projection: absent values are omitted, and the
+            // new detail property did not exist in this encoding.
+            let projection: [String: String] = ["quickBooksID": "42", "name": "Service",
+                "itemType": "Service", "reviewStatus": "approved"]
+            var object: [String: Any] = projection
+            object["unitPrice"] = 150; object["taxable"] = true
+            let bytes = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+            let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+            let v1 = QuickBooksCatalogApplicationReceipt(projectionVersion: 1, localItemID: item.id,
+                source: try incoming.1.version(for: incoming.0[0]), projectionSHA256: digest, appliedAt: Date())
+            item.quickBooksCatalogReceiptJSON = String(decoding: try JSONEncoder().encode(v1), as: UTF8.self)
+            item.quickBooksCatalogDetailsJSON = diverged ? "unreviewed-details" : nil
+            try context.save()
+            #expect(v1.matchesProjection(of: item, scope: scope))
+            if diverged {
+                #expect(throws: QuickBooksBillingImportReview.self) { try apply(incoming, into: context) }
+                #expect(item.quickBooksCatalogDetailsJSON == "unreviewed-details")
+            } else {
+                try apply(incoming, into: context)
+                let v2 = try QuickBooksCatalogApplicationReceipt.decode(#require(item.quickBooksCatalogReceiptJSON))
+                #expect(v2.projectionVersion == 2 && v2.isCurrent(on: item, scope: scope))
+                #expect(throws: QuickBooksBillingImportReview.self) {
+                    try apply(batch(time: "2026-09-08T00:00:00.000001Z"), into: context)
+                }
+            }
+        }
+    }
+
+    @Test func versionTwoRetainsCurrentStockAndRollsBackFailedDetailApplication() throws {
+        let context = try context()
+        var fields: [String: Any] = ["Type": "Inventory", "QtyOnHand": -2.5, "TrackQtyOnHand": true,
+            "InvStartDate": "2026-09-08", "AssetAccountRef": ["value": "A"],
+            "IncomeAccountRef": ["value": "I"], "ExpenseAccountRef": ["value": "E"]]
+        try apply(batch([fields]), into: context)
+        let item = try #require(context.fetch(FetchDescriptor<Item>()).first)
+        #expect(item.itemType == .inventory && item.catalogDetails?.quantityOnHand == -2.5)
+        let originalDetails = item.quickBooksCatalogDetailsJSON
+        let originalReceipt = item.quickBooksCatalogReceiptJSON
+        fields["QtyOnHand"] = 30
+        struct SaveFailure: Error {}
+        #expect(throws: SaveFailure.self) {
+            try apply(batch([fields], time: "2026-09-08T00:00:00.000003Z"), into: context) { _ in throw SaveFailure() }
+        }
+        #expect(item.quickBooksCatalogDetailsJSON == originalDetails && item.quickBooksCatalogReceiptJSON == originalReceipt)
+        let reloaded = try #require(ModelContext(context.container).fetch(FetchDescriptor<Item>()).first)
+        #expect(reloaded.catalogDetails?.quantityOnHand == -2.5)
+        fields.removeValue(forKey: "AssetAccountRef")
+        #expect(throws: QuickBooksInventoryError.self) { try apply(batch([fields]), into: context) }
+        #expect(item.quickBooksCatalogDetailsJSON == originalDetails)
     }
 
     @Test func opensPreReceiptSQLiteItemStoreAndPreservesLegacyValues() throws {
@@ -279,6 +337,7 @@ struct QuickBooksCatalogHistoryTests {
         #expect(migrated.quickBooksID == "42" && migrated.hasPendingQuickBooksCatalogUpdate)
         #expect(migrated.vendorPartNumber == "Vendor-42" && migrated.flatRateAssemblyJSON == "legacy-package")
         #expect(migrated.quickBooksCatalogReceiptJSON == nil)
+        #expect(migrated.quickBooksInventorySetupJSON == nil && migrated.quickBooksCatalogDetailsJSON == nil)
     }
 }
 

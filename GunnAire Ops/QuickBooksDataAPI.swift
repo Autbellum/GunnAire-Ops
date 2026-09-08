@@ -3051,12 +3051,22 @@ struct QuickBooksItem: Codable, Identifiable {
     let IncomeAccountRef: QuickBooksReference?
     let ExpenseAccountRef: QuickBooksReference?
     let PrefVendorRef: QuickBooksReference?
+    var QtyOnHand: Double? = nil
+    var InvStartDate: String? = nil
+    var TrackQtyOnHand: Bool? = nil
+    var AssetAccountRef: QuickBooksReference? = nil
+    var ParentRef: QuickBooksReference? = nil
+    var FullyQualifiedName: String? = nil
+    var Level: Int? = nil
+    var ItemGroupDetail: QuickBooksItemGroupDetail? = nil
+    var PrintGroupedItems: Bool? = nil
 
     var id: String { Id }
 
     private enum CodingKeys: String, CodingKey {
         case Id, SyncToken, Name, Description, Sku, PurchaseDesc, UnitPrice, PurchaseCost, Taxable, Active, IncomeAccountRef, ExpenseAccountRef, PrefVendorRef
         case ItemType = "Type"
+        case QtyOnHand, InvStartDate, TrackQtyOnHand, AssetAccountRef, ParentRef, FullyQualifiedName, Level, ItemGroupDetail, PrintGroupedItems
     }
 }
 
@@ -3078,9 +3088,8 @@ enum QuickBooksCatalogSnapshotApplication {
         item.quickBooksLastSyncedAt = date
         item.applyQuickBooksCatalogAvailability(quickBooksItem.Active ?? true)
         item.name = quickBooksItem.Name
-        if let itemType = normalizedOptionalText(quickBooksItem.ItemType) {
-            item.itemTypeRawValue = itemType
-        }
+        item.itemTypeRawValue = normalizedOptionalText(quickBooksItem.ItemType) ?? CatalogItemType.unknown.rawValue
+        item.quickBooksCatalogDetailsJSON = QuickBooksCatalogJSON.encode(QuickBooksCatalogDetails(quickBooksItem))
         item.unitPrice = quickBooksItem.UnitPrice ?? 0
         item.purchaseCost = quickBooksItem.PurchaseCost
         item.isTaxable = quickBooksItem.Taxable ?? false
@@ -3110,10 +3119,15 @@ struct QuickBooksItemCreate: Codable, Equatable {
     let IncomeAccountRef: QuickBooksReference?
     let ExpenseAccountRef: QuickBooksReference?
     let PrefVendorRef: QuickBooksReference?
+    var QtyOnHand: Double? = nil
+    var InvStartDate: String? = nil
+    var TrackQtyOnHand: Bool? = nil
+    var AssetAccountRef: QuickBooksReference? = nil
 
     private enum CodingKeys: String, CodingKey {
         case Name, Description, Sku, PurchaseDesc, UnitPrice, PurchaseCost, Taxable, IncomeAccountRef, ExpenseAccountRef, PrefVendorRef
         case ItemType = "Type"
+        case QtyOnHand, InvStartDate, TrackQtyOnHand, AssetAccountRef
     }
 }
 
@@ -3131,7 +3145,8 @@ enum QuickBooksCatalogCreateOperation {
         incomeAccountRef: QuickBooksReference,
         expenseAccountRef: QuickBooksReference?
     ) -> QuickBooksItemCreate {
-        QuickBooksItemCreate(
+        let setup = item.itemType == .inventory ? item.inventorySetup : nil
+        return QuickBooksItemCreate(
             Name: item.name,
             ItemType: item.itemType.rawValue,
             Description: item.itemDescription,
@@ -3140,13 +3155,17 @@ enum QuickBooksCatalogCreateOperation {
             UnitPrice: item.unitPrice,
             PurchaseCost: item.purchaseCost,
             Taxable: item.isTaxable,
-            IncomeAccountRef: incomeAccountRef,
-            ExpenseAccountRef: expenseAccountRef,
+            IncomeAccountRef: item.itemType == .inventory ? setup?.incomeAccount : incomeAccountRef,
+            ExpenseAccountRef: item.itemType == .inventory ? setup?.expenseAccount : expenseAccountRef,
             PrefVendorRef: item.preferredVendorQuickBooksID.flatMap { quickBooksID in
                 quickBooksID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     ? nil
                     : QuickBooksReference(value: quickBooksID, name: item.preferredVendorName)
-            }
+            },
+            QtyOnHand: setup?.openingQuantity,
+            InvStartDate: setup?.openingDate,
+            TrackQtyOnHand: item.itemType == .inventory ? true : nil,
+            AssetAccountRef: setup?.assetAccount
         )
     }
 }
@@ -3164,6 +3183,13 @@ struct QuickBooksItemUpdate: Codable {
     let Taxable: Bool
     let PrefVendorRef: QuickBooksReference?
     let Active: Bool
+    /// Review evidence consumed by the shared server, never a type conversion.
+    let ItemType: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case Id, SyncToken, sparse, Name, Description, Sku, PurchaseDesc, UnitPrice, PurchaseCost, Taxable, PrefVendorRef, Active
+        case ItemType = "Type"
+    }
 
     init(
         Id: String,
@@ -3176,7 +3202,8 @@ struct QuickBooksItemUpdate: Codable {
         PurchaseCost: Double,
         Taxable: Bool,
         PrefVendorRef: QuickBooksReference?,
-        Active: Bool = true
+        Active: Bool = true,
+        ItemType: String? = nil
     ) {
         self.Id = Id
         self.SyncToken = SyncToken
@@ -3190,6 +3217,7 @@ struct QuickBooksItemUpdate: Codable {
         self.Taxable = Taxable
         self.PrefVendorRef = PrefVendorRef
         self.Active = Active
+        self.ItemType = ItemType
     }
 }
 

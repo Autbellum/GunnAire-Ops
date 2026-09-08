@@ -930,7 +930,7 @@ enum GunnAireCloudKitRoundTripProbe {
 enum GunnAireCloudKitSchemaBootstrap {
     static let initializeArgument = "-initializeCloudKitSchema"
     static let cleanupArgument = "-cleanupCloudKitSchemaBootstrap"
-    static let schemaVersion = 24
+    static let schemaVersion = 25
 
     private static let marker = "__GUNNAIRE_CLOUDKIT_SCHEMA_BOOTSTRAP__"
     private static let bootstrapEmail = "schema-bootstrap@gunnaire.invalid"
@@ -1100,6 +1100,8 @@ enum GunnAireCloudKitSchemaBootstrap {
         // Schema-only marker. It is deliberately not a valid application
         // receipt and must never be used as accounting evidence.
         item.quickBooksCatalogReceiptJSON = marker
+        item.quickBooksInventorySetupJSON = marker
+        item.quickBooksCatalogDetailsJSON = marker
         let bootstrapCatalogSnapshot = CatalogLineItemSnapshot.encoded(from: [item]) ?? "[]"
         let serviceLocation = CustomerServiceLocation(
             customer: customer,

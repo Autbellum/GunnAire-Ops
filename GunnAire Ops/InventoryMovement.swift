@@ -414,7 +414,7 @@ enum JobMaterialCloseoutPolicy {
         _ item: Item,
         movements: [InventoryMovement]
     ) -> Bool {
-        item.itemType == .nonInventory ||
+        item.itemType.isMaterial ||
             item.tracksInventory ||
             movements.contains { $0.itemID == item.id }
     }

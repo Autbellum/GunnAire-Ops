@@ -6708,7 +6708,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Review Pricebook Item"].waitForExistence(timeout: 3))
         let itemType = app.segmentedControls["PricebookReviewItemType"]
         XCTAssertTrue(itemType.exists)
-        itemType.buttons["NonInventory"].tap()
+        itemType.buttons["Non-inventory"].tap()
         app.buttons["SavePricebookReviewChanges"].tap()
 
         XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 3))
@@ -6958,6 +6958,61 @@ final class GunnAire_OpsUITests: XCTestCase {
         let retry = app.buttons["Retry publication for Offline Taxable Capacitor"]
         XCTAssertTrue(retry.exists)
         XCTAssertFalse(retry.isEnabled)
+    }
+
+    @MainActor
+    func testAdministratorCreatesInventoryOfflineAndReopensExactSetup() throws {
+        XCUIDevice.shared.orientation = .portrait
+        // The existing UI-fixture reset removes only these scoped test drafts
+        // on launch. Other saved catalog items must not change this journey.
+        let itemName = "Scoped Draft Inventory Capacitor"
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin", "-GunnAirePendingAppRoute", "quickBooksManagement"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
+        app.segmentedControls["QuickBooksWorkspacePicker"].buttons["Sales"].tap()
+        let addItem = app.buttons["Add Catalog Item"]
+        for _ in 0..<14 where !addItem.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(addItem)); addItem.tap()
+        XCTAssertTrue(app.navigationBars["Add Catalog Item"].waitForExistence(timeout: 3))
+        replaceText(in: app.textFields["QuickBooksCatalogItemName"], with: itemName)
+        replaceText(in: app.textFields["QuickBooksCatalogItemSKU"], with: "INV-CAP-45")
+        replaceText(in: app.textFields["QuickBooksCatalogItemPrice"], with: "125.375")
+        // The iPad numeric keyboard must not cover the item-type control.
+        let priceKeyboardEvidence = XCTAttachment(screenshot: app.screenshot())
+        priceKeyboardEvidence.name = "Inventory price keyboard before changing type"
+        priceKeyboardEvidence.lifetime = .keepAlways; add(priceKeyboardEvidence)
+        let inventoryType = app.segmentedControls["QuickBooksCatalogItemType"].buttons["Inventory"]
+        XCTAssertTrue(waitForHittable(inventoryType)); inventoryType.tap()
+        let quantity = app.textFields["InventoryOpeningQuantity"]
+        for _ in 0..<8 where !quantity.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(quantity)); replaceText(in: quantity, with: "4.25")
+        let date = app.textFields["InventoryOpeningDate"]
+        XCTAssertTrue(waitForHittable(date)); replaceText(in: date, with: "2026-09-08")
+        let typed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "2026-09-08"), object: date)
+        XCTAssertEqual(XCTWaiter.wait(for: [typed], timeout: 5), .completed)
+        let evidence = XCTAttachment(screenshot: app.screenshot())
+        evidence.name = "Inventory opening setup offline"; evidence.lifetime = .keepAlways; add(evidence)
+        app.buttons["CreateQuickBooksCatalogItem"].tap()
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 5))
+        let browse = app.buttons["CompanyPricebookDisclosure"]
+        for _ in 0..<14 where !browse.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(browse)); browse.tap()
+        let edit = app.buttons["Edit \(itemName)"]
+        for _ in 0..<8 where !edit.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(edit)); edit.tap()
+        XCTAssertTrue(app.navigationBars["Edit Catalog Item"].waitForExistence(timeout: 3))
+        XCTAssertEqual(app.textFields["CatalogEditSalesPrice"].value as? String, "125.375")
+        let savedQuantity = app.textFields["InventoryOpeningQuantity"]
+        for _ in 0..<8 where !savedQuantity.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(savedQuantity))
+        XCTAssertEqual(savedQuantity.value as? String, "4.25")
+        XCTAssertEqual(app.textFields["InventoryOpeningDate"].value as? String, "2026-09-08")
+        let saved = XCTAttachment(screenshot: app.screenshot())
+        saved.name = "Saved inventory setup and original price"; saved.lifetime = .keepAlways; add(saved)
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].exists)
     }
 
     @MainActor
