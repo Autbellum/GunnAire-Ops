@@ -59,7 +59,7 @@ enum QuickBooksChangeEntity: String, Codable, CaseIterable {
     }
 }
 
-struct QuickBooksChangeHistoryScope: Equatable {
+struct QuickBooksChangeHistoryScope: Codable, Equatable {
     let companyID: UUID
     let realmID: String
     let environment: String
@@ -247,6 +247,7 @@ struct QuickBooksHistoryPage: Decodable {
     private let transport: Request
     private(set) var connectionRevision: String?
     private var proofs: [QuickBooksChangeEntity: QuickBooksHistoryPage] = [:]
+    private var catalogBatch: QuickBooksCatalogHistoryBatch?
 
     init(scope: QuickBooksChangeHistoryScope, check: @escaping () throws -> Void,
          request: @escaping Request) throws {
@@ -294,6 +295,7 @@ struct QuickBooksHistoryPage: Decodable {
 
     func records<T: Decodable>(entity: QuickBooksChangeEntity, as type: T.Type = T.self) async throws -> [T] {
         proofs.removeValue(forKey: entity)
+        if entity == .item { catalogBatch = nil }
         let first = try await request(entity: entity)
         var page = first
         var latest: [String: (QuickBooksHistoryVersion, QuickBooksHistoryTimestamp, Bool)] = [:]
@@ -335,8 +337,18 @@ struct QuickBooksHistoryPage: Decodable {
         // collection revision before even exposing this collection to the UI.
         _ = try await request(entity: entity, original: first, after: first.throughSequence)
         try check()
+        if entity == .item {
+            catalogBatch = try QuickBooksCatalogHistoryBatch(scope: scope,
+                connectionRevision: first.connectionRevision, versions: latest.values.map { $0.0 })
+        }
         proofs[entity] = first.metadataOnly
         return records
+    }
+
+    func catalogHistory() throws -> QuickBooksCatalogHistoryBatch {
+        try check()
+        guard proofs[.item] != nil, let catalogBatch else { throw QuickBooksChangeHistoryError.incomplete }
+        return catalogBatch
     }
 
     func revalidate(_ entities: Set<QuickBooksChangeEntity>) async throws {

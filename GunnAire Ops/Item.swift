@@ -785,6 +785,9 @@ final class Item {
     var quickBooksSyncStatus: String = "pending"
     var quickBooksSyncDetail: String?
     var quickBooksLastSyncedAt: Date?
+    /// Evidence for the last applied catalog projection, not an all-fields or
+    /// webhook acknowledgement. Optional for existing local/CloudKit records.
+    var quickBooksCatalogReceiptJSON: String?
     /// Field-created items remain usable on their originating job, but cannot
     /// become global QBO products/services until an administrator reviews the
     /// price, tax treatment, purchasing identity, and description.

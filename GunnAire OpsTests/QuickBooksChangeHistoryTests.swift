@@ -348,9 +348,13 @@ struct QuickBooksChangeHistoryTests {
         let server = Server(scope)
         server.versions[.item] = [try version("tech", sequence: 1), try version("admin", sequence: 2),
                                  try version("synced", sequence: 3), try version("archived", sequence: 4, fields: ["Active": false])]
-        let records: [QuickBooksItem] = try await client(server).records(entity: .item)
-        try QuickBooksLocalSync.importSnapshot(customers: [], items: records, estimates: [],
-            invoices: [], payments: [], vendors: [], into: context)
+        let reader = try client(server)
+        let records: [QuickBooksItem] = try await reader.records(entity: .item)
+        try await reader.revalidate([.item])
+        #expect(throws: QuickBooksBillingImportReview.self) {
+            try QuickBooksLocalSync.importSnapshot(customers: [], items: records, estimates: [],
+                invoices: [], payments: [], vendors: [], into: context, catalogHistory: reader.catalogHistory())
+        }
         #expect(technician.name == "Field proposal" && technician.unitPrice == 321)
         #expect(technician.requiresPricebookReview && technician.pricebookCreatedByEmail == "tech@example.invalid")
         #expect(admin.unitPrice == 432 && admin.hasPendingQuickBooksCatalogUpdate)
@@ -358,6 +362,10 @@ struct QuickBooksChangeHistoryTests {
         #expect(synced.vendorPartNumber == "P-1" && synced.tracksInventory && synced.reorderPoint == 3)
         #expect(synced.defaultInventoryLocation == "Truck 2")
         #expect(archived.isCatalogArchived && archived.quickBooksID == "archived")
+        #expect(technician.quickBooksCatalogReceiptJSON == nil && admin.quickBooksCatalogReceiptJSON == nil)
+        let receipt = try QuickBooksCatalogApplicationReceipt.decode(#require(synced.quickBooksCatalogReceiptJSON))
+        #expect(receipt.isCurrent(on: synced, scope: scope))
+        #expect(archived.quickBooksCatalogReceiptJSON != nil)
         #expect(invoice.amount == 80 && invoice.catalogSnapshotJSON == sold)
         #expect(invoice.catalogLineSnapshots.first?.unitPrice == 80)
         #expect(try context.fetchCount(FetchDescriptor<Item>()) == 4)

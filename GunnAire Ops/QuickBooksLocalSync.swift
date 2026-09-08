@@ -10,14 +10,48 @@ enum QuickBooksLocalSync {
         invoices: [QuickBooksInvoice],
         payments: [QuickBooksPayment],
         vendors: [QuickBooksVendor],
-        into modelContext: ModelContext
+        into modelContext: ModelContext,
+        catalogHistory: QuickBooksCatalogHistoryBatch? = nil,
+        saveSnapshot: (ModelContext) throws -> Void = { try $0.save() }
     ) throws {
+        // The shared-history import owns one synchronous save. Never roll back
+        // an unrelated editor's unsaved work, or let autosave persist half a
+        // projection and its receipt after an error.
+        if let catalogHistory {
+            try catalogHistory.validate(records: items)
+            guard !modelContext.hasChanges else {
+                throw QuickBooksCatalogImportError.unsavedEdits
+            }
+        }
+        let wasAutosaveEnabled = modelContext.autosaveEnabled
+        var snapshotSaved = false
+        var catalogRollbacks: [() -> Void] = []
+        if catalogHistory != nil { modelContext.autosaveEnabled = false }
+        defer {
+            if catalogHistory != nil {
+                if !snapshotSaved {
+                    for restore in catalogRollbacks { restore() }
+                    modelContext.processPendingChanges()
+                    modelContext.rollback()
+                }
+                modelContext.autosaveEnabled = wasAutosaveEnabled
+            }
+        }
         let existingCustomers = try modelContext.fetch(FetchDescriptor<Customer>())
         let existingItems = try modelContext.fetch(FetchDescriptor<Item>())
+        if catalogHistory != nil {
+            catalogRollbacks = existingItems.map { QuickBooksCatalogApplicationReceipt.captureRollback($0) }
+        }
         let existingEstimates = try modelContext.fetch(FetchDescriptor<Estimate>())
         let existingInvoices = try modelContext.fetch(FetchDescriptor<Invoice>())
         let existingPayments = try modelContext.fetch(FetchDescriptor<Payment>())
         let existingVendors = try modelContext.fetch(FetchDescriptor<Vendor>())
+        let itemUUIDConflicts = QuickBooksBillingIdentity.conflictingKeys(existingItems) { $0.id.uuidString }
+        let unlinkedItems = existingItems.filter {
+            $0.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
+        }
+        let unlinkedItemsByName = Dictionary(grouping: unlinkedItems) { normalized($0.name) }
+        let unlinkedItemsBySKU = Dictionary(grouping: unlinkedItems) { normalized($0.sku ?? "") }
         let remoteInvoiceConflicts = QuickBooksBillingIdentity.conflictingKeys(invoices) { $0.Id }
         let remoteEstimateConflicts = QuickBooksBillingIdentity.conflictingKeys(estimates) { $0.Id }
         let remoteInvoiceLineageConflicts = QuickBooksBillingIdentity.conflictingKeys(invoices) {
@@ -116,7 +150,49 @@ enum QuickBooksLocalSync {
             // Never select an arbitrary local owner or create a third record
             // when this QBO identity is already ambiguous. The conflict stays
             // local and visible until an administrator chooses the owner.
-            guard !conflictedItemIDs.contains(normalizedQuickBooksID) else { continue }
+            guard !conflictedItemIDs.contains(normalizedQuickBooksID) else {
+                if catalogHistory != nil {
+                    reviewReasons.insert("Multiple local items claim one QuickBooks item. Administrator mapping review is required.")
+                }
+                continue
+            }
+            if let catalogHistory {
+                let version = try catalogHistory.version(for: quickBooksItem)
+                let linked = itemsByQBID[normalizedQuickBooksID]
+                // Names and SKUs are useful review candidates, never proof of
+                // identity. Do not silently link a field proposal or create a
+                // duplicate beside an unresolved candidate.
+                if linked == nil {
+                    let skuKey = normalized(quickBooksItem.Sku ?? "")
+                    let candidates = (unlinkedItemsByName[normalized(quickBooksItem.Name)] ?? []) +
+                        (skuKey.isEmpty ? [] : (unlinkedItemsBySKU[skuKey] ?? []))
+                    if !candidates.isEmpty {
+                        for candidate in candidates {
+                            candidate.quickBooksSyncDetail = "A possible QuickBooks match needs administrator review before linking. Your local item is unchanged."
+                        }
+                        reviewReasons.insert("Possible catalog matches need administrator review before linking.")
+                        continue
+                    }
+                }
+                let item = linked ?? Item(name: quickBooksItem.Name, unitPrice: quickBooksItem.UnitPrice ?? 0)
+                guard !itemUUIDConflicts.contains(item.id.uuidString),
+                      item.quickBooksID == nil || item.quickBooksID == quickBooksItem.Id else {
+                    reviewReasons.insert("An item's local UUID or QuickBooks mapping is ambiguous. Local values were preserved.")
+                    continue
+                }
+                if let reason = QuickBooksCatalogApplicationReceipt.reviewReason(for: item, incoming: version, record: quickBooksItem) {
+                    item.quickBooksSyncDetail = reason
+                    if !item.requiresPricebookReview && !item.hasPendingQuickBooksCatalogUpdate {
+                        item.quickBooksSyncStatus = "needs_review"
+                    }
+                    reviewReasons.insert(reason)
+                    continue
+                }
+                if item.modelContext == nil { modelContext.insert(item) }
+                try QuickBooksCatalogApplicationReceipt.apply(quickBooksItem, version: version, to: item)
+                itemsByQBID[normalizedQuickBooksID] = item
+                continue
+            }
             let item = itemsByQBID[normalizedQuickBooksID]
                 ?? Item.matchingLocalCatalogItem(
                     in: existingItems,
@@ -398,7 +474,8 @@ enum QuickBooksLocalSync {
             serviceCalls: reconciledServiceCalls,
             attachments: reconciledAttachments
         )
-        try modelContext.save()
+        try saveSnapshot(modelContext)
+        snapshotSaved = true
         if !reviewReasons.isEmpty {
             throw QuickBooksBillingImportReview(reasons: reviewReasons.sorted())
         }

@@ -1,6 +1,20 @@
 # Native GitHub Actions checks
 
-## Latest completed hosted result: `29e124d`
+## Latest completed hosted result: `8aadb75`
+
+[Native run 34188092219](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34188092219)
+passes iPad and Mac. [Backend run 34188092174](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34188092174)
+passes Python 3.13 and 3.14. Exact-head completion was verified September 8,
+2026. This qualifies the initial native shared-history reader, not the later
+Item application receipts, CloudKit v24 source contract or production release.
+
+The catalog receipt tests are part of the complete native logic target on both
+platforms. The v24 schema tests are part of the unchanged complete Tools suite.
+No workflow selector, assertion or failure gate is removed. Local final-source
+evidence and remaining full-goal requirements are recorded in
+[versioned catalog application](QBO_CATALOG_VERSION_APPLICATION.md).
+
+## Earlier completed hosted result: `29e124d`
 
 [Native run 34184842191](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34184842191)
 passes both iPad and Mac. [Backend run 34184842221](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34184842221)

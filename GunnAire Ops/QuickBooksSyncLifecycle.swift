@@ -129,13 +129,16 @@ final class QuickBooksSyncRun {
         return try await receive(fetch)
     }
 
-    func prepareLocalImport() async throws {
+    @discardableResult
+    func prepareLocalImport() async throws -> QuickBooksCatalogHistoryBatch? {
         try check()
-        guard let sharedHistory else { return }
+        guard let sharedHistory else { return nil }
         let entities = Set(QuickBooksChangeEntity.allCases)
         guard entities.allSatisfy({ successfulResourceIDs.contains($0.resourceID) })
         else { throw QuickBooksChangeHistoryError.incomplete }
         try await perform { try await sharedHistory.revalidate(entities) }
+        try check()
+        return try sharedHistory.catalogHistory()
     }
 
     func commit(_ body: () throws -> Void) throws {

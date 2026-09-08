@@ -89,7 +89,11 @@ for individual application receipts. Existing server events remain pending.
 The old server endpoint is retained for compatibility; it is not used by the
 new native refresh.
 
-This does **not** implement durable per-model provider-version receipts,
+Follow-up: [versioned catalog application](QBO_CATALOG_VERSION_APPLICATION.md)
+adds actual Item projection receipts with pending-edit and rollback protection
+and an additive v24 CloudKit source contract. It is not full event application.
+
+This initial checkpoint does **not** implement durable per-model provider-version receipts,
 device-consumption cursors, CloudKit conflict ownership for this history,
 deletion/merge/void/payment-reallocation application, or the associated natural
 review/recovery actions. Those are the next actual synchronization requirements,

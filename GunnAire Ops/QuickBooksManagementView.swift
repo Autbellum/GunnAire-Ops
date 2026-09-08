@@ -5052,7 +5052,7 @@ struct QuickBooksManagementView: View {
         var completedFailures = failures
         let successfulResources = syncRun.successfulResourceIDs
         do {
-            try await syncRun.prepareLocalImport()
+            let catalogHistory = try await syncRun.prepareLocalImport()
             try syncRun.commit {
                 try QuickBooksLocalSync.importSnapshot(
                     customers: QuickBooksSnapshotImportPolicy.records(customers, resource: "customers", successfulResourceIDs: successfulResources),
@@ -5061,7 +5061,8 @@ struct QuickBooksManagementView: View {
                     invoices: QuickBooksSnapshotImportPolicy.records(invoices, resource: "invoices", successfulResourceIDs: successfulResources),
                     payments: QuickBooksSnapshotImportPolicy.records(payments, resource: "payments", successfulResourceIDs: successfulResources),
                     vendors: QuickBooksSnapshotImportPolicy.records(vendors, resource: "vendors", successfulResourceIDs: successfulResources),
-                    into: context
+                    into: context,
+                    catalogHistory: catalogHistory
                 )
                 if successfulResources.contains("storedCards") {
                     try reconcileStoredPaymentMethodReferences(storedCards, context: context)

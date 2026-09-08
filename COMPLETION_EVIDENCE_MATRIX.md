@@ -1,3 +1,19 @@
+Versioned QBO catalog application, 2026-09-08: the follow-up source applies
+verified dated Item projections and persists scoped version/digest receipts in
+the same local save. It preserves pending edits, sold prices and stock metadata;
+older/conflicting versions and ambiguous matches require review. CloudKit source
+bootstrap v24 adds one optional Item receipt field, with exact schema preflight
+and promotion-manifest gates. QBO_CATALOG_VERSION_APPLICATION.md records the
+real legacy SQLite migration, discovered held-model rollback defect and fix,
+retained qualification, and remaining full financial/item lifecycle and
+multi-device requirements. This is not production promotion, deployment or
+full-goal completion. Final qualification passes 1,308 logic tests on each
+native platform, four iPad UI journeys, 493 Backend tests, 40 Tools tests and
+the unsigned universal Mac Release with both architectures verified. Final
+Inbox/Compose/saved-Invoice screenshots were inspected with no account-email
+footer or internal receipt data shown. Preceding head 8aadb75 passes all four
+hosted jobs; the new catalog candidate requires its own CI after publication.
+
 Native QBO history checkpoint, 2026-09-08: the configured shared backend now
 supplies the existing Management refresh's thirteen accounting collections.
 Original company/realm/grant, capture revision, page counts, canonical digests
