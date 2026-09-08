@@ -4428,10 +4428,23 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
-    private func exerciseNativeBillingReview(recover: Bool, bundle: Bool = false, milestone: Bool = false, missingOriginal: Bool = false, retain: Bool = false) throws {
+    func testRetainedMilestoneScheduleCollectsTheOriginalInvoice() throws {
+        try exerciseNativeBillingReview(recover: false, milestone: true, retain: true, jobHandoff: "Schedule & Jobs")
+    }
+
+    @MainActor
+    func testRetainedMilestoneDocumentationQueueCollectsTheOriginalInvoice() throws {
+        try exerciseNativeBillingReview(recover: false, milestone: true, retain: true, jobHandoff: "Onsite Documentation")
+    }
+
+    @MainActor
+    private func exerciseNativeBillingReview(recover: Bool, bundle: Bool = false, milestone: Bool = false, missingOriginal: Bool = false, retain: Bool = false, jobHandoff: String? = nil) throws {
         let app = XCUIApplication()
         app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-appStoreScreenshotFixtures",
-            "-uiTestSeedCollectibleJob", "-uiTestNativeBillingReview", "-GunnAirePendingAppRoute", "invoices"]
+            "-uiTestSeedCollectibleJob", "-uiTestNativeBillingReview"]
+        // A launch-domain route stays pinned even after a runtime handoff.
+        // Cross-workspace journeys must enter through ordinary navigation.
+        if jobHandoff == nil { app.launchArguments += ["-GunnAirePendingAppRoute", "invoices"] }
         if recover { app.launchArguments.append("-uiTestNativeBillingAccepted") }
         if bundle { app.launchArguments.append("-uiTestBillingBundleReview") }
         if milestone { app.launchArguments.append("-uiTestMilestoneOriginalReview") }
@@ -4439,6 +4452,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         if retain { app.launchArguments.append("-uiTestRetainMilestoneDraft") }
         app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
         app.launch()
+        if jobHandoff != nil { revealSidebarDestination("Invoices", in: app).tap() }
         XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 8))
         let review = app.buttons["BillingReview-\(screenshotInvoiceID)"]
         if !review.exists {
@@ -4545,6 +4559,37 @@ final class GunnAire_OpsUITests: XCTestCase {
             XCTAssertTrue(app.buttons["RetainedMilestoneDraft-\(screenshotInvoiceID)"].waitForExistence(timeout: 4))
             XCTAssertFalse(review.exists, "The retained draft must not remain in the active invoice list.")
         } else { XCTAssertTrue(review.waitForExistence(timeout: 4)) }
+        if let jobHandoff {
+            revealSidebarDestination(jobHandoff, in: app).tap()
+            let scheduleHandoff = jobHandoff == "Schedule & Jobs"
+            XCTAssertTrue(app.navigationBars[scheduleHandoff ? "Schedule" : "Onsite Documentation"].waitForExistence(timeout: 4))
+            let collect = scheduleHandoff ? app.buttons["Collect"].firstMatch
+                : app.buttons["DocumentationQueueCollectPayment-\(screenshotServiceCallID)"]
+            for _ in 0..<12 where !collect.exists || !collect.isHittable { app.swipeUp() }
+            if scheduleHandoff {
+                XCTAssertTrue(app.staticTexts["Due $189.00"].exists,
+                    "The retained draft's zero contribution must not label the job paid.")
+            }
+            XCTAssertTrue(collect.waitForExistence(timeout: 4)); collect.tap()
+            XCTAssertTrue(app.navigationBars[scheduleHandoff ? "Finalize Invoice" : "Record Payment"].waitForExistence(timeout: 5))
+            if scheduleHandoff {
+                XCTAssertTrue(app.staticTexts["Blue Ridge Dental"].exists)
+                XCTAssertTrue(app.staticTexts["Balance due: $189.00"].exists,
+                    "A job still linked to the retained draft must collect the reviewed original, never the zero-balance alias.")
+            } else {
+                XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Blue Ridge Dental - $189.00")).firstMatch.exists)
+                XCTAssertEqual(app.textFields["Amount"].value as? String, "189.00")
+            }
+            XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Retained duplicate draft.")).firstMatch.exists)
+            let handoffEvidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            handoffEvidence.name = "Retained milestone - \(jobHandoff) opens original collection"
+            handoffEvidence.lifetime = .keepAlways; add(handoffEvidence)
+            if !scheduleHandoff {
+                app.navigationBars["Record Payment"].buttons["Cancel"].tap()
+                XCTAssertTrue(app.navigationBars["Payments"].waitForExistence(timeout: 4))
+                XCTAssertTrue(app.segmentedControls["PaymentsWorkspacePicker"].buttons["Collect"].isSelected)
+            }
+        }
     }
 
     @MainActor

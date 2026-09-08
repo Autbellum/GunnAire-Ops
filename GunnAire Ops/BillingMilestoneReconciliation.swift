@@ -111,12 +111,24 @@ enum BillingMilestoneReconciliation {
     /// An incomplete receipt remains visible as a blocked draft, never as an
     /// absent invoice that would invite the user to create another one.
     static func linkedInvoice(for call: ServiceCall, in invoices: [Invoice], payments: [Payment]) -> Invoice? {
-        guard let id = call.linkedInvoiceID else { return nil }
+        guard let id = call.linkedInvoiceID, let customer = call.customer else { return nil }
         let matches = invoices.filter { $0.id == id }
         guard matches.count == 1, let stored = matches.first,
-              stored.customer === call.customer,
+              stored.customer === customer,
               stored.serviceCallID == nil || stored.serviceCallID == call.id else { return nil }
         return original(for: stored, in: invoices, payments: payments) ?? stored
+    }
+
+    /// Legacy documentation may predate the stored job link. Resolve only an
+    /// exact, unique invoice for that customer and job; never guess by amount
+    /// or bypass a present but unresolved historical link.
+    static func documentationInvoice(for call: ServiceCall, in invoices: [Invoice], payments: [Payment]) -> Invoice? {
+        if call.linkedInvoiceID != nil { return linkedInvoice(for: call, in: invoices, payments: payments) }
+        guard let customer = call.customer else { return nil }
+        let matches = project(invoices, payments: payments).activeInvoices.filter {
+            $0.customer === customer && $0.serviceCallID == call.id
+        }
+        return matches.count == 1 ? matches.first : nil
     }
 
     @MainActor static func save(draft: Invoice, original: Invoice, evidence: BillingMilestoneOriginal,

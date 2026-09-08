@@ -254,6 +254,38 @@ import Testing
         #expect(BillingMilestoneReconciliation.linkedInvoice(for: call, in: [f.draft, duplicate], payments: []) == nil)
     }
 
+    @Test func legacyDocumentationFollowsOnlyAnExactUniqueCustomerJobInvoice() throws {
+        let f = try Fixture(); try f.retain()
+        let call = ServiceCall(id: f.job, type: .repair, scheduledDate: Date(), customer: f.app.customer)
+        #expect(BillingMilestoneReconciliation.documentationInvoice(for: call, in: [f.draft, f.original], payments: []) === f.original)
+        #expect(call.linkedInvoiceID == nil)
+        let other = Invoice(serviceCallID: f.job, customer: f.app.customer)
+        #expect(BillingMilestoneReconciliation.documentationInvoice(for: call, in: [f.original, other], payments: []) == nil)
+        other.customer = Customer(name: "Another customer")
+        #expect(BillingMilestoneReconciliation.documentationInvoice(for: call, in: [other], payments: []) == nil)
+        other.customer = f.app.customer; other.serviceCallID = UUID()
+        #expect(BillingMilestoneReconciliation.documentationInvoice(for: call, in: [other], payments: []) == nil)
+    }
+
+    @Test func documentationNeverFallsBackPastAnUnavailableHistoricalLink() throws {
+        let f = try Fixture(); try f.retain()
+        let call = ServiceCall(id: f.job, type: .repair, scheduledDate: Date(),
+            customer: f.app.customer, linkedInvoiceID: f.draft.id)
+        #expect(BillingMilestoneReconciliation.documentationInvoice(for: call, in: [f.original], payments: []) == nil)
+        #expect(BillingMilestoneReconciliation.documentationInvoice(for: call, in: [f.draft], payments: []) === f.draft)
+        #expect(!f.draft.isReadyForPaymentCollection)
+        #expect(!Invoice.isPaid(f.draft, payments: []))
+    }
+
+    @Test func unresolvedCloudKitCustomerCannotResolveAJobInvoice() throws {
+        let f = try Fixture()
+        let call = ServiceCall(id: f.job, type: .repair, scheduledDate: Date(),
+            customer: f.app.customer, linkedInvoiceID: f.draft.id)
+        call.customer = nil; f.draft.customer = nil
+        #expect(BillingMilestoneReconciliation.linkedInvoice(for: call, in: [f.draft], payments: []) == nil)
+        #expect(BillingMilestoneReconciliation.documentationInvoice(for: call, in: [f.draft], payments: []) == nil)
+    }
+
     @Test func foreignBusinessOrRevokedReviewCannotPersistAndMalformedReceiptRemainsVisible() throws {
         let f = try Fixture()
         let foreign = BillingDocumentScope(companyID: UUID(), realmID: "R1", environment: "sandbox",

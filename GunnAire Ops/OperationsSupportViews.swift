@@ -1921,7 +1921,8 @@ struct OnsiteDocumentationView: View {
     }
 
     private var invoicesAwaitingCloseout: [Invoice] {
-        invoices.filter { invoice in
+        BillingMilestoneReconciliation.project(invoices, payments: payments).activeInvoices.filter { invoice in
+            guard invoice.customer != nil else { return false }
             if let call = serviceCall(for: invoice) {
                 return !closeoutReadiness(for: call, invoice: invoice).isReady
             }
@@ -1948,11 +1949,7 @@ struct OnsiteDocumentationView: View {
     }
 
     private func invoice(for call: ServiceCall) -> Invoice? {
-        if let linkedInvoiceID = call.linkedInvoiceID,
-           let linkedInvoice = invoices.first(where: { $0.id == linkedInvoiceID }) {
-            return linkedInvoice
-        }
-        return invoices.first(where: { $0.serviceCallID == call.id })
+        BillingMilestoneReconciliation.documentationInvoice(for: call, in: invoices, payments: payments)
     }
 
     private func payments(for invoice: Invoice?) -> [Payment] {
@@ -2253,16 +2250,20 @@ struct OnsiteDocumentationView: View {
                                 .disabled(!call.canCreateInvoiceDocument)
                                 .accessibilityLabel("Create invoice for \(documentationAccessibilityContext(for: call))")
                                 .accessibilityIdentifier("DocumentationQueueCreateInvoice-\(call.id.uuidString)")
-                            } else {
+                            } else if let invoice = invoice(for: call), invoice.isReadyForPaymentCollection,
+                                      invoiceBalanceDue(for: invoice) > 0.009 {
                                 Button("Collect Payment") {
-                                    if let linkedInvoiceID = call.linkedInvoiceID {
-                                        GunnAireAppIntentRouter.storePaymentCollectionRoute(linkedInvoiceID)
-                                    }
+                                    GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .tint(.green)
                                 .accessibilityLabel("Collect payment for \(documentationAccessibilityContext(for: call))")
                                 .accessibilityIdentifier("DocumentationQueueCollectPayment-\(call.id.uuidString)")
+                            } else {
+                                Button("Review Invoice") { selectedServiceCallID = call.id }
+                                    .buttonStyle(.bordered)
+                                    .accessibilityLabel("Review invoice for \(documentationAccessibilityContext(for: call))")
+                                    .accessibilityIdentifier("DocumentationQueueReviewInvoice-\(call.id.uuidString)")
                             }
                         }
                         if call.linkedInvoiceID == nil,

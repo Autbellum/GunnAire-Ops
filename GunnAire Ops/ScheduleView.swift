@@ -196,8 +196,8 @@ struct ScheduleView: View {
     private var quickBooksAttentionPayments: [Payment] {
         payments
             .filter { payment in
-                payment.needsQuickBooksAttention &&
-                callsForSignedInUser.contains { $0.linkedInvoiceID == payment.invoice.id }
+                guard payment.needsQuickBooksAttention, let invoiceID = payment.invoice?.id else { return false }
+                return callsForSignedInUser.contains { invoice(for: $0)?.id == invoiceID }
             }
             .sorted { $0.date > $1.date }
     }
@@ -1404,7 +1404,7 @@ struct ScheduleView: View {
     private func selectedDayCallRow(for call: ServiceCall) -> some View {
         serviceCallCard(for: call)
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                if canCollectFieldPayments, let invoice = invoice(for: call), !isInvoicePaid(invoice) {
+                if canCollectFieldPayments, let invoice = invoice(for: call), invoice.isReadyForPaymentCollection, !isInvoicePaid(invoice) {
                     Button {
                         openDocumentation(call, at: tapToPayReady ? .tapToPay : .collectPayment)
                     } label: {
@@ -1504,7 +1504,7 @@ struct ScheduleView: View {
                     .accessibilityIdentifier("OpenDocumentation-\(call.id.uuidString)")
                 }
 
-                if canCollectFieldPayments, let invoice = invoice(for: call), !isInvoicePaid(invoice) {
+                if canCollectFieldPayments, let invoice = invoice(for: call), invoice.isReadyForPaymentCollection, !isInvoicePaid(invoice) {
                     Button(tapToPayReady ? "Pay" : "Collect") {
                         openDocumentation(call, at: tapToPayReady ? .tapToPay : .collectPayment)
                     }
@@ -1645,15 +1645,18 @@ struct ScheduleView: View {
                     Label(estimate.status.capitalized, systemImage: "list.clipboard.fill")
                 }
                 if (isAdminUser || canCollectFieldPayments), let invoice = invoice(for: call) {
-                    Label(invoice.status.capitalized, systemImage: isInvoicePaid(invoice) ? "checkmark.circle.fill" : "creditcard.fill")
+                    Label(invoice.paymentCollectionBlockedMessage == nil
+                          ? Invoice.resolvedStatus(for: invoice, payments: payments).capitalized : "Invoice review",
+                          systemImage: invoice.paymentCollectionBlockedMessage != nil ? "exclamationmark.triangle.fill"
+                          : isInvoicePaid(invoice) ? "checkmark.circle.fill" : "creditcard.fill")
+                } else if (isAdminUser || canCollectFieldPayments), call.linkedInvoiceID != nil {
+                    Label("Invoice pending sync", systemImage: "icloud")
                 }
                 if (isAdminUser || canCollectFieldPayments) && isCollectionOverdue(for: call) {
                     Label("Overdue", systemImage: "exclamationmark.triangle.fill")
                 }
                 if (isAdminUser || canCollectFieldPayments), let balanceDue = balanceDue(for: call), balanceDue > 0 {
                     Text("Due \(balanceDue, format: .currency(code: "USD"))")
-                } else if (isAdminUser || canCollectFieldPayments) && call.linkedInvoiceID != nil {
-                    Text("Paid")
                 }
             }
             .font(.caption2)
@@ -1870,8 +1873,7 @@ struct ScheduleView: View {
     }
 
     private func invoice(for call: ServiceCall) -> Invoice? {
-        guard let invoiceID = call.linkedInvoiceID else { return nil }
-        return invoices.first { $0.id == invoiceID }
+        BillingMilestoneReconciliation.linkedInvoice(for: call, in: invoices, payments: payments)
     }
 
     private func estimate(for call: ServiceCall) -> Estimate? {
@@ -1880,7 +1882,7 @@ struct ScheduleView: View {
     }
 
     private func balanceDue(for call: ServiceCall) -> Double? {
-        guard let invoice = invoice(for: call) else { return nil }
+        guard let invoice = invoice(for: call), invoice.isReadyForPaymentCollection else { return nil }
         return Invoice.outstandingBalance(for: invoice, payments: payments)
     }
 

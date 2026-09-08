@@ -1,3 +1,21 @@
+Job/invoice handoff follow-up, 2026-09-08:
+JOB_INVOICE_HANDOFF_RECONCILIATION.md records exact original-invoice resolution
+for Schedule balances/payment attention and Documentation Queue collection,
+strict legacy customer/job matching and blocked missing/ambiguous links.
+Schedule's retained-draft-as-paid defect is reproduced and corrected. UI-test
+diagnostics separately corrected the expected payment destination and a pinned
+launch route, without altering production routing. Mac and iPad each pass 1,413
+logic tests; the final iPad result passes all seven selected UI journeys (1,420
+total). Exact execution trees, both final collection screens and frozen source
+hashes were checked. Unsigned universal Mac Release passes with both architectures.
+All seven follow-up paths match the original iCloud project, preserving 215
+unrelated changed files and its empty index. This local review commit remains
+separate from published PR #18 head 0fa15fe (42 selectors);
+its prepared 44-selector workflow is not published. Legacy receipt/estimate
+consumers, pending-CloudKit empty-state wording, signed multi-device acceptance
+and the full business-suite goal remain open. No merge, deployment, financial
+write, schema promotion, signing change or physical installation occurred.
+
 Local milestone reconciliation qualification, 2026-09-08:
 MILESTONE_DRAFT_RECONCILIATION.md records an office-only review receipt that
 preserves both documents and follows the exact original for reporting, job
