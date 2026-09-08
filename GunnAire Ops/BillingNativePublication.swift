@@ -17,10 +17,13 @@ struct BillingNativeContext: Decodable {
     let syncToken: String?
     let invoice: QuickBooksInvoice?
     let estimate: QuickBooksEstimate?
+    let milestoneIdentityVersion: Int?
+    let milestone: BillingMilestoneOriginal?
 
     private enum CodingKeys: String, CodingKey {
         case companyID, realmID, environment, documentType, localDocumentID, localCustomerID, serviceCallID
         case connectionRevision, customerProviderID, providerID, authority, assignment, document
+        case milestoneIdentityVersion, milestone
     }
     init(from decoder: Decoder) throws {
         let v = try decoder.container(keyedBy: CodingKeys.self)
@@ -36,6 +39,8 @@ struct BillingNativeContext: Decodable {
         providerID = try v.decodeIfPresent(String.self, forKey: .providerID)
         authority = try v.decode(String.self, forKey: .authority)
         assignment = try v.decodeIfPresent(JobBillingAssignment.self, forKey: .assignment)
+        milestoneIdentityVersion = try v.decodeIfPresent(Int.self, forKey: .milestoneIdentityVersion)
+        milestone = try v.decodeIfPresent(BillingMilestoneOriginal.self, forKey: .milestone)
         struct Version: Decodable { let SyncToken: String? }
         syncToken = try v.decodeIfPresent(Version.self, forKey: .document)?.SyncToken
         switch documentType {
@@ -44,13 +49,21 @@ struct BillingNativeContext: Decodable {
         }
     }
 
-    func validate(_ scope: BillingDocumentScope, customerID: UUID, jobID: UUID?) throws {
+    func validate(_ scope: BillingDocumentScope, customerID: UUID, jobID: UUID?, milestoneID: UUID? = nil) throws {
         guard companyID == scope.companyID, realmID == scope.realmID, environment == scope.environment,
               documentType == scope.documentType, localDocumentID == scope.localDocumentID,
               localCustomerID == customerID, serviceCallID == jobID,
               JobBillingAssignmentSnapshot.validConnectionRevision(connectionRevision),
               !customerProviderID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               ["office", "assigned"].contains(authority) else { throw BillingPublicationError.invalidResponse }
+        if let milestoneID {
+            guard milestoneIdentityVersion == 1 else { throw BillingNativeError.milestoneServiceUnavailable }
+            if let milestone {
+                guard milestone.projectMilestoneID == milestoneID, milestone.localCustomerID == customerID else {
+                    throw BillingPublicationError.invalidResponse
+                }
+            }
+        } else if milestone != nil { throw BillingPublicationError.invalidResponse }
         if let assignment {
             guard let jobID else { throw BillingPublicationError.invalidResponse }
             try assignment.validate(.init(companyID: companyID, realmID: realmID, environment: environment, serviceCallID: jobID), customerID: customerID)
@@ -64,6 +77,9 @@ struct BillingNativeContext: Decodable {
         let ref = invoice?.CustomerRef.value ?? estimate?.CustomerRef.value
         let token = syncToken
         let date = invoice?.TxnDate ?? estimate?.TxnDate
+        if let milestoneID, try BillingMilestoneIdentity.reference(in: invoice?.PrivateNote) != milestoneID {
+            throw BillingPublicationError.invalidResponse
+        }
         guard !providerID.isEmpty, id == providerID, ref == customerProviderID, token?.isEmpty == false,
               let date, date.count == 10,
               QuickBooksDateOnly.date(from: date).map({ QuickBooksDateOnly.string(from: $0) == date }) == true,
@@ -104,7 +120,7 @@ extension BillingPublicationRequest {
                 }
             }
             if let values = value as? [Any] { return values.map { normalize($0) } }
-            if let text = value as? String, ["companyID", "localDocumentID", "localCustomerID", "serviceCallID"].contains(key ?? "") {
+            if let text = value as? String, ["companyID", "localDocumentID", "localCustomerID", "serviceCallID", "projectMilestoneID"].contains(key ?? "") {
                 return text.lowercased()
             }
             return value
@@ -116,6 +132,7 @@ extension BillingPublicationRequest {
 
 enum BillingNativeError: LocalizedError, Equatable {
     case storage, originalDraft, pending, connection, mapping
+    case milestoneOriginal(UUID), milestoneServiceUnavailable
     var errorDescription: String? {
         switch self {
         case .storage: "The original billing request could not be saved or verified on this device. Your draft was retained; no replacement request was sent."
@@ -123,6 +140,8 @@ enum BillingNativeError: LocalizedError, Equatable {
         case .pending: "Open Billing Review to recover or review the original request. No replacement invoice or estimate was sent."
         case .connection: "The QuickBooks connection changed. Keep the original request for office review."
         case .mapping: "The saved QuickBooks link does not match the shared business record. An administrator can review Existing Links in QuickBooks settings."
+        case .milestoneOriginal: "Another device already saved this milestone's original invoice. Open Billing Review to find it. This local draft is retained; no second invoice was sent."
+        case .milestoneServiceUnavailable: "Shared milestone billing needs a service update. This invoice stays saved on your device; no separate QuickBooks request was sent."
         }
     }
 }
@@ -322,6 +341,10 @@ final class BillingNativePublication {
             customerID: pending.request.localCustomerID, providerCustomerID: pending.request.document.CustomerRef.value, workflow: workflow)
         try check()
         let remoteLines = result.invoice?.Line ?? result.estimate?.Line
+        let milestone = try pending.request.projectMilestoneID ?? BillingMilestoneIdentity.reference(in: pending.request.document.PrivateNote)
+        guard try BillingMilestoneIdentity.reference(in: result.invoice?.PrivateNote ?? result.estimate?.PrivateNote) == milestone else {
+            throw BillingPublicationError.invalidResponse
+        }
         guard result.publication.operation == pending.request.operation,
               pending.request.document.Id == nil || pending.request.document.Id == result.publication.providerID,
               QuickBooksBillingLineEvidence.matches(expected: pending.request.document.Line, reported: remoteLines),

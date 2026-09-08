@@ -2,6 +2,14 @@
 
 This is a small backend for sharing app users, roles, uploaded field receipts, and field payment records across iPads.
 
+Candidate **2026.09.08.37** adds shared milestone-invoice identity, an additive
+index of encrypted original proposals, concurrent dispatch exclusion, immutable
+issued allocations and read-only original-invoice lookup. The native app derives
+stable new invoice IDs and offers an in-place recovery handoff without deleting
+offline drafts. See [shared milestone billing](../SHARED_MILESTONE_BILLING.md)
+for qualification, older-client limitations and safe rollout/rollback boundaries.
+This candidate is not deployed and does not establish physical CloudKit acceptance.
+
 Candidate **2026.09.08.34** adds the native change-history consumption contract:
 original-grant and capture-revision pins, exact history counts and canonical
 record bytes/digests with bounded wire pages. The existing Management refresh

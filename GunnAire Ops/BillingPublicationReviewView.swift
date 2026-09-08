@@ -18,6 +18,9 @@ import SwiftData
     @State private var confirmApproval = false
     @State private var visibleLines = 20
     @State private var didLoad = false
+    @State private var milestoneOriginal: BillingMilestoneOriginal?
+    @Query private var syncedInvoices: [Invoice]
+    @State private var visitID = UUID()
 
     init(document: QuickBooksBillingDocument, context: ModelContext) {
         self.document = document; self.context = context
@@ -26,7 +29,8 @@ import SwiftData
 
     private var proposal: BillingPublicationRequest? { original?.proposal ?? pending?.request }
     private var status: String {
-        switch original?.publication.state {
+        if milestoneOriginal != nil { return "Original milestone invoice found" }
+        return switch original?.publication.state {
         case .reserved: "Not yet sent to QuickBooks"
         case .sending, .unknown: "Checking the original request"
         case .confirmed: "Confirmed in QuickBooks"
@@ -45,6 +49,29 @@ import SwiftData
             }
             if let message { Section { Text(message).accessibilityIdentifier("BillingReviewMessage") } }
             if busy { ProgressView("Checking billing…") }
+            if let milestoneOriginal {
+                Section {
+                    if let invoice = matchingMilestoneInvoice(milestoneOriginal) {
+                        Text("Another device saved this milestone first. Open that invoice to review its saved items and QuickBooks status.")
+                            .font(.callout).foregroundStyle(.secondary)
+                        NavigationLink("Open original milestone invoice") {
+                            BillingMilestoneInvoiceReview(invoice: invoice, context: context)
+                        }
+                        .accessibilityIdentifier("BillingReviewOpenMilestoneOriginal")
+                    } else {
+                        Text(syncedInvoices.contains(where: { $0.id == milestoneOriginal.localDocumentID })
+                             ? "The original invoice needs review on this device. Reopen your business workspace and ask accounting to check its customer, job and saved identity."
+                             : "The original invoice is still syncing to this device. Keep this local draft and check again when CloudKit finishes syncing.")
+                            .accessibilityIdentifier("BillingReviewMilestoneSyncPending")
+                    }
+                    Button("Check again") { Task { await load() } }.disabled(busy)
+                        .accessibilityIdentifier("BillingReviewCheckMilestoneOriginal")
+                } header: {
+                    Text("Original milestone invoice")
+                } footer: {
+                    Text("No invoice, attachment or payment is replaced or deleted.")
+                }
+            }
             if let proposal {
                 Section("Original proposal") {
                     LabeledContent("Document", value: proposal.documentType.rawValue)
@@ -83,7 +110,13 @@ import SwiftData
         .navigationTitle("Billing Review")
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
-        .onDisappear { lifecycle.cancel() }
+        .onDisappear {
+            visitID = UUID()
+            lifecycle.cancel()
+            // Retain the displayed navigation link while its child is pushed;
+            // recreate only the cancelled workflow owner on the next appearance.
+            flow = nil; shared = nil; message = nil; busy = false
+        }
         .confirmationDialog("Publish this original proposal?", isPresented: $confirmSend, titleVisibility: .visible) {
             Button("Publish original proposal") { Task { await publish() } }
         } message: { Text("QuickBooks will receive the saved lines, prices and dates shown here. Changed local drafts are not substituted.") }
@@ -93,7 +126,9 @@ import SwiftData
     }
 
     private func load() async {
-        guard !busy else { return }; busy = true; defer { busy = false }
+        guard !busy else { return }
+        let visit = visitID
+        busy = true; defer { if visit == visitID { busy = false } }
         do {
             if flow == nil {
                 #if DEBUG
@@ -107,12 +142,25 @@ import SwiftData
                 flow = value; shared = try value.openSharedReview()
             }
             try await refresh()
-        } catch { message = error.localizedDescription }
+            if visit == visitID { message = nil }
+        } catch is CancellationError {
+            // Navigation invalidates the old owner; it is not a business error.
+        } catch { if visit == visitID { message = error.localizedDescription } }
     }
     private func refresh() async throws {
         guard let shared, let customer = document.customer else { throw BillingNativeError.pending }
-        original = try await shared.original(customerID: customer.id)
+        let visit = visitID
+        if let found = try await flow?.originalMilestone(), found.localDocumentID != document.id {
+            guard visit == visitID else { throw CancellationError() }
+            milestoneOriginal = found
+            original = nil; pending = nil; didLoad = true
+            return
+        }
+        let found = try await shared.original(customerID: customer.id)
         try shared.check()
+        guard visit == visitID else { throw CancellationError() }
+        milestoneOriginal = nil
+        original = found
         if shared.journal.pending == nil, let original, let flow,
            original.proposal.draftRevision == (try flow.billingDraftRevision()), original.publication.state != .cancelled {
             try shared.adoptOriginal(original, revision: flow.billingDraftRevision())
@@ -120,50 +168,85 @@ import SwiftData
         pending = shared.journal.pending
         didLoad = true
     }
+
+    private func matchingMilestoneInvoice(_ original: BillingMilestoneOriginal) -> Invoice? {
+        // Observe CloudKit arrivals but never choose arbitrarily between duplicate
+        // model UUIDs or a record from another customer, job or business access.
+        guard syncedInvoices.filter({ $0.id == original.localDocumentID }).count == 1,
+              let invoice = try? original.localInvoice(in: context, for: document) else { return nil }
+        do { try QuickBooksBillingAccessPolicy.validate(context: context, document: .invoice(invoice)); return invoice }
+        catch { return nil }
+    }
     private func recover() async {
-        guard !busy else { return }; busy = true; defer { busy = false }
+        guard !busy else { return }; let visit = visitID
+        busy = true; defer { if visit == visitID { busy = false } }
         do {
             try await refresh()
             if pending != nil, let flow,
                [.sending, .unknown, .confirmed].contains(original?.publication.state) {
                 let result = try await flow.recoverOriginalFromReview()
+                guard visit == visitID else { return }
                 message = result.message
                 try await refresh()
             } else { message = status }
-        } catch { message = error.localizedDescription }
+        } catch is CancellationError {} catch { if visit == visitID { message = error.localizedDescription } }
     }
     private func publish() async {
-        guard !busy, let flow else { return }; busy = true; defer { busy = false }
+        guard !busy, let flow else { return }; let visit = visitID
+        busy = true; defer { if visit == visitID { busy = false } }
         do {
             let result = try await flow.resumeOriginalFromReview()
+            guard visit == visitID else { return }
             message = result.message
             try await refresh()
             do { try await flow.uploadLinkedAttachments() }
-            catch { message = result.message + " Supporting files remain pending." }
-        } catch { message = error.localizedDescription; try? await refresh() }
+            catch { if visit == visitID { message = result.message + " Supporting files remain pending." } }
+        } catch is CancellationError {} catch {
+            guard visit == visitID else { return }
+            message = error.localizedDescription; try? await refresh()
+        }
     }
     private func approve() async {
         guard !busy, let shared, let original, flow?.canApproveSharedDraft == true else { return }
-        busy = true; defer { busy = false }
+        let visit = visitID
+        busy = true; defer { if visit == visitID { busy = false } }
         do {
             try await shared.client.approveOriginal(original, workflow: shared.workflow)
+            guard visit == visitID else { return }
             message = "Field prices approved. The original technician can now publish this unchanged proposal."
             try await refresh()
-        } catch { message = error.localizedDescription }
+        } catch is CancellationError {} catch { if visit == visitID { message = error.localizedDescription } }
     }
     private func cancel() async {
-        guard !busy, let shared else { return }; busy = true; defer { busy = false }
+        guard !busy, let shared else { return }; let visit = visitID
+        busy = true; defer { if visit == visitID { busy = false } }
         do {
             try await shared.cancelUnsent()
+            guard visit == visitID else { return }
             original = nil; pending = nil
             message = "Unsent request cancelled. Return to this document to review and save your changes. No QuickBooks record was deleted."
-        } catch { message = error.localizedDescription }
+        } catch is CancellationError {} catch { if visit == visitID { message = error.localizedDescription } }
     }
 
     #if DEBUG
     private func loadFixture() throws {
         let company = UUID(uuidString: "10000000-0000-4000-8000-000000000001")!
         let attempt = UUID(uuidString: "10000000-0000-4000-8000-000000000002")!
+        let stage = UUID(uuidString: "10000000-0000-4000-8000-000000000007")!
+        let originalID = UUID(uuidString: "10000000-0000-4000-8000-000000000006")!
+        let handoff = ProcessInfo.processInfo.arguments.contains("-uiTestMilestoneOriginalReview")
+        let missingOriginal = ProcessInfo.processInfo.arguments.contains("-uiTestMilestoneOriginalMissing")
+        if handoff, case .invoice(let invoice) = document, let customer = invoice.customer {
+            invoice.projectMilestoneID = stage; invoice.projectMilestoneTitle = "Deposit"
+            invoice.serviceCallID = invoice.serviceCallID ?? UUID(uuidString: "10000000-0000-4000-8000-000000000008")!
+            if !missingOriginal, !(try context.fetch(FetchDescriptor<Invoice>())).contains(where: { $0.id == originalID }) {
+                context.insert(Invoice(id: originalID, serviceCallID: invoice.serviceCallID,
+                    serviceLocationID: invoice.serviceLocationID, siteAddress: invoice.siteAddress, customer: customer,
+                    catalogSnapshotJSON: invoice.catalogSnapshotJSON, amount: invoice.subtotalAmount,
+                    projectMilestoneID: stage, projectMilestoneTitle: "Deposit",
+                    dueDate: invoice.effectiveDueDate(), createdAt: invoice.createdAt))
+            }
+        }
         let recover = ProcessInfo.processInfo.arguments.contains("-uiTestNativeBillingAccepted")
         var state = recover ? "confirmed" : "reserved"
         var request: BillingPublicationRequest?
@@ -177,6 +260,16 @@ import SwiftData
                 "operation": "create", "state": state, "providerID": state == "confirmed" ? "BILLING-UI-189" : NSNull(),
                 "updatedAt": "2026-09-07T12:00:00Z"]
             if method == "GET" {
+                if handoff, path.hasPrefix("/api/billing-publications/context?") {
+                    return try JSONSerialization.data(withJSONObject: ["companyID": company.uuidString, "realmID": request.realmID,
+                        "environment": request.environment, "documentType": "Invoice", "localDocumentID": document.id.uuidString,
+                        "localCustomerID": request.localCustomerID.uuidString, "serviceCallID": document.serviceCallID!.uuidString,
+                        "connectionRevision": request.connectionRevision, "customerProviderID": request.document.CustomerRef.value,
+                        "providerID": NSNull(), "authority": "office", "assignment": NSNull(), "document": NSNull(),
+                        "milestoneIdentityVersion": 1,
+                        "milestone": ["projectMilestoneID": stage.uuidString, "localDocumentID": originalID.uuidString,
+                            "localCustomerID": request.localCustomerID.uuidString, "publicationID": attempt.uuidString, "state": "reserved"]])
+                }
                 return try JSONSerialization.data(withJSONObject: ["publication": row,
                     "proposal": JSONSerialization.jsonObject(with: JSONEncoder().encode(request)), "reviewableByOffice": false])
             }
@@ -230,6 +323,36 @@ import SwiftData
         flow = value; shared = try value.openSharedReview()
     }
     #endif
+}
+
+@MainActor private struct BillingMilestoneInvoiceReview: View {
+    let invoice: Invoice
+    let context: ModelContext
+    @Query private var invoices: [Invoice]
+    @Query private var users: [AppUser]
+
+    private var allowed: Bool {
+        guard !users.isEmpty, invoices.contains(where: { $0 === invoice }) else { return false }
+        do { try QuickBooksBillingAccessPolicy.validate(context: context, document: .invoice(invoice)); return true }
+        catch { return false }
+    }
+
+    var body: some View {
+        List {
+            if allowed {
+                Section { ProjectProgressInvoiceReview(invoice: invoice) }
+                Section {
+                    NavigationLink("Billing Review") {
+                        BillingPublicationReviewView(document: .invoice(invoice), context: context)
+                    }
+                }
+            } else {
+                Text("Reopen this invoice from your current business workspace.")
+            }
+        }
+        .navigationTitle("Original Invoice")
+        .navigationBarTitleDisplayMode(.inline)
+    }
 }
 
 /// Keep the bill readable, with exact repeated components one disclosure away.

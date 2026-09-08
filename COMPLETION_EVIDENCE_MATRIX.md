@@ -1,3 +1,20 @@
+Shared milestone candidate, 2026-09-08: SHARED_MILESTONE_BILLING.md records
+stable new invoice identities, preserved legacy originals, atomic company-scoped
+publication ownership, exact office authority, provider duplicate-reference
+checks and native original-invoice/CloudKit-wait handoffs. Tests exposed the
+first-publication edit-lock defect; visual QA exposed a raw cancellation error
+after Back despite initially green UI tests. Both are corrected and retained
+as evidence. Final frozen source passes 1,390 logic tests on each native platform,
+all seven selected iPad journeys, 564 Backend tests, 51 Tools tests and unsigned
+universal Mac Release with both architectures verified. Exact test trees and
+all three final milestone screens were inspected. The native stored-data schema
+is unchanged; backend candidate 2026.09.08.37 adds only a derived identity index.
+Hosted checks/publication remain separately qualified. Signed multi-device and
+mixed-version CloudKit acceptance, local duplicate-draft/report reconciliation,
+legacy missing provider references, general feasible allocation and the remaining
+full competitor/Google/vendor/access/Handoff/Tap-to-Pay objective are incomplete.
+No merge, deployment, live accounting write, schema promotion or signing change.
+
 Bundle milestone candidate, 2026-09-08: PROJECT_BUNDLE_MILESTONE_BILLING.md
 records whole-plan cent/quantity/discount conservation, original bundle and
 member evidence, prior-invoice reconciliation, before-tax staged scope, and

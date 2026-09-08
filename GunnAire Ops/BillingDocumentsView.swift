@@ -5071,7 +5071,12 @@ GunnAire
             let invoiceDueDate = configuredDefaultInvoicePaymentTerms.dueDate(from: invoiceCreatedAt)
                 ?? Calendar.current.startOfDay(for: invoiceCreatedAt)
 
+            let invoiceID = BillingMilestoneIdentity.invoiceID(for: milestone.id)
+            guard !invoices.contains(where: { $0.id == invoiceID }) else {
+                throw ProjectBillingValidationError.issuedAllocationChanged
+            }
             let invoice = Invoice(
+                id: invoiceID,
                 serviceCallID: call.id,
                 serviceLocationID: call.serviceLocationID,
                 siteAddress: call.siteAddress,
@@ -10730,9 +10735,10 @@ enum CatalogVendorSelection {
 }
 
 enum BillingInvoiceMutationPolicy {
-    static func blockedMessage(for invoice: Invoice, payments: [Payment]) -> String? {
+    static func blockedMessage(for invoice: Invoice, payments: [Payment], allowingInitialMilestonePublication: Bool = false) -> String? {
         if let message = invoice.quickBooksReconciliationReviewMessage { return message }
-        if invoice.isProjectProgressInvoice {
+        if invoice.isProjectProgressInvoice && (!allowingInitialMilestonePublication ||
+            invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) {
             return "Progress-invoice lines are locked to the approved milestone allocation. Correct the project plan before invoicing, or create a separate approved adjustment."
         }
         if invoice.finalizedAt != nil || invoice.customerSignedAt != nil {

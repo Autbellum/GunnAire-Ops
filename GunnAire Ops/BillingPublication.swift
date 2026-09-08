@@ -78,7 +78,7 @@ struct BillingPublicationProposal: Codable {
             let line = line.trimmingCharacters(in: .whitespaces).lowercased()
             return !["gunnaire invoice id:", "gunnaire estimate id:", "gunnaire publication:"].contains { line.hasPrefix($0) }
         }.joined(separator: "\n")
-        return note.isEmpty ? nil : note
+        return note.isEmpty ? nil : String(note.prefix(3_800))
     }
 }
 
@@ -95,6 +95,7 @@ struct BillingPublicationRequest: Codable {
     var serviceCallID: UUID?
     var assignmentRevision: Int?
     var draftRevision: String?
+    var projectMilestoneID: UUID?
 
     var scope: BillingDocumentScope {
         .init(companyID: companyID, realmID: realmID, environment: environment,
@@ -108,6 +109,7 @@ struct BillingPublicationRequest: Codable {
         guard JobBillingAssignmentSnapshot.validConnectionRevision(connectionRevision),
               draftRevision.map(JobBillingAssignmentSnapshot.validConnectionRevision) ?? true,
               assignmentRevision == nil || serviceCallID != nil,
+              projectMilestoneID == nil || (documentType == .invoice && serviceCallID != nil),
               assignmentRevision.map({ (1...2_147_483_647).contains($0) }) ?? true,
               !document.CustomerRef.value.isEmpty, !document.Line.isEmpty, document.Line.count <= 750,
               document.CurrencyRef.value == "USD", document.TxnDate.count == 10,
@@ -325,6 +327,10 @@ struct BillingPublicationClient {
         let result = try await perform(BillingPublicationResponse.self, path: "/api/billing-publications",
                                        body: encode(request), workflow: workflow)
         try result.validate(request.scope, customerID: request.localCustomerID, providerCustomerID: request.document.CustomerRef.value)
+        let milestone = try request.projectMilestoneID ?? BillingMilestoneIdentity.reference(in: request.document.PrivateNote)
+        guard try BillingMilestoneIdentity.reference(in: result.invoice?.PrivateNote ?? result.estimate?.PrivateNote) == milestone else {
+            throw BillingPublicationError.invalidResponse
+        }
         guard result.publication.operation == request.operation,
               QuickBooksBillingLineEvidence.matches(expected: request.document.Line, reported: result.invoice?.Line ?? result.estimate?.Line),
               (result.invoice?.TxnDate ?? result.estimate?.TxnDate) == request.document.TxnDate,
@@ -368,12 +374,17 @@ struct BillingPublicationClient {
     }
 
     func context(_ scope: BillingDocumentScope, customerID: UUID, jobID: UUID?,
+                 milestoneID: UUID? = nil,
                  workflow: QuickBooksDataAPI.CapturedWorkspaceWorkflow) async throws -> BillingNativeContext {
         try scope.validate(workflow)
         var query = scope.query + [.init(name: "localCustomerID", value: customerID.uuidString.lowercased())]
         if let jobID { query.append(.init(name: "serviceCallID", value: jobID.uuidString.lowercased())) }
+        if let milestoneID {
+            guard scope.documentType == .invoice, jobID != nil else { throw BillingPublicationError.invalidProposal }
+            query.append(.init(name: "projectMilestoneID", value: milestoneID.uuidString.lowercased()))
+        }
         let result = try await perform(BillingNativeContext.self, path: path("/api/billing-publications/context", query), workflow: workflow)
-        try result.validate(scope, customerID: customerID, jobID: jobID)
+        try result.validate(scope, customerID: customerID, jobID: jobID, milestoneID: milestoneID)
         return result
     }
 

@@ -77,6 +77,9 @@ enum QuickBooksBillingDocument {
     var label: String {
         switch self { case .invoice: "Invoice"; case .estimate: "Estimate" }
     }
+    var projectMilestoneID: UUID? {
+        switch self { case .invoice(let value): value.projectMilestoneID; case .estimate: nil }
+    }
 
     /// Capture values, not a closure that reads mutable "before" values later.
     private static func unchanged<M: AnyObject, V: Equatable>(_ model: M, _ paths: [KeyPath<M, V>]) -> () -> Bool {
@@ -347,6 +350,10 @@ final class QuickBooksBillingWorkflow {
             if let client = self.api.billingPublicationClient {
                 let journal = try self.makeSharedPublication(client)
                 self.sharedPublication = journal
+                if self.customerID?.isEmpty == false,
+                   let original = try await self.originalMilestone(), original.localDocumentID != self.document.id {
+                    throw BillingNativeError.milestoneOriginal(original.localDocumentID)
+                }
                 let revision = try self.billingDraftRevision()
                 if let pending = journal.journal.pending,
                    !pending.settled || pending.draftRevision == revision {
@@ -425,6 +432,17 @@ final class QuickBooksBillingWorkflow {
         return value
     }
 
+    /// Read-only cross-device handoff once the customer has a shared link. It never
+    /// relabels this draft or substitutes another invoice's frozen allocation.
+    func originalMilestone() async throws -> BillingMilestoneOriginal? {
+        guard let milestoneID = document.projectMilestoneID else { return nil }
+        let shared = try openSharedReview()
+        let evidence = try await shared.client.context(shared.scope.document, customerID: customer.id,
+            jobID: document.serviceCallID, milestoneID: milestoneID, workflow: run.workflow)
+        try check()
+        return evidence.milestone
+    }
+
     var canApproveSharedDraft: Bool {
         guard let email = actorEmail, let users = try? context.fetch(FetchDescriptor<AppUser>()),
               let role = users.first(where: { AppAccess.normalizedEmail($0.email) == AppAccess.normalizedEmail(email) && $0.isActive })?.role else { return false }
@@ -440,7 +458,8 @@ final class QuickBooksBillingWorkflow {
         try check()
         if case .invoice(let invoice) = document,
            let reason = BillingInvoiceMutationPolicy.blockedMessage(for: invoice,
-               payments: try context.fetch(FetchDescriptor<Payment>()).filter { $0.invoice != nil }) {
+               payments: try context.fetch(FetchDescriptor<Payment>()).filter { $0.invoice != nil },
+               allowingInitialMilestonePublication: pending.request.operation == .create) {
             throw QuickBooksInvoicePublicationRecoveryError.protectedHistory(reason)
         }
         attemptedWrite = true
@@ -486,8 +505,12 @@ final class QuickBooksBillingWorkflow {
 
     private func publishSharedDocument(_ shared: BillingNativePublication) async throws -> Outcome {
         let scope = shared.scope.document
-        let evidence = try await shared.client.context(scope, customerID: customer.id, jobID: document.serviceCallID, workflow: run.workflow)
+        let evidence = try await shared.client.context(scope, customerID: customer.id, jobID: document.serviceCallID,
+            milestoneID: document.projectMilestoneID, workflow: run.workflow)
         try check()
+        if let original = evidence.milestone, original.localDocumentID != document.id {
+            throw BillingNativeError.milestoneOriginal(original.localDocumentID)
+        }
         guard evidence.customerProviderID == customerID else { throw BillingNativeError.mapping }
         let catalog = try context.fetch(FetchDescriptor<Item>())
         let tax = try BillingTaxAddressContext.forPublication(document)
@@ -504,7 +527,8 @@ final class QuickBooksBillingWorkflow {
                 return try applySharedConfirmation(invoice: existing, estimate: nil, recovered: true)
             }
             if let reason = BillingInvoiceMutationPolicy.blockedMessage(for: invoice,
-                payments: try context.fetch(FetchDescriptor<Payment>()).filter { $0.invoice != nil }) {
+                payments: try context.fetch(FetchDescriptor<Payment>()).filter { $0.invoice != nil },
+                allowingInitialMilestonePublication: evidence.providerID == nil) {
                 throw QuickBooksInvoicePublicationRecoveryError.protectedHistory(reason)
             }
             operation = evidence.providerID == nil ? .create : .update
@@ -534,7 +558,7 @@ final class QuickBooksBillingWorkflow {
             documentType: scope.documentType, localDocumentID: document.id, localCustomerID: customer.id, operation: operation,
             document: proposal, connectionRevision: evidence.connectionRevision, serviceCallID: document.serviceCallID,
             assignmentRevision: evidence.authority == "assigned" ? evidence.assignment?.revision : nil,
-            draftRevision: try billingDraftRevision())
+            draftRevision: try billingDraftRevision(), projectMilestoneID: document.projectMilestoneID)
         try shared.prepare(request, revision: billingDraftRevision())
         attemptedWrite = true
         let result = try await shared.submitOriginal()

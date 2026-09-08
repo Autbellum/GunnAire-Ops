@@ -4408,12 +4408,24 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
-    private func exerciseNativeBillingReview(recover: Bool, bundle: Bool = false) throws {
+    func testMilestoneBillingReviewOpensOriginalInvoiceAndReturnsWithoutDuplicating() throws {
+        try exerciseNativeBillingReview(recover: false, milestone: true)
+    }
+
+    @MainActor
+    func testMilestoneBillingReviewRetainsDraftWhileOriginalCloudKitRecordIsMissing() throws {
+        try exerciseNativeBillingReview(recover: false, milestone: true, missingOriginal: true)
+    }
+
+    @MainActor
+    private func exerciseNativeBillingReview(recover: Bool, bundle: Bool = false, milestone: Bool = false, missingOriginal: Bool = false) throws {
         let app = XCUIApplication()
         app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-appStoreScreenshotFixtures",
             "-uiTestSeedCollectibleJob", "-uiTestNativeBillingReview", "-GunnAirePendingAppRoute", "invoices"]
         if recover { app.launchArguments.append("-uiTestNativeBillingAccepted") }
         if bundle { app.launchArguments.append("-uiTestBillingBundleReview") }
+        if milestone { app.launchArguments.append("-uiTestMilestoneOriginalReview") }
+        if missingOriginal { app.launchArguments.append("-uiTestMilestoneOriginalMissing") }
         app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
         app.launch()
         XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 8))
@@ -4444,7 +4456,34 @@ final class GunnAire_OpsUITests: XCTestCase {
             bundleEvidence.name = "Billing - expanded original bundle with repeated components"
             bundleEvidence.lifetime = .keepAlways; add(bundleEvidence)
         }
-        if recover {
+        if milestone {
+            let open = app.buttons["BillingReviewOpenMilestoneOriginal"]
+            XCTAssertFalse(app.buttons["BillingReviewPublish"].exists)
+            XCTAssertFalse(app.buttons["BillingReviewCancel"].exists)
+            if missingOriginal {
+                XCTAssertTrue(app.staticTexts["BillingReviewMilestoneSyncPending"].waitForExistence(timeout: 4))
+                XCTAssertFalse(open.exists)
+                app.buttons["BillingReviewCheckMilestoneOriginal"].tap()
+                XCTAssertTrue(app.staticTexts["BillingReviewMilestoneSyncPending"].exists)
+                XCTAssertFalse(app.buttons["BillingReviewPublish"].exists)
+            } else {
+                XCTAssertTrue(open.waitForExistence(timeout: 4)); open.tap()
+                XCTAssertTrue(app.navigationBars["Original Invoice"].waitForExistence(timeout: 4))
+                XCTAssertTrue(app.staticTexts["ProjectMilestoneAllocationLocked"].exists)
+                XCTAssertTrue(app.staticTexts["ProjectMilestoneSavedSubtotal"].exists)
+                XCTAssertFalse(app.buttons["InvoicePrimaryAction"].exists)
+                let originalEvidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+                originalEvidence.name = "Milestone - original saved invoice handoff"
+                originalEvidence.lifetime = .keepAlways; add(originalEvidence)
+                app.navigationBars["Original Invoice"].buttons.firstMatch.tap()
+                XCTAssertTrue(app.navigationBars["Billing Review"].waitForExistence(timeout: 4))
+                XCTAssertTrue(open.waitForExistence(timeout: 4))
+                app.buttons["BillingReviewCheckMilestoneOriginal"].tap()
+                XCTAssertTrue(open.waitForExistence(timeout: 4))
+                XCTAssertFalse(app.staticTexts["BillingReviewMessage"].exists, "Returning and checking again must use a fresh workflow owner, not a cancelled run.")
+                XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "CancellationError")).firstMatch.exists)
+            }
+        } else if recover {
             app.buttons["BillingReviewRecover"].tap()
             let message = app.staticTexts["BillingReviewMessage"]
             XCTAssertTrue(message.waitForExistence(timeout: 4))
@@ -4458,7 +4497,8 @@ final class GunnAire_OpsUITests: XCTestCase {
             XCTAssertTrue(message.label.contains("No QuickBooks record was deleted"))
         }
         let evidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-        evidence.name = recover ? "Billing - recover original accepted invoice" : "Billing - cancel only unsent proposal"
+        evidence.name = milestone ? "Milestone - original review after return or sync wait"
+            : recover ? "Billing - recover original accepted invoice" : "Billing - cancel only unsent proposal"
         evidence.lifetime = .keepAlways; add(evidence)
         app.navigationBars["Billing Review"].buttons.firstMatch.tap()
         XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 4))

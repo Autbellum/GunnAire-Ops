@@ -362,15 +362,7 @@ final class Invoice {
     /// QBO receives plain operator notes plus immutable project-allocation
     /// evidence. The local UUID is safe operational metadata, not a credential.
     var accountingPrivateNote: String? {
-        let entries = [
-            notes?.trimmingCharacters(in: .whitespacesAndNewlines),
-            projectBillingAuditSummary.map { "GunnAire project billing: \($0); milestone ID \(projectMilestoneID?.uuidString ?? "unknown")" }
-        ]
-        .compactMap { value -> String? in
-            guard let value, !value.isEmpty else { return nil }
-            return value
-        }
-        return entries.isEmpty ? nil : String(entries.joined(separator: "\n").prefix(4_000))
+        BillingMilestoneIdentity.privateNote(notes: notes, milestoneID: projectMilestoneID, summary: projectBillingAuditSummary)
     }
 
     static func draft(

@@ -24,7 +24,8 @@ def wire_request(intent, fingerprint):
         ("documentType", "document_type"), ("localDocumentID", "local_document_id"),
         ("localCustomerID", "local_customer_id"), ("operation", "operation"), ("document", "document"))}
     result["connectionRevision"] = intent.get("connection_revision", assignments.connection_revision(fingerprint))
-    for key, column in (("serviceCallID", "service_call_id"), ("assignmentRevision", "assignment_revision"), ("draftRevision", "draft_revision")):
+    for key, column in (("serviceCallID", "service_call_id"), ("assignmentRevision", "assignment_revision"), ("draftRevision", "draft_revision"),
+                        ("projectMilestoneID", "project_milestone_id")):
         if column in intent:
             result[key] = intent[column]
     return result
@@ -36,13 +37,18 @@ class NativeBilling:
 
     def query(self, value):
         required = {"companyID", "realmID", "environment", "documentType", "localDocumentID", "localCustomerID"}
-        if not isinstance(value, dict) or set(value) not in (required, required | {"serviceCallID"}) or value.get("documentType") not in ("Invoice", "Estimate"):
+        shapes = (required, required | {"serviceCallID"}, required | {"serviceCallID", "projectMilestoneID"})
+        if not isinstance(value, dict) or set(value) not in shapes or value.get("documentType") not in ("Invoice", "Estimate"):
             raise failure("invalid_query", "Choose the original saved billing document.", 400)
         intent = assignments.request_scope({**value, "serviceCallID": value.get("serviceCallID", value["localDocumentID"])})
         if "serviceCallID" not in value:
             intent.pop("service_call_id")
         intent.update(document_type=value["documentType"], local_document_id=canonical_uuid(value["localDocumentID"]),
                       local_customer_id=canonical_uuid(value["localCustomerID"]))
+        if "projectMilestoneID" in value:
+            if value["documentType"] != "Invoice":
+                raise failure("invalid_query", "Milestone billing belongs to its original invoice.", 400)
+            intent["project_milestone_id"] = canonical_uuid(value["projectMilestoneID"])
         return intent
 
     def inspect(self, connection, session, intent):
@@ -76,6 +82,11 @@ class NativeBilling:
             "customerProviderID": customer[0], "providerID": mapping["provider_id"] if mapping else None,
             "authority": "office" if office else "assigned",
             "assignment": p.assignments.public(connection, assignment, fingerprint) if assignment else None}
+        if "project_milestone_id" in intent:
+            milestone_id = intent["project_milestone_id"]
+            original = billing.billing_milestones.original(connection, p, intent, milestone_id)
+            value["milestoneIdentityVersion"] = 1
+            value["milestone"] = billing.billing_milestones.public(original, milestone_id) if original else None
         grant = dict(connection.execute("SELECT * FROM qbo_connections WHERE id=1").fetchone())
         grant["grant_fingerprint"] = fingerprint
         return value, grant

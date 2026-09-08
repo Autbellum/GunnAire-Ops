@@ -16,11 +16,11 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 try:
-    from Backend import billing_assignments
+    from Backend import billing_assignments, billing_milestones
     from Backend.catalog_publications import canonical, failure, scope
     from Backend.payment_attempts import AttemptError, canonical_uuid, grant_fingerprint, reference
 except ModuleNotFoundError:
-    import billing_assignments
+    import billing_assignments, billing_milestones
     from catalog_publications import canonical, failure, scope
     from payment_attempts import AttemptError, canonical_uuid, grant_fingerprint, reference
 
@@ -58,7 +58,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS billing_active_draft_grant ON billing_draft_gr
 
 def initialize_schema(connection):
     billing_assignments.initialize_schema(connection)
-    for statement in SCHEMA.split(";"):
+    for statement in (SCHEMA + billing_milestones.SCHEMA).split(";"):
         if statement.strip():
             connection.execute(statement)
 
@@ -315,7 +315,8 @@ def document_values(value, kind, operation):
 def validated_request(payload):
     required = {"companyID", "realmID", "environment", "documentType", "localDocumentID", "localCustomerID", "operation", "document", "connectionRevision"}
     shapes = (required, required | {"serviceCallID"}, required | {"serviceCallID", "assignmentRevision"})
-    if not isinstance(payload, dict) or set(payload) not in (*shapes, *(shape | {"draftRevision"} for shape in shapes)):
+    shapes = (*shapes, *(shape | {"draftRevision"} for shape in shapes))
+    if not isinstance(payload, dict) or set(payload) not in (*shapes, *(shape | {"projectMilestoneID"} for shape in shapes)):
         raise failure("invalid_request", "Use the supported billing publication fields only.", 400)
     epoch = payload["connectionRevision"]
     if not isinstance(epoch, str) or not re.fullmatch(r"[0-9a-f]{64}", epoch):
@@ -325,6 +326,8 @@ def validated_request(payload):
             or (kind == "Estimate" and operation != "create") or payload["environment"] not in ("sandbox", "production")):
         raise failure("invalid_request", "Choose a supported billing operation and environment.", 400)
     job = {"connection_revision": epoch}
+    if "projectMilestoneID" in payload:
+        job["project_milestone_id"] = canonical_uuid(payload["projectMilestoneID"])
     if "draftRevision" in payload:
         revision = payload["draftRevision"]
         if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{64}", revision):
@@ -337,10 +340,12 @@ def validated_request(payload):
             if type(revision) is not int or not 1 <= revision <= 2147483647:
                 raise failure("invalid_request", "Use the original server-approved assignment revision.", 400)
             job["assignment_revision"] = revision
-    return {"company_id": canonical_uuid(payload["companyID"]), "realm_id": reference(payload["realmID"]),
+    result = {"company_id": canonical_uuid(payload["companyID"]), "realm_id": reference(payload["realmID"]),
             "environment": payload["environment"], "document_type": kind, "operation": operation,
             "local_document_id": canonical_uuid(payload["localDocumentID"]), "local_customer_id": canonical_uuid(payload["localCustomerID"]),
             "document": document_values(payload["document"], kind, operation), **job}
+    billing_milestones.identity(result)
+    return result
 
 
 def digest(intent):
@@ -419,6 +424,10 @@ class BillingPublisher:
                     authority = "assigned"
         if not allowed:
             raise failure("review_required", "Keep the saved draft. Confirm current job billing access or ask the office to review it.", 403)
+        if authority == "assigned":
+            proposal = self.intent(intent) if "payload_ciphertext" in intent.keys() else intent
+            if billing_milestones.identity(proposal) is not None:
+                raise failure("review_required", "Ask accounting to approve this exact project milestone invoice. Job assignment alone does not approve progress billing.", 403)
         return actor, {**dict(grant), "grant_fingerprint": fingerprint, "billing_authority": authority}
 
     def approve_draft(self, session_id, payload, technician_email, *, original_attempt=None):
@@ -517,6 +526,7 @@ class BillingPublisher:
             connection.execute("BEGIN IMMEDIATE")
             actor, context = self.authorize(connection, session_id, intent, require_grant=False)
             self.mappings(connection, intent)
+            billing_milestones.ensure(connection, self, intent)
             rows = connection.execute("""SELECT * FROM billing_publications WHERE company_id=? AND realm_id=? AND environment=?
                 AND document_type=? AND local_document_id=? AND state!='cancelled' ORDER BY created_at DESC,id DESC""", document_scope(intent)).fetchall()
             for row in rows:
@@ -533,6 +543,7 @@ class BillingPublisher:
             connection.execute("INSERT INTO billing_publications VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'reserved',NULL,?,?,?)",
                 (identifier, *document_scope(intent), intent["local_customer_id"], intent["operation"], hash_value, ciphertext,
                  context["grant_fingerprint"], request_id, actor["email"], now, now))
+            billing_milestones.index_row(connection, self, self.record(connection, identifier))
             self.audit(actor["email"], "reserve", "billing-publication", identifier, connection=connection)
             return dict(self.record(connection, identifier))
 
@@ -561,11 +572,16 @@ class BillingPublisher:
                 raise failure("publication_pending", "The original billing request cannot be sent again.")
             self.document_mapping(connection, intent)
             self.payment_boundary(connection, intent)
+            billing_milestones.ensure(connection, self, intent)
             connection.execute("UPDATE billing_publications SET state='sending',updated_at=? WHERE id=?", (self.now().isoformat(), identifier))
             self.audit(actor["email"], "dispatch", "billing-publication", identifier, connection=connection)
 
     def payload(self, row):
-        document = dict(self.intent(row)["document"])
+        intent = self.intent(row)
+        document = dict(intent["document"])
+        milestone_id = billing_milestones.identity(intent)
+        if milestone_id and billing_milestones.from_note(document.get("PrivateNote")) is None:
+            document["PrivateNote"] = "\n".join(filter(None, ["GunnAire Milestone ID: " + milestone_id.upper(), document.get("PrivateNote")]))
         document["PrivateNote"] = "\n".join(filter(None, [document.get("PrivateNote"), marker(row), publication_marker(row)]))
         if row["operation"] == "create":
             # Posting date was captured explicitly in the immutable proposal;
@@ -589,7 +605,9 @@ class BillingPublisher:
             verify_remote(row, self.payload(row), remote, original_attempt=original_attempt)
             if row["provider_id"] and row["provider_id"] != remote["Id"]:
                 raise failure("identity_conflict", "The original accounting identity changed.")
-            self.mappings(connection, self.intent(row))
+            intent = self.intent(row)
+            self.mappings(connection, intent)
+            billing_milestones.ensure(connection, self, intent)
             mappings = connection.execute("""SELECT * FROM billing_entity_mappings WHERE company_id=? AND realm_id=? AND environment=?
                 AND document_type=? AND (local_document_id=? OR provider_id=?)""", (*document_scope(row), remote["Id"])).fetchall()
             if any(value["local_document_id"] != row["local_document_id"] or value["provider_id"] != remote["Id"] or value["local_customer_id"] != row["local_customer_id"] for value in mappings):
@@ -622,6 +640,11 @@ class BillingPublisher:
             matches = [value for value in remotes if marker(row) in value.get("PrivateNote", "").splitlines()]
             if len(matches) > 1:
                 raise failure("identity_conflict", "More than one accounting document has this saved identity.")
+            milestone_id = billing_milestones.identity(self.intent(row))
+            if milestone_id:
+                stages = [value for value in remotes if billing_milestones.from_note(value.get("PrivateNote")) == milestone_id]
+                if any(marker(row) not in value.get("PrivateNote", "").splitlines() for value in stages):
+                    raise failure("milestone_original", "QuickBooks already has this milestone under another invoice identity. Ask accounting to review Existing Links; no second invoice was sent.")
             if matches:
                 return self.confirm(session_id, identifier, matches[0], original_attempt=row["state"] != "reserved")
         if row["state"] != "reserved" or not allow_send:
@@ -777,6 +800,8 @@ def verify_remote(row, expected, remote, *, original_attempt):
     reserved = [line for line in lines if line.strip().casefold().startswith(("gunnaire invoice id:", "gunnaire estimate id:"))]
     if reserved != [marker(row)]:
         raise failure("identity_conflict", "QuickBooks returned conflicting document lineage.")
+    if billing_milestones.from_note(note) != billing_milestones.from_note(expected.get("PrivateNote")):
+        raise failure("milestone_review", "QuickBooks did not retain the original milestone reference.")
     if not isinstance(remote.get("CustomerRef"), dict) or remote["CustomerRef"].get("value") != expected["CustomerRef"]["value"]:
         raise failure("identity_conflict", "QuickBooks returned a different customer.")
     if provider_line_values(remote.get("Line")) != expected["Line"]:

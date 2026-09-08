@@ -20,6 +20,8 @@ import Testing
         let attempt = UUID()
         let company = UUID(uuidString: "10000000-0000-4000-8000-000000000001")!
         var epoch = String(repeating: "a", count: 64)
+        var milestoneOriginal: [String: Any]?
+        var milestoneVersion: Int? = 1
 
         init(linked: Bool = false) throws {
             app = try .init(linkedInvoice: linked)
@@ -44,7 +46,9 @@ import Testing
                     "documentType": query["documentType"]!, "localDocumentID": query["localDocumentID"]!,
                     "localCustomerID": app.customer.id.uuidString, "serviceCallID": query["serviceCallID"] as Any? ?? NSNull(),
                     "connectionRevision": epoch, "customerProviderID": "C1", "providerID": remote?["Id"] as Any? ?? NSNull(),
-                    "authority": "office", "assignment": NSNull(), "document": remote as Any? ?? NSNull()])
+                    "authority": "office", "assignment": NSNull(), "document": remote as Any? ?? NSNull(),
+                    "milestoneIdentityVersion": milestoneVersion as Any? ?? NSNull(),
+                    "milestone": milestoneOriginal as Any? ?? NSNull()])
             }
             if method == "GET", url.path == "/api/billing-publications" {
                 return try encoded(["publications": record.map { [$0] } ?? [], "nextCursor": NSNull()])
@@ -73,7 +77,7 @@ import Testing
             remote = try object(request.document) as? [String: Any]
             let total = QuickBooksSalesLineContract.double(try QuickBooksSalesLineContract.totals(request.document.Line).net)
             remote?.merge(["Id": "D1", "SyncToken": "8", "TotalAmt": total, "Balance": total, "TxnTaxDetail": ["TotalTax": 0],
-                "PrivateNote": "GunnAire \(request.documentType.rawValue) ID: \(request.localDocumentID.uuidString.uppercased())\nGunnAire Publication: \(attempt.uuidString.lowercased())"]) { _, new in new }
+                "PrivateNote": [request.document.PrivateNote, "GunnAire \(request.documentType.rawValue) ID: \(request.localDocumentID.uuidString.uppercased())\nGunnAire Publication: \(attempt.uuidString.lowercased())"].compactMap { $0 }.joined(separator: "\n")]) { _, new in new }
             if failReply { throw URLError(.timedOut) }
             return try response()
         }
