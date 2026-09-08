@@ -79,6 +79,8 @@ jobs:
               testManagementBillingComposerSavesOriginalInvoiceAndEstimateOffline \
               testBillingIdentityReviewKeepsReportsSafeAndHandsOffToInvoices \
               testCatalogPublicationReviewCancelsOnlyAnUnsentProposalAndReturnsToCatalog \
+              testAdministratorCreatesInventoryOfflineAndReopensExactSetup \
+              testPricebookReviewCorrectsFieldItemBeforeApprovalWithoutLosingDocumentPriority \
               testScheduleDeletionRetainsTheConfirmedTargetAndProtectsBilledJobs \
               testUnreconciledStatementExplainsReviewAndHandsOffToInvoices; do
               selectors+=("-only-testing:GunnAire OpsUITests/GunnAire_OpsUITests/$test")
