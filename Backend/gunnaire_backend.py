@@ -34,7 +34,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 try:
     from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications, billing_native, qbo_link_adoption
     from Backend.billing_provider import BillingQBOProvider
-    from Backend import google_connections
+    from Backend import google_connections, google_mail
 except ModuleNotFoundError:
     import payment_attempts  # Direct launch from the Backend directory.
     import catalog_publications
@@ -44,10 +44,11 @@ except ModuleNotFoundError:
     import qbo_link_adoption
     from billing_provider import BillingQBOProvider
     import google_connections
+    import google_mail
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.07.31"
+SERVICE_VERSION = "2026.09.07.32"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -2468,6 +2469,7 @@ def initialize_database() -> None:
         billing_publications.initialize_schema(connection)
         qbo_link_adoption.initialize_schema(connection)
         google_connections.initialize_schema(connection)
+        google_mail.initialize_schema(connection)
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS customer_communications (
@@ -3514,6 +3516,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/google/connection" or parsed.path.startswith("/api/google/authorizations/"):
             self.handle_google_connection(parsed, method="GET")
             return
+        if parsed.path.startswith("/api/google/mail/"):
+            self.handle_google_mail(parsed, method="GET")
+            return
         if parsed.path == "/api/payment-attempts" or parsed.path.startswith("/api/payment-attempts/"):
             self.handle_payment_attempt(parsed, method="GET")
             return
@@ -3721,6 +3726,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/google/authorizations" or parsed.path.startswith("/api/google/authorizations/") or parsed.path == "/api/google/connection/disconnect":
             self.handle_google_connection(parsed, method="POST")
+            return
+        if parsed.path.startswith("/api/google/mail/"):
+            self.handle_google_mail(parsed, method="POST")
             return
         if parsed.path == "/api/payment-attempts" or parsed.path.startswith("/api/payment-attempts/"):
             self.handle_payment_attempt(parsed, method="POST")
@@ -5933,6 +5941,66 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             redirect_uri=GOOGLE_WEB_REDIRECT_URI, encryption_key=GOOGLE_TOKEN_ENCRYPTION_KEY,
             allowed_domain=GOOGLE_ALLOWED_DOMAIN)
 
+    def google_mail_service(self):
+        return google_mail.GoogleMail(self.google_connection_service())
+
+    def handle_google_mail(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        try:
+            service = self.google_mail_service()
+            route = parsed.path.removeprefix("/api/google/mail/").split("/")
+            if method == "GET":
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, max_num_fields=8)
+                if any(len(values) != 1 for values in query.values()):
+                    raise google_mail.failure()
+                query = {key: values[0] for key, values in query.items()}
+                google_mail.fields(query, ("companyID", "grantID"), ("folder", "query", "pageToken", "maxResults"))
+                context = service.context(self._application_session_id, query.pop("companyID"), query.pop("grantID"))
+                if route == ["messages"]:
+                    result = service.page(context, folder=query.pop("folder", "Inbox"), query=query.pop("query", ""),
+                        page_token=query.pop("pageToken", None), maximum=int(query.pop("maxResults", "25")))
+                elif route == ["outbox"]:
+                    google_mail.fields(query, (), ("pageToken",))
+                    result = service.outbox(context, before=query.get("pageToken"))
+                elif not query and len(route) == 2 and route[0] == "messages":
+                    result = service.message(context, route[1])
+                elif not query and len(route) == 4 and route[0] == "messages" and route[2] == "attachments":
+                    result = service.attachment(context, route[1], route[3])
+                elif not query and len(route) == 2 and route[0] == "operations":
+                    result = service.outcome(context, route[1])
+                elif not query and len(route) == 3 and route[0] == "operations" and route[2] == "message":
+                    result = service.saved_message(context, route[1])
+                elif not query and len(route) == 3 and route[0] == "operations" and route[2] == "recovery":
+                    original = service.original(context, route[1])
+                    result = (service.recover_send if original["kind"] == "send" else service.recover_action)(context, route[1])
+                else:
+                    raise google_mail.failure()
+            elif method == "POST" and not parsed.query:
+                maximum = google_mail.MAX_MESSAGE_BYTES if route == ["outbox"] else 8192
+                payload = google_connections.strict_json(self.read_limited_body(maximum))
+                google_mail.fields(payload, ("companyID", "grantID"), ("id", "message", "threadID", "action"))
+                context = service.context(self._application_session_id, payload.pop("companyID"), payload.pop("grantID"))
+                if route == ["outbox"]:
+                    google_mail.fields(payload, ("id", "message"))
+                    result = service.prepare_send(context, payload["id"], payload["message"])
+                elif len(route) == 3 and route[0] == "messages" and route[2] == "actions":
+                    google_mail.fields(payload, ("id", "threadID", "action"))
+                    result = service.action(context, payload["id"], message=route[1], thread=payload["threadID"], action=payload["action"])
+                elif len(route) == 3 and route[0] == "operations" and route[2] in {"send", "cancel"} and not payload:
+                    result = (service.send if route[2] == "send" else service.cancel)(context, route[1])
+                else:
+                    raise google_mail.failure()
+            else:
+                raise google_mail.failure()
+            self.write_json(result)
+        except google_connections.ConnectionError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError, KeyError, AttributeError, RecursionError):
+            self.write_json({"error": "The original mail request could not be verified.", "code": "invalid_mail"}, status=400)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Shared mail storage is unavailable. Keep the original request for recovery.", "code": "storage_unavailable"}, status=503)
+
     def handle_google_connection(self, parsed, *, method):
         if not self.require_application_session():
             return
@@ -6519,6 +6587,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         message = redact_capability_tokens(format % args)
+        # Search terms and provider resource IDs can identify customer mail.
+        message = re.sub(r"/api/google/mail/[^\s\"]*", "/api/google/mail/[redacted]", message)
         print(f"{timestamp} {self.address_string()} {message}")
 
 

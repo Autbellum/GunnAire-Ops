@@ -1,3 +1,16 @@
+Server Mail checkpoint, 2026-09-07: backend **2026.09.07.32** adds own-account
+office mailbox reading, paging, attachments and recoverable actions, plus an
+encrypted immutable outbox with one dispatch claim and exact MIME/Sent recovery.
+Final local qualification passes **447 Backend tests (42 focused Mail)** and
+**37 Tools tests**. Compact encrypted summaries support recent-first lists without
+decrypting every attachment. Native transport cutover, durable mailbox-action
+recovery, server-authorized technician/accounting/customer workflows and consent,
+received-mail/job/file archival, shared history and delivery outcomes remain
+required; existing native behavior is unchanged. Exact contract, retained failures
+and rollout gates: [SERVER_MAIL_WORKFLOW.md](SERVER_MAIL_WORKFLOW.md). No live
+message, deployment, signing, CloudKit promotion or physical installation occurred.
+This does not close the complete-suite, QBO, CloudKit, Tap to Pay or release goal.
+
 Native Google access checkpoint, 2026-09-07: a compact Settings → Sync → Google
 access page now uses the company-owned OAuth service, device-only original
 request journals, scoped callback/status verification, partial-grant display,
@@ -16,6 +29,12 @@ Hosted qualification is separate: preceding head `f082074` passes Backend/Mac,
 but its existing tax-address UI test fails on incomplete typed input before save.
 Three unchanged local repetitions pass; the hosted cause remains unconfirmed.
 No failure gate or assertion is weakened. Fresh exact-head CI is required.
+
+Follow-up exact-head evidence: `cad60f5` passes all four hosted jobs in
+[Native run 34170779743](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34170779743)
+and [Backend run 34170779787](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34170779787).
+The iPad run includes the unchanged tax-address journey and both Google journeys.
+This qualifies that head, not later server Mail changes or production acceptance.
 
 Server Google connection checkpoint, 2026-09-07: backend candidate
 **2026.09.07.30** implements single-use, company/user-bound web OAuth, encrypted

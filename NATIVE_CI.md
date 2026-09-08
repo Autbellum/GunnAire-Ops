@@ -22,6 +22,12 @@ Three unchanged local repetitions pass; the cause remains unconfirmed. Preserve
 the full-address/save/reopen assertions and require new exact-head hosted checks.
 The retained failure and reproduction are detailed in `NATIVE_GOOGLE_ACCESS.md`.
 
+At `cad60f5`, [Native run 34170779743](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34170779743)
+passes iPad and Mac, including all 29 selected iPad journeys and the unchanged
+tax-address test. [Backend run 34170779787](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34170779787)
+passes Python 3.13 and 3.14. This exact-head result does not establish the earlier
+tax-input failure's cause or qualify later source changes.
+
 The Mail draft-recovery candidate selects **twenty-seven** iPad journeys.
 The three additions verify complete draft/attachment retention across relaunch,
 an uncertain send remaining read-only with a handoff to Sent after relaunch,

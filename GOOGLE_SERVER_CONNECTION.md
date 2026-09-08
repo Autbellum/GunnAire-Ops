@@ -1,5 +1,11 @@
 # Server-owned Google connection
 
+Mailbox service follow-up: candidate **2026.09.07.32** adds own-office mailbox
+read/actions and an encrypted immutable shared outbox with original-message
+recovery. Scope, API, qualification and native/domain migration gates are in
+[SERVER_MAIL_WORKFLOW.md](SERVER_MAIL_WORKFLOW.md). It is not activated by the
+existing native Google Access page and does not migrate customer-triggered sends.
+
 Native integration follow-up: candidate **2026.09.07.31** adds scoped response
 metadata, discovery of the actor's original pending request, cancel-before-prepare
 tombstones and a fixed native callback handoff. The actual Settings journey,
