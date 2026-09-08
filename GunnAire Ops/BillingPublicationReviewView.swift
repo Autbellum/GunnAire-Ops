@@ -21,6 +21,21 @@ import SwiftData
     @State private var milestoneOriginal: BillingMilestoneOriginal?
     @Query private var syncedInvoices: [Invoice]
     @State private var visitID = UUID()
+    @State private var confirmRetain = false
+    @Query private var reviewUsers: [AppUser]
+    @Query private var reviewAttachments: [ServiceDocumentAttachment]
+    @Query private var reviewPayments: [Payment]
+
+    private var retainedDraft: Invoice? {
+        guard case .invoice(let invoice) = document, invoice.milestoneDraftReceiptJSON != nil,
+              (try? QuickBooksBillingAccessPolicy.validate(context: context, document: document)) != nil else { return nil }
+        return invoice
+    }
+
+    private var retainedOriginal: Invoice? {
+        guard let retainedDraft else { return nil }
+        return BillingMilestoneReconciliation.original(for: retainedDraft, in: syncedInvoices, payments: reviewPayments)
+    }
 
     init(document: QuickBooksBillingDocument, context: ModelContext) {
         self.document = document; self.context = context
@@ -29,6 +44,7 @@ import SwiftData
 
     private var proposal: BillingPublicationRequest? { original?.proposal ?? pending?.request }
     private var status: String {
+        if retainedDraft != nil { return retainedOriginal == nil ? "Retained draft needs review" : "Duplicate draft retained" }
         if milestoneOriginal != nil { return "Original milestone invoice found" }
         return switch original?.publication.state {
         case .reserved: "Not yet sent to QuickBooks"
@@ -49,6 +65,28 @@ import SwiftData
             }
             if let message { Section { Text(message).accessibilityIdentifier("BillingReviewMessage") } }
             if busy { ProgressView("Checking billing…") }
+            if let retainedDraft {
+                Section {
+                    Text(BillingMilestoneReconciliation.retainedMessage).font(.callout)
+                    if let invoice = retainedOriginal {
+                        NavigationLink("Open original milestone invoice") {
+                            BillingMilestoneInvoiceReview(invoice: invoice, context: context)
+                        }.accessibilityIdentifier("BillingReviewOpenMilestoneOriginal")
+                    } else {
+                        Text("The saved review cannot yet be verified on this device. Keep both records and let accounting check the original and CloudKit status.")
+                    }
+                    DisclosureGroup("Retained draft details") {
+                        Text(retainedDraft.lineItemSummary)
+                        LabeledContent("Saved draft amount", value: retainedDraft.amount.formatted(.currency(code: "USD")))
+                        if let notes = retainedDraft.notes, !notes.isEmpty { Text(notes) }
+                        ForEach(reviewAttachments.filter { $0.invoiceID == retainedDraft.id && $0.customer === retainedDraft.customer }) { attachment in
+                            Label(attachment.displayName, systemImage: "paperclip")
+                        }
+                        Text("Supporting files remain linked to this draft in the customer’s Files workspace.").font(.caption).foregroundStyle(.secondary)
+                    }
+                    .accessibilityIdentifier("BillingReviewRetainedDraftDetails")
+                }
+            }
             if let milestoneOriginal {
                 Section {
                     if let invoice = matchingMilestoneInvoice(milestoneOriginal) {
@@ -58,6 +96,11 @@ import SwiftData
                             BillingMilestoneInvoiceReview(invoice: invoice, context: context)
                         }
                         .accessibilityIdentifier("BillingReviewOpenMilestoneOriginal")
+                        if milestoneOriginal.state == .confirmed, invoice.quickBooksID != nil,
+                           flow?.canApproveSharedDraft == true, shared?.journal.pending == nil {
+                            Button("Retain this unused draft") { confirmRetain = true }.disabled(busy)
+                                .accessibilityIdentifier("BillingReviewRetainMilestoneDraft")
+                        }
                     } else {
                         Text(syncedInvoices.contains(where: { $0.id == milestoneOriginal.localDocumentID })
                              ? "The original invoice needs review on this device. Reopen your business workspace and ask accounting to check its customer, job and saved identity."
@@ -123,6 +166,11 @@ import SwiftData
         .confirmationDialog("Approve these exact field prices?", isPresented: $confirmApproval, titleVisibility: .visible) {
             Button("Approve field prices") { Task { await approve() } }
         } message: { Text("The original technician may publish this unchanged proposal. A different price or draft requires a new review.") }
+        .confirmationDialog("Retain this unused milestone draft?", isPresented: $confirmRetain, titleVisibility: .visible) {
+            Button("Retain duplicate draft") { Task { await retainDraft() } }
+        } message: {
+            Text("The original confirmed invoice remains the bill. This draft and its files stay available, but this draft will not add a second amount to reports or customer statements. Nothing is deleted or changed in QuickBooks.")
+        }
     }
 
     private func load() async {
@@ -130,6 +178,10 @@ import SwiftData
         let visit = visitID
         busy = true; defer { if visit == visitID { busy = false } }
         do {
+            if retainedDraft != nil {
+                milestoneOriginal = nil; original = nil; pending = nil; didLoad = true; message = nil
+                return
+            }
             if flow == nil {
                 #if DEBUG
                 if GunnAireCloudKit.usesTestDatabase, ProcessInfo.processInfo.arguments.contains("-uiTestNativeBillingReview") {
@@ -176,6 +228,17 @@ import SwiftData
               let invoice = try? original.localInvoice(in: context, for: document) else { return nil }
         do { try QuickBooksBillingAccessPolicy.validate(context: context, document: .invoice(invoice)); return invoice }
         catch { return nil }
+    }
+    private func retainDraft() async {
+        guard !busy, let flow else { return }
+        let visit = visitID
+        busy = true; defer { if visit == visitID { busy = false } }
+        do {
+            try await flow.retainDuplicateMilestoneDraft()
+            guard visit == visitID else { return }
+            lifecycle.cancel(); self.flow = nil; shared = nil
+            milestoneOriginal = nil; original = nil; pending = nil; message = nil; didLoad = true
+        } catch is CancellationError {} catch { if visit == visitID { message = error.localizedDescription } }
     }
     private func recover() async {
         guard !busy else { return }; let visit = visitID
@@ -236,19 +299,21 @@ import SwiftData
         let originalID = UUID(uuidString: "10000000-0000-4000-8000-000000000006")!
         let handoff = ProcessInfo.processInfo.arguments.contains("-uiTestMilestoneOriginalReview")
         let missingOriginal = ProcessInfo.processInfo.arguments.contains("-uiTestMilestoneOriginalMissing")
+        let retain = ProcessInfo.processInfo.arguments.contains("-uiTestRetainMilestoneDraft")
         if handoff, case .invoice(let invoice) = document, let customer = invoice.customer {
             invoice.projectMilestoneID = stage; invoice.projectMilestoneTitle = "Deposit"
             invoice.serviceCallID = invoice.serviceCallID ?? UUID(uuidString: "10000000-0000-4000-8000-000000000008")!
             if !missingOriginal, !(try context.fetch(FetchDescriptor<Invoice>())).contains(where: { $0.id == originalID }) {
                 context.insert(Invoice(id: originalID, serviceCallID: invoice.serviceCallID,
                     serviceLocationID: invoice.serviceLocationID, siteAddress: invoice.siteAddress, customer: customer,
+                    quickBooksID: retain ? "BILLING-UI-189" : nil, quickBooksBalanceDue: retain ? 189 : nil,
                     catalogSnapshotJSON: invoice.catalogSnapshotJSON, amount: invoice.subtotalAmount,
                     projectMilestoneID: stage, projectMilestoneTitle: "Deposit",
                     dueDate: invoice.effectiveDueDate(), createdAt: invoice.createdAt))
             }
         }
         let recover = ProcessInfo.processInfo.arguments.contains("-uiTestNativeBillingAccepted")
-        var state = recover ? "confirmed" : "reserved"
+        var state = recover || retain ? "confirmed" : "reserved"
         var request: BillingPublicationRequest?
         var saved: BillingNativeJournal?
         let store = BillingNativeJournalStore(read: { scope in saved ?? .init(scope: scope) }, write: { saved = $0 })
@@ -268,7 +333,10 @@ import SwiftData
                         "providerID": NSNull(), "authority": "office", "assignment": NSNull(), "document": NSNull(),
                         "milestoneIdentityVersion": 1,
                         "milestone": ["projectMilestoneID": stage.uuidString, "localDocumentID": originalID.uuidString,
-                            "localCustomerID": request.localCustomerID.uuidString, "publicationID": attempt.uuidString, "state": "reserved"]])
+                            "localCustomerID": request.localCustomerID.uuidString, "publicationID": attempt.uuidString, "state": state]])
+                }
+                if retain, path.hasPrefix("/api/billing-publications?") {
+                    return try JSONSerialization.data(withJSONObject: ["publications": [], "nextCursor": NSNull()])
                 }
                 return try JSONSerialization.data(withJSONObject: ["publication": row,
                     "proposal": JSONSerialization.jsonObject(with: JSONEncoder().encode(request)), "reviewableByOffice": false])
@@ -315,11 +383,12 @@ import SwiftData
         }
         let revision = try value.billingDraftRevision()
         request = .init(companyID: company, realmID: "billing-review-fixture", environment: Config.QuickBooks.environment,
-            documentType: .invoice, localDocumentID: document.id, localCustomerID: customer.id, operation: .create,
+            documentType: .invoice, localDocumentID: retain ? originalID : document.id, localCustomerID: customer.id, operation: .create,
             document: .init(CustomerRef: .init(value: customer.quickBooksID ?? "C1", name: nil), Line: lines, TxnDate: "2026-09-07"),
-            connectionRevision: String(repeating: "a", count: 64), serviceCallID: document.serviceCallID, draftRevision: revision)
+            connectionRevision: String(repeating: "a", count: 64), serviceCallID: document.serviceCallID, draftRevision: revision,
+            projectMilestoneID: retain ? stage : nil)
         let journalScope = BillingNativeJournalScope(document: request!.scope, actorEmail: AppAccess.normalizedEmail(AppIdentity.currentEmail))
-        saved = .init(scope: journalScope, pending: .init(request: request!, draftRevision: revision, submitted: true, publicationID: attempt))
+        if !retain { saved = .init(scope: journalScope, pending: .init(request: request!, draftRevision: revision, submitted: true, publicationID: attempt)) }
         flow = value; shared = try value.openSharedReview()
     }
     #endif

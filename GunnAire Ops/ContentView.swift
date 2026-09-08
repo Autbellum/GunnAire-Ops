@@ -1339,13 +1339,12 @@ GunnAire
     }
 
     private var linkedPayments: [Payment] {
-        guard let invoiceID = call.linkedInvoiceID else { return [] }
+        guard let invoiceID = linkedInvoice?.id else { return [] }
         return payments.filter { $0.invoice.id == invoiceID }
     }
 
     private var linkedInvoice: Invoice? {
-        guard let invoiceID = call.linkedInvoiceID else { return nil }
-        return invoices.first { $0.id == invoiceID }
+        BillingMilestoneReconciliation.linkedInvoice(for: call, in: invoices, payments: payments)
     }
 
     private var linkedEstimate: Estimate? {
@@ -3545,7 +3544,7 @@ GunnAire
                     if selectedWorkspace == .billing && canViewFinancials && hasOpenInvoiceBalance {
                         VStack(spacing: 10) {
                             Button {
-                                if let linkedInvoiceID = call.linkedInvoiceID {
+                                if let linkedInvoiceID = linkedInvoice?.id {
                                     GunnAireAppIntentRouter.storePaymentCollectionRoute(linkedInvoiceID)
                                 } else {
                                     GunnAireAppIntentRouter.storeDocumentationRoute(call.id)

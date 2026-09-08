@@ -567,6 +567,13 @@ EXPECTED_CLOUDKIT_V25_ADDITIONS = {
         "CD_quickBooksCatalogDetailsJSON": _CLOUDKIT_STRING_FIELD,
     },
 }
+EXPECTED_CLOUDKIT_V26_ADDITIONS = {
+    **EXPECTED_CLOUDKIT_V25_ADDITIONS,
+    "CD_Invoice": {
+        **EXPECTED_CLOUDKIT_V25_ADDITIONS["CD_Invoice"],
+        "CD_milestoneDraftReceiptJSON": _CLOUDKIT_STRING_FIELD,
+    },
+}
 EXPECTED_CLOUDKIT_BASELINE_RECORD_TYPES = {
     "CD_AppUser",
     "CD_Customer",
@@ -1920,7 +1927,7 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
             f"Development removes or alters Production fields: {changed_or_removed}",
         )
         malformed_existing_v23_fields: list[str] = []
-        for record_name, expected_fields in EXPECTED_CLOUDKIT_V25_ADDITIONS.items():
+        for record_name, expected_fields in EXPECTED_CLOUDKIT_V26_ADDITIONS.items():
             production_fields = prod.get(record_name, {})
             for field_name, expected_definition in expected_fields.items():
                 if (
@@ -1932,8 +1939,8 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
                     )
         results.require(
             not malformed_existing_v23_fields,
-            "Existing Production fields through v25 match their approved definitions",
-            "CloudKit Production contains malformed approved fields through v25: "
+            "Existing Production fields through v26 match their approved definitions",
+            "CloudKit Production contains malformed approved fields through v26: "
             f"{malformed_existing_v23_fields}",
         )
 
@@ -1965,11 +1972,13 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
             f"{record}.{field}"
             for record, fields in actual_additions.items()
             for field, definition in fields.items()
-            if EXPECTED_CLOUDKIT_V25_ADDITIONS.get(record, {}).get(field) != definition
+            if EXPECTED_CLOUDKIT_V26_ADDITIONS.get(record, {}).get(field) != definition
         ]
         results.require(not unexpected_additions,
-                        "All CloudKit additions match approved definitions through v25",
-                        f"Unexpected CloudKit additions through v25: {unexpected_additions}")
+                        "All CloudKit additions match approved definitions through v26",
+                        f"Unexpected CloudKit additions through v26: {unexpected_additions}")
+        expected_remaining_v26_additions = expected_remaining(EXPECTED_CLOUDKIT_V26_ADDITIONS)
+        dev_missing_v26 = missing_or_changed(dev, EXPECTED_CLOUDKIT_V26_ADDITIONS)
         expected_remaining_v25_additions = expected_remaining(EXPECTED_CLOUDKIT_V25_ADDITIONS)
         dev_missing_v25 = missing_or_changed(dev, EXPECTED_CLOUDKIT_V25_ADDITIONS)
         expected_remaining_v24_additions = expected_remaining(EXPECTED_CLOUDKIT_V24_ADDITIONS)
@@ -1998,8 +2007,11 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
         dev_missing_v16 = missing_or_changed(dev, EXPECTED_CLOUDKIT_V16_ADDITIONS)
         prod_missing_v16 = missing_or_changed(prod, EXPECTED_CLOUDKIT_V16_ADDITIONS)
 
-        if not dev_missing_v25 and actual_additions == expected_remaining_v25_additions:
+        if not dev_missing_v26 and actual_additions == expected_remaining_v26_additions:
+            results.pass_("CloudKit Development contains the exact cumulative v26 retained milestone draft schema")
+        elif not dev_missing_v25 and actual_additions == expected_remaining_v25_additions:
             results.pass_("CloudKit Development contains the exact cumulative v25 inventory setup and provider detail schema")
+            results.warn("CloudKit v26 milestone draft receipts are not staged; run the signed v26 bootstrap before promotion review")
         elif not dev_missing_v24 and actual_additions == expected_remaining_v24_additions:
             results.pass_("CloudKit Development contains the exact cumulative v24 Item catalog application receipt schema")
             results.warn("CloudKit v25 inventory fields are not staged; run the signed v25 bootstrap before promotion review")

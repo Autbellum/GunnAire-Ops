@@ -4318,6 +4318,11 @@ final class GunnAire_OpsUITests: XCTestCase {
     @MainActor
     private func exerciseBundleComposer(kind: String, submitKeyboard: Bool, hardwareKeys: Bool = false) throws {
         let app = openManagementBillingComposer(kind, bundle: true)
+        if hardwareKeys {
+            // Establish physical-keyboard input before the field owns focus.
+            // Selection below must still succeed with exactly one Command-A.
+            app.typeKey(XCUIKeyboardKey.shift.rawValue, modifierFlags: [])
+        }
         func enterQuantity(_ identifier: String, _ value: String) {
             let field = app.textFields[identifier]
             XCTAssertTrue(field.waitForExistence(timeout: 4))
@@ -4418,7 +4423,12 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
-    private func exerciseNativeBillingReview(recover: Bool, bundle: Bool = false, milestone: Bool = false, missingOriginal: Bool = false) throws {
+    func testOfficeRetainsUnusedMilestoneDraftAndReopensOriginalFromInvoices() throws {
+        try exerciseNativeBillingReview(recover: false, milestone: true, retain: true)
+    }
+
+    @MainActor
+    private func exerciseNativeBillingReview(recover: Bool, bundle: Bool = false, milestone: Bool = false, missingOriginal: Bool = false, retain: Bool = false) throws {
         let app = XCUIApplication()
         app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-appStoreScreenshotFixtures",
             "-uiTestSeedCollectibleJob", "-uiTestNativeBillingReview", "-GunnAirePendingAppRoute", "invoices"]
@@ -4426,6 +4436,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         if bundle { app.launchArguments.append("-uiTestBillingBundleReview") }
         if milestone { app.launchArguments.append("-uiTestMilestoneOriginalReview") }
         if missingOriginal { app.launchArguments.append("-uiTestMilestoneOriginalMissing") }
+        if retain { app.launchArguments.append("-uiTestRetainMilestoneDraft") }
         app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
         app.launch()
         XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 8))
@@ -4482,6 +4493,34 @@ final class GunnAire_OpsUITests: XCTestCase {
                 XCTAssertTrue(open.waitForExistence(timeout: 4))
                 XCTAssertFalse(app.staticTexts["BillingReviewMessage"].exists, "Returning and checking again must use a fresh workflow owner, not a cancelled run.")
                 XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "CancellationError")).firstMatch.exists)
+                if retain {
+                    let action = app.buttons["BillingReviewRetainMilestoneDraft"]
+                    XCTAssertTrue(action.waitForExistence(timeout: 4)); action.tap()
+                    let confirm = app.buttons["Retain duplicate draft"]
+                    XCTAssertTrue(confirm.waitForExistence(timeout: 4)); confirm.tap()
+                    let retained = app.staticTexts.matching(NSPredicate(format: "label == %@", "Duplicate draft retained")).firstMatch
+                    XCTAssertTrue(retained.waitForExistence(timeout: 5))
+                    XCTAssertFalse(action.exists)
+                    XCTAssertFalse(app.buttons["BillingReviewPublish"].exists)
+                    XCTAssertTrue(open.exists)
+                    app.buttons["BillingReviewRetainedDraftDetails"].tap()
+                    let retainedEvidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+                    retainedEvidence.name = "Milestone - reviewed duplicate remains available without another bill"
+                    retainedEvidence.lifetime = .keepAlways; add(retainedEvidence)
+                    app.navigationBars["Billing Review"].buttons.firstMatch.tap()
+                    XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 4))
+                    let disclosure = app.buttons["Retained milestone drafts (1)"]
+                    for _ in 0..<12 where !disclosure.exists || !disclosure.isHittable { app.swipeUp() }
+                    XCTAssertTrue(disclosure.waitForExistence(timeout: 4)); disclosure.tap()
+                    let saved = app.buttons["RetainedMilestoneDraft-\(screenshotInvoiceID)"]
+                    XCTAssertTrue(saved.waitForExistence(timeout: 4)); saved.tap()
+                    XCTAssertTrue(retained.waitForExistence(timeout: 4))
+                    XCTAssertTrue(open.waitForExistence(timeout: 4)); open.tap()
+                    XCTAssertTrue(app.navigationBars["Original Invoice"].waitForExistence(timeout: 4))
+                    XCTAssertTrue(app.staticTexts["ProjectMilestoneSavedSubtotal"].exists)
+                    app.navigationBars["Original Invoice"].buttons.firstMatch.tap()
+                    XCTAssertTrue(retained.waitForExistence(timeout: 4))
+                }
             }
         } else if recover {
             app.buttons["BillingReviewRecover"].tap()
@@ -4502,7 +4541,10 @@ final class GunnAire_OpsUITests: XCTestCase {
         evidence.lifetime = .keepAlways; add(evidence)
         app.navigationBars["Billing Review"].buttons.firstMatch.tap()
         XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 4))
-        XCTAssertTrue(review.waitForExistence(timeout: 4))
+        if retain {
+            XCTAssertTrue(app.buttons["RetainedMilestoneDraft-\(screenshotInvoiceID)"].waitForExistence(timeout: 4))
+            XCTAssertFalse(review.exists, "The retained draft must not remain in the active invoice list.")
+        } else { XCTAssertTrue(review.waitForExistence(timeout: 4)) }
     }
 
     @MainActor

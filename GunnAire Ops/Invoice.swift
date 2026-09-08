@@ -100,6 +100,9 @@ final class Invoice {
     /// contract allocation. This prevents two equal draws on one job from being
     /// deduplicated and keeps QBO reconciliation traceable to field progress.
     var projectMilestoneID: UUID?
+    /// Additive CloudKit receipt; preserves an office-reviewed unused draft and
+    /// its original relationships without treating it as a second customer debt.
+    var milestoneDraftReceiptJSON: String?
     var projectMilestoneSequence: Int?
     var projectMilestoneTitle: String?
     var projectContractAmount: Double?
@@ -305,6 +308,13 @@ final class Invoice {
     }
 
     var paymentCollectionBlockedMessage: String? {
+        if milestoneDraftReceiptJSON != nil { return BillingMilestoneReconciliation.retainedMessage }
+        if let stage = projectMilestoneID, let customer {
+            let related = customer.invoices.filter { $0.projectMilestoneID == stage }
+            if BillingMilestoneReconciliation.project(related, payments: related.flatMap(\.payments)).needsReview {
+                return BillingMilestoneReconciliation.reviewMessage
+            }
+        }
         if let message = quickBooksReconciliationReviewMessage { return message }
         return BillingTaxPolicy.customerCommitmentBlockedMessage(
             status: taxCalculationStatus,
@@ -405,6 +415,8 @@ final class Invoice {
     }
 
     static func outstandingBalance(for invoice: Invoice, payments: [Payment]) -> Double {
+        if let customer = invoice.customer,
+           BillingMilestoneReconciliation.original(for: invoice, in: customer.invoices, payments: payments) != nil { return 0 }
         if let quickBooksBalanceDue = invoice.quickBooksBalanceDue,
            invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
             return max(quickBooksBalanceDue, 0)
@@ -421,6 +433,7 @@ final class Invoice {
     }
 
     static func isPaid(_ invoice: Invoice, payments: [Payment]) -> Bool {
+        if invoice.milestoneDraftReceiptJSON != nil { return false }
         guard invoice.quickBooksReconciliationReviewMessage == nil else { return false }
         if invoice.hasQuickBooksBalance {
             return outstandingBalance(for: invoice, payments: payments) <= 0.009
@@ -430,6 +443,7 @@ final class Invoice {
     }
 
     static func resolvedStatus(for invoice: Invoice, payments: [Payment]) -> String {
+        if invoice.milestoneDraftReceiptJSON != nil { return "retained draft" }
         guard invoice.quickBooksReconciliationReviewMessage == nil else { return "review" }
         let balance = outstandingBalance(for: invoice, payments: payments)
         if balance <= 0.009 {

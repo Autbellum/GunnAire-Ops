@@ -4,7 +4,7 @@ import Foundation
 /// deduplication. Only durable invoice/payment identities can collapse records.
 @MainActor
 enum CustomerAccountStatementPolicy {
-    static func snapshot(customer: Customer, invoices: [Invoice], payments: [Payment],
+    static func snapshot(customer: Customer, invoices allInvoices: [Invoice], payments: [Payment],
                          asOf: Date?, calendar: Calendar, now: Date) -> CustomerAccountStatementSnapshot {
         let cutoff = asOf ?? now
         let isHistorical = asOf != nil
@@ -13,6 +13,10 @@ enum CustomerAccountStatementPolicy {
         func review(_ message: String) {
             if !issues.contains(message) { issues.append(message) }
         }
+        let milestoneProjection = BillingMilestoneReconciliation.project(
+            allInvoices.filter { $0.customer?.id == customer.id }, payments: payments)
+        let invoices = milestoneProjection.activeInvoices
+        if milestoneProjection.needsReview { review(BillingMilestoneReconciliation.reviewMessage) }
         if isHistorical {
             // Neither mutable Invoice fields nor a latest QBO balance are an
             // as-of accounting ledger. Preserve a dated diagnostic projection,

@@ -88,7 +88,7 @@ class CloudKitV23PreflightTests(unittest.TestCase):
         development["CD_Item"].update(release_preflight.EXPECTED_CLOUDKIT_V25_ADDITIONS["CD_Item"])
         results = self.check(development, self.development, production_metadata=self.development_metadata)
         self.assertEqual(results.failures, [])
-        self.assertEqual(results.warnings, 0)
+        self.assertEqual(results.warnings, 1)  # v26 retained-draft field still needs staging.
         development["CD_Item"]["CD_unapproved"] = ("STRING", "QUERYABLE")
         results = self.check(development, self.development, production_metadata=self.development_metadata)
         self.assertTrue(results.failures)

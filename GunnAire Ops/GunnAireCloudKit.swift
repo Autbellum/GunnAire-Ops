@@ -930,7 +930,7 @@ enum GunnAireCloudKitRoundTripProbe {
 enum GunnAireCloudKitSchemaBootstrap {
     static let initializeArgument = "-initializeCloudKitSchema"
     static let cleanupArgument = "-cleanupCloudKitSchemaBootstrap"
-    static let schemaVersion = 25
+    static let schemaVersion = 26
 
     private static let marker = "__GUNNAIRE_CLOUDKIT_SCHEMA_BOOTSTRAP__"
     private static let bootstrapEmail = "schema-bootstrap@gunnaire.invalid"
@@ -1225,6 +1225,7 @@ enum GunnAireCloudKitSchemaBootstrap {
             completionNotes: marker,
             finalizedAt: now
         )
+        invoice.milestoneDraftReceiptJSON = marker
         let estimate = Estimate(
             serviceCallID: serviceCall.id,
             serviceLocationID: serviceLocation.id,

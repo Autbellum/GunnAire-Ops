@@ -103,7 +103,7 @@ enum QuickBooksBillingDocument {
                 Self.unchanged(value, [\Invoice.serviceCallID, \.serviceLocationID, \.projectMilestoneID]),
                 Self.unchanged(value, [\Invoice.siteAddress, \.quickBooksID, \.catalogSnapshotJSON, \.notes,
                     \.customerSignatureName, \.customerSignatureImageBase64, \.completionNotes,
-                    \.projectMilestoneTitle, \.taxCalculationStatusRawValue, \.quickBooksSyncDetail]),
+                    \.projectMilestoneTitle, \.taxCalculationStatusRawValue, \.quickBooksSyncDetail, \.milestoneDraftReceiptJSON]),
                 Self.unchanged(value, [\Invoice.status, \.workTypeRaw, \.lineItemSummary, \.quickBooksSyncStatus]),
                 Self.unchanged(value, [\Invoice.amount, \.salesTaxAmount]),
                 Self.unchanged(value, [\Invoice.quickBooksBalanceDue, \.projectContractAmount, \.projectBillingPercent]),
@@ -263,14 +263,15 @@ final class QuickBooksBillingWorkflow {
          validateAccess: (() throws -> Void)? = nil,
          validateCatalogAccess: (() throws -> Void)? = nil,
          billingJournal: BillingNativeJournalStore? = nil,
-         save: @escaping (ModelContext) throws -> Void = { try $0.save() }) throws {
+         save: @escaping (ModelContext) throws -> Void = { try $0.save() },
+         actorEmail: String? = nil) throws {
         guard lifecycle.activeID == nil else { throw QuickBooksBillingWorkflowError.busy }
         guard let customer = document.customer else { throw QuickBooksBillingWorkflowError.changed }
         let validate = validateAccess ?? { try QuickBooksBillingAccessPolicy.validate(context: context, document: document) }
         try validate()
         self.document = document; self.context = context; self.api = api; self.lifecycle = lifecycle
         self.customer = customer; self.customerDraft = QuickBooksCustomerCreateOperation.draft(for: customer)
-        actorEmail = AppIdentity.currentEmail
+        self.actorEmail = actorEmail ?? AppIdentity.currentEmail
         customerID = customer.quickBooksID
         self.save = save
         self.billingJournal = billingJournal ?? .device
@@ -450,6 +451,51 @@ final class QuickBooksBillingWorkflow {
         case .invoice: return role == .admin || role == .accounting
         case .estimate: return role == .admin || role == .dispatcher
         }
+    }
+
+    /// A local bookkeeping decision, not an accounting write. The current
+    /// server scope must confirm office authority and the already-issued owner.
+    func retainDuplicateMilestoneDraft() async throws {
+        guard case .invoice(let draft) = document, let milestoneID = draft.projectMilestoneID,
+              canApproveSharedDraft else { throw BillingMilestoneReconciliationError.accessRequired }
+        let shared = try openSharedReview()
+        guard shared.journal.pending == nil else { throw BillingMilestoneReconciliationError.reviewRequired }
+        let scope = shared.scope.document
+        let evidence = try await shared.client.context(scope, customerID: customer.id,
+            jobID: draft.serviceCallID, milestoneID: milestoneID, workflow: run.workflow)
+        try check()
+        guard evidence.authority == "office", evidence.providerID == nil,
+              let owner = evidence.milestone, owner.state == .confirmed,
+              owner.localDocumentID != draft.id,
+              let original = try owner.localInvoice(in: context, for: document) else {
+            throw BillingMilestoneReconciliationError.originalRequired
+        }
+        let unchangedOriginal = QuickBooksBillingDocument.invoice(original).validation(context: context)
+        try unchangedOriginal()
+        let originalScope = BillingDocumentScope(companyID: scope.companyID, realmID: scope.realmID,
+            environment: scope.environment, documentType: .invoice, localDocumentID: owner.localDocumentID)
+        let publication = try await shared.client.original(owner.publicationID, scope: originalScope,
+            customerID: customer.id, workflow: run.workflow)
+        try check(); try unchangedOriginal()
+        guard try await shared.original(customerID: customer.id) == nil else {
+            throw BillingMilestoneReconciliationError.reviewRequired
+        }
+        try check(); try unchangedOriginal()
+        // Revalidate authority and durable ownership after all awaited reads.
+        let latest = try await shared.client.context(scope, customerID: customer.id,
+            jobID: draft.serviceCallID, milestoneID: milestoneID, workflow: run.workflow)
+        try check(); try unchangedOriginal()
+        guard latest.authority == "office", latest.providerID == nil, latest.milestone == owner,
+              canApproveSharedDraft, let email = actorEmail else {
+            throw BillingMilestoneReconciliationError.accessRequired
+        }
+        let users = try context.fetch(FetchDescriptor<AppUser>()).filter {
+            AppAccess.normalizedEmail($0.email) == AppAccess.normalizedEmail(email) && $0.isActive
+        }
+        guard users.count == 1, let reviewer = users.first else { throw BillingMilestoneReconciliationError.accessRequired }
+        try BillingMilestoneReconciliation.save(draft: draft, original: original, evidence: owner,
+            publication: publication, scope: scope, reviewer: reviewer, context: context,
+            check: { try self.check(); try unchangedOriginal() }, persist: { try self.save(self.context) })
     }
 
     func resumeOriginalFromReview() async throws -> Outcome {

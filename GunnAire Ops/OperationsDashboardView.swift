@@ -1019,8 +1019,8 @@ struct OperationsDashboardView: View {
                 )
                 dispatchMetric(
                     title: "Open Balance",
-                    value: currency(accountOpenBalanceTotal),
-                    detail: "\(openInvoices.count) invoices",
+                    value: accountSnapshots.contains(where: { $0.billingReviewMessage != nil }) ? "Review" : currency(accountOpenBalanceTotal),
+                    detail: accountSnapshots.contains(where: { $0.billingReviewMessage != nil }) ? "Milestone billing needs review" : "\(openInvoices.count) invoices",
                     systemImage: "creditcard.trianglebadge.exclamationmark",
                     tint: accountOpenBalanceTotal > 0 ? .red : .green
                 )
@@ -1470,7 +1470,9 @@ struct OperationsDashboardView: View {
                     .lineLimit(2)
 
                 HStack(spacing: 8) {
-                    if snapshot.openBalance > 0 {
+                    if snapshot.billingReviewMessage != nil {
+                        Label("Billing review", systemImage: "doc.text.magnifyingglass")
+                    } else if snapshot.openBalance > 0 {
                         Label(currency(snapshot.openBalance), systemImage: "creditcard")
                     }
                     if snapshot.readyToBillCount > 0 {
@@ -1575,11 +1577,10 @@ struct OperationsDashboardView: View {
                     assignmentMenu(for: call)
                 }
 
-                if let linkedInvoiceID = call.linkedInvoiceID,
-                   let invoice = invoice(for: call),
+                if let invoice = invoice(for: call),
                    outstandingBalance(for: invoice) > 0 {
                     Button {
-                        GunnAireAppIntentRouter.storePaymentCollectionRoute(linkedInvoiceID)
+                        GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
                     } label: {
                         Label("Collect", systemImage: "creditcard")
                     }
@@ -1796,8 +1797,7 @@ struct OperationsDashboardView: View {
     }
 
     private func invoice(for call: ServiceCall) -> Invoice? {
-        guard let invoiceID = call.linkedInvoiceID else { return nil }
-        return dashboardInvoices.first { $0.id == invoiceID }
+        BillingMilestoneReconciliation.linkedInvoice(for: call, in: dashboardInvoices, payments: dashboardPayments)
     }
 
     private func dispatchIconName(for call: ServiceCall) -> String {
@@ -2145,6 +2145,8 @@ struct OperationsDashboardView: View {
             GunnAireAppIntentRouter.storeDocumentationRoute(serviceCallID)
         case .openSchedule(let serviceCallID):
             GunnAireAppIntentRouter.storeScheduleCallRoute(serviceCallID)
+        case .reviewInvoices:
+            GunnAireAppIntentRouter.store(.invoices)
         case .openPayments:
             GunnAireAppIntentRouter.store(.payments)
         case .completeProfile(let customerID), .openCustomer(let customerID):

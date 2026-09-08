@@ -218,7 +218,7 @@ enum BusinessReporting {
         now: Date = Date(),
         serviceCalls: [ServiceCall],
         estimates: [Estimate],
-        invoices: [Invoice],
+        invoices allInvoices: [Invoice],
         payments: [Payment],
         timeEntries: [TimeEntry],
         technicians: [Technician],
@@ -229,6 +229,8 @@ enum BusinessReporting {
         calendar: Calendar = .current
     ) -> BusinessReportSnapshot {
         let interval = period.interval(containing: now, calendar: calendar)
+        let milestoneProjection = BillingMilestoneReconciliation.project(allInvoices, payments: payments)
+        let invoices = milestoneProjection.activeInvoices
         let periodCalls = uniqueServiceCalls(serviceCalls.filter { interval.contains($0.scheduledDate) })
         let periodInvoices = Invoice.displayDeduplicated(invoices.filter { interval.contains($0.createdAt) })
         let periodEstimates = Estimate.displayDeduplicated(estimates.filter { interval.contains($0.createdAt) })
@@ -262,7 +264,7 @@ enum BusinessReporting {
         let projectContractValue = projectGroups.values.reduce(0) { partial, milestones in
             partial + milestones.reduce(0) { $0 + $1.plannedAmount }
         }
-        let milestoneInvoiceIDs = Set(periodProjectMilestones.compactMap(\.invoiceID))
+        let milestoneInvoiceIDs = Set(periodProjectMilestones.compactMap { $0.linkedInvoice(in: allInvoices)?.id ?? $0.invoiceID })
         let projectInvoices = invoices.filter { milestoneInvoiceIDs.contains($0.id) }
         let projectInvoicedAmount = projectInvoices.reduce(0) { $0 + $1.subtotalAmount }
         let projectReadyToBillCount = periodProjectMilestones.filter { milestone in
@@ -467,6 +469,7 @@ enum BusinessReporting {
             interval: interval,
             generatedAt: now,
             billingIdentityReviewMessage: (
+                milestoneProjection.needsReview ||
                 invoices.contains { $0.quickBooksReconciliationReviewMessage != nil } ||
                 QuickBooksBillingIdentity.hasAmbiguousMapping(invoices.map { ($0.id, $0.customer?.id, $0.quickBooksID) }) ||
                 QuickBooksBillingIdentity.hasAmbiguousMapping(estimates.map { ($0.id, $0.customer?.id, $0.quickBooksID) })

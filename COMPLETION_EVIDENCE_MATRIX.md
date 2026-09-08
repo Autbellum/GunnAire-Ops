@@ -1,3 +1,26 @@
+Local milestone reconciliation qualification, 2026-09-08:
+MILESTONE_DRAFT_RECONCILIATION.md records an office-only review receipt that
+preserves both documents and follows the exact original for reporting, job
+billing and collection. Missing/changed originals and ambiguous stage identities
+remain blocked for review. The workflow revalidates authority and both records
+after shared-service GETs; it performs no accounting mutation. Final frozen
+source passes 1,410 logic tests on each native platform, all ten selected iPad
+UI journeys, three additional probe-free hardware-keyboard repetitions, 564
+Backend tests, 52 Tools tests and unsigned universal Mac Release with both
+architectures verified. All requested execution trees, five final UI captures
+and 22 source hashes were checked. Diagnostics isolate a synthesized keyboard
+initialization issue; no production text-field change or physical-device fix
+is claimed. The optional CloudKit v26 receipt field is not promoted. All 24
+candidate paths now match the original iCloud project; 197 unrelated changed
+files and its empty index were preserved. Preceding PR #18 head aaaaf68 has 41
+UI selectors: Backend/Mac passed, while iPad finished with the known keyboard
+test failure (one failure in 41 UI tests). The corrected candidate needs its own
+hosted run. Schedule/Documentation Queue and legacy receipt/estimate link
+consumers still require follow-up beyond the qualified job-detail/dashboard.
+Signed multi-device and mixed-version CloudKit safety, physical keyboard/job
+handoffs, provider acceptance and the full business-suite objective remain
+incomplete. No merge, deployment, financial write or signing change occurred.
+
 Shared milestone candidate, 2026-09-08: SHARED_MILESTONE_BILLING.md records
 stable new invoice identities, preserved legacy originals, atomic company-scoped
 publication ownership, exact office authority, provider duplicate-reference

@@ -636,8 +636,7 @@ struct BillingDocumentsView: View {
 
     private var currentJobInvoice: Invoice? {
         if let activeServiceCall {
-            guard let invoiceID = activeServiceCall.linkedInvoiceID else { return nil }
-            return invoices.first { $0.id == invoiceID }
+            return BillingMilestoneReconciliation.linkedInvoice(for: activeServiceCall, in: invoices, payments: payments)
         }
         guard let selectedInvoiceForEditingID else { return nil }
         return invoices.first { $0.id == selectedInvoiceForEditingID }
@@ -778,6 +777,10 @@ struct BillingDocumentsView: View {
         return (openInvoices.count, overdueInvoices.count, balance)
     }
 
+    private var milestoneBillingNeedsReview: Bool {
+        BillingMilestoneReconciliation.project(invoices, payments: payments).needsReview
+    }
+
     private var estimatesNeedingFollowUp: [Estimate] {
         displayedEstimates.filter { estimate in
             isCurrentProposal(estimate) && (estimate.status == "pending" || estimate.status == "follow-up")
@@ -900,7 +903,7 @@ struct BillingDocumentsView: View {
     private var displayedInvoices: [Invoice] {
         // Authorize before coalescing replicas, so another user's row cannot
         // suppress assigned field work. Keep unresolved CloudKit records saved.
-        let resolved = invoices.filter { $0.customer != nil }
+        let resolved = BillingMilestoneReconciliation.project(invoices, payments: payments).activeInvoices.filter { $0.customer != nil }
         if canViewFinancials { return Invoice.displayDeduplicated(resolved) }
         guard canCollectFieldPayments else { return [] }
         let visibleCallIDs = visibleBillingServiceCallIDsForFieldUser
@@ -915,6 +918,12 @@ struct BillingDocumentsView: View {
         Invoice.displayDeduplicated(invoices)
             .filter { $0.customer == nil }
             .count
+    }
+
+    private var retainedMilestoneDrafts: [Invoice] {
+        guard canViewFinancials else { return [] }
+        return BillingMilestoneReconciliation.project(invoices, payments: payments).retainedDrafts
+            .filter { $0.customer != nil }.sorted { $0.createdAt > $1.createdAt }
     }
 
     private var visibleBillingServiceCallIDsForFieldUser: Set<UUID> {
@@ -1678,13 +1687,13 @@ GunnAire
         if canViewFinancials {
             Section("Workspace Snapshot") {
                 HStack {
-                    workspaceMetricView(title: "Open", value: "\(invoiceMetrics.open)")
+                    workspaceMetricView(title: "Open", value: milestoneBillingNeedsReview ? "Review" : "\(invoiceMetrics.open)")
                     Spacer()
-                    workspaceMetricView(title: "Overdue", value: "\(invoiceMetrics.overdue)")
+                    workspaceMetricView(title: "Overdue", value: milestoneBillingNeedsReview ? "Review" : "\(invoiceMetrics.overdue)")
                     Spacer()
                     workspaceMetricView(
                         title: "Outstanding",
-                        value: invoiceMetrics.outstandingBalance.formatted(.currency(code: "USD"))
+                        value: milestoneBillingNeedsReview ? "Review" : invoiceMetrics.outstandingBalance.formatted(.currency(code: "USD"))
                     )
                 }
                 if unresolvedInvoiceRelationshipCount > 0 {
@@ -1984,12 +1993,12 @@ GunnAire
                                     HStack {
                                         workspaceMetricView(title: "Pending Estimates", value: "\(estimateMetrics.pending)")
                                         Spacer()
-                                        workspaceMetricView(title: "Open Invoices", value: "\(invoiceMetrics.open)")
+                                        workspaceMetricView(title: "Open Invoices", value: milestoneBillingNeedsReview ? "Review" : "\(invoiceMetrics.open)")
                                     }
                                     HStack {
                                         workspaceMetricView(title: "Estimate Follow-Up", value: "\(estimateMetrics.followUp)")
                                         Spacer()
-                                        workspaceMetricView(title: "Outstanding", value: invoiceMetrics.outstandingBalance.formatted(.currency(code: "USD")))
+                                        workspaceMetricView(title: "Outstanding", value: milestoneBillingNeedsReview ? "Review" : invoiceMetrics.outstandingBalance.formatted(.currency(code: "USD")))
                                     }
                                 }
                             case .estimates:
@@ -2002,11 +2011,11 @@ GunnAire
                                 }
                             case .invoices:
                                 HStack {
-                                    workspaceMetricView(title: "Open", value: "\(invoiceMetrics.open)")
+                                    workspaceMetricView(title: "Open", value: milestoneBillingNeedsReview ? "Review" : "\(invoiceMetrics.open)")
                                     Spacer()
-                                    workspaceMetricView(title: "Overdue", value: "\(invoiceMetrics.overdue)")
+                                    workspaceMetricView(title: "Overdue", value: milestoneBillingNeedsReview ? "Review" : "\(invoiceMetrics.overdue)")
                                     Spacer()
-                                    workspaceMetricView(title: "Outstanding", value: invoiceMetrics.outstandingBalance.formatted(.currency(code: "USD")))
+                                    workspaceMetricView(title: "Outstanding", value: milestoneBillingNeedsReview ? "Review" : invoiceMetrics.outstandingBalance.formatted(.currency(code: "USD")))
                                 }
                             }
                         }
@@ -3661,6 +3670,23 @@ GunnAire
     @ViewBuilder
     private var invoicesWorkspaceSection: some View {
                 if !isJobDocumentationMode && workspaceMode.showsInvoices {
+                    if !retainedMilestoneDrafts.isEmpty {
+                        Section {
+                            DisclosureGroup("Retained milestone drafts (\(retainedMilestoneDrafts.count))") {
+                                ForEach(retainedMilestoneDrafts) { invoice in
+                                    NavigationLink {
+                                        BillingPublicationReviewView(document: .invoice(invoice), context: modelContext)
+                                    } label: {
+                                        VStack(alignment: .leading) {
+                                            Text(invoice.customer.name)
+                                            Text(invoice.projectMilestoneTitle ?? "Project milestone").font(.caption).foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    .accessibilityIdentifier("RetainedMilestoneDraft-\(invoice.id.uuidString)")
+                                }
+                            }
+                        } footer: { Text("These reviewed drafts are kept with their files, but are not additional invoices or amounts due.") }
+                    }
                     Section("Invoices") {
                         if displayedInvoices.isEmpty {
                             Text("No invoices yet.")
@@ -10736,6 +10762,7 @@ enum CatalogVendorSelection {
 
 enum BillingInvoiceMutationPolicy {
     static func blockedMessage(for invoice: Invoice, payments: [Payment], allowingInitialMilestonePublication: Bool = false) -> String? {
+        if invoice.milestoneDraftReceiptJSON != nil { return BillingMilestoneReconciliation.retainedMessage }
         if let message = invoice.quickBooksReconciliationReviewMessage { return message }
         if invoice.isProjectProgressInvoice && (!allowingInitialMilestonePublication ||
             invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) {

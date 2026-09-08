@@ -124,7 +124,7 @@ final class ProjectMilestone {
         set { statusRaw = newValue.rawValue }
     }
 
-    func displayState(invoices: [Invoice], payments: [Payment]) -> ProjectMilestoneDisplayState {
+    @MainActor func displayState(invoices: [Invoice], payments: [Payment]) -> ProjectMilestoneDisplayState {
         if let invoice = linkedInvoice(in: invoices) {
             return Invoice.isPaid(invoice, payments: payments) ? .paid : .invoiced
         }
@@ -134,9 +134,13 @@ final class ProjectMilestone {
         return .planned
     }
 
-    func linkedInvoice(in invoices: [Invoice]) -> Invoice? {
+    @MainActor func linkedInvoice(in invoices: [Invoice]) -> Invoice? {
         guard let invoiceID else { return nil }
-        return invoices.first { $0.id == invoiceID }
+        guard let stored = invoices.first(where: { $0.id == invoiceID }) else { return nil }
+        if stored.milestoneDraftReceiptJSON != nil {
+            return BillingMilestoneReconciliation.original(for: stored, in: invoices, payments: invoices.flatMap(\.payments))
+        }
+        return stored
     }
 
     func markScheduled(visitID: UUID, at date: Date = Date()) {

@@ -545,6 +545,7 @@ struct CustomersView: View {
 
     private func accountPulseLine(for snapshot: CustomerIntelligenceSnapshot) -> String {
         var parts: [String] = ["\(snapshot.healthLabel) account"]
+        if snapshot.billingReviewMessage != nil { parts.append("billing needs review") }
         if snapshot.openBalance > 0 {
             parts.append("\(snapshot.openBalance.formatted(.currency(code: "USD"))) open")
         }
@@ -2861,7 +2862,7 @@ private struct CustomerEditorView: View {
     }
 
     private var openCustomerInvoiceBalances: [(invoice: Invoice, balance: Double)] {
-        invoices.filter {
+        BillingMilestoneReconciliation.project(invoices, payments: payments).activeInvoices.filter {
             $0.customer.id == customer.id
         }
         .compactMap { invoice in
@@ -3282,7 +3283,7 @@ private struct CustomerEditorView: View {
 
                         HStack {
                             metricPill("\(customerServiceCalls.count)", label: "jobs")
-                            metricPill(openCustomerInvoiceBalances.reduce(0) { $0 + $1.balance }.formatted(.currency(code: "USD")), label: "balance")
+                            metricPill(customerSnapshot.billingReviewMessage != nil ? "Review" : openCustomerInvoiceBalances.reduce(0) { $0 + $1.balance }.formatted(.currency(code: "USD")), label: "balance")
                             metricPill("\(customerSnapshot.activeContractCount)", label: "agreements")
                         }
                     } else {
@@ -5716,6 +5717,8 @@ private struct CustomerEditorView: View {
         case .openSchedule(let serviceCallID):
             GunnAireAppIntentRouter.storeScheduleCallRoute(serviceCallID)
             dismiss()
+        case .reviewInvoices:
+            GunnAireAppIntentRouter.store(.invoices)
         case .openPayments:
             GunnAireAppIntentRouter.store(.payments)
             dismiss()
