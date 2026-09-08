@@ -472,6 +472,7 @@ enum QuickBooksLocalSync {
             estimates: reconciledEstimates,
             invoices: reconciledInvoices,
             serviceCalls: reconciledServiceCalls,
+            payments: try modelContext.fetch(FetchDescriptor<Payment>()),
             attachments: reconciledAttachments
         )
         try saveSnapshot(modelContext)
@@ -487,6 +488,7 @@ enum QuickBooksLocalSync {
             estimates: syncedEstimates,
             invoices: syncedInvoices,
             serviceCalls: syncedServiceCalls,
+            payments: try modelContext.fetch(FetchDescriptor<Payment>()),
             attachments: serviceAttachments,
             modelContext: modelContext
         )

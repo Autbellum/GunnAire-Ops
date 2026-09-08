@@ -1900,7 +1900,7 @@ struct OnsiteDocumentationView: View {
     }
 
     private var jobsNeedingDocumentation: [ServiceCall] {
-        openJobs.filter {
+        openJobs.filter { $0.customer != nil }.filter {
             $0.documentationCompletedAt == nil ||
             $0.linkedEstimateID != nil ||
             $0.linkedInvoiceID != nil
@@ -1930,22 +1930,25 @@ struct OnsiteDocumentationView: View {
         }
     }
 
+    private var invoiceQueueStatus: DocumentationQueueStatus {
+        DocumentationQueueStatus.resolve(invoices: invoices, payments: payments,
+            visibleCalls: visibleServiceCalls, includesAllInvoices: canViewFinancials)
+    }
+
     private var selectedServiceCall: ServiceCall? {
         guard let selectedServiceCallID else { return nil }
-        return visibleServiceCalls.first { $0.id == selectedServiceCallID }
+        return JobBillingDocumentLinks.unique(visibleServiceCalls.filter { $0.id == selectedServiceCallID && $0.customer != nil })
     }
 
     private func serviceCall(for invoice: Invoice) -> ServiceCall? {
         guard let serviceCallID = invoice.serviceCallID else { return nil }
-        return visibleServiceCalls.first(where: { $0.id == serviceCallID })
+        return JobBillingDocumentLinks.unique(visibleServiceCalls.filter {
+            $0.id == serviceCallID && $0.customer != nil && $0.customer === invoice.customer
+        })
     }
 
     private func estimate(for call: ServiceCall) -> Estimate? {
-        if let linkedEstimateID = call.linkedEstimateID,
-           let linkedEstimate = estimates.first(where: { $0.id == linkedEstimateID }) {
-            return linkedEstimate
-        }
-        return estimates.first(where: { $0.serviceCallID == call.id })
+        JobBillingDocumentLinks.estimate(for: call, in: estimates)
     }
 
     private func invoice(for call: ServiceCall) -> Invoice? {
@@ -1954,7 +1957,7 @@ struct OnsiteDocumentationView: View {
 
     private func payments(for invoice: Invoice?) -> [Payment] {
         guard let invoice else { return [] }
-        return payments.filter { $0.invoice.id == invoice.id }
+        return payments.filter { $0.invoice?.id == invoice.id }
     }
 
     private func invoiceBalanceDue(for invoice: Invoice) -> Double {
@@ -2025,7 +2028,14 @@ struct OnsiteDocumentationView: View {
     var body: some View {
         NavigationStack {
             Form {
-                        if jobsNeedingDocumentation.isEmpty {
+                        if openJobs.contains(where: { $0.customer == nil }) {
+                            Section("Jobs Awaiting Sync") {
+                                Text("Customer records are still syncing. Your job files are retained; document actions will be available when those records arrive.")
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("DocumentationJobSyncStatus")
+                            }
+                        }
+                        if jobsNeedingDocumentation.isEmpty && !openJobs.contains(where: { $0.customer == nil }) {
                             Section("Documentation Queue") {
                                 Text("No active jobs are waiting for documentation.")
                                     .foregroundColor(.secondary)
@@ -2056,17 +2066,29 @@ struct OnsiteDocumentationView: View {
                         }
 
                         Section("Invoices Awaiting Closeout") {
+                            if invoiceQueueStatus == .pendingSync || invoiceQueueStatus == .review {
+                                Text(invoiceQueueStatus.message)
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("DocumentationInvoiceSyncStatus")
+                                if invoiceQueueStatus == .review && canViewFinancials {
+                                    Button("Review Invoices") { GunnAireAppIntentRouter.store(.invoices) }
+                                        .accessibilityIdentifier("DocumentationReviewInvoices")
+                                }
+                            }
                             if invoicesAwaitingCloseout.isEmpty {
-                                Text("All invoices are finalized and paid.")
-                                    .foregroundColor(.secondary)
+                                if invoiceQueueStatus == .empty || invoiceQueueStatus == .current {
+                                    Text(invoiceQueueStatus.message)
+                                        .foregroundColor(.secondary)
+                                }
                             } else {
                                 ForEach(invoicesAwaitingCloseout) { invoice in
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(invoice.customer.name)
                                             .font(.headline)
-                                        Text("\(invoice.amount, format: .currency(code: "USD")) • \(invoice.status.capitalized)")
+                                        Text("\(invoice.amount, format: .currency(code: "USD")) • \(Invoice.resolvedStatus(for: invoice, payments: payments(for: invoice)).capitalized)")
                                             .font(.caption)
                                             .foregroundColor(.secondary)
+                                            .accessibilityIdentifier("DocumentationInvoiceStatus-\(invoice.id.uuidString)")
                                         if let linkedCall = serviceCall(for: invoice) {
                                             let readiness = closeoutReadiness(for: linkedCall, invoice: invoice)
                                             Text(closeoutSummary(for: linkedCall, invoice: invoice))
@@ -2099,7 +2121,7 @@ struct OnsiteDocumentationView: View {
                                                 .accessibilityIdentifier("InvoiceCloseoutOpenSchedule-\(invoice.id.uuidString)")
                                             }
 
-                                            if invoiceBalanceDue(for: invoice) > 0.009 {
+                                            if invoice.isReadyForPaymentCollection && invoiceBalanceDue(for: invoice) > 0.009 {
                                                 Button("Collect Payment") {
                                                     GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
                                                 }
@@ -2374,6 +2396,7 @@ struct OnsiteDocumentationView: View {
                 estimates: estimates,
                 invoices: invoices,
                 serviceCalls: serviceCalls,
+                payments: payments,
                 attachments: documentAttachments + [attachment],
                 modelContext: modelContext
             )
@@ -2535,6 +2558,7 @@ struct OnsiteDocumentationView: View {
                 estimates: estimates,
                 invoices: invoices,
                 serviceCalls: serviceCalls,
+                payments: payments,
                 attachments: documentAttachments + [attachment],
                 modelContext: modelContext
             )

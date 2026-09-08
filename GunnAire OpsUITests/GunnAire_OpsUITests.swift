@@ -4438,6 +4438,108 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testDocumentationQueueShowsUnresolvedCloudKitBillingWithoutClaimingPaid() throws {
+        try exerciseDocumentationPending(jobCustomerMissing: false)
+    }
+
+    @MainActor
+    func testDocumentationQueueRetainsJobsWhileTheirCustomersSync() throws {
+        try exerciseDocumentationPending(jobCustomerMissing: true)
+    }
+
+    @MainActor
+    private func exerciseDocumentationPending(jobCustomerMissing: Bool) throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-appStoreScreenshotFixtures",
+            "-uiTestSeedCollectibleJob", "-uiTestDocumentationCustomerPending",
+            "-GunnAirePendingAppRoute", "onsiteDocumentation"]
+        if jobCustomerMissing { app.launchArguments.append("-uiTestDocumentationJobPending") }
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Onsite Documentation"].waitForExistence(timeout: 8))
+        if jobCustomerMissing {
+            XCTAssertTrue(app.staticTexts["DocumentationJobSyncStatus"].waitForExistence(timeout: 4))
+            XCTAssertFalse(app.buttons["DocumentationQueueOpenDocuments-\(screenshotServiceCallID)"].exists)
+        }
+        let notice = app.staticTexts["DocumentationInvoiceSyncStatus"]
+        for _ in 0..<8 where !notice.exists || !notice.isHittable { app.swipeUp() }
+        XCTAssertTrue(notice.waitForExistence(timeout: 4))
+        XCTAssertEqual(notice.label, "Some billing records are still syncing. Payment and closeout status are not confirmed yet.")
+        XCTAssertFalse(app.staticTexts["All invoices are finalized and paid."].exists)
+        XCTAssertFalse(app.buttons["DocumentationQueueCollectPayment-\(screenshotServiceCallID)"].exists)
+        let evidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        evidence.name = "Documentation - pending customer relationship is not paid"
+        evidence.lifetime = .keepAlways; add(evidence)
+    }
+
+    @MainActor
+    func testReceiptJobAndTransactionChangesKeepAttachmentTypeAndIDTogether() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-appStoreScreenshotFixtures",
+            "-uiTestSeedCollectibleJob", "-uiTestDocumentLinkTargets",
+            "-GunnAirePendingAppRoute", "receiptsBills"]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Receipts & Bills"].waitForExistence(timeout: 8))
+        let job = app.buttons["DocumentServiceCallPicker"], type = app.buttons["DocumentAttachTypePicker"]
+        let id = app.textFields["DocumentAttachEntityID"]
+        for _ in 0..<8 where !job.exists || !job.isHittable { app.swipeUp() }
+        XCTAssertTrue(job.waitForExistence(timeout: 4))
+        func selectJob(_ identifier: String) {
+            job.tap()
+            let option = app.buttons["DocumentServiceCall-\(identifier)"]
+            XCTAssertTrue(option.waitForExistence(timeout: 3)); option.tap()
+        }
+        func expectEmptyID() {
+            let predicate = NSPredicate(format: "value == %@ OR value == %@", "", "QuickBooks Entity ID (optional)")
+            expectation(for: predicate, evaluatedWith: id)
+            waitForExpectations(timeout: 3)
+        }
+        selectJob(screenshotServiceCallID)
+        XCTAssertEqual(id.value as? String, "100")
+        type.tap(); app.buttons["Estimate"].tap()
+        expectEmptyID()
+        selectJob(maintenanceServiceCallID)
+        XCTAssertEqual(id.value as? String, "QBO-UI-DOCUMENT-ESTIMATE")
+        XCTAssertTrue(type.label.contains("Estimate"))
+        let evidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        evidence.name = "Receipts - estimate target retains correct transaction type"
+        evidence.lifetime = .keepAlways; add(evidence)
+        selectJob(screenshotServiceCallID)
+        XCTAssertEqual(id.value as? String, "100")
+        XCTAssertTrue(type.label.contains("Invoice"))
+        job.tap(); app.buttons["None"].tap()
+        expectEmptyID()
+        XCTAssertFalse(app.buttons["Sync Receipts and Bills with QuickBooks"].isEnabled)
+    }
+
+    @MainActor
+    func testDocumentationBillingReviewReturnsToTheOriginalWorkspace() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-appStoreScreenshotFixtures",
+            "-uiTestSeedCollectibleJob", "-uiTestUnconfirmedInvoiceBalance"]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+        revealSidebarDestination("Onsite Documentation", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Onsite Documentation"].waitForExistence(timeout: 5))
+        let review = app.buttons["DocumentationReviewInvoices"]
+        for _ in 0..<8 where !review.exists || !review.isHittable { app.swipeUp() }
+        XCTAssertTrue(review.waitForExistence(timeout: 4)); review.tap()
+        XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 5))
+        revealSidebarDestination("Onsite Documentation", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Onsite Documentation"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["DocumentationInvoiceSyncStatus"].exists)
+        XCTAssertFalse(app.buttons["DocumentationQueueCollectPayment-\(screenshotServiceCallID)"].exists)
+        let status = app.staticTexts["DocumentationInvoiceStatus-\(screenshotInvoiceID)"]
+        for _ in 0..<8 where !status.exists || !status.isHittable { app.swipeUp() }
+        XCTAssertTrue(status.waitForExistence(timeout: 4))
+        XCTAssertEqual(status.label, "$189.00 • Review")
+        let evidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        evidence.name = "Documentation - billing review returns without collecting an unverified balance"
+        evidence.lifetime = .keepAlways; add(evidence)
+    }
+
+    @MainActor
     private func exerciseNativeBillingReview(recover: Bool, bundle: Bool = false, milestone: Bool = false, missingOriginal: Bool = false, retain: Bool = false, jobHandoff: String? = nil) throws {
         let app = XCUIApplication()
         app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-appStoreScreenshotFixtures",

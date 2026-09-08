@@ -45,6 +45,7 @@ struct ReceiptsAndBillsView: View {
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
+    @Query private var payments: [Payment]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query(sort: \Vendor.name, order: .forward) private var vendors: [Vendor]
     @Query(sort: \Item.name, order: .forward) private var catalogItems: [Item]
@@ -75,6 +76,7 @@ struct ReceiptsAndBillsView: View {
     @State private var selectedServiceCallID: UUID?
     @State private var selectedJobDocumentStage: JobDocumentStage = .supporting
     @State private var isLoadingAttachTargets = false
+    @State private var attachLookupID = UUID()
     @State private var attachTargetOptions: [AttachTargetOption] = []
     @State private var selectedAttachTargetID: String = ""
     @State private var attachLookupMessage: String?
@@ -143,7 +145,7 @@ struct ReceiptsAndBillsView: View {
 
     private var selectedServiceCall: ServiceCall? {
         guard let selectedServiceCallID else { return nil }
-        return serviceCalls.first { $0.id == selectedServiceCallID }
+        return JobBillingDocumentLinks.unique(serviceCalls.filter { $0.id == selectedServiceCallID })
     }
 
     private var duePendingUploadsCount: Int {
@@ -439,10 +441,12 @@ struct ReceiptsAndBillsView: View {
                         Picker("Service Call", selection: $selectedServiceCallID) {
                             Text("None").tag(UUID?.none)
                             ForEach(serviceCalls) { call in
-                                Text("\(call.customer.name) • \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))")
+                                Text("\(call.customer?.name ?? "Customer pending sync") • \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))")
                                     .tag(UUID?.some(call.id))
+                                    .accessibilityIdentifier("DocumentServiceCall-\(call.id.uuidString)")
                             }
                         }
+                        .accessibilityIdentifier("DocumentServiceCallPicker")
 
                         Picker("Documentation Type", selection: $selectedJobDocumentStage) {
                             ForEach(JobDocumentStage.allCases) { stage in
@@ -452,8 +456,8 @@ struct ReceiptsAndBillsView: View {
 
                         if let selectedServiceCall {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("Linked job: \(selectedServiceCall.customer.name)")
-                                if let address = selectedServiceCall.siteAddress ?? selectedServiceCall.customer.address,
+                                Text("Linked job: \(selectedServiceCall.customer?.name ?? "Customer pending sync")")
+                                if let address = selectedServiceCall.siteAddress ?? selectedServiceCall.customer?.address,
                                    !address.isEmpty {
                                     Text(address)
                                         .font(.caption)
@@ -463,7 +467,7 @@ struct ReceiptsAndBillsView: View {
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
                                 if selectedServiceCall.linkedInvoiceID == nil {
-                                    Text("This job does not have a linked invoice yet. QuickBooks attachment sync may still require a manual entity ID.")
+                                    Text("Choose the related transaction below, or save the file without a QuickBooks transaction link.")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
                                 }
@@ -471,12 +475,21 @@ struct ReceiptsAndBillsView: View {
                         }
 
                         if isAdminUser {
-                            Picker("Attach To", selection: $selectedAttachEntityType) {
+                            Picker("Attach To", selection: Binding(
+                                get: { selectedAttachEntityType },
+                                set: { value in
+                                    selectedAttachEntityType = value
+                                    attachEntityID = ""
+                                    clearAttachLookup()
+                                }
+                            )) {
                                 ForEach(QuickBooksAttachableEntityType.allCases, id: \.self) { type in
                                     Text(type.rawValue).tag(type)
                                 }
                             }
+                            .accessibilityIdentifier("DocumentAttachTypePicker")
                             TextField("QuickBooks Entity ID (optional)", text: $attachEntityID)
+                                .accessibilityIdentifier("DocumentAttachEntityID")
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled(true)
 
@@ -768,11 +781,6 @@ struct ReceiptsAndBillsView: View {
         } message: { context in
             Text("Vendor: \(context.order.vendorName)\nCredit: \(context.evidence.reference)\nAP account: \(quickBooksAccountingConfiguration?.defaultAPAccountName ?? "Not configured")\n\nThis creates one QuickBooks Vendor Credit only after checking for a matching GunnAire marker. It does not apply the credit to a bill.")
         }
-        .onChange(of: selectedAttachEntityType) { _, _ in
-            attachTargetOptions = []
-            selectedAttachTargetID = ""
-            attachLookupMessage = nil
-        }
         .onChange(of: selectedServiceCallID) { _, _ in
             applyLinkedServiceCallDefaults()
         }
@@ -786,6 +794,8 @@ struct ReceiptsAndBillsView: View {
             if newIsAdminUser {
                 loadPendingUploads()
             } else {
+                attachEntityID = ""
+                clearAttachLookup()
                 pendingUploads = []
                 selectedPendingUploadForDetail = nil
                 pendingUploadForDeletion = nil
@@ -802,8 +812,11 @@ struct ReceiptsAndBillsView: View {
             refreshQuickBooksAccountingMappings()
         }
         .onReceive(NotificationCenter.default.publisher(for: .quickBooksAuthenticationDidChange)) { _ in
+            attachEntityID = ""
+            clearAttachLookup()
             refreshQuickBooksAccountingMappings(force: true)
         }
+        .onDisappear { clearAttachLookup() }
         .sheet(item: $selectedPendingUploadForDetail) { pending in
             PendingUploadDetailSheet(
                 pending: refreshPendingUploadDetails(for: pending),
@@ -3945,7 +3958,7 @@ private extension ReceiptsAndBillsView {
                 estimateID: nil,
                 customerEquipmentID: selectedServiceCall?.customerEquipmentID,
                 equipmentName: selectedServiceCall?.equipmentSummary,
-                customerName: selectedServiceCall?.customer.name
+                customerName: selectedServiceCall?.customer?.name
             )
             backendUploadMessage = "Receipt uploaded to company storage: \(response.filename)."
         } catch {
@@ -4385,10 +4398,24 @@ private extension ReceiptsAndBillsView {
             return
         }
 
-        switch selectedAttachEntityType {
+        let requestID = UUID()
+        attachLookupID = requestID
+        let entityType = selectedAttachEntityType
+        guard let workflow = try? QuickBooksDataAPI.shared.captureWorkspaceWorkflow() else {
+            isLoadingAttachTargets = false
+            attachLookupMessage = "Reconnect QuickBooks before choosing a transaction."
+            return
+        }
+        func acceptsLookup() -> Bool {
+            attachLookupID == requestID && selectedAttachEntityType == entityType &&
+                isAdminUser && (try? workflow.check()) != nil
+        }
+
+        switch entityType {
         case .estimate:
             QuickBooksDataAPI.shared.fetchEstimates { result in
                 DispatchQueue.main.async {
+                    guard acceptsLookup() else { return }
                     isLoadingAttachTargets = false
                     switch result {
                     case .success(let estimates):
@@ -4407,6 +4434,7 @@ private extension ReceiptsAndBillsView {
         case .invoice:
             QuickBooksDataAPI.shared.fetchInvoices { result in
                 DispatchQueue.main.async {
+                    guard acceptsLookup() else { return }
                     isLoadingAttachTargets = false
                     switch result {
                     case .success(let invoices):
@@ -4425,6 +4453,7 @@ private extension ReceiptsAndBillsView {
         case .bill:
             QuickBooksDataAPI.shared.fetchBills { result in
                 DispatchQueue.main.async {
+                    guard acceptsLookup() else { return }
                     isLoadingAttachTargets = false
                     switch result {
                     case .success(let bills):
@@ -4443,6 +4472,7 @@ private extension ReceiptsAndBillsView {
         case .payment:
             QuickBooksDataAPI.shared.fetchPayments { result in
                 DispatchQueue.main.async {
+                    guard acceptsLookup() else { return }
                     isLoadingAttachTargets = false
                     switch result {
                     case .success(let payments):
@@ -4462,6 +4492,7 @@ private extension ReceiptsAndBillsView {
         case .salesReceipt:
             QuickBooksDataAPI.shared.fetchSalesReceipts { result in
                 DispatchQueue.main.async {
+                    guard acceptsLookup() else { return }
                     isLoadingAttachTargets = false
                     switch result {
                     case .success(let salesReceipts):
@@ -4481,6 +4512,7 @@ private extension ReceiptsAndBillsView {
         case .purchase:
             QuickBooksDataAPI.shared.fetchPurchases { result in
                 DispatchQueue.main.async {
+                    guard acceptsLookup() else { return }
                     isLoadingAttachTargets = false
                     switch result {
                     case .success(let purchases):
@@ -4523,24 +4555,24 @@ private extension ReceiptsAndBillsView {
     }
 
     func applyLinkedServiceCallDefaults() {
+        attachEntityID = ""
+        clearAttachLookup()
         guard let selectedServiceCall else { return }
-        if let linkedInvoiceID = selectedServiceCall.linkedInvoiceID,
-           let invoice = invoices.first(where: { $0.id == linkedInvoiceID }),
-           let quickBooksID = invoice.quickBooksID,
-           !quickBooksID.isEmpty {
-            selectedAttachEntityType = .invoice
-            if attachEntityID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                attachEntityID = quickBooksID
-            }
-        } else if let linkedEstimateID = selectedServiceCall.linkedEstimateID,
-                  let estimate = estimates.first(where: { $0.id == linkedEstimateID }),
-                  let quickBooksID = estimate.quickBooksID,
-                  !quickBooksID.isEmpty {
-            selectedAttachEntityType = .invoice
-            if attachEntityID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                attachEntityID = quickBooksID
-            }
+        if let target = JobBillingDocumentLinks.attachmentTarget(for: selectedServiceCall,
+            invoices: invoices, estimates: estimates, payments: payments) {
+            selectedAttachEntityType = target.type
+            attachEntityID = target.id
+        } else if selectedServiceCall.linkedInvoiceID != nil || selectedServiceCall.linkedEstimateID != nil {
+            attachLookupMessage = "The linked transaction needs sync or review. No QuickBooks transaction is selected."
         }
+    }
+
+    func clearAttachLookup() {
+        attachLookupID = UUID()
+        isLoadingAttachTargets = false
+        attachTargetOptions = []
+        selectedAttachTargetID = ""
+        attachLookupMessage = nil
     }
 
     func applyPurchaseOrderItemDefaults() {

@@ -1473,6 +1473,21 @@ private enum GunnAireUITestFixtures {
             context.insert(source)
             context.insert(followUp)
         }
+        if arguments.contains("-uiTestDocumentLinkTargets") {
+            invoice.quickBooksID = "100"
+            call.linkedInvoiceID = invoice.id
+            maintenanceCall.type = .estimate
+            maintenanceCall.linkedEstimateID = estimate.id
+            estimate.serviceCallID = maintenanceCall.id
+            estimate.quickBooksID = "QBO-UI-DOCUMENT-ESTIMATE"
+        }
+        if arguments.contains("-uiTestDocumentationCustomerPending") {
+            call.linkedInvoiceID = invoice.id
+            invoice.customer = nil
+        }
+        if arguments.contains("-uiTestDocumentationJobPending") {
+            call.customer = nil
+        }
         try context.save()
     }
 }

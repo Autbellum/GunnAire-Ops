@@ -448,7 +448,8 @@ final class ServiceDocumentAttachment {
             canLinkToQuickBooksInvoiceDocument,
             invoiceID == invoice.id &&
             invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
-            customerMatches(invoice.customer),
+            customer === invoice.customer,
+            serviceCallID == nil || invoice.serviceCallID == nil || serviceCallID == invoice.serviceCallID,
             let reference = quickBooksInvoiceReference(for: invoice) else {
             return false
         }
@@ -461,7 +462,8 @@ final class ServiceDocumentAttachment {
             canLinkToQuickBooksInvoiceDocument,
             (invoiceID == nil || invoiceID == invoice.id) &&
             invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
-            customerMatches(invoice.customer),
+            customer === invoice.customer,
+            serviceCallID == nil || invoice.serviceCallID == nil || serviceCallID == invoice.serviceCallID,
             let reference = quickBooksInvoiceReference(for: invoice) else {
             return false
         }
@@ -469,10 +471,12 @@ final class ServiceDocumentAttachment {
     }
 
     func canUploadToQuickBooksEstimate(_ estimate: Estimate) -> Bool {
-        guard canLinkToQuickBooksEstimateDocument,
+        guard estimate.customer != nil,
+            canLinkToQuickBooksEstimateDocument,
             estimateID == estimate.id &&
             estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
-            customerMatches(estimate.customer),
+            customer === estimate.customer,
+            serviceCallID == nil || estimate.serviceCallID == nil || serviceCallID == estimate.serviceCallID || serviceCallID == estimate.scheduledServiceCallID,
             let reference = quickBooksEstimateReference(for: estimate) else {
             return false
         }

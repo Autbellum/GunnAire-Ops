@@ -1,3 +1,24 @@
+Job document target and closeout checkpoint, 2026-09-08:
+JOB_DOCUMENT_TARGET_RECONCILIATION.md records saved-link precedence, exact
+customer/job/document identity, preserved historical file ownership, paired
+receipt transaction type/ID, stale lookup rejection and truthful CloudKit
+pending/review states. Six initial regressions reproduced eleven failed
+assertions. A subsequent green UI run still showed a stale Paid label; visual
+review led to reconciled row status and an explicit visible Review assertion.
+Final accepted Mac and iPad results each pass 1,427 logic tests; all nine
+selected iPad journeys pass (1,436 executions). Exact execution trees, all four
+final UI screenshots and ten accepted source hashes were checked. Unsigned
+universal Mac Release contains both architectures. All 52 Tools tests and
+workflow lint pass. Twelve scoped paths match the original iCloud project,
+preserving its empty index and 216 unrelated changed files. The prepared
+48-selector native workflow retains the preceding 44 checks. Published PR #18
+head 9e8ab2a had passed Backend/Mac with iPad still running; publication and
+hosted verification of this new checkpoint remain distinct from local evidence.
+Legacy queued upload ownership/lifecycle, remaining estimate lineage and UI
+polish, signed multi-device/provider acceptance and the full suite goal remain
+open. No merge, deployment, financial write, schema promotion, signing change
+or physical installation occurred.
+
 Job/invoice handoff follow-up, 2026-09-08:
 JOB_INVOICE_HANDOFF_RECONCILIATION.md records exact original-invoice resolution
 for Schedule balances/payment attention and Documentation Queue collection,
