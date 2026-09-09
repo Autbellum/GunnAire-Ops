@@ -5812,8 +5812,6 @@ private struct TechnicianEditorView: View {
     @State private var qualificationReviewedByEmail: String
     @State private var serviceAreas: String
     @State private var laborCostPerHour: String
-    @State private var quickBooksTimeEntityKind: TechnicianQuickBooksTimeEntityKind
-    @State private var quickBooksTimeEntityRef: String
 
     private let reviewerEmail: String
 
@@ -5834,8 +5832,6 @@ private struct TechnicianEditorView: View {
         _qualificationReviewedByEmail = State(initialValue: review.reviewedByEmail ?? AppAccess.normalizedEmail(reviewerEmail))
         _serviceAreas = State(initialValue: technician.serviceAreas.joined(separator: ", "))
         _laborCostPerHour = State(initialValue: technician.laborCostPerHour.map { String(format: "%.2f", $0) } ?? "")
-        _quickBooksTimeEntityKind = State(initialValue: technician.quickBooksTimeEntityKind ?? .employee)
-        _quickBooksTimeEntityRef = State(initialValue: technician.quickBooksTimeEntityRef ?? "")
     }
 
     var body: some View {
@@ -5853,15 +5849,17 @@ private struct TechnicianEditorView: View {
                         .foregroundStyle(.secondary)
                 }
                 Section("QuickBooks Time") {
-                    Picker("Worker type", selection: $quickBooksTimeEntityKind) {
-                        ForEach(TechnicianQuickBooksTimeEntityKind.allCases) { kind in
-                            Text(kind.displayName).tag(kind)
-                        }
+                    NavigationLink("Review QuickBooks Worker") {
+                        SharedTimeWorkerReview(
+                            workerEmail: AppAccess.normalizedEmail(technician.contactInfo), workerName: technician.name,
+                            suggestedKind: technician.quickBooksTimeEntityKind == .vendor ? "Vendor" : "Employee",
+                            suggestedID: technician.quickBooksTimeEntityRef ?? "", technician: technician)
                     }
-                    TextField("QuickBooks employee or vendor ID", text: $quickBooksTimeEntityRef)
-                        .textInputAutocapitalization(.never)
-                        .accessibilityIdentifier("TechnicianQBOTimeEntityRef")
-                    Text("Copy the exact Employee or Vendor ID from the connected QuickBooks company. Completed time stays local until this technician has an explicit mapping; GunnAire never reuses another worker's ID.")
+                    .disabled(!canReviewSavedWorker)
+                    .accessibilityIdentifier("TechnicianQBOTimeWorkerReview")
+                    Text(canReviewSavedWorker
+                         ? "An administrator checks the worker in the business QuickBooks account. Saved legacy IDs are suggestions, not confirmed mappings."
+                         : "Save the technician's name and business email before reviewing the QuickBooks worker.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -5953,9 +5951,6 @@ private struct TechnicianEditorView: View {
                         technician.qualificationNotes = qualificationNotes.nilIfBlank
                         technician.serviceAreas = Technician.serviceAreas(from: serviceAreas)
                         technician.laborCostPerHour = Double(laborCostPerHour.trimmingCharacters(in: .whitespacesAndNewlines))
-                        let timeEntityRef = quickBooksTimeEntityRef.trimmingCharacters(in: .whitespacesAndNewlines)
-                        technician.quickBooksTimeEntityKind = timeEntityRef.isEmpty ? nil : quickBooksTimeEntityKind
-                        technician.quickBooksTimeEntityRef = timeEntityRef.isEmpty ? nil : timeEntityRef
                         dismiss()
                     }
                     .disabled(
@@ -5974,6 +5969,12 @@ private struct TechnicianEditorView: View {
             reviewDueAt: tracksQualificationReview ? qualificationReviewDueAt : nil,
             reviewedByEmail: tracksQualificationReview ? qualificationReviewedByEmail : nil
         )
+    }
+
+    private var canReviewSavedWorker: Bool {
+        SharedTimeError.validEmail(AppAccess.normalizedEmail(technician.contactInfo)) &&
+        AppAccess.normalizedEmail(calendarEmail) == AppAccess.normalizedEmail(technician.contactInfo) &&
+        name.trimmingCharacters(in: .whitespacesAndNewlines) == technician.name
     }
 
     private var qualificationReviewValidationMessage: String? {

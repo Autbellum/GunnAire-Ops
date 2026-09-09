@@ -1656,6 +1656,110 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    private func sharedTimeFixture(_ flags: [String] = []) -> (XCUIApplication, String) {
+        let app = XCUIApplication(), identifier = UUID().uuidString
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-uiTestAuthenticatedAdmin",
+            "-uiTestSharedTime", "-GunnAirePendingAppRoute", "timeClock"] + flags
+        app.launchEnvironment["GUNNAIRE_TIME_FIXTURE"] = identifier
+        app.launch()
+        openSharedTimeReview(in: app, identifier: identifier)
+        return (app, identifier)
+    }
+
+    @MainActor
+    private func openSharedTimeReview(in app: XCUIApplication, identifier: String) {
+        XCTAssertTrue(app.navigationBars["Time Clock"].waitForExistence(timeout: 10))
+        let picker = app.segmentedControls["TimeClockWorkspacePicker"]
+        if picker.buttons["Team Review"].exists { picker.buttons["Team Review"].tap() }
+        let review = app.buttons["RetryQBOTimeSync-" + identifier]
+        if !review.exists {
+            let member = app.staticTexts["Shared Time Technician"].firstMatch
+            for _ in 0..<10 where !member.exists || !member.isHittable { app.swipeUp() }
+            XCTAssertTrue(member.waitForExistence(timeout: 3))
+            if member.isHittable { member.tap() }
+        }
+        for _ in 0..<8 where !review.exists || !review.isHittable { app.swipeUp() }
+        XCTAssertTrue(review.waitForExistence(timeout: 3))
+        XCTAssertTrue(review.isHittable)
+        review.tap()
+        XCTAssertTrue(app.navigationBars["QuickBooks Time"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    func testSharedTimeReviewCancelsOnlyUnsentProposalAndReturnsToApprovedHours() throws {
+        let (app, identifier) = sharedTimeFixture()
+        let prepare = app.buttons["SharedTimePrepare"]
+        XCTAssertTrue(prepare.waitForExistence(timeout: 5)); prepare.tap()
+        XCTAssertTrue(app.buttons["SharedTimePublish"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["SharedTimeApprovedDuration"].label, "Approved time, 2 hr 0 min")
+        let cancelProposal = app.buttons["SharedTimeCancelProposal"]
+        let reviewForm = app.collectionViews["SharedTimeReview"]
+        for _ in 0..<5 where !cancelProposal.exists || !cancelProposal.isHittable { reviewForm.swipeUp() }
+        XCTAssertTrue(cancelProposal.waitForExistence(timeout: 3)); XCTAssertTrue(cancelProposal.isHittable)
+        cancelProposal.tap()
+        let cancel = app.alerts.buttons.matching(identifier: "SharedTimeConfirmCancellation").firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 3)); cancel.tap()
+        XCTAssertTrue(app.staticTexts["SharedTimeCancelled"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["SharedTimePublish"].exists)
+        app.navigationBars["QuickBooks Time"].buttons["Close"].tap()
+        XCTAssertTrue(app.navigationBars["Time Clock"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["RetryQBOTimeSync-" + identifier].exists)
+        XCTAssertTrue(app.staticTexts["Approved"].exists)
+    }
+
+    @MainActor
+    func testSharedTimeWorkerReviewConfirmsReturnedWorkerAndReturnsToOriginalTime() throws {
+        let (app, _) = sharedTimeFixture(["-uiTestTimeWorkerMissing"])
+        let worker = app.buttons["SharedTimeReviewWorker"]
+        XCTAssertTrue(worker.waitForExistence(timeout: 5)); worker.tap()
+        XCTAssertTrue(app.navigationBars["QuickBooks Worker"].waitForExistence(timeout: 3))
+        let reference = app.textFields["SharedTimeWorkerReference"]
+        XCTAssertTrue(reference.waitForExistence(timeout: 3)); reference.tap(); reference.typeText("55")
+        let check = app.buttons["SharedTimeWorkerCheck"]
+        for _ in 0..<4 where !check.isHittable { app.swipeUp() }
+        check.tap()
+        XCTAssertTrue(app.staticTexts["SharedTimeWorkerCandidate"].waitForExistence(timeout: 5))
+        let confirm = app.buttons["SharedTimeWorkerConfirm"]
+        for _ in 0..<4 where !confirm.isHittable { app.swipeUp() }
+        confirm.tap()
+        XCTAssertTrue(app.staticTexts["Ready for approved time"].waitForExistence(timeout: 5))
+        app.navigationBars["QuickBooks Worker"].buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["QuickBooks Time"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Employee, Alex QuickBooks"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.buttons["SharedTimePrepare"].exists)
+        XCTAssertFalse(app.buttons["SharedTimePublish"].exists)
+    }
+
+    @MainActor
+    func testSharedTimeLostConfirmationRecoversAfterRelaunchWithoutAnotherPublish() throws {
+        let (app, identifier) = sharedTimeFixture(["-uiTestTimeLostReply"])
+        let prepare = app.buttons["SharedTimePrepare"]
+        XCTAssertTrue(prepare.waitForExistence(timeout: 5)); prepare.tap()
+        let publish = app.buttons["SharedTimePublish"]
+        XCTAssertTrue(publish.waitForExistence(timeout: 5)); publish.tap()
+        let confirm = app.alerts.buttons.matching(identifier: "SharedTimeConfirmPublication").firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 3)); confirm.tap()
+        XCTAssertTrue(app.staticTexts["SharedTimeReviewMessage"].waitForExistence(timeout: 5))
+        XCTAssertFalse(publish.exists)
+        app.terminate(); app.launch()
+        openSharedTimeReview(in: app, identifier: identifier)
+        let recover = app.buttons["SharedTimeRecover"]
+        XCTAssertTrue(recover.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["SharedTimePublish"].exists)
+        recover.tap()
+        XCTAssertTrue(app.staticTexts["QuickBooks result confirmed"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["SharedTimePublish"].exists)
+        XCTAssertFalse(app.buttons["SharedTimeCancelProposal"].exists)
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "@gunnaire.com")).firstMatch.exists)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Original approved time recovered without another publish"
+        screenshot.lifetime = .keepAlways; add(screenshot)
+        app.navigationBars["QuickBooks Time"].buttons["Close"].tap()
+        XCTAssertTrue(app.navigationBars["Time Clock"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Linked to QuickBooks"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
     func testAccountingBoundaryRequiresTeamTimeApprovalBeforeQuickBooksPublication() throws {
         let app = XCUIApplication()
         app.launchArguments = [
@@ -1899,8 +2003,10 @@ final class GunnAire_OpsUITests: XCTestCase {
             "-enableSplashVideo", "NO",
             "-disableCloudKitForTesting",
             "-uiTestAuthenticatedAdmin",
-            "-uiTestSeedCollectibleJob"
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSharedTime", "-uiTestTimeWorkerMissing"
         ]
+        app.launchEnvironment["GUNNAIRE_TIME_FIXTURE"] = UUID().uuidString
         app.launch()
 
         let syncIntegrations = app.staticTexts["Sync & Integrations"]
@@ -1927,17 +2033,32 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         let editor = app.navigationBars["Edit Technician"]
         XCTAssertTrue(editor.waitForExistence(timeout: 3))
-        let quickBooksWorkerID = app.textFields["TechnicianQBOTimeEntityRef"]
+        let workerReview = app.buttons["TechnicianQBOTimeWorkerReview"]
+        XCTAssertTrue(workerReview.waitForExistence(timeout: 3)); XCTAssertTrue(workerReview.isEnabled)
+        workerReview.tap()
+        let workerNavigation = app.navigationBars["QuickBooks Worker"]
+        XCTAssertTrue(workerNavigation.waitForExistence(timeout: 3))
+        let quickBooksWorkerID = app.textFields["SharedTimeWorkerReference"]
         XCTAssertTrue(quickBooksWorkerID.waitForExistence(timeout: 3))
         quickBooksWorkerID.tap()
         quickBooksWorkerID.typeText("QBO-EMP-42")
+        XCTAssertEqual(quickBooksWorkerID.value as? String, "QBO-EMP-42")
+        app.buttons["SharedTimeWorkerCheck"].tap()
+        XCTAssertTrue(app.staticTexts["SharedTimeWorkerCandidate"].waitForExistence(timeout: 5))
+        app.buttons["SharedTimeWorkerConfirm"].tap()
+        XCTAssertTrue(app.staticTexts["Ready for approved time"].waitForExistence(timeout: 5))
+        workerNavigation.buttons.firstMatch.tap()
+        XCTAssertTrue(editor.waitForExistence(timeout: 3))
         editor.buttons["Save"].tap()
 
         XCTAssertTrue(app.navigationBars["Sync & Integrations"].waitForExistence(timeout: 3))
         XCTAssertTrue(editButton.waitForExistence(timeout: 3))
         editButton.tap()
         XCTAssertTrue(editor.waitForExistence(timeout: 3))
-        XCTAssertEqual(app.textFields["TechnicianQBOTimeEntityRef"].value as? String, "QBO-EMP-42")
+        workerReview.tap()
+        XCTAssertTrue(workerNavigation.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Ready for approved time"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.textFields["SharedTimeWorkerReference"].value as? String, "QBO-EMP-42")
     }
 
     @MainActor

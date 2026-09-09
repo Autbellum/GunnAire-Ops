@@ -205,7 +205,7 @@ class TimePublisher:
                 raise failure("storage_unavailable", "The original time receipt could not be verified.", 503) from None
         return {"id": row["id"], "companyID": row["company_id"], "realmID": row["realm_id"], "environment": row["environment"],
                 "localEntryID": row["local_entry_id"], "workerEmail": row["worker_email"], "state": row["state"],
-                "entryRevision": envelope["request"]["entryRevision"], "reviewHash": row["payload_hash"],
+                "entryRevision": envelope["request"]["entryRevision"], "reviewHash": row["payload_hash"], "preparedByEmail": row["actor_email"],
                 "review": envelope["request"], "worker": envelope["mapping"], "timeActivity": envelope["document"],
                 "receipt": receipt, "createdAt": row["created_at"], "updatedAt": row["updated_at"],
                 "expiresAt": (instant(row["created_at"]) + timedelta(minutes=15)).isoformat()}

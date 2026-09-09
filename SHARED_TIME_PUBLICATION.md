@@ -1,5 +1,12 @@
 # Shared business time publication — implementation checkpoint
 
+The later [native Time Clock review checkpoint](NATIVE_SHARED_TIME_REVIEW.md)
+implements the native migration described below and adds backend
+`2026.09.09.45`: public proposals return immutable `preparedByEmail` from the
+authenticated preparing session. The native reader requires that matching
+contract. The September 8 evidence and remaining gates below describe the
+earlier server-only checkpoint and are retained as history.
+
 Candidate backend: `2026.09.08.44`, September 8, 2026. This is server-side
 groundwork for the native Time Clock migration, not a claim that migration or
 payroll is complete. No live provider records were read or changed in testing.

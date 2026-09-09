@@ -115,6 +115,7 @@ class TimePublicationTests(unittest.TestCase):
         publication = self.prepare()
         self.assertEqual(publication["state"], "reserved")
         self.assertIsNone(publication["receipt"])
+        self.assertEqual(publication["preparedByEmail"], "admin@example.invalid")
         self.assertFalse(self.posts)
         self.assertEqual(self.provider_reads, [("Employee", "55")])
         row = self.state(publication)

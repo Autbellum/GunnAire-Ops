@@ -1,3 +1,32 @@
+Native shared Time Clock review qualification, 2026-09-09:
+NATIVE_SHARED_TIME_REVIEW.md records backend 2026.09.09.45 and the native
+business-session Time Clock cutover, without the former device-OAuth callback
+writer or automatic send after approval. Admin reviews shared Employee/Vendor
+identity; Admin/Accounting prepares and separately confirms original approved
+paid time. Encrypted device journals, pinned business/actor/entry/grant, durable
+confirmation intent, original-only recovery, explicit legacy adoption, offline
+receipt restoration and unsent cancellation retain local hours and prevent
+blind resends. Failed approval/correction saves restore affected fields, and bulk
+approval is all-or-nothing without rolling back unrelated edits. Worker review
+returns within the original navigation stack and reopens the saved exact ID.
+All 1,591 logic tests pass on each platform, including 33 time/save tests. iPad
+passes all nine selected UI journeys (1,600 actual cases), zero failures/skips,
+with exact execution verification. All 766 backend and 64 Tools tests pass;
+both workflows pass lint. Seven final screenshots are inspected, including
+simple Mail and original offline invoice/estimate saves without account-email
+footers. Unsigned universal Mac Release and arm64 iOS device Release succeed;
+existing document-concurrency/optional Metal warnings remain. Initial failed
+UI selectors and corrections are retained with evidence. CI adds four time
+journeys, retaining all previous 60, complete logic targets and exact pinned
+simulator preparation. Source-freeze/copy-back gates cover 21 scoped files,
+274 unrelated changes, original branch/HEAD/index and 309 other matching sources.
+Matching backend deployment, exact-head hosted CI and live provider acceptance
+remain required. Independent-staff CloudKit sharing, signed convergence,
+remaining Google/QBO migration, vendor onboarding, approved physical Tap to Pay
+and iPad-to-iPhone handoff, and full competitor-suite/accessibility/real-device
+acceptance remain open. No main merge, deployment, signing/schema change,
+physical install or live customer/accounting/payment mutation is included.
+
 Shared time publication groundwork, 2026-09-08:
 SHARED_TIME_PUBLICATION.md records candidate backend 2026.09.08.44, additive
 encrypted company-scoped worker mappings and the office-reviewed TimeActivity

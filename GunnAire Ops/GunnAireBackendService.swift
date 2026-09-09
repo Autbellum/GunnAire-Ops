@@ -915,6 +915,33 @@ enum GunnAireBackendService {
         }
     }
 
+    static func sharedTimeRequest(path: String, method: String, body: Data?) async throws -> Data {
+        guard SharedTimeTransportPolicy.allows(path: path, method: method, bodyBytes: body?.count) else { throw SharedTimeError.invalid }
+        guard let identity = CompanyWorkspaceSession.current else { throw SharedTimeError.access }
+        var request = try makeRequest(path: path, method: method, body: body)
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        guard bearer.hasPrefix("Bearer "), CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == identity.tokenFingerprint,
+              request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil else { throw SharedTimeError.access }
+        request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
+        let controller = CompanyWorkspaceAccessController.shared, generation = controller.generation
+        func check() throws {
+            try Task.checkCancellation()
+            guard CompanyWorkspaceSession.current == identity, controller.generation == generation,
+                  controller.authorizedContainer != nil else { throw SharedTimeError.access }
+        }
+        try check()
+        do {
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: 512 * 1024)
+            try check(); return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let status) = error {
+                throw GunnAireBackendError.server(statusCode: status, message: "Shared time action was not confirmed.")
+            }
+            throw SharedTimeError.safe(error)
+        }
+    }
+
     private struct CatalogPublicationList: Decodable { let publications: [CatalogPublicationRecord] }
 
     static func catalogPublicationRequest(path: String, method: String, body: Data?) async throws -> Data {

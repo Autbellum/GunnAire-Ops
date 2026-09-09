@@ -1,5 +1,26 @@
 # Native GitHub Actions checks
 
+## Shared native Time Clock regression coverage — September 9, 2026
+
+The candidate workflow retains all prior 60 UI journeys and adds four shared
+Time Clock paths: unsent cancellation/return, reviewed worker selection/return,
+lost-confirmation relaunch and original-only recovery, and administrator worker
+mapping through the technician editor with exact saved ID on reopen. Two disjoint
+groups now select 32 UI journeys each, retaining the complete logic target on
+both iPads, Mac logic and unsigned universal Release, exact M5/iOS 26.2 preparation,
+timeouts, read-only permissions and the actual-execution verifier.
+
+See [native time review](NATIVE_SHARED_TIME_REVIEW.md) for source, local evidence
+and remaining rollout gates. These candidate additions need fresh exact-head
+hosted qualification after publication; previous hosted passes are not evidence
+for this source.
+
+Exact predecessor `839cb66` has passed backend Python 3.13/3.14 and Mac native
+checks. Both iPad jobs in run `34310698177` have successfully completed explicit
+M5/iOS 26.2 preparation and are still executing their test step as of September
+9, 01:13 Eastern. This verifies preparation on the hosted runners; it is not a
+claim that either complete iPad job has passed.
+
 ## Explicit pinned iPad preparation — September 9, 2026
 
 At `16e5c5f`, [native run 34308307273](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34308307273)

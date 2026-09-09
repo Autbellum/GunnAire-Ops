@@ -34,7 +34,7 @@ struct TimeClockView: View {
     @State private var syncMessage: String?
     @State private var selectedActivity: TimeEntryActivity = .general
     @State private var selectedServiceCallID: UUID?
-    @State private var syncingEntryIDs: Set<UUID> = []
+    @State private var entryPendingQuickBooksReview: TimeEntry?
     @State private var selectedWorkspace: TimeClockWorkspace = .myTime
     @State private var reviewPeriod: TeamTimeReviewPeriod = .currentWeek
     @State private var performancePeriod: BusinessReportPeriod = .currentMonth
@@ -416,6 +416,9 @@ struct TimeClockView: View {
                     requestCorrection(for: entry, reason: reason)
                 }
             }
+            .sheet(item: $entryPendingQuickBooksReview) { entry in
+                NavigationStack { SharedTimeReviewView(entry: entry, workerName: teamMemberDisplayName(for: entry.userEmail)) }
+            }
             .confirmationDialog(
                 "Sign this weekly time snapshot?",
                 isPresented: $showingTimesheetSignOffConfirmation,
@@ -748,7 +751,7 @@ struct TimeClockView: View {
             Label(entry.activity.displayName, systemImage: entry.activity.systemImage)
                 .font(.caption.weight(.semibold))
             if let serviceCall = entry.serviceCall {
-                Text("Job: \(serviceCall.customer.name)")
+                Text("Job: \(serviceCall.customer?.name ?? "Customer is syncing")")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -766,16 +769,16 @@ struct TimeClockView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
-            if let quickBooksID = entry.quickBooksTimeActivityID {
-                Text("QBO TimeActivity \(quickBooksID)")
+            if entry.quickBooksTimeActivityID != nil {
+                Text("Linked to QuickBooks")
                     .font(.caption)
                     .foregroundColor(.secondary)
             } else if entry.reviewStatus == .approved, !entry.activity.isQuickBooksPublishable {
                 Text("Approved unpaid break • excluded from QBO paid time")
                     .font(.caption)
                     .foregroundColor(.secondary)
-            } else if entry.reviewStatus == .approved, Config.QuickBooksTime.enabled {
-                Text(entry.quickBooksTimeActivitySyncError.map { "QBO sync issue: \($0)" } ?? "Approved; waiting for QBO publication.")
+            } else if entry.reviewStatus == .approved {
+                Text(entry.quickBooksTimeActivitySyncError == nil ? "Approved; ready for office QuickBooks review." : "QuickBooks time needs office review. Saved hours are retained.")
                     .font(.caption)
                     .foregroundColor(entry.quickBooksTimeActivitySyncError == nil ? .secondary : .orange)
             }
@@ -838,7 +841,7 @@ struct TimeClockView: View {
                     .foregroundStyle(Color.primaryBlack)
                     .accessibilityIdentifier("ApproveReadyTimeEntries")
                 }
-                Text("Approval locks the local time record and authorizes QBO publication. Open shifts and correction requests are never included in bulk approval.")
+                Text("Approval locks the local hours. Review QuickBooks Time separately before publishing. Open shifts and correction requests are never included in bulk approval.")
                     .font(.caption)
                     .foregroundColor(.secondary)
                 if let reviewMessage {
@@ -1019,7 +1022,7 @@ struct TimeClockView: View {
                 timeReviewStatusLabel(for: entry)
             }
             if let serviceCall = entry.serviceCall {
-                Text("\(serviceCall.customer.name) • \(serviceCall.type.displayName)")
+                Text("\(serviceCall.customer?.name ?? "Customer is syncing") • \(serviceCall.type.displayName)")
                     .font(.caption)
                     .foregroundColor(.secondary)
             } else {
@@ -1039,12 +1042,14 @@ struct TimeClockView: View {
                     .font(.caption)
                     .foregroundColor(.orange)
             }
-            if let quickBooksID = entry.quickBooksTimeActivityID {
-                Text("QBO TimeActivity \(quickBooksID)")
+            if entry.quickBooksTimeActivityID != nil {
+                Label("Linked to QuickBooks", systemImage: "checkmark.circle")
                     .font(.caption)
                     .foregroundColor(.secondary)
-            } else if let error = entry.quickBooksTimeActivitySyncError {
-                Text("QBO: \(error)")
+                Button("View QuickBooks Time") { openQuickBooksTimeReview(entry) }
+                    .buttonStyle(.bordered)
+            } else if entry.quickBooksTimeActivitySyncError != nil {
+                Text("QuickBooks time needs review. Your saved hours are retained.")
                     .font(.caption)
                     .foregroundColor(.orange)
             }
@@ -1064,12 +1069,11 @@ struct TimeClockView: View {
                     } else if entry.reviewStatus == .correctionRequested {
                         Button("Correct Entry") { entryPendingCorrection = entry }
                             .buttonStyle(.bordered)
-                    } else if Config.QuickBooksTime.enabled, entry.activity.isQuickBooksPublishable {
-                        Button(syncingEntryIDs.contains(entry.id) ? "Checking QuickBooks..." : "Retry QBO Sync") {
-                            syncCompletedEntryToQuickBooks(entry)
+                    } else if entry.activity.isQuickBooksPublishable {
+                        Button("Review QuickBooks Time") {
+                            openQuickBooksTimeReview(entry)
                         }
                         .buttonStyle(.bordered)
-                        .disabled(syncingEntryIDs.contains(entry.id))
                         .accessibilityIdentifier("RetryQBOTimeSync-\(entry.id.uuidString)")
                     }
                 }
@@ -1137,15 +1141,16 @@ struct TimeClockView: View {
                     editableServiceCalls(for: entry).first { $0.id == id }
                 }
                 : nil
-            try TimeEntryReviewPolicy.applyCorrection(
+            try TimeEntryReviewPolicy.savingChanges(to: [entry], save: { try modelContext.save() }) {
+                try TimeEntryReviewPolicy.applyCorrection(
                 draft,
                 to: entry,
                 serviceCall: selectedCall,
                 allEntries: entries,
                 actorEmail: signedInEmail,
                 users: users
-            )
-            try modelContext.save()
+                )
+            }
             reviewMessage = "Corrected time was resubmitted for review."
             syncMessage = reviewMessage
             return nil
@@ -1156,13 +1161,14 @@ struct TimeClockView: View {
 
     private func requestCorrection(for entry: TimeEntry, reason: String) -> String? {
         do {
-            try TimeEntryReviewPolicy.requestCorrection(
+            try TimeEntryReviewPolicy.savingChanges(to: [entry], save: { try modelContext.save() }) {
+                try TimeEntryReviewPolicy.requestCorrection(
                 for: entry,
                 reason: reason,
                 actorEmail: signedInEmail,
                 users: users
-            )
-            try modelContext.save()
+                )
+            }
             reviewMessage = "Correction requested from \(teamMemberDisplayName(for: entry.userEmail))."
             return nil
         } catch {
@@ -1172,32 +1178,21 @@ struct TimeClockView: View {
 
     private func approveEntry(_ entry: TimeEntry) {
         do {
-            try TimeEntryReviewPolicy.approve(entry, actorEmail: signedInEmail, users: users)
-            try modelContext.save()
-            reviewMessage = "Approved \(durationLabel(entry)) for \(teamMemberDisplayName(for: entry.userEmail))."
-            syncCompletedEntryToQuickBooks(entry)
+            try TimeEntryReviewPolicy.approveAndSave([entry], actorEmail: signedInEmail, users: users) { try modelContext.save() }
+            reviewMessage = "Approved \(durationLabel(entry)) for \(teamMemberDisplayName(for: entry.userEmail))." +
+                (entry.activity.isQuickBooksPublishable ? " Review QuickBooks Time when ready to publish." : " Unpaid time stays in the local timesheet.")
         } catch {
             reviewMessage = error.localizedDescription
         }
     }
 
     private func approveAllReadyEntries() {
-        var approved: [TimeEntry] = []
-        for entry in entriesReadyForApproval {
-            do {
-                try TimeEntryReviewPolicy.approve(entry, actorEmail: signedInEmail, users: users)
-                approved.append(entry)
-            } catch {
-                reviewMessage = error.localizedDescription
-            }
-        }
+        let approved = entriesReadyForApproval
         guard !approved.isEmpty else { return }
         do {
-            try modelContext.save()
-            reviewMessage = "Approved \(approved.count) \(approved.count == 1 ? "entry" : "entries")."
-            for entry in approved {
-                syncCompletedEntryToQuickBooks(entry)
-            }
+            try TimeEntryReviewPolicy.approveAndSave(approved, actorEmail: signedInEmail, users: users) { try modelContext.save() }
+            reviewMessage = "Approved \(approved.count) \(approved.count == 1 ? "entry" : "entries")." +
+                (approved.contains { $0.activity.isQuickBooksPublishable } ? " Review each QuickBooks time proposal before publishing." : " Unpaid time stays in the local timesheet.")
         } catch {
             reviewMessage = "Could not save time approvals: \(error.localizedDescription)"
         }
@@ -1294,108 +1289,21 @@ struct TimeClockView: View {
         }
     }
 
-    private func syncCompletedEntryToQuickBooks(_ entry: TimeEntry) {
+    private func openQuickBooksTimeReview(_ entry: TimeEntry) {
         guard canReviewTeamTime else { return }
-        guard Config.QuickBooksTime.enabled else { return }
-        guard entry.quickBooksTimeActivityID == nil else { return }
         guard entry.isApprovedForQuickBooksPublication else {
             reviewMessage = "Approve this completed time entry before QuickBooks publication."
             return
         }
         guard entry.activity.isQuickBooksPublishable else {
-            entry.quickBooksTimeActivitySyncError = nil
             reviewMessage = "Approved unpaid break stayed in the time audit and was excluded from QBO paid time."
-            try? modelContext.save()
             return
         }
-        guard let mapping = QuickBooksTimeActivitySync.mapping(
-            for: entry.userEmail,
-            technicians: technicians
-        ) else {
-            entry.quickBooksTimeActivitySyncError = "No technician-specific QuickBooks Employee or Vendor ID is configured."
-            reviewMessage = "Approved time stayed local because this technician needs one QBO Employee or Vendor mapping in Sync & Integrations."
-            try? modelContext.save()
-            return
-        }
-        guard QuickBooksDataAPI.shared.isAuthenticated else {
-            entry.quickBooksTimeActivitySyncError = "QuickBooks is not connected."
-            reviewMessage = "Time is approved, but QuickBooks is not connected. It stayed in the recovery queue."
-            try? modelContext.save()
-            return
-        }
-        guard let payload = QuickBooksTimeActivitySync.makePayload(for: entry, mapping: mapping) else {
-            entry.quickBooksTimeActivitySyncError = "Could not build a valid TimeActivity duration."
-            reviewMessage = entry.quickBooksTimeActivitySyncError
-            try? modelContext.save()
-            return
-        }
-
-        syncingEntryIDs.insert(entry.id)
-        entry.quickBooksTimeActivitySyncError = nil
-        reviewMessage = "Checking QuickBooks for the stable time marker before publication..."
-        try? modelContext.save()
-
-        QuickBooksDataAPI.shared.fetchTimeActivities { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .failure(let error):
-                    syncingEntryIDs.remove(entry.id)
-                    entry.quickBooksTimeActivitySyncError = "Could not reconcile existing QBO time: \(error.localizedDescription)"
-                    reviewMessage = "QuickBooks reconciliation failed; approved time stayed local and was not duplicated."
-                    try? modelContext.save()
-                case .success(let activities):
-                    if let existing = QuickBooksTimeActivitySync.matchingActivity(
-                        for: entry.id,
-                        in: activities
-                    ) {
-                        finishQuickBooksSync(entry, activity: existing, reconciled: true)
-                    } else {
-                        createQuickBooksTimeActivity(payload, for: entry)
-                    }
-                }
-            }
-        }
-    }
-
-    private func createQuickBooksTimeActivity(
-        _ payload: QuickBooksTimeActivityCreate,
-        for entry: TimeEntry
-    ) {
-        reviewMessage = "Publishing approved time to QuickBooks..."
-        QuickBooksDataAPI.shared.createTimeActivity(payload) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let activity):
-                    finishQuickBooksSync(entry, activity: activity, reconciled: false)
-                case .failure(let error):
-                    syncingEntryIDs.remove(entry.id)
-                    entry.quickBooksTimeActivitySyncError = error.localizedDescription
-                    reviewMessage = "QBO time sync failed; approved time stayed local and can be retried."
-                    try? modelContext.save()
-                }
-            }
-        }
-    }
-
-    private func finishQuickBooksSync(
-        _ entry: TimeEntry,
-        activity: QuickBooksTimeActivity,
-        reconciled: Bool
-    ) {
-        syncingEntryIDs.remove(entry.id)
-        entry.quickBooksTimeActivityID = activity.Id
-        entry.quickBooksTimeActivitySyncToken = activity.SyncToken
-        entry.quickBooksTimeActivitySyncedAt = Date()
-        entry.quickBooksTimeActivitySyncError = nil
-        reviewMessage = reconciled
-            ? "Recovered existing QBO TimeActivity \(activity.Id); no duplicate was created."
-            : "Synced to QBO TimeActivity \(activity.Id)."
-        syncMessage = reviewMessage
-        try? modelContext.save()
+        entryPendingQuickBooksReview = entry
     }
 
     private func jobLabel(for call: ServiceCall) -> String {
-        "\(call.customer.name) • \(call.type.displayName) • \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))"
+        "\(call.customer?.name ?? "Customer is syncing") • \(call.type.displayName) • \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))"
     }
 
     private func selectableServiceCalls(for entry: TimeEntry) -> [ServiceCall] {
@@ -1544,7 +1452,7 @@ private struct TimeEntryCorrectionSheet: View {
                         Picker("Job", selection: $draft.serviceCallID) {
                             Text("Choose a job").tag(UUID?.none)
                             ForEach(serviceCalls) { call in
-                                Text("\(call.customer.name) • \(call.type.displayName) • \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))")
+                                Text("\(call.customer?.name ?? "Customer is syncing") • \(call.type.displayName) • \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))")
                                     .tag(UUID?.some(call.id))
                             }
                         }

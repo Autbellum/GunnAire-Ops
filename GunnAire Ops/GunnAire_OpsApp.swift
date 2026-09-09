@@ -113,6 +113,7 @@ struct GunnAire_OpsApp: App {
             try GunnAireCloudKitRoundTripProbe.runIfRequested(in: modelContainer.mainContext)
             try GunnAireCloudKitSchemaBootstrap.runIfRequested(in: modelContainer.mainContext)
             try GunnAireUITestFixtures.prepareIfRequested(in: modelContainer.mainContext)
+            try SharedTimeUIFixture.seedIfRequested(in: modelContainer.mainContext)
             CompanyWorkspaceAccessController.shared.installTestContainer(modelContainer)
             return .ready(modelContainer)
         } catch {
