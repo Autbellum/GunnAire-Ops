@@ -22,6 +22,8 @@ final class StaffReplicaServerInteropTests: XCTestCase {
         XCTAssertEqual(original.manifest.recordCount, 8)
         XCTAssertEqual(original.bytes.count, original.manifest.payloadBytes + 28)
         XCTAssertEqual(StaffReplicaManifest.hash(original.opened.bytes), original.manifest.payloadSHA256)
+        let graph = try StaffReplicaCoreGraph(payload: original.opened, plan: vector.plan, workspace: vector.workspace, now: now)
+        XCTAssertEqual(graph.records.count, 8)
         let attachment = XCTAttachment(data: original.opened.bytes, uniformTypeIdentifier: "public.json")
         attachment.name = "Real backend staff payload opened by native CryptoKit"
         attachment.lifetime = .keepAlways

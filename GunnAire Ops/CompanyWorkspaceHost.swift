@@ -125,6 +125,7 @@ struct CompanyWorkspaceHost: View {
                 .accessibilityIdentifier("CompanyWorkspaceProofGate")
             }
         }
+        .modifier(StaffReplicaReceiveRecoveryModifier())
         .sheet(isPresented: $showingStaffSetup) { CloudKitStaffSetupView() }
         .onReceive(staffInvitations.$pending) { invitation in
             if invitation != nil { showingStaffSetup = true }

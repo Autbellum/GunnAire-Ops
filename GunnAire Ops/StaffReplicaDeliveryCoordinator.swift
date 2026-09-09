@@ -149,7 +149,8 @@ struct StaffReplicaDeliveryJournal: Codable {
 
     /// Keeps an encrypted, monotonic staging envelope only. No SwiftData model
     /// changes and no pending technician edits are consumed by this transport.
-    func download(plan: CloudKitStaffSharePlan, context: Context, invitation: URL) async throws -> StaffReplicaManifest {
+    func download(plan: CloudKitStaffSharePlan, context: Context, invitation: URL, requireCurrent: Bool = false,
+                  validate: ((StaffReplicaVerifiedPayload) throws -> Void)? = nil) async throws -> StaffReplicaManifest {
         try check(context, plan: plan)
         guard context.owns(plan), CloudKitStaffSetupPolicy.invitationURL(invitation) else { throw StaffReplicaDeliveryError.access }
         let key = key(context: context, plan: plan)
@@ -159,15 +160,20 @@ struct StaffReplicaDeliveryJournal: Codable {
         let authorize: CloudKitStaffRemote.Authorize = { try await self.authorize(context, plan: plan) }
         let io = try await dependencies.participantIO(plan, context, invitation, authorize)
         let payload = try await StaffReplicaCloudTransfer.download(plan: plan, workspace: context.workspace, io: io,
-            authority: { try await self.receipt($0, plan: plan, context: context, key: true) }, now: dependencies.now)
+            authority: {
+                let receipt = try await self.receipt($0, plan: plan, context: context, key: true)
+                guard !requireCurrent || receipt.isCurrent else { throw StaffReplicaDeliveryError.changed }
+                return receipt
+            }, now: dependencies.now)
         if let old {
             guard payload.manifest.sourceSequence >= old.manifest.sourceSequence,
                   payload.manifest.authorizationSequence >= old.manifest.authorizationSequence,
                   payload.manifest.sourceSequence != old.manifest.sourceSequence || payload.bytes == old.payload else { throw StaffReplicaDeliveryError.superseded }
         }
         let fresh = try await receipt(payload.manifest.operationID, plan: plan, context: context)
-        guard fresh.manifest == payload.manifest else { throw StaffReplicaDeliveryError.changed }
+        guard fresh.manifest == payload.manifest, !requireCurrent || fresh.isCurrent else { throw StaffReplicaDeliveryError.changed }
         try await authorize()
+        try validate?(payload) // Reject an incomplete or out-of-role graph before replacing the retained stage.
         try save(.init(scope: context.scope, plan: plan, manifest: payload.manifest, state: "staged", payload: payload.bytes), key: key, context: context)
         return payload.manifest // Applied sourceSequence remains untouched.
     }

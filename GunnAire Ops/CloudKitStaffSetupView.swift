@@ -113,12 +113,19 @@ struct CloudKitStaffSetupView: View {
 }
 
 private struct CloudKitStaffRequestView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject var model: CloudKitStaffSetupController
+    @StateObject private var receive: StaffReplicaReceiveController
     let id: UUID
     let incoming: CloudKitStaffInvitation?
     @State private var confirmsReview = false
     @State private var invitationText = ""
     @State private var removal: String?
+
+    init(model: CloudKitStaffSetupController, id: UUID, incoming: CloudKitStaffInvitation?) {
+        self.model = model; self.id = id; self.incoming = incoming
+        _receive = StateObject(wrappedValue: StaffReplicaReceiveUIFixture.dependencies.map { StaffReplicaReceiveController(dependencies: $0) } ?? .shared)
+    }
 
     private var plan: CloudKitStaffSharePlan? { model.visiblePlans.first { $0.id == id } }
     private var originalURL: URL? {
@@ -131,6 +138,11 @@ private struct CloudKitStaffRequestView: View {
         if text.isEmpty { return originalURL }
         guard let url = URL(string: text), CloudKitStaffSetupPolicy.invitationURL(url) else { return nil }
         return url
+    }
+    private var receiveIdentity: StaffReplicaReceiveIdentity? {
+        guard let context = model.context, let plan, context.owns(plan), plan.state == "accepted",
+              !model.needsRecovery, !GunnAireCloudKit.usesTestDatabase || StaffReplicaReceiveUIFixture.isEnabled else { return nil }
+        return .init(stamp: context.stamp, plan: plan, invitation: originalURL, isActive: scenePhase == .active)
     }
 
     var body: some View {
@@ -158,9 +170,13 @@ private struct CloudKitStaffRequestView: View {
                              : "Business access changed after this request. Revoke this request and review a new invitation before sharing again.")
                     }
                 } else if plan.state == "accepted" {
-                    Section("Invitation accepted") {
-                        Text("The invitation is accepted. Staff business-data synchronization still needs to be connected and verified before this workspace can open. Your existing saved work remains unchanged.")
-                            .accessibilityIdentifier("StaffCloudKitAcceptedPendingSync")
+                    if context.owns(plan) {
+                        StaffReplicaReceiveStatusView(receive: receive, context: context, plan: plan, invitation: originalURL)
+                    } else {
+                        Section("Invitation accepted") {
+                            Text("The invitation is accepted. The staff device still needs complete, verified workspace data before opening.")
+                                .accessibilityIdentifier("StaffCloudKitAcceptedPendingSync")
+                        }
                     }
                 }
                 if !model.needsRecovery {
@@ -201,6 +217,15 @@ private struct CloudKitStaffRequestView: View {
             } else {
                 ContentUnavailableView("Access needs review", systemImage: "person.crop.circle.badge.exclamationmark",
                     description: Text("Return to staff setup and verify the current business login. Saved setup has not been deleted."))
+            }
+        }
+        .task(id: receiveIdentity) {
+            guard receiveIdentity?.isActive == true, let context = model.context,
+                  let plan, let url = originalURL else { return }
+            receive.clearDisplay()
+            while !Task.isCancelled {
+                let ran = await receive.refresh(context: context, plan: plan, invitation: url)
+                do { try await Task.sleep(for: .seconds(ran ? 60 : 1)) } catch { return }
             }
         }
         .navigationTitle("Staff request").navigationBarTitleDisplayMode(.inline)

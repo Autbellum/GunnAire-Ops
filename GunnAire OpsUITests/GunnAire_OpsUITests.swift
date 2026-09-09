@@ -1263,6 +1263,32 @@ final class GunnAire_OpsUITests: XCTestCase {
         app.navigationBars["Staff iCloud"].buttons["Close"].tap()
         XCTAssertTrue(app.staticTexts["Workspace does not match"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.navigationBars["Invoices"].exists)
+
+        // A separate synthetic accepted-invitation journey exercises automatic
+        // receipt, a failed read, recovery and return without opening a partial store.
+        app.terminate()
+        app.launchArguments.removeAll { $0 == "-uiTestStaffLostReply" }
+        app.launchArguments += ["-uiTestStaffReceipt", "-uiTestStaffReceiptReadFailure"]
+        app.launchEnvironment["GUNNAIRE_STAFF_SETUP_FIXTURE"] = UUID().uuidString
+        app.launch(); openSetup()
+        let invited = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'StaffCloudKitRequest-'")).firstMatch
+        XCTAssertTrue(invited.waitForExistence(timeout: 5)); invited.tap()
+        let link = app.textFields["StaffCloudKitInvitationLink"]
+        XCTAssertTrue(link.waitForExistence(timeout: 5))
+        replaceText(in: link, with: "https://www.icloud.com/share/ui-fixture-original")
+        app.switches["StaffCloudKitReviewConfirmation"].coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        let accept = app.buttons["StaffCloudKitAcceptInvitation"]
+        XCTAssertTrue(accept.isEnabled); accept.tap()
+        XCTAssertTrue(app.staticTexts["Staff synchronization could not be confirmed. Recover the original operation when connected."].waitForExistence(timeout: 8))
+        let again = app.buttons["StaffReplicaReceiveAgain"]
+        XCTAssertTrue(waitForHittable(again)); again.tap()
+        XCTAssertTrue(app.staticTexts["Core records received. Full workspace data is still required before opening."].waitForExistence(timeout: 5))
+        let receiptEvidence = XCTAttachment(screenshot: app.screenshot())
+        receiptEvidence.name = "Staff shared-data receipt and retained workspace gate"; receiptEvidence.lifetime = .keepAlways; add(receiptEvidence)
+        app.navigationBars["Staff request"].buttons.firstMatch.tap()
+        app.navigationBars["Staff iCloud"].buttons["Close"].tap()
+        XCTAssertTrue(app.staticTexts["Workspace does not match"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.navigationBars["Invoices"].exists)
     }
 
     @MainActor

@@ -1,3 +1,23 @@
+Staff receiving and import-boundary candidate, 2026-09-09:
+STAFF_RECEIPT_IMPORT.md records automatic original-invitation receipt at the staff
+setup/company gate, exact typed core graph and role validation before replacing
+the encrypted stage, current source/authorization checks and retained prior data
+on invalid payloads. The iPad regression exposed an unordered-JSON task identity
+that retriggered reads on redraw; typed request equality fixes it while retaining
+the original failed-read/manual-retry/return assertions. Final Mac verifies 1,710
+actual cases, iPad 1,714, with 12 focused receipt/UI cases also verified. All 852
+backend and 70 Tools tests, both unchanged workflow lint checks, unsigned universal
+Mac and arm64 iOS Release builds and binary architecture checks pass. Three
+current-source screenshots are inspected without account-email footers. Fourteen
+copy-back paths preserve 333 unrelated changes and the original branch/HEAD/index;
+353 other tracked sources match. Published predecessor 3a6d94a backend CI passed;
+its native CI remains live, so this candidate is retained locally without canceling
+that run. Full 32-model semantics, isolated staff operational import/activation,
+field-command reconciliation, signed cross-account convergence and full-suite
+provider/vendor/payment/Handoff/usability acceptance remain required. Core receipt
+does not unlock an incomplete workspace or redefine the goal. No live provider,
+CloudKit, production deployment, signing, physical installation or merge occurred.
+
 Automatic per-member staff delivery candidate, 2026-09-09:
 STAFF_AUTOMATIC_DELIVERY.md records the connected saved-source-to-projection-to-
 private-CloudKit pipeline, immutable preparation recovery, original archive/index

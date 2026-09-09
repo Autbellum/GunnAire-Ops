@@ -56,6 +56,9 @@ import Foundation
         }
         func load() throws -> [String: Any] {
             if let bytes = UserDefaults.standard.data(forKey: key) { return try JSONSerialization.jsonObject(with: bytes) as! [String: Any] }
+            if participant && StaffReplicaReceiveUIFixture.isEnabled {
+                return ["row": row(id: company.uuidString.lowercased(), state: "invited", revision: 3)]
+            }
             return participant ? [:] : ["row": row(id: company.uuidString.lowercased(), state: "requested", revision: 1)]
         }
         func recordApple(_ action: String, _ plan: CloudKitStaffSharePlan) throws {
