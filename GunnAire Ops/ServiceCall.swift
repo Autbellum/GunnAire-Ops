@@ -1274,7 +1274,7 @@ struct PhotoEvidenceStatus: Equatable {
 
 @Model
 final class ServiceCall {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var googleCalendarID: String?
     var googleEventID: String?
     var googleEventManagedByApp: Bool = false

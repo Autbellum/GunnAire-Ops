@@ -46,7 +46,7 @@ enum StaffReplicaSourceError: Error, LocalizedError {
 /// facts for the server's role-filtered ledger; it neither publishes a snapshot
 /// nor mounts a staff store. Billing, forms, media, agreements, time, tasks and
 /// financial workflows require their own explicit serializers before activation.
-struct StaffReplicaCoreSource: Encodable, Equatable {
+struct StaffReplicaCoreSource: Codable, Equatable {
     static let schemaVersion = "core-field-v1"
     static let recordKinds = ["customer", "equipment", "item", "job", "location", "technician"]
     let schema: String

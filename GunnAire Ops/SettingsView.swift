@@ -396,6 +396,7 @@ struct SettingsView: View {
                         Section("Staff iCloud") {
                             Button("Manage Staff iCloud Access") { showingStaffCloudKitSetup = true }
                                 .accessibilityIdentifier("OpenStaffCloudKitSetup")
+                            StaffReplicaSourceSettingsRow()
                         }
                         Section("Application Users") {
                             LabeledContent("Shared Backend") {

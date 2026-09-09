@@ -1268,7 +1268,7 @@ final class GunnAire_OpsUITests: XCTestCase {
     @MainActor
     func testStaffCloudKitAdministratorReviewReturnsToSettingsAndRetainsOriginalInvitation() throws {
         let app = XCUIApplication(), identifier = UUID().uuidString.lowercased()
-        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-appStoreScreenshotFixtures", "-uiTestStaffCloudKitSetup"]
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-appStoreScreenshotFixtures", "-uiTestStaffCloudKitSetup", "-uiTestStaffSourceSync"]
         app.launchEnvironment["GUNNAIRE_STAFF_SETUP_FIXTURE"] = identifier
         app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
         app.launch()
@@ -1300,6 +1300,23 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
         XCTAssertTrue(app.buttons["StaffCloudKitShareOriginalInvitation"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["StaffCloudKitApproveOrInvite"].exists)
+        app.navigationBars["Staff request"].buttons.firstMatch.tap()
+        app.navigationBars["Staff iCloud"].buttons["Settings"].tap()
+        let source = app.buttons["OpenStaffSourceReview"]
+        XCTAssertTrue(source.waitForExistence(timeout: 5)); source.tap()
+        XCTAssertTrue(app.navigationBars["Staff Data Preparation"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["This device: 10 Main — service entrance"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Shared: 10 Main — front entrance"].exists)
+        let reviewSource = app.buttons["Review This Device's Version"]
+        XCTAssertTrue(reviewSource.waitForExistence(timeout: 5)); reviewSource.tap()
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(reviewSource.waitForExistence(timeout: 5))
+        let comparison = XCTAttachment(screenshot: app.screenshot()); comparison.name = "Saved staff change comparison"; comparison.lifetime = .keepAlways; add(comparison)
+        reviewSource.tap(); app.buttons["Share This Device's Saved Version"].tap()
+        XCTAssertTrue(app.staticTexts["Core records prepared. Staff device delivery is a separate step."].waitForExistence(timeout: 5))
+        XCTAssertFalse(reviewSource.exists)
+        app.navigationBars["Staff Data Preparation"].buttons["Settings"].tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
     }
 
     @MainActor

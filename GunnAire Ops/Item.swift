@@ -883,7 +883,7 @@ private struct CatalogDocumentSnapshotEnvelope: Codable {
 
 @Model
 final class Item {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var quickBooksID: String?
     /// `pending`, `pending_update`, `synced`, `needs_review`, `archived`, or
     /// `needs_attention`. This is intentionally stored with the pricebook item

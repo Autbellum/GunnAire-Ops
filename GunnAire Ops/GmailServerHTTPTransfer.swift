@@ -7,6 +7,7 @@ nonisolated enum GmailServerHTTPError: Error { case response, limit, status(Int)
 /// provider reply. Never follow redirects or retain a private response in a cache.
 nonisolated final class GmailServerHTTPTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let maximum: Int
+    private let acceptedStatusCodes: Set<Int>
     private let lock = NSLock()
     private var bytes = Data()
     private var response: HTTPURLResponse?
@@ -14,10 +15,13 @@ nonisolated final class GmailServerHTTPTransfer: NSObject, URLSessionDataDelegat
     private var session: URLSession?
     private var finished = false
 
-    init(maximum: Int) { self.maximum = maximum }
+    init(maximum: Int, acceptedStatusCodes: Set<Int> = [200]) {
+        self.maximum = maximum; self.acceptedStatusCodes = acceptedStatusCodes
+    }
 
-    static func data(for request: URLRequest, maximum: Int, configuration: URLSessionConfiguration = .ephemeral) async throws -> (Data, HTTPURLResponse) {
-        let receiver = GmailServerHTTPTransfer(maximum: maximum)
+    static func data(for request: URLRequest, maximum: Int, configuration: URLSessionConfiguration = .ephemeral,
+                     acceptedStatusCodes: Set<Int> = [200]) async throws -> (Data, HTTPURLResponse) {
+        let receiver = GmailServerHTTPTransfer(maximum: maximum, acceptedStatusCodes: acceptedStatusCodes)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { receiver.start(request, configuration: configuration, continuation: $0) }
         } onCancel: { receiver.finish(.failure(CancellationError())) }
@@ -51,7 +55,7 @@ nonisolated final class GmailServerHTTPTransfer: NSObject, URLSessionDataDelegat
         guard let http = response as? HTTPURLResponse else {
             finish(.failure(GmailServerHTTPError.response)); completionHandler(.cancel); return
         }
-        guard http.statusCode == 200 else {
+        guard acceptedStatusCodes.contains(http.statusCode), !(300..<400).contains(http.statusCode) else {
             finish(.failure(GmailServerHTTPError.status(http.statusCode))); completionHandler(.cancel); return
         }
         guard http.expectedContentLength <= maximum else {

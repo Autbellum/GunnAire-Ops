@@ -1,3 +1,21 @@
+Owner saved-change preparation candidate, 2026-09-09:
+STAFF_OWNER_SOURCE_SYNC.md records the now-connected authorized-owner lifecycle,
+same-store SwiftData deletion history, encrypted source/cursor/operation journal,
+consistent source paging, exact-request recovery and acknowledged-baseline conflict
+review. Settings > Users gains a secondary comparison/recovery screen rather than
+technical details on normal mail, invoice or job screens. Real SQLite history and
+legacy-metadata migration checks pass. Final-source Mac verifies 1,675 executed cases;
+iPad verifies 1,679, including four UI journeys and the explicit Cancel/approval/return
+flow. All 852 backend and 69 Tools tests pass, both workflows lint, and unsigned
+universal Mac/arm64 iOS Release builds and binary architecture checks pass. Three
+current iPad screenshots are inspected with no account-email footer. Copy-back
+preflight covers 22 scoped files, 315 unrelated changes and 337 matching sources.
+The predecessor's hosted backend/Mac checks passed; iPad jobs remain active at this
+checkpoint, so new-source hosted acceptance is not claimed. Per-member automatic projection/delivery,
+staff model import, full-domain coverage and signed cross-account convergence are
+not complete. No live CloudKit/provider writes, deployment, signing or physical
+installation occurred. The full goal remains active.
+
 Encrypted staff CloudKit transport candidate, 2026-09-09:
 STAFF_CLOUDKIT_TRANSPORT.md records backend 2026.09.09.49, original AES-GCM
 packaging/key authority, native private-share upload/download, exact operation

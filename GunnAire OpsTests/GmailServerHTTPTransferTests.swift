@@ -51,4 +51,14 @@ nonisolated private final class MailTransferProtocol: URLProtocol, @unchecked Se
             await #expect(throws: CancellationError.self) { try await task.value }
         }
     }
+    @Test func explicitErrorBodyOptInRemainsBoundedAndNeverAllowsRedirects() async throws {
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [MailTransferProtocol.self]
+        let request = URLRequest(url: URL(string: "https://mail.example.invalid/denied")!)
+        let (bytes, response) = try await GmailServerHTTPTransfer.data(for: request, maximum: 8, configuration: config, acceptedStatusCodes: [200, 403])
+        #expect(response.statusCode == 403 && bytes == Data("AAAABBBB".utf8))
+        let redirected = URLRequest(url: URL(string: "https://mail.example.invalid/redirect")!)
+        await #expect(throws: GmailServerHTTPError.self) {
+            try await GmailServerHTTPTransfer.data(for: redirected, maximum: 8, configuration: config, acceptedStatusCodes: [200, 302])
+        }
+    }
 }

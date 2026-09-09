@@ -978,6 +978,42 @@ enum GunnAireBackendService {
         }
     }
 
+    /// Owner source reads and mutations never use the staff metadata exception.
+    static func staffReplicaSourceRequest(path: String, method: String, body: Data?) async throws -> Data {
+        guard StaffReplicaSourceTransportPolicy.allows(path: path, method: method, body: body),
+              let stamp = CompanyWorkspaceAccessController.shared.operationStamp,
+              CompanyWorkspaceAccessController.shared.verifiedRole == .admin else { throw StaffReplicaSourceSyncError.access }
+        var request = try makeRequest(path: path, method: method, body: body)
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        guard bearer.hasPrefix("Bearer "), CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == stamp.session.tokenFingerprint,
+              request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil else { throw StaffReplicaSourceSyncError.access }
+        func check() throws {
+            try Task.checkCancellation()
+            let access = CompanyWorkspaceAccessController.shared
+            guard access.operationStamp == stamp, access.verifiedRole == .admin, access.authorizedContainer != nil else {
+                throw StaffReplicaSourceSyncError.access
+            }
+        }
+        try check()
+        request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
+        do {
+            let (data, response) = try await GmailServerHTTPTransfer.data(for: request, maximum: 8 * 1024 * 1024, acceptedStatusCodes: [200, 409])
+            try check()
+            if response.statusCode == 409 {
+                struct Rejection: Decodable { let code: String }
+                guard data.count <= 8192, let value = try? JSONDecoder().decode(Rejection.self, from: data),
+                      ["source_changed", "record_changed", "deletion_changed"].contains(value.code) else { throw StaffReplicaSourceSyncError.invalid }
+                if method == "POST" { throw StaffReplicaSourceRejected(code: value.code) }
+                throw StaffReplicaSourceSyncError.sourceChanged
+            }
+            return data
+        } catch {
+            try check()
+            if error is StaffReplicaSourceRejected || error is StaffReplicaSourceSyncError { throw error }
+            throw StaffReplicaSourceSyncError.unavailable
+        }
+    }
+
     static func sharedTimeRequest(path: String, method: String, body: Data?) async throws -> Data {
         guard SharedTimeTransportPolicy.allows(path: path, method: method, bodyBytes: body?.count) else { throw SharedTimeError.invalid }
         guard let identity = CompanyWorkspaceSession.current else { throw SharedTimeError.access }
