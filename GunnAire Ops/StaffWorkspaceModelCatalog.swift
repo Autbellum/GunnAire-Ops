@@ -12,12 +12,13 @@ import SwiftData
     let relationships: Set<String>
     let excludedAttributes: [String: String]
     let fields: Set<String>
+    let fieldSchema: [String: StaffWorkspaceFieldSchema]
     let references: [String: String]
     let validate: (StaffWorkspaceModelRecord) throws -> Void
     let encode: (any PersistentModel) throws -> StaffWorkspaceModelRecord
     let readSavedRecords: (ModelContext) throws -> [StaffWorkspaceModelRecord]
     let deletedID: (any HistoryDelete) throws -> UUID?
-    let decode: (StaffWorkspaceModelRecord, StaffWorkspaceModelResolver) throws -> any PersistentModel
+    let decode: (StaffWorkspaceModelRecord, inout StaffWorkspaceModelResolver) throws -> any PersistentModel
 
     init<M>(_ codec: StaffWorkspaceModelCodec<M>) {
         kind = codec.kind
@@ -26,6 +27,7 @@ import SwiftData
         let owning = codec.fields.filter { $0.referenceKind != nil }
         references = Dictionary(uniqueKeysWithValues: owning.map { ($0.name, $0.referenceKind!) })
         fields = codec.fieldNames
+        fieldSchema = Dictionary(uniqueKeysWithValues: codec.fields.map { ($0.name, $0.schema) })
         attributes = codec.fieldNames.subtracting(references.keys).union(["id"]).union(codec.excludedAttributes.keys)
         relationships = Set(references.keys).union(codec.inverseRelationships)
         excludedAttributes = codec.excludedAttributes
@@ -49,7 +51,7 @@ import SwiftData
             guard let id = typed.tombstone[codec.id] as? UUID else { throw StaffReplicaSourceSyncError.history }
             return id
         }
-        decode = { try codec.decodeDetached($0, resolver: $1) }
+        decode = { try codec.decodeDetached($0, resolver: &$1) }
     }
 }
 
@@ -111,7 +113,7 @@ import SwiftData
                 }
             }
         }
-        let resolver = StaffWorkspaceModelResolver()
+        var resolver = StaffWorkspaceModelResolver()
         var remaining = records.sorted { key($0.kind, $0.id) < key($1.kind, $1.id) }
         var models: [any PersistentModel] = []
         while !remaining.isEmpty {
@@ -124,7 +126,7 @@ import SwiftData
                     if value == .null { return true }
                     return resolver.contains(kind: kind, id: try UUID.fromStaffValue(value))
                 }
-                if ready { models.append(try codec.decode(record, resolver)) }
+                if ready { models.append(try codec.decode(record, &resolver)) }
                 else { deferred.append(record) }
             }
             guard models.count > before else { throw StaffWorkspaceModelError.relationships }

@@ -148,7 +148,8 @@ import Testing
         let user = AppUser(email: "owner@example.invalid", role: .admin)
         let row = try C.user.encode(user)
         try D.validate(row)
-        let copy = try C.user.decodeDetached(row, resolver: .init())
+        var resolver = StaffWorkspaceModelResolver()
+        let copy = try C.user.decodeDetached(row, resolver: &resolver)
         #expect(AppAccess.activeRole(email: copy.email, users: [copy], verifiedUser: nil) == nil)
         #expect(copy.roleRawValue == AppUserRole.admin.rawValue)
     }

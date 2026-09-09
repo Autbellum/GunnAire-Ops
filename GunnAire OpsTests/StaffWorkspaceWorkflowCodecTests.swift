@@ -7,9 +7,14 @@ import Testing
     typealias C = StaffWorkspaceModelCodecs
     let date = Date(timeIntervalSinceReferenceDate: 810_123_456.123456)
 
-    func copy<M>(_ codec: StaffWorkspaceModelCodec<M>, _ source: M, resolver: StaffWorkspaceModelResolver? = nil) throws -> M {
+    func copy<M>(_ codec: StaffWorkspaceModelCodec<M>, _ source: M) throws -> M {
+        var resolver = StaffWorkspaceModelResolver()
+        return try copy(codec, source, resolver: &resolver)
+    }
+
+    func copy<M>(_ codec: StaffWorkspaceModelCodec<M>, _ source: M, resolver: inout StaffWorkspaceModelResolver) throws -> M {
         let record = try codec.encode(source)
-        let value = try codec.decodeDetached(record, resolver: resolver ?? .init())
+        let value = try codec.decodeDetached(record, resolver: &resolver)
         #expect(try codec.encode(value) == record)
         return value
     }
@@ -28,9 +33,9 @@ import Testing
         lifecycle.cancelledAt = date; lifecycle.cancellationReason = "Original cancellation"
         let agreement = RecurringMaintenanceContract(customer: customer, schedulePattern: "every 6 months",
             nextDate: date, active: false, pricePerVisit: 12.125, coveredEquipmentIDs: [UUID()], lifecycle: lifecycle)
-        let resolver = StaffWorkspaceModelResolver()
-        _ = try copy(C.customer, customer, resolver: resolver)
-        let result = try copy(C.agreement, agreement, resolver: resolver)
+        var resolver = StaffWorkspaceModelResolver()
+        _ = try copy(C.customer, customer, resolver: &resolver)
+        let result = try copy(C.agreement, agreement, resolver: &resolver)
         #expect(result.lifecycle == lifecycle && !result.canScheduleVisit && !result.active)
         #expect(result.billingEvents.count == 1 && result.billingEvents[0].id == operationID)
         #expect(result.billingEvents[0].invoiceID == invoiceID && result.billingEvents[0].amount == 12.125)
@@ -105,8 +110,8 @@ import Testing
         communication.deliveredAt = nil // Keep incomplete legacy delivery evidence incomplete.
         communication.providerStatusDetail = "Original pending delivery confirmation"
         customer.allowsMarketing = true
-        let resolver = StaffWorkspaceModelResolver(); _ = try copy(C.customer, customer, resolver: resolver)
-        let imported = try copy(C.communication, communication, resolver: resolver)
+        var resolver = StaffWorkspaceModelResolver(); _ = try copy(C.customer, customer, resolver: &resolver)
+        let imported = try copy(C.communication, communication, resolver: &resolver)
         #expect(imported.consentSnapshot == originalConsent && imported.consentSnapshot?.allowsMarketing == false)
         #expect(imported.deliveredAt == nil && imported.providerMessageID == "original-provider-message")
         let expense = FieldExpenseClaim(claimantEmail: "field@example.invalid", claimantName: "Original technician",

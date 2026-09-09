@@ -12,6 +12,17 @@ enum StaffWorkspaceModelError: Error, Equatable {
     case invalid, incomplete, relationships, unsupported
 }
 
+enum StaffWorkspaceWireType: String, Codable {
+    case text, number, integer, flag, date, identifier
+}
+
+struct StaffWorkspaceFieldSchema: Codable, Equatable {
+    let type: StaffWorkspaceWireType
+    let nullable: Bool
+    let reference: String?
+    let enumeration: [String]?
+}
+
 struct StaffWorkspaceModelRecord: Codable, Equatable {
     let version: Int
     let kind: String
@@ -36,10 +47,12 @@ struct StaffWorkspaceModelRecord: Codable, Equatable {
 }
 
 @MainActor protocol StaffWorkspaceAtom {
+    static var wireType: StaffWorkspaceWireType { get }
     var staffValue: StaffWorkspaceValue { get }
     static func fromStaffValue(_ value: StaffWorkspaceValue) throws -> Self
 }
 extension String: StaffWorkspaceAtom {
+    static var wireType: StaffWorkspaceWireType { .text }
     var staffValue: StaffWorkspaceValue { .text(self) }
     static func fromStaffValue(_ value: StaffWorkspaceValue) throws -> Self {
         guard case .text(let result) = value, result.utf8.count <= 1_048_576,
@@ -48,6 +61,7 @@ extension String: StaffWorkspaceAtom {
     }
 }
 extension Double: StaffWorkspaceAtom {
+    static var wireType: StaffWorkspaceWireType { .number }
     var staffValue: StaffWorkspaceValue { .number(self) }
     static func fromStaffValue(_ value: StaffWorkspaceValue) throws -> Self {
         guard case .number(let result) = value, result.isFinite, abs(result) <= 1_000_000_000_000 else { throw StaffWorkspaceModelError.invalid }
@@ -55,6 +69,7 @@ extension Double: StaffWorkspaceAtom {
     }
 }
 extension Int: StaffWorkspaceAtom {
+    static var wireType: StaffWorkspaceWireType { .integer }
     var staffValue: StaffWorkspaceValue { .integer(self) }
     static func fromStaffValue(_ value: StaffWorkspaceValue) throws -> Self {
         guard case .integer(let result) = value, (-2_147_483_647...2_147_483_647).contains(result) else { throw StaffWorkspaceModelError.invalid }
@@ -62,12 +77,14 @@ extension Int: StaffWorkspaceAtom {
     }
 }
 extension Bool: StaffWorkspaceAtom {
+    static var wireType: StaffWorkspaceWireType { .flag }
     var staffValue: StaffWorkspaceValue { .flag(self) }
     static func fromStaffValue(_ value: StaffWorkspaceValue) throws -> Self {
         guard case .flag(let result) = value else { throw StaffWorkspaceModelError.invalid }; return result
     }
 }
 extension Date: StaffWorkspaceAtom {
+    static var wireType: StaffWorkspaceWireType { .date }
     var staffValue: StaffWorkspaceValue { .date(self) }
     static func fromStaffValue(_ value: StaffWorkspaceValue) throws -> Self {
         guard case .date(let result) = value, result.timeIntervalSinceReferenceDate.isFinite,
@@ -75,6 +92,7 @@ extension Date: StaffWorkspaceAtom {
     }
 }
 extension UUID: StaffWorkspaceAtom {
+    static var wireType: StaffWorkspaceWireType { .identifier }
     var staffValue: StaffWorkspaceValue { .identifier(self) }
     static func fromStaffValue(_ value: StaffWorkspaceValue) throws -> Self {
         guard case .identifier(let result) = value else { throw StaffWorkspaceModelError.invalid }; return result
@@ -83,9 +101,9 @@ extension UUID: StaffWorkspaceAtom {
 
 /// Resolver contains only the new detached graph, never objects fetched from
 /// an existing owner or staff store. Duplicate identity is an error, not a merge.
-@MainActor final class StaffWorkspaceModelResolver {
+@MainActor struct StaffWorkspaceModelResolver {
     private var models: [String: any PersistentModel] = [:]
-    func add<M: PersistentModel>(_ model: M, kind: String, id: UUID) throws {
+    mutating func add<M: PersistentModel>(_ model: M, kind: String, id: UUID) throws {
         let key = kind + ":" + id.uuidString
         guard model.modelContext == nil, models[key] == nil else { throw StaffWorkspaceModelError.invalid }; models[key] = model
     }
@@ -103,30 +121,36 @@ extension UUID: StaffWorkspaceAtom {
 @MainActor struct StaffWorkspaceModelField<M: PersistentModel> {
     let name: String
     let referenceKind: String?
+    let schema: StaffWorkspaceFieldSchema
     let read: (M) -> StaffWorkspaceValue
     let validate: (StaffWorkspaceValue) throws -> Void
     let write: (M, StaffWorkspaceValue, StaffWorkspaceModelResolver) throws -> Void
     var validateReference: (StaffWorkspaceValue, StaffWorkspaceModelResolver) throws -> Void = { _, _ in }
 
     static func value<T: StaffWorkspaceAtom>(_ name: String, _ key: ReferenceWritableKeyPath<M, T>) -> Self {
-        .init(name: name, referenceKind: nil, read: { $0[keyPath: key].staffValue },
+        .init(name: name, referenceKind: nil, schema: .init(type: T.wireType, nullable: false, reference: nil, enumeration: nil),
+            read: { $0[keyPath: key].staffValue },
             validate: { _ = try T.fromStaffValue($0) }, write: { object, value, _ in object[keyPath: key] = try T.fromStaffValue(value) })
     }
     static func optional<T: StaffWorkspaceAtom>(_ name: String, _ key: ReferenceWritableKeyPath<M, T?>) -> Self {
-        .init(name: name, referenceKind: nil, read: { $0[keyPath: key]?.staffValue ?? .null },
+        .init(name: name, referenceKind: nil, schema: .init(type: T.wireType, nullable: true, reference: nil, enumeration: nil),
+            read: { $0[keyPath: key]?.staffValue ?? .null },
             validate: { if $0 != .null { _ = try T.fromStaffValue($0) } },
             write: { object, value, _ in object[keyPath: key] = value == .null ? nil : try T.fromStaffValue(value) })
     }
-    static func enumeration<T: RawRepresentable>(_ name: String, _ key: ReferenceWritableKeyPath<M, T>) -> Self where T.RawValue == String {
+    static func enumeration<T: RawRepresentable & CaseIterable>(_ name: String, _ key: ReferenceWritableKeyPath<M, T>) -> Self where T.RawValue == String {
         func decode(_ value: StaffWorkspaceValue) throws -> T {
             guard let result = T(rawValue: try String.fromStaffValue(value)) else { throw StaffWorkspaceModelError.invalid }; return result
         }
-        return .init(name: name, referenceKind: nil, read: { .text($0[keyPath: key].rawValue) },
+        return .init(name: name, referenceKind: nil,
+            schema: .init(type: .text, nullable: false, reference: nil, enumeration: T.allCases.map(\.rawValue).sorted()),
+            read: { .text($0[keyPath: key].rawValue) },
             validate: { _ = try decode($0) }, write: { object, value, _ in object[keyPath: key] = try decode(value) })
     }
     static func reference<P: PersistentModel>(_ name: String, _ key: ReferenceWritableKeyPath<M, P?>,
                                                id: KeyPath<P, UUID>, kind: String, required: Bool) -> Self {
-        .init(name: name, referenceKind: kind, read: { $0[keyPath: key].map { .identifier($0[keyPath: id]) } ?? .null },
+        .init(name: name, referenceKind: kind, schema: .init(type: .identifier, nullable: !required, reference: kind, enumeration: nil),
+            read: { $0[keyPath: key].map { .identifier($0[keyPath: id]) } ?? .null },
             validate: { if $0 == .null && !required { return }; _ = try UUID.fromStaffValue($0) },
             write: { object, value, resolver in
                 object[keyPath: key] = value == .null && !required ? nil : try resolver.require(P.self, kind: kind, id: UUID.fromStaffValue(value))
@@ -160,7 +184,7 @@ extension UUID: StaffWorkspaceAtom {
               try JSONEncoder().encode(record).count <= 2 * 1024 * 1024 else { throw StaffWorkspaceModelError.incomplete }
         for field in fields { try field.validate(record.fields[field.name]!) }
     }
-    func decodeDetached(_ record: StaffWorkspaceModelRecord, resolver: StaffWorkspaceModelResolver) throws -> M {
+    func decodeDetached(_ record: StaffWorkspaceModelRecord, resolver: inout StaffWorkspaceModelResolver) throws -> M {
         try validate(record)
         guard !resolver.contains(kind: kind, id: record.id) else { throw StaffWorkspaceModelError.invalid }
         for field in fields { try field.validateReference(record.fields[field.name]!, resolver) }

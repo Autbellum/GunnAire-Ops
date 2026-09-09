@@ -1,3 +1,31 @@
+Full owner HTTP source candidate, 2026-09-09:
+STAFF_FULL_WORKSPACE_SOURCE.md records the authenticated 404 reproduction and
+new owner-workspace-v1 endpoint, generated from all 32 native model kinds and
+561 typed fields. Separate encrypted source/receipt tables, per-transaction
+Admin/company/replica checks, immutable retries, retained tombstones, explicit
+restore, atomic conflict/failure handling and actual-wire-size paging preserve
+originals without changing the six-kind staff namespace. All 29 focused backend
+tests and the corrected Mac native/backend round-trip pass. MacFull1 verifies
+1,877 cases; BackendFull1 passes 881 tests and Tools1 passes 74. Both first
+unsigned Release builds pass. IPadFull1 exposes two actual isolated-helper
+deallocation crashes, retained and not counted as passes. The component and
+resolver helpers now use value storage with explicit inout mutation, retaining
+actor and relationship checks. All three original synchronous tests now pass
+on iPad; corrected MacFull2 verifies 1,877 passes and IPadFull2 verifies 1,882,
+including five invoice/Mail/staff UI journeys, all with no failures/skips. Both
+final unsigned Release builds and architecture checks pass: arm64 iOS and
+universal arm64/x86_64 Mac. Existing QBO/test/linker warnings remain documented.
+OriginalPreflight3 protects 17 paths, 406 unrelated changes, 399 matching other
+tracked sources and the owner's branch/HEAD/index. OriginalCopyBack3 verifies
+all 17 files byte-equal, preserving those unrelated changes and branch/HEAD/index.
+Only the isolated review checkout is staged and committed. Hosted a0fd766 native CI is
+terminal: 1,891 passes/one failure in iPad group 1, at the inventory opening-date
+Done control; its Mail journeys pass. Exact verified log/artifact evidence is
+retained and the inventory issue remains open. Automatic full-model owner
+publication, domain/role projection, staff-store activation/leases/commands/media
+and independent signed-account CloudKit convergence remain essential and
+incomplete. This endpoint does not authorize live provider or financial writes.
+
 Full owner-model history local qualification, 2026-09-09:
 STAFF_FULL_MODEL_HISTORY.md records the actual lost invoice/payment deletion IDs,
 26 missing history attributes, full 32-model typed capture, store/transaction

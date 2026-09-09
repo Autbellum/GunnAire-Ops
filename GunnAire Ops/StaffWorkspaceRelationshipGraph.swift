@@ -8,10 +8,13 @@ import SwiftData
     typealias Key = StaffWorkspaceRecordKey
     private let records: [Key: StaffWorkspaceModelRecord]
 
-    private final class Components {
+    // Per-validation union/find state has no shared identity or asynchronous
+    // lifetime. Value storage also avoids actor-isolated class destruction when
+    // a synchronous caller releases this temporary graph on iPadOS.
+    private struct Components {
         private var parents: [String: String] = [:]
         private var anchors: [String: UUID] = [:]
-        func root(_ key: String) -> String {
+        mutating func root(_ key: String) -> String {
             var current = key
             while let parent = parents[current], parent != current { current = parent }
             var child = key
@@ -20,8 +23,8 @@ import SwiftData
             }
             return current
         }
-        func anchor(_ key: String, id: UUID) { anchors[key] = id }
-        func join(_ lhs: String, _ rhs: String) -> Bool {
+        mutating func anchor(_ key: String, id: UUID) { anchors[key] = id }
+        mutating func join(_ lhs: String, _ rhs: String) -> Bool {
             let left = root(lhs), right = root(rhs)
             if left == right { return true }
             if let a = anchors[left], let b = anchors[right], a != b { return false }
@@ -49,7 +52,7 @@ import SwiftData
             records[key] = record
         }
         let graph = Self(records: records)
-        let components = Dictionary(uniqueKeysWithValues: StaffWorkspaceLinkScope.allCases.map { ($0, Components()) })
+        var components = Dictionary(uniqueKeysWithValues: StaffWorkspaceLinkScope.allCases.map { ($0, Components()) })
         func node(_ key: Key) -> String { key.kind + ":" + key.id.uuidString }
         for key in records.keys {
             if let scope = StaffWorkspaceLinkScope(rawValue: key.kind) { components[scope]!.anchor(node(key), id: key.id) }
