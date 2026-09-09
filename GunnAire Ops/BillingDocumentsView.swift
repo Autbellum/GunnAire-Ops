@@ -5539,7 +5539,7 @@ GunnAire
     @ViewBuilder
     private func jobFieldFormsSection(for call: ServiceCall) -> some View {
         let templates = fieldFormTemplates
-            .filter { $0.isActive && $0.applies(to: call.type) }
+            .filter { $0.isActive && $0.isListed(for: call.type) }
             .sorted { lhs, rhs in
                 if lhs.requiresCompletionForCloseout != rhs.requiresCompletionForCloseout {
                     return lhs.requiresCompletionForCloseout
@@ -5587,7 +5587,8 @@ GunnAire
                                 actorEmail: currentUserEmail
                             )
                         } label: {
-                            Label("Complete \(template.title)", systemImage: "checklist.unchecked")
+                            Label(template.dataReviewIssue == nil ? "Complete \(template.title)" : "Review \(template.title)",
+                                  systemImage: template.dataReviewIssue == nil ? "checklist.unchecked" : "exclamationmark.triangle")
                         }
                         .accessibilityIdentifier("CompleteRequiredFieldForm-\(template.id.uuidString)")
                     }
@@ -5601,6 +5602,15 @@ GunnAire
                     }
                 }
             }
+            if !responses.isEmpty {
+                NavigationLink {
+                    CompletedFieldFormsView(responses: responses, templates: fieldFormTemplates,
+                                            serviceCall: call, attachments: activeJobAttachments)
+                } label: {
+                    Label("Saved forms (\(responses.count))", systemImage: "doc.text")
+                }
+                .accessibilityIdentifier("OpenSavedFieldForms-\(call.id.uuidString)")
+            }
         }
     }
 
@@ -5613,7 +5623,8 @@ GunnAire
         if let response = FieldFormCloseoutPolicy.latestResponse(
             completing: template,
             serviceCallID: call.id,
-            responses: responses
+            responses: responses,
+            originalTemplates: fieldFormTemplates
         ) {
             NavigationLink {
                 FieldFormResponseDetailView(

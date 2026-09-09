@@ -2546,7 +2546,8 @@ final class GunnAire_OpsUITests: XCTestCase {
         app.launchArguments = [
             "-enableSplashVideo", "NO",
             "-disableCloudKitForTesting",
-            "-uiTestAuthenticatedAdmin"
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestIsolatedStore", UUID().uuidString
         ]
         app.launch()
 
@@ -2584,6 +2585,14 @@ final class GunnAire_OpsUITests: XCTestCase {
         title.tap()
         title.typeText("UI Commissioning Form")
 
+        let required = app.switches["FieldFormRequiredForCloseout"]
+        XCTAssertTrue(waitForHittable(required))
+        XCTAssertEqual(required.value as? String, "0")
+        // SwiftUI exposes the entire labeled row as a Switch. Its center is
+        // blank space, not the visible trailing switch, on this iPad sheet.
+        required.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertEqual(required.value as? String, "1")
+
         let fieldLabel = app.textFields["Field label"]
         XCTAssertTrue(fieldLabel.waitForExistence(timeout: 3))
         fieldLabel.tap()
@@ -2595,6 +2604,18 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["UI Commissioning Form"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["1 field • All job types"].exists)
+        let savedTitle = app.staticTexts["UI Commissioning Form"]
+        let savedRow = app.collectionViews["FieldFormTemplateList"].cells.containing(.staticText, identifier: "UI Commissioning Form").firstMatch
+        XCTAssertTrue(waitForHittable(savedTitle), "The saved form must be revealed without another scroll.")
+        XCTAssertTrue(savedRow.exists)
+        let requiredStatus = savedRow.staticTexts["Required for closeout"]
+        XCTAssertTrue(requiredStatus.exists)
+        XCTAssertTrue(app.collectionViews["FieldFormTemplateList"].frame.contains(requiredStatus.frame),
+                      "The saved form's complete status must remain inside the viewport.")
+        let templateEvidence = XCTAttachment(screenshot: app.screenshot())
+        templateEvidence.name = "Saved reusable field form in template management"
+        templateEvidence.lifetime = .keepAlways
+        add(templateEvidence)
     }
 
     @MainActor
@@ -3542,6 +3563,72 @@ final class GunnAire_OpsUITests: XCTestCase {
             app.swipeUp()
         }
         XCTAssertTrue(otherForms.exists)
+        let workEvidence = XCTAttachment(screenshot: app.screenshot())
+        workEvidence.name = "Required service forms in the job work stage"
+        workEvidence.lifetime = .keepAlways
+        add(workEvidence)
+    }
+
+    @MainActor
+    func testSavedFieldFormHistoryRetainsOriginalRevisionAndExplainsUnreadableRecords() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin", "-uiTestSeedCollectibleJob",
+            "-uiTestIsolatedStore", UUID().uuidString, "-uiTestFieldFormHistory"
+        ]
+        app.launch()
+        revealSidebarDestination("Schedule & Jobs", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+        let documentation = app.buttons["OpenDocumentation-\(screenshotServiceCallID)"]
+        for _ in 0..<6 where !documentation.exists || !documentation.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(documentation))
+        documentation.tap()
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
+        app.segmentedControls["JobDocumentationStagePicker"].buttons["Work"].tap()
+        let savedForms = app.buttons["OpenSavedFieldForms-\(screenshotServiceCallID)"]
+        for _ in 0..<12 where !savedForms.exists || !savedForms.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(savedForms))
+        XCTAssertEqual(savedForms.label, "Saved forms (2)")
+        savedForms.tap()
+        XCTAssertTrue(app.navigationBars["Saved Forms"].waitForExistence(timeout: 3))
+        let valid = app.buttons["SavedFieldFormResponse-F0F00000-0000-4000-8000-000000000003"]
+        let invalid = app.buttons["SavedFieldFormResponse-F0F00000-0000-4000-8000-000000000004"]
+        XCTAssertTrue(valid.exists)
+        XCTAssertTrue(invalid.exists)
+        XCTAssertFalse(app.buttons["SavedFieldFormResponse-F0F00000-0000-4000-8000-000000000005"].exists)
+        XCTAssertFalse(app.staticTexts["Another visit's private form"].exists)
+        invalid.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["FieldFormHistoryNeedsReview"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["FieldFormUnreadableAnswers"].exists)
+        XCTAssertFalse(app.buttons["ShareCompletedFieldFormPDF"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["FieldFormExportIssue"].exists,
+                       "An already explained review state should not repeat as a second error banner.")
+        XCTAssertFalse(app.staticTexts["New coil inspection"].exists)
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "\"version\":99")).firstMatch.exists)
+        let reviewEvidence = XCTAttachment(screenshot: app.screenshot())
+        reviewEvidence.name = "Saved form needs review without exposing raw data or creating a completion PDF"
+        reviewEvidence.lifetime = .keepAlways
+        add(reviewEvidence)
+        app.navigationBars["Equipment condition"].buttons["Saved Forms"].tap()
+        XCTAssertTrue(app.navigationBars["Saved Forms"].waitForExistence(timeout: 3))
+        valid.tap()
+        let original = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Original drain condition")).firstMatch
+        XCTAssertTrue(original.waitForExistence(timeout: 3))
+        XCTAssertTrue(original.label.contains("Pass"))
+        XCTAssertFalse(app.staticTexts["New coil inspection"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["FieldFormHistoryNeedsReview"].exists)
+        XCTAssertTrue(app.buttons["ShareCompletedFieldFormPDF"].waitForExistence(timeout: 5))
+        let originalEvidence = XCTAttachment(screenshot: app.screenshot())
+        originalEvidence.name = "Original saved form retains retired question and answer after revision"
+        originalEvidence.lifetime = .keepAlways
+        add(originalEvidence)
+        app.navigationBars["Equipment condition"].buttons["Saved Forms"].tap()
+        XCTAssertTrue(valid.exists && invalid.exists)
+        app.navigationBars["Saved Forms"].buttons["Job Documentation"].tap()
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
+        XCTAssertTrue(savedForms.exists)
+        XCTAssertEqual(savedForms.label, "Saved forms (2)")
     }
 
     @MainActor

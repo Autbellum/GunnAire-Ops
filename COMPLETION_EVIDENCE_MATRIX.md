@@ -1,3 +1,38 @@
+Field-form history integration candidate, 2026-09-09:
+FIELD_FORM_HISTORY_VALIDATION.md records strict bounded original-history parsing,
+unchanged legacy raw evidence, original-template resolution, required closeout
+validation, job-scoped Saved Forms navigation, failure-safe template persistence,
+automatic reveal of the saved template, and removal of a redundant warning.
+The 12 form paths retain both overlapping inventory/discriminator changes from
+published e7c6c8a. Combined-source MacFocused1 passed 68 actual cases with all five
+suite identities verified and zero failures/skips. MacFull1 also passed all 1,791
+logic cases and all 16 required selectors. Three current-run PDF pages were
+visually inspected: history status and answers are clear without email footers;
+empty headings and repetitive report-readiness information still need polish.
+IPadFull1 passes all 1,805 actual cases (1,791 logic plus all 14 UI journeys),
+zero failures/skips and all 30 required selectors. Eight final-run iPad frames
+were inspected with visible saved-form status and no account-email footer.
+Both combined-source unsigned Release builds and architecture checks pass:
+arm64 iOS and arm64/x86_64 universal Mac. The separate five-journey MacUI1 attempt
+failed before test execution: macOS rejected the generated unsigned test runner
+as damaged, its signature verification failed, and Xcode reported failure to
+establish the runner connection. This is retained as failed qualification, not
+Mac UI coverage. The launch alerts were dismissed without deleting files or
+changing signing/security settings. All local runs are now terminal.
+All 852 Backend and 74 Tools cases and both unchanged workflow lint checks pass.
+OriginalPreflight1 protects 368 unrelated changes and the original branch, HEAD
+and index; 379 other tracked sources match. Final copy-back verifies all 13 paths
+byte-equal and preserves all 368 unrelated changes and original branch/HEAD/index.
+The review-branch checkpoint remains local, not published. Published-head Backend
+run 34380679091 passed;
+native run 34380679032 has a Mac pass and both iPad jobs still live. It will not
+be canceled by a successor push.
+Response drafts still exist only in view state. Draft recovery, wider iPad/Mac
+navigation/accessibility, complete nested business semantics, authenticated staff
+projections, isolated operational import/lease, durable commands/files, signed
+independent-account CloudKit convergence, provider/vendor/payment/Handoff/device
+acceptance and the original full-suite goal remain incomplete.
+
 Staff domain validation and inventory entry follow-up, 2026-09-09:
 STAFF_DISCRIMINATOR_VALIDATION.md records strict recognized-value checks for
 every current persisted Raw field across all 32 schema models. The full graph

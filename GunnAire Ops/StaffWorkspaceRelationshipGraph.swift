@@ -91,6 +91,7 @@ import SwiftData
         try graph.rejectCycles(kind: "job", field: "scheduledFollowUpServiceCallID")
         try graph.rejectCycles(kind: "estimate", field: "parentEstimateID")
         try graph.rejectCycles(kind: "payment", field: "refundedPaymentID")
+        try StaffWorkspaceFieldForms.validate(input)
         return graph
     }
 

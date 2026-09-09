@@ -1232,11 +1232,11 @@ struct ServiceCallDetailView: View {
     }
 
     private var availableFieldFormTemplates: [FieldFormTemplate] {
-        fieldFormTemplates.filter { $0.isActive && $0.applies(to: call.type) }
+        fieldFormTemplates.filter { $0.isActive && $0.isListed(for: call.type) }
     }
 
     private var completedFieldFormResponses: [FieldFormResponse] {
-        fieldFormResponses.filter { $0.serviceCallID == call.id }
+        FieldFormHistoryPolicy.responses(fieldFormResponses, for: call.id)
     }
 
     private var fieldFormCloseoutReadiness: FieldFormCloseoutReadiness {
@@ -2718,7 +2718,8 @@ GunnAire
                                     let isCompleted = FieldFormCloseoutPolicy.responseCompletes(
                                         template,
                                         serviceCallID: call.id,
-                                        responses: fieldFormResponses
+                                        responses: fieldFormResponses,
+                                        originalTemplates: fieldFormTemplates
                                     )
                                     NavigationLink {
                                         FieldFormResponseEditor(template: template, serviceCall: call, actorEmail: currentActivityActor)
@@ -2729,7 +2730,11 @@ GunnAire
                                                 systemImage: isCompleted ? "checkmark.circle.fill" : "checklist"
                                             )
                                             Spacer()
-                                            if template.requiresCompletionForCloseout {
+                                            if template.dataReviewIssue != nil {
+                                                Text("Needs review")
+                                                    .font(.caption2.weight(.semibold))
+                                                    .foregroundStyle(.orange)
+                                            } else if template.requiresCompletionForCloseout {
                                                 Text(isCompleted ? "Complete" : "Required")
                                                     .font(.caption2.weight(.semibold))
                                                     .foregroundStyle(isCompleted ? Color.green : Color.orange)
@@ -2745,7 +2750,7 @@ GunnAire
                                     .foregroundStyle(.secondary)
                             } else {
                                 Divider()
-                                Text("Completed")
+                                Text("Saved forms")
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(.secondary)
                                 ForEach(completedFieldFormResponses.prefix(3)) { response in
@@ -2763,8 +2768,13 @@ GunnAire
                                             Text(response.completedAt.formatted(date: .abbreviated, time: .shortened))
                                                 .font(.caption2)
                                                 .foregroundStyle(.secondary)
+                                            if response.completionReviewIssue(resolving: fieldFormTemplates.first { $0.id == response.templateID }) != nil {
+                                                Label("Needs review", systemImage: "exclamationmark.triangle")
+                                                    .font(.caption2)
+                                            }
                                         }
                                     }
+                                    .accessibilityIdentifier("SavedFieldFormResponse-\(response.id.uuidString)")
                                 }
                                 if completedFieldFormResponses.count > 3 {
                                     NavigationLink {

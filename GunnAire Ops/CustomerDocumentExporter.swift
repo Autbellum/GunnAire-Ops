@@ -5,6 +5,7 @@ enum CustomerDocumentExportError: LocalizedError {
     case documentsDirectoryUnavailable
     case authoritativeTaxRequired(String)
     case statementNeedsReview(String)
+    case fieldFormNeedsReview(String)
 
     var errorDescription: String? {
         switch self {
@@ -13,6 +14,8 @@ enum CustomerDocumentExportError: LocalizedError {
         case .authoritativeTaxRequired(let message):
             return message
         case .statementNeedsReview(let message):
+            return message
+        case .fieldFormNeedsReview(let message):
             return message
         }
     }
@@ -213,6 +216,12 @@ enum CustomerDocumentExporter {
         serviceCall: ServiceCall,
         template: FieldFormTemplate?
     ) throws -> URL {
+        guard response.serviceCallID == serviceCall.id else {
+            throw CustomerDocumentExportError.fieldFormNeedsReview("Open this form from its original job before creating a completion PDF.")
+        }
+        if let issue = response.completionReviewIssue(resolving: template) {
+            throw CustomerDocumentExportError.fieldFormNeedsReview(issue)
+        }
         let answerRows = response.answerRows(resolving: template)
         let fileName = makeFileName(
             prefix: "GunnAire-Field-Form",
@@ -615,7 +624,8 @@ enum CustomerDocumentExporter {
         sections.append(contentsOf: technicalReportSections(for: serviceCall))
         sections.append(contentsOf: fieldFormSections(
             for: serviceCall,
-            responses: fieldFormResponses
+            responses: fieldFormResponses,
+            templates: fieldFormTemplates
         ))
         sections.append(contentsOf: photoEvidenceSections(
             for: attachments,
@@ -652,17 +662,23 @@ enum CustomerDocumentExporter {
 
     private static func fieldFormSections(
         for serviceCall: ServiceCall,
-        responses: [FieldFormResponse]
+        responses: [FieldFormResponse],
+        templates: [FieldFormTemplate]
     ) -> [DocumentSection] {
         responses
             .filter { $0.serviceCallID == serviceCall.id }
             .sorted { $0.completedAt < $1.completedAt }
             .map { response in
+                let original = templates.first { $0.id == response.templateID }
+                let needsReview = response.completionReviewIssue(resolving: original) != nil
                 var rows = [
-                    row("Completed", formattedDateTime(response.completedAt)),
-                    row("Completed By", response.completedByEmail)
+                    row(needsReview ? "Recorded" : "Completed", formattedDateTime(response.completedAt)),
+                    row(needsReview ? "Recorded By" : "Completed By", response.completedByEmail)
                 ]
-                rows.append(contentsOf: response.answerRows(resolving: nil).map { answer in
+                if needsReview {
+                    rows.append(row("Status", "Needs review. Original record retained; completion is not verified."))
+                }
+                rows.append(contentsOf: response.answerRows(resolving: original).map { answer in
                     row(answer.required ? "\(answer.label) (Required)" : answer.label, answer.displayAnswer)
                 })
                 return DocumentSection(title: "Field Form — \(response.templateTitle)", rows: rows)

@@ -114,6 +114,7 @@ struct GunnAire_OpsApp: App {
             try GunnAireCloudKitSchemaBootstrap.runIfRequested(in: modelContainer.mainContext)
             try GunnAireUITestFixtures.prepareIfRequested(in: modelContainer.mainContext)
             try SharedTimeUIFixture.seedIfRequested(in: modelContainer.mainContext)
+            try FieldFormHistoryUIFixture.seedIfRequested(in: modelContainer.mainContext)
             CompanyWorkspaceAccessController.shared.installTestContainer(modelContainer)
             return .ready(modelContainer)
         } catch {
