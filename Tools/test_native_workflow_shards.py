@@ -12,7 +12,8 @@ WORKFLOW = ROOT / ".github/workflows/native-app-regression.yml"
 
 
 class NativeWorkflowShardTests(unittest.TestCase):
-    def selectors(self, platform, shard, *, check=True):
+    def selectors(self, platform, shard, *, check=True,
+                  udid="12345678-1234-1234-1234-123456789ABC"):
         text = WORKFLOW.read_text()
         start = text.index('          selectors=(-only-testing:')
         end = text.index('          xcodebuild ', start)
@@ -22,7 +23,8 @@ class NativeWorkflowShardTests(unittest.TestCase):
         result = subprocess.run(
             ["/bin/bash", "-eu", "-o", "pipefail", "-c", script],
             env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-                 "CI_PLATFORM": platform, "CI_SHARD": str(shard)},
+                 "CI_PLATFORM": platform, "CI_SHARD": str(shard),
+                 "CI_IPAD_UDID": udid},
             capture_output=True, text=True, check=check,
         )
         return result.stdout.splitlines() if check else result
@@ -58,6 +60,19 @@ class NativeWorkflowShardTests(unittest.TestCase):
                 result = self.selectors("iPad", shard, check=False)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(result.stdout, "")
+
+    def test_ipad_requires_the_prepared_exact_device(self):
+        for udid in ("", "not-a-device", "12345678-1234-1234-1234-123456789ABC\nX=1"):
+            with self.subTest(udid=udid):
+                result = self.selectors("iPad", 0, check=False, udid=udid)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("-only-testing:", result.stdout)
+        self.assertEqual(self.selectors("Mac", 0, udid=""), ["-only-testing:GunnAire OpsTests"])
+        text = WORKFLOW.read_text()
+        self.assertIn('destination="platform=iOS Simulator,id=$CI_IPAD_UDID"', text)
+        self.assertIn('timeout-minutes: 5\n        run: bash Tools/prepare_ci_ipad.sh', text)
+        self.assertLess(text.index('run: bash Tools/prepare_ci_ipad.sh'),
+                        text.index('selectors=(-only-testing:'))
 
 
 if __name__ == "__main__":

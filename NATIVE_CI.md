@@ -1,5 +1,36 @@
 # Native GitHub Actions checks
 
+## Explicit pinned iPad preparation — September 9, 2026
+
+At `16e5c5f`, [native run 34308307273](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34308307273)
+fails its second iPad group before test execution: Xcode exits 70 because no
+device matches the 13-inch M5 iPad on iOS 26.2. Its destination inventory contains
+only generic simulator placeholders, not a usable iPad. This is an environment
+failure, not an observed app assertion failure. The log alone does not establish
+whether that runner lacked a created device or a usable runtime.
+
+The workflow now checks the exact runtime and device type, creates and boots a
+job-owned simulator, verifies its returned identity/state, and selects its UDID.
+It retains before/ready inventories and boot output with existing CI evidence.
+Missing runtime/type, malformed identity or failed boot remains a visible failure;
+there is no automatic runtime download, OS/model fallback, retry of failed tests,
+device erasure or signing change. Preparation has a five-minute step limit inside
+the existing job limit. All 60 UI selections, both complete iPad logic suites,
+Mac logic/universal Release and actual-execution checks remain intact.
+
+`Tools/test_prepare_ci_ipad.py` executes the real preparation script against
+fixture-only simulator commands, including missing precreated devices, unavailable
+runtime, invalid identity, failed creation/boot and incorrect readback. The shard
+tests require a prepared destination without reducing test coverage. This workflow
+change requires fresh exact-head hosted verification after publication; it does
+not qualify the unfinished native time-review work or production release.
+
+Local validation passes all **64 Tools tests**, both workflows through
+`actionlint`, shell syntax and `git diff --check`. With Xcode 26.6 (17F113), the
+actual script creates and boots a fresh 13-inch M5/iOS 26.2 simulator, and
+`xcodebuild -showdestinations` recognizes its exact exported UDID. This checks
+simulator preparation only; it is not a new app-test or signed-device run.
+
 ## Shared field-payment handoff review coverage
 
 The candidate workflow selects **58** iPad UI journeys: all prior 54, plus the
