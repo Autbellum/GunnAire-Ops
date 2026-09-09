@@ -650,11 +650,11 @@ struct GmailView: View {
         ]
         let textPayload = GmailMessagePayload(headers: nil, mimeType: "text/html",
             body: GmailMessageBody(data: encodedHTML, size: html.utf8.count), parts: nil, filename: nil)
-        let fixtureAttachment = Data("Fixture equipment list.\n".utf8)
+        let fixtureAttachment = MailAttachmentPreviewFixture.attachment
         let includesAttachment = ProcessInfo.processInfo.arguments.contains("-uiTestMailAttachments")
-        let filePayload = GmailMessagePayload(headers: nil, mimeType: "text/plain",
-            body: GmailMessageBody(data: fixtureAttachment.base64EncodedString(), size: fixtureAttachment.count),
-            parts: nil, filename: "Equipment.txt")
+        let filePayload = GmailMessagePayload(headers: nil, mimeType: fixtureAttachment.mimeType,
+            body: GmailMessageBody(data: fixtureAttachment.data.base64EncodedString(), size: fixtureAttachment.data.count),
+            parts: nil, filename: fixtureAttachment.fileName)
         return [
             GmailMessageDetail(
                 id: "ui-mail-1",

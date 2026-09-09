@@ -1,3 +1,24 @@
+Native attachment-preview local qualification, 2026-09-09:
+NATIVE_ATTACHMENT_PREVIEW.md records the actual hosted blank text preview,
+unchanged warm/cold local passes, and a native text-reader candidate that retains
+original bytes and all other formats through Quick Look. Cancellation/identity,
+empty/unavailable recovery, explicit Quick Look refresh, original forwarding and
+edited-copy callbacks are preserved. First candidate tests expose malformed
+Unicode being read as empty; exact byte round-trip validation fixes this without
+weakening the assertions. Final focused Mac/iPad runs pass 34/37 cases. MacFull1
+verifies 1,858 logic cases; IPadFull1 verifies 1,865 cases with all seven selected
+UI journeys, including invoice navigation and retained Mail drafts. All 852
+backend and 74 Tools tests pass, as do workflow checks and unsigned arm64 iOS
+Release. Six final iPad preview/forward/inbox/compose frames were inspected.
+MacUI1 remains a real runner-launch failure: macOS rejected its signature, and
+Cancel was requested on the damaged-runner dialog without deleting files or
+changing security settings; the failed process/result is terminal. Mac UI
+acceptance needs a properly signed harness; do not
+repeat the unchanged unsigned launch. Universal arm64/x86_64 Mac Release also
+passes. Copy-back verifies all eight files byte-equal and preserves 391 unrelated
+changes plus the owner's branch/HEAD/index. Only the isolated review checkout is
+committed. This is not full app, live provider or signed-device acceptance.
+
 Saved billing evidence and staff graph locally qualified checkpoint, 2026-09-09:
 Later hosted update, 21:07 UTC: parent 223f1b4 native CI has finished with Mac and
 iPad group 2 passing but group 1 failing one Mail attachment-preview case.

@@ -391,6 +391,68 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testMailPDFPreviewReloadAndForwardKeepOriginalAttachment() throws {
+        try verifyNonTextMailAttachment(argument: "-uiTestMailPDFAttachment", name: "EquipmentReport.pdf",
+                                        content: "Original equipment report")
+    }
+
+    @MainActor
+    func testMailImagePreviewReloadAndForwardKeepOriginalAttachment() throws {
+        try verifyNonTextMailAttachment(argument: "-uiTestMailImageAttachment", name: "EquipmentPhoto.png")
+    }
+
+    @MainActor
+    private func verifyNonTextMailAttachment(argument: String, name: String, content: String? = nil) throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-appStoreScreenshotFixtures", "-uiTestSeedMailInbox", "-uiTestMailAttachments", argument,
+            "-GunnAirePendingAppRoute", "mail"]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 8))
+        app.descendants(matching: .any)["MailMessage-ui-mail-1"].tap()
+        let file = app.buttons["MailAttachment-0.0"]
+        XCTAssertTrue(file.waitForExistence(timeout: 4))
+        for pass in 0..<2 {
+            file.tap()
+            let done = app.buttons["Done"].firstMatch
+            let reload = app.buttons["Reload Preview"]
+            XCTAssertTrue(done.waitForExistence(timeout: 5))
+            XCTAssertTrue(reload.waitForExistence(timeout: 5))
+            XCTAssertFalse(app.descendants(matching: .any)["AttachmentTextReader"].exists)
+            if let content {
+                XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(
+                    format: "label CONTAINS %@ OR value CONTAINS %@", content, content
+                )).firstMatch.waitForExistence(timeout: 8))
+            }
+            reload.tap()
+            if let content {
+                XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(
+                    format: "label CONTAINS %@ OR value CONTAINS %@", content, content
+                )).firstMatch.waitForExistence(timeout: 8))
+            }
+            let evidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            evidence.name = "Mail - original \(name) preview \(pass)"
+            evidence.lifetime = .keepAlways
+            add(evidence)
+            done.tap()
+            XCTAssertTrue(app.navigationBars["Mail"].waitForExistence(timeout: 3))
+        }
+        app.buttons["MailMoreActionsButton"].tap()
+        app.buttons["Forward"].tap()
+        XCTAssertTrue(app.navigationBars["Compose"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Remove \(name)"].exists)
+        XCTAssertEqual(app.textFields["MailComposeSubject"].value as? String, "Fwd: Service appointment confirmed")
+        app.buttons["Remove \(name)"].tap()
+        XCTAssertTrue(app.buttons["Remove \(name)"].waitForNonExistence(timeout: 3))
+        app.navigationBars["Compose"].buttons["Cancel"].tap()
+        XCTAssertTrue(app.buttons["Delete Draft"].waitForExistence(timeout: 3))
+        app.buttons["Delete Draft"].tap()
+        XCTAssertTrue(file.waitForExistence(timeout: 3))
+        XCTAssertTrue(file.label.contains(name))
+    }
+
+    @MainActor
     func testMailWorkspaceUsesASimpleInboxInterface() throws {
         let app = XCUIApplication()
         app.launchArguments = [
