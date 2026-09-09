@@ -4711,10 +4711,36 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testExistingQuickBooksLinksOfferOfflineRecoveryWithoutDeviceOAuth() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob", "-uiTestForceQuickBooksDisconnected", "-uiTestExistingQuickBooksLinks",
+            "-uiTestExistingLinksOffline", "-GunnAirePendingAppRoute", "quickBooksManagement"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
+        let link = app.buttons["ExistingQBOLinksLink"]
+        for _ in 0..<8 where !link.isHittable { app.swipeUp() }
+        XCTAssertTrue(link.waitForExistence(timeout: 4)); link.tap()
+        XCTAssertTrue(app.navigationBars["Existing QuickBooks links"].waitForExistence(timeout: 4))
+        let retry = app.buttons["ExistingQBOLinkRetryConnection"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 5)); XCTAssertTrue(retry.isEnabled)
+        XCTAssertTrue(app.staticTexts["ExistingQBOLinkMessage"].exists)
+        XCTAssertFalse(app.buttons["ExistingQBOLinkConfirm"].exists)
+        retry.tap()
+        XCTAssertTrue(retry.waitForExistence(timeout: 5)); XCTAssertTrue(retry.isEnabled)
+        XCTAssertFalse(app.buttons["ExistingQBOLinkPreview"].exists)
+        let evidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        evidence.name = "Existing links - offline business connection and retry"
+        evidence.lifetime = .keepAlways; add(evidence)
+        app.navigationBars["Existing QuickBooks links"].buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 4))
+    }
+
+    @MainActor
     private func exerciseExistingQuickBooksLinks(lostReply: Bool, reconnected: Bool = false) throws {
         let app = XCUIApplication()
         app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-uiTestAuthenticatedAdmin",
-            "-uiTestSeedCollectibleJob", "-uiTestForceQuickBooksConnected", "-uiTestExistingQuickBooksLinks",
+            "-uiTestSeedCollectibleJob", "-uiTestForceQuickBooksDisconnected", "-uiTestExistingQuickBooksLinks",
             "-GunnAirePendingAppRoute", "quickBooksManagement"]
         if lostReply { app.launchArguments.append("-uiTestExistingLinksLostReply") }
         if reconnected { app.launchArguments.append("-uiTestExistingLinksReconnected") }
@@ -4734,6 +4760,11 @@ final class GunnAire_OpsUITests: XCTestCase {
             XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 4), .completed)
             XCTAssertEqual(choice.isSelected, selected)
             XCTAssertEqual(preview.label, "Review selected (\(selected ? 1 : 0))")
+            if preview.isEnabled != selected {
+                let evidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+                evidence.name = "Existing link selection eligibility mismatch"
+                evidence.lifetime = .keepAlways; add(evidence)
+            }
             XCTAssertEqual(preview.isEnabled, selected)
         }
         requireSelection(false)

@@ -39,6 +39,26 @@ struct QuickBooksExistingLink: Codable, Equatable, Identifiable {
     }
 }
 
+/// Presentation eligibility is pure: SwiftUI rendering must not re-enter an
+/// operation's captured page/access closures or fetch the database. The owner
+/// applies this same policy to freshly authorized records at the user action.
+enum QuickBooksLinkSelection {
+    static func batch(_ selected: Set<String>, from available: [QuickBooksExistingLink]) throws -> [QuickBooksExistingLink] {
+        guard Set(available.map(\.id)).count == available.count,
+              Set(available.map { $0.kind.rawValue + ":" + $0.providerID }).count == available.count else {
+            throw QuickBooksLinkReviewError.changed
+        }
+        var links = available.filter { selected.contains($0.id) }
+        guard !links.isEmpty, links.count == selected.count else { throw QuickBooksLinkReviewError.changed }
+        for customerID in Set(links.compactMap(\.localCustomerID)) {
+            guard let customer = available.first(where: { $0.kind == .customer && $0.localID == customerID }) else { throw QuickBooksLinkReviewError.changed }
+            if !links.contains(where: { $0.id == customer.id }) { links.append(customer) }
+        }
+        guard links.count <= 25 else { throw QuickBooksLinkReviewError.invalid }
+        return links
+    }
+}
+
 struct QuickBooksLinkReviewRequest: Codable, Equatable {
     let companyID: UUID
     let realmID: String
@@ -144,19 +164,24 @@ struct QuickBooksLinkReviewRecord: Codable, Identifiable {
                 if let body { data = try await operation.performExternalMutation { try await transport(path, "POST", body) } }
                 else { data = try await transport(path, "GET", nil) }
                 try workflow.check()
+                guard data.count <= 1024 * 1024 else { throw QuickBooksLinkReviewError.invalid }
                 return try JSONDecoder().decode(type, from: data)
             }
         } catch {
             try workflow.check()
-            if let error = error as? QuickBooksLinkReviewError { throw error }
-            if error is DecodingError { throw QuickBooksLinkReviewError.invalid }
-            if case GunnAireBackendError.server(let status, _) = error {
-                if [401, 403].contains(status) { throw QuickBooksLinkReviewError.access }
-                if status == 409 { throw QuickBooksLinkReviewError.changed }
-                if status == 400 { throw QuickBooksLinkReviewError.invalid }
-            }
-            throw QuickBooksLinkReviewError.unavailable
+            throw Self.safe(error)
         }
+    }
+
+    static func safe(_ error: Error) -> Error {
+        if error is CancellationError || error is WorkspaceProviderAccessError || error is QuickBooksLinkReviewError { return error }
+        if error is DecodingError { return QuickBooksLinkReviewError.invalid }
+        if case GunnAireBackendError.server(let status, _) = error {
+            if [401, 403].contains(status) { return QuickBooksLinkReviewError.access }
+            if status == 409 { return QuickBooksLinkReviewError.changed }
+            if status == 400 { return QuickBooksLinkReviewError.invalid }
+        }
+        return QuickBooksLinkReviewError.unavailable
     }
 
     private func validate(_ request: QuickBooksLinkReviewRequest, _ workflow: QuickBooksDataAPI.CapturedWorkspaceWorkflow) throws {
@@ -282,15 +307,7 @@ struct QuickBooksLinkReviewStore {
     }
 
     func batch(_ selected: Set<String>) throws -> [QuickBooksExistingLink] {
-        let available = try candidates()
-        var links = available.filter { selected.contains($0.id) }
-        guard !links.isEmpty, links.count == selected.count else { throw QuickBooksLinkReviewError.changed }
-        for customerID in Set(links.compactMap(\.localCustomerID)) {
-            guard let customer = available.first(where: { $0.kind == .customer && $0.localID == customerID }) else { throw QuickBooksLinkReviewError.changed }
-            if !links.contains(where: { $0.id == customer.id }) { links.append(customer) }
-        }
-        guard links.count <= 25 else { throw QuickBooksLinkReviewError.invalid }
-        return links
+        try QuickBooksLinkSelection.batch(selected, from: candidates())
     }
 
     private func validateLocal(_ request: QuickBooksLinkReviewRequest) throws {

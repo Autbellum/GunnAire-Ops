@@ -885,7 +885,34 @@ enum GunnAireBackendService {
     }
 
     static var qboLinkReviewClient: QuickBooksLinkReviewClient {
-        .init { path, method, body in try await send(path: path, method: method, body: body) }
+        .init(transport: qboLinkReviewRequest)
+    }
+
+    static func qboLinkReviewRequest(path: String, method: String, body: Data?) async throws -> Data {
+        guard LinkReviewTransportPolicy.allows(path: path, method: method, bodyBytes: body?.count) else { throw QuickBooksLinkReviewError.invalid }
+        guard let identity = CompanyWorkspaceSession.current else { throw QuickBooksLinkReviewError.access }
+        var request = try makeRequest(path: path, method: method, body: body)
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        guard bearer.hasPrefix("Bearer "), CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == identity.tokenFingerprint,
+              request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil else { throw QuickBooksLinkReviewError.access }
+        request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
+        let controller = CompanyWorkspaceAccessController.shared, generation = controller.generation
+        func check() throws {
+            try Task.checkCancellation()
+            guard CompanyWorkspaceSession.current == identity, controller.generation == generation,
+                  controller.authorizedContainer != nil else { throw QuickBooksLinkReviewError.access }
+        }
+        try check()
+        do {
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: 1024 * 1024)
+            try check(); return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let status) = error {
+                throw GunnAireBackendError.server(statusCode: status, message: "Existing link review was not confirmed.")
+            }
+            throw QuickBooksLinkReviewClient.safe(error)
+        }
     }
 
     private struct CatalogPublicationList: Decodable { let publications: [CatalogPublicationRecord] }

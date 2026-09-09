@@ -210,6 +210,26 @@ class LinkAdopter:
                 self.authorize(connection, session_id, row, historical=True)
             return {"connectionRevision": billing_assignments.connection_revision(grant["grant_fingerprint"]), "review": self.public(row) if row else None}
 
+    def context(self, session_id, query):
+        """Discover only the current business connection; no QBO reads or link writes."""
+        if not isinstance(query, dict) or set(query) != {"companyID"}:
+            raise failure("invalid_query", "Choose one original business workspace.", 400)
+        company_id = canonical_uuid(query["companyID"])
+        with self.database() as connection:
+            actor = self.billing.actor(connection, session_id)
+            if actor["role"] != "Admin":
+                raise failure("administrator_required", "An administrator must review existing accounting links.", 403)
+            company = connection.execute("SELECT company_id FROM company_identity WHERE singleton=1").fetchone()
+            if company is None or company[0] != company_id:
+                raise failure("company_changed", "Reopen the original business workspace.", 403)
+            grant = connection.execute("SELECT * FROM qbo_connections WHERE id=1").fetchone()
+            if grant is None:
+                raise failure("provider_changed", "Connect the business to QuickBooks before reviewing its existing links.")
+            intent = request_scope({"companyID": company_id, "realmID": grant["realm_id"], "environment": grant["environment"]})
+            _, current = self.authorize(connection, session_id, intent)
+            return {"companyID": company_id, "realmID": current["realm_id"], "environment": current["environment"],
+                    "connectionRevision": billing_assignments.connection_revision(current["grant_fingerprint"]), "protocolVersion": 1}
+
     def preview(self, session_id, payload):
         intent = validated_request(payload)
         request_hash = digest(intent)

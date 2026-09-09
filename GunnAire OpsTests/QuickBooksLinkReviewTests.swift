@@ -21,6 +21,8 @@ import Testing
         var granted = true
         var connectionRevision = String(repeating: "a", count: 64)
         var beforeReply: (() -> Void)?
+        var visible = true
+        var contextOverride: Data?
 
         init() throws {
             let schema = GunnAireModelSchema.schema
@@ -52,6 +54,10 @@ import Testing
             self.calls.append((path, method))
             defer { self.beforeReply?() }
             if method == "GET" {
+                if URLComponents(string: path)?.path == "/api/qbo-link-reviews/context" {
+                    return try self.contextOverride ?? JSONEncoder().encode(SharedLinkReviewConnection(companyID: self.company, realmID: "realm",
+                        environment: Config.QuickBooks.environment, connectionRevision: self.connectionRevision, protocolVersion: 1))
+                }
                 let operation = URLComponents(string: path)?.queryItems?.first(where: { $0.name == "operationID" })?.value
                 let review = operation.flatMap(UUID.init(uuidString:)) == self.remote?.operationID ? self.remote : nil
                 return try JSONSerialization.data(withJSONObject: ["connectionRevision": self.connectionRevision,
@@ -73,6 +79,12 @@ import Testing
             try .init(context: context, api: api, client: client, store: store, actorEmail: "admin@example.invalid", validateAccess: {
                 guard self.granted else { throw QuickBooksLinkReviewError.access }
             })
+        }
+        func sharedPreparation() throws -> SharedLinkReviewPreparation {
+            try .init(context: context, client: client, isCurrent: { self.visible }, fixtureCompanyID: company,
+                actorEmail: "admin@example.invalid", validateAccess: {
+                    guard self.granted else { throw QuickBooksLinkReviewError.access }
+                })
         }
         func selected(_ kind: QuickBooksLinkKind, owner: QuickBooksLinkReviewOwner) throws -> Set<String> {
             Set(try owner.candidates().filter { $0.kind == kind }.map(\.id))
@@ -238,5 +250,141 @@ import Testing
         try owner.nextBatch()
         #expect(owner.request == nil)
         #expect(f.calls.filter { $0.0.hasSuffix("/confirm") }.count == 1)
+    }
+
+    @Test func sharedBusinessDiscoveryConfirmsOriginalDocumentsWithoutDeviceOAuth() async throws {
+        let f = try Fixture()
+        let estimate = Estimate(customer: f.customer, amount: 189)
+        estimate.quickBooksID = "E1"; f.context.insert(estimate); try f.context.save()
+        let owner = try await f.sharedPreparation().owner(store: f.store)
+        #expect(owner.workflow.sharedBillingConnectionRevision == f.connectionRevision)
+        #expect(f.calls.count == 1); #expect(f.calls.first?.0.hasPrefix("/api/qbo-link-reviews/context?companyID=") == true)
+        #expect(f.saved == nil)
+        try await owner.preview(selected: Set(try owner.candidates().map(\.id)))
+        #expect(Set(owner.request?.links.map(\.kind) ?? []) == Set(QuickBooksLinkKind.allCases))
+        try await owner.decide(confirm: true)
+        #expect(owner.record?.state == .confirmed)
+        #expect(f.invoice.quickBooksID == "D1" && estimate.quickBooksID == "E1" && f.customer.quickBooksID == "C1" && f.item.quickBooksID == "I1")
+        #expect(f.invoice.amount == 189 && estimate.amount == 189 && f.item.unitPrice == 189)
+    }
+
+    @Test func sharedDiscoveryReopensTheExistingRealmActorJournalAndRecoversLostDecision() async throws {
+        let f = try Fixture(), original = try f.owner()
+        try await original.preview(selected: f.selected(.customer, owner: original)); f.loseDecision = true
+        await #expect(throws: QuickBooksLinkReviewError.unavailable) { try await original.decide(confirm: true) }
+        let id = original.request?.operationID; original.cancel()
+        let owner = try await f.sharedPreparation().owner(store: f.store)
+        try await owner.recover()
+        #expect(owner.request?.operationID == id); #expect(owner.record?.state == .confirmed)
+        #expect(f.calls.filter { $0.0.hasSuffix("/confirm") }.count == 1)
+    }
+
+    @Test func sharedConnectionChangeRetainsExplicitCancellationAndFreshReview() async throws {
+        let f = try Fixture(), owner = try await f.sharedPreparation().owner(store: f.store)
+        try await owner.preview(selected: f.selected(.item, owner: owner))
+        f.connectionRevision = String(repeating: "c", count: 64)
+        try await owner.recover()
+        #expect(owner.connectionChanged)
+        await #expect(throws: QuickBooksLinkReviewError.changed) { try await owner.decide(confirm: true) }
+        try await owner.decide(confirm: false); try owner.nextBatch()
+        try await owner.preview(selected: f.selected(.item, owner: owner))
+        #expect(owner.request?.connectionRevision == f.connectionRevision)
+    }
+
+    @Test func discoveryRejectsAnotherCompanyMalformedEpochAndUnsupportedContract() async throws {
+        for kind in 0..<4 {
+            let f = try Fixture()
+            f.contextOverride = try JSONEncoder().encode(SharedLinkReviewConnection(companyID: kind == 0 ? UUID() : f.company,
+                realmID: "realm", environment: kind == 1 ? "other" : Config.QuickBooks.environment,
+                connectionRevision: kind == 2 ? "bad" : f.connectionRevision, protocolVersion: kind == 3 ? 2 : 1))
+            await #expect(throws: QuickBooksLinkReviewError.invalid) { _ = try await f.sharedPreparation().owner(store: f.store) }
+            #expect(f.calls.count == 1 && f.writes == 0)
+        }
+    }
+
+    @Test func revokedOrClosedBusinessCannotAcceptLateDiscoveredOwner() async throws {
+        for revoke in [true, false] {
+            let f = try Fixture(), preparation = try f.sharedPreparation()
+            f.beforeReply = { if revoke { f.granted = false } else { f.visible = false } }
+            await #expect(throws: (any Error).self) { _ = try await preparation.owner(store: f.store) }
+            #expect(f.calls.count == 1 && f.writes == 0)
+        }
+        let f = try Fixture(), preparation = try f.sharedPreparation(); f.visible = false
+        await #expect(throws: (any Error).self) { _ = try await preparation.owner(store: f.store) }
+        #expect(f.calls.isEmpty)
+    }
+
+    @Test func unavailableDiscoveryDoesNotReadOrEraseTheRetainedJournal() async throws {
+        let f = try Fixture(), old = try f.owner()
+        try await old.preview(selected: f.selected(.customer, owner: old))
+        let saved = f.saved, writes = f.writes
+        let client = QuickBooksLinkReviewClient { _, _, _ in throw URLError(.notConnectedToInternet) }
+        let preparation = try SharedLinkReviewPreparation(context: f.context, client: client, isCurrent: { true },
+            fixtureCompanyID: f.company, actorEmail: "admin@example.invalid", validateAccess: {})
+        await #expect(throws: QuickBooksLinkReviewError.unavailable) { _ = try await preparation.owner(store: f.store) }
+        #expect(f.saved == saved && f.writes == writes && f.invoice.amount == 189)
+    }
+
+    @Test func sharedOwnerRetainsLocalChangeAndNavigationChecksAfterDiscovery() async throws {
+        let f = try Fixture(), owner = try await f.sharedPreparation().owner(store: f.store)
+        try await owner.preview(selected: f.selected(.customer, owner: owner))
+        f.customer.quickBooksID = "changed"
+        await #expect(throws: QuickBooksLinkReviewError.changed) { try await owner.decide(confirm: true) }
+        f.visible = false
+        let count = f.calls.count
+        await #expect(throws: (any Error).self) { try await owner.recover() }
+        #expect(f.calls.count == count && f.saved != nil)
+    }
+
+    @Test func displayEligibilityDoesNotReenterAccessButPreviewStillRequiresIt() async throws {
+        let f = try Fixture(), owner = try await f.sharedPreparation().owner(store: f.store)
+        let available = try owner.candidates(), selected = Set(available.filter { $0.kind == .customer }.map(\.id))
+        f.granted = false
+        // A rendered snapshot is not authorization. Revocation still prevents
+        // every actual read/preview before a server request or journal write.
+        #expect(try QuickBooksLinkSelection.batch(selected, from: available).count == 1)
+        #expect(throws: (any Error).self) { _ = try owner.batch(selected) }
+        let count = f.calls.count
+        await #expect(throws: (any Error).self) { try await owner.preview(selected: selected) }
+        #expect(f.calls.count == count && f.writes == 0 && f.saved == nil)
+    }
+
+    @Test func selectionEligibilityRejectsMissingAndAmbiguousSnapshotIdentities() throws {
+        let f = try Fixture(), owner = try f.owner(), available = try owner.candidates()
+        let customer = try #require(available.first { $0.kind == .customer })
+        let selected: Set<String> = [customer.id]
+        #expect(throws: QuickBooksLinkReviewError.changed) { _ = try QuickBooksLinkSelection.batch([], from: available) }
+        #expect(throws: QuickBooksLinkReviewError.changed) { _ = try QuickBooksLinkSelection.batch(["missing"], from: available) }
+        #expect(throws: QuickBooksLinkReviewError.changed) { _ = try QuickBooksLinkSelection.batch(selected, from: available + [customer]) }
+        let alias = QuickBooksExistingLink(kind: .customer, localID: UUID(), providerID: customer.providerID, localName: "Ambiguous customer")
+        #expect(throws: QuickBooksLinkReviewError.changed) { _ = try QuickBooksLinkSelection.batch(selected, from: available + [alias]) }
+        let document = try #require(available.first { $0.kind == .invoice })
+        #expect(throws: QuickBooksLinkReviewError.changed) { _ = try QuickBooksLinkSelection.batch([document.id], from: [document]) }
+    }
+
+    @Test func selectionEligibilityCountsTheOriginalCustomerWithinTheBatchLimit() throws {
+        let customer = QuickBooksExistingLink(kind: .customer, localID: UUID(), providerID: "C1", localName: "Original customer")
+        let documents = (0..<25).map { QuickBooksExistingLink(kind: .invoice, localID: UUID(), providerID: "D\($0)", localName: "Invoice \($0)", localCustomerID: customer.localID) }
+        let available = [customer] + documents
+        let valid = try QuickBooksLinkSelection.batch(Set(documents.prefix(24).map(\.id)), from: available)
+        #expect(valid.count == 25 && valid.filter { $0 == customer }.count == 1)
+        #expect(throws: QuickBooksLinkReviewError.invalid) { _ = try QuickBooksLinkSelection.batch(Set(documents.map(\.id)), from: available) }
+    }
+
+    @Test func sharedLinkTransportIsBoundedAndCannotBecomeAGenericProxy() {
+        let company = UUID().uuidString.lowercased(), review = UUID().uuidString.lowercased()
+        let root = "/api/qbo-link-reviews", context = "/api/qbo-link-reviews/context?companyID=" + company
+        #expect(LinkReviewTransportPolicy.allows(path: context, method: "GET", bodyBytes: nil))
+        #expect(LinkReviewTransportPolicy.allows(path: root + "?companyID=\(company)&realmID=R1&environment=sandbox&operationID=\(review)", method: "GET", bodyBytes: nil))
+        for path in [root, root + "/\(review)/confirm", root + "/\(review)/cancel"] {
+            #expect(LinkReviewTransportPolicy.allows(path: path, method: "POST", bodyBytes: 200))
+            #expect(!LinkReviewTransportPolicy.allows(path: path, method: "POST", bodyBytes: 131073))
+        }
+        for path in ["https://outside.invalid" + context, context + "&companyID=" + company, context + "&realmID=R1",
+                     context + "#extra", root + "/context/", root + "/\(review)/confirm/", "/api/qbo/invoice", "/api/%71bo-link-reviews/context?companyID=" + company] {
+            #expect(!LinkReviewTransportPolicy.allows(path: path, method: "GET", bodyBytes: nil))
+        }
+        #expect(!LinkReviewTransportPolicy.allows(path: context, method: "GET", bodyBytes: 0))
+        #expect(!LinkReviewTransportPolicy.allows(path: root + "/\(review)/confirm?force=true", method: "POST", bodyBytes: 20))
     }
 }

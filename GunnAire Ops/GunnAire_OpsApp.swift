@@ -562,6 +562,10 @@ private enum GunnAireUITestFixtures {
             item.name == "UI Test Added Repair" ||
             item.name == "Invoice Workspace Added Part" ||
             item.name == "Offline Taxable Capacitor" ||
+            // Both bundle-composer and milestone fixtures create these records.
+            // Reset their isolated test identities on every fixture launch so
+            // another journey cannot inherit duplicate provider/local mappings.
+            item.quickBooksID?.hasPrefix("BC-") == true ||
             item.name.hasPrefix("Scoped Draft ") {
             context.delete(item)
         }

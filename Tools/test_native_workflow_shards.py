@@ -29,7 +29,8 @@ class NativeWorkflowShardTests(unittest.TestCase):
 
     def test_ipad_shards_execute_every_declared_existing_ui_method_once(self):
         declared = re.findall(r'^\s+(test\w+)\s*(?:\\|; do)\s*$', WORKFLOW.read_text(), re.M)
-        self.assertGreaterEqual(len(declared), 58)
+        self.assertGreaterEqual(len(declared), 59)
+        self.assertIn("testExistingQuickBooksLinksOfferOfflineRecoveryWithoutDeviceOAuth", declared)
         self.assertEqual(len(declared), len(set(declared)))
         source = (ROOT / "GunnAire OpsUITests/GunnAire_OpsUITests.swift").read_text()
         for name in declared:

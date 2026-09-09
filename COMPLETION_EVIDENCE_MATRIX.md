@@ -1,3 +1,37 @@
+Shared business-session existing-link review qualification, 2026-09-08:
+NATIVE_SHARED_LINK_REVIEW.md records candidate backend 2026.09.08.43 and the
+native imported-customer/item/invoice/estimate review using verified business
+login, without device QBO OAuth. Read-only context derives the server connection;
+administrator, tenant, realm, grant, original actor and page lifetime remain
+pinned. Existing realm/actor journals, operation identities, local links and sold
+prices remain intact through lost replies and reconnection. Confirmation retains
+the existing exact evidence/revision/expiry and one-to-one mapping safeguards;
+it does not create or update accounting entities. Strict bounded native transport
+and server parsing reject route, query, payload and response ambiguity.
+The iPad failure was reproduced: selection changed but body-time authorization
+disabled Review. Pure displayed-snapshot eligibility now leaves every actual
+preview/decision freshly authorized. Three new tests cover revoked access,
+ambiguous/missing identities and the 25-record limit including customers.
+Separate duplicate BC- milestone fixtures were isolated in test-only startup;
+production identity checks and every existing assertion remain unchanged.
+All 664 Backend and 56 Tools tests pass; both workflows pass lint. CI now names
+59 iPad UI journeys, adding offline link recovery while retaining disjoint groups
+and complete logic targets. Final Mac and iPad logic each pass 1,548 tests;
+all eight selected iPad UI journeys pass (1,556 total), with zero failures/skips
+and actual-execution verification. All 14 final screenshots are visually reviewed:
+enabled selection, original review outcomes and prices, simple Mail, and no
+account-email footer or temporary diagnostics. Unsigned universal Mac Release
+and both architecture checks pass. Existing concurrency/Metal warnings remain.
+Original-project safety boundaries cover 14 scoped paths, 256 unrelated changes,
+the unchanged empty index and 297 other byte-identical tracked source files.
+Matching-backend deployment and hosted qualification of the new head remain
+required. No main merge, deployment, live QBO/customer/payment change, signing,
+schema promotion or physical installation is part of this checkpoint. Signed
+CloudKit convergence and independent staff sharing, real approved Tap to Pay,
+remaining Google/QBO device-OAuth workflows, vendor onboarding and full
+competitor-suite, navigation/accessibility and physical-device acceptance remain
+open; the whole application is not complete.
+
 Shared business-session catalog qualification, 2026-09-08:
 NATIVE_SHARED_CATALOG_CONNECTION.md records candidate backend 2026.09.08.42
 and native catalog approval, publication, comparison and original-only recovery

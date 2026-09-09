@@ -53,7 +53,7 @@ except ModuleNotFoundError:
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.08.42"
+SERVICE_VERSION = "2026.09.08.43"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -5971,27 +5971,16 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         suffix = parsed.path.removeprefix("/api/qbo-link-reviews")
         parts = suffix[1:].split("/") if suffix.startswith("/") else []
         try:
-            if method == "GET" and not suffix:
-                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+            if method == "GET" and suffix in ("", "/context"):
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True, max_num_fields=4)
                 if any(len(value) != 1 for value in query.values()):
                     raise qbo_link_adoption.failure("invalid_query", "Choose one original review operation.", 400)
-                result = adopter.lookup(session_id, {key: value[0] for key, value in query.items()})
+                query = {key: value[0] for key, value in query.items()}
+                result = adopter.context(session_id, query) if suffix == "/context" else adopter.lookup(session_id, query)
             elif method == "GET" and len(parts) == 1 and not parsed.query:
                 result = adopter.read(session_id, parts[0])
             elif method == "POST" and not parsed.query:
-                def unique_object(pairs):
-                    result = {}
-                    for key, value in pairs:
-                        if key in result:
-                            raise ValueError()
-                        result[key] = value
-                    return result
-
-                def invalid_constant(value):
-                    raise ValueError()
-
-                payload = json.loads(self.read_limited_body(1024 * 1024).decode("utf-8"),
-                                     object_pairs_hook=unique_object, parse_constant=invalid_constant)
+                payload = qbo_change_capture.strict_json(self.read_limited_body(1024 * 1024).decode("utf-8"))
                 if not suffix:
                     result = adopter.preview(session_id, payload)
                 elif len(parts) == 2 and parts[1] in ("confirm", "cancel") and isinstance(payload, dict) and set(payload) == {"revision"}:

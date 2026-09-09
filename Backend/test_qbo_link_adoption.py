@@ -65,6 +65,50 @@ class LinkAdoptionTests(BillingFixture, unittest.TestCase):
             return tuple(connection.execute("SELECT COUNT(*) FROM " + table).fetchone()[0] for table in
                          ("customer_entity_mappings", "catalog_entity_mappings", "billing_entity_mappings", "billing_job_documents"))
 
+    def test_business_context_is_minimal_read_only_and_uses_server_connection(self):
+        result = self.adopter.context(self.admin, {"companyID": self.company})
+        self.assertEqual(set(result), {"companyID", "realmID", "environment", "connectionRevision", "protocolVersion"})
+        self.assertEqual((result["companyID"], result["realmID"], result["environment"], result["protocolVersion"]),
+                         (self.company, "realm", "sandbox", 1))
+        self.assertEqual(result["connectionRevision"], self.adopter.lookup(self.admin, self.query())["connectionRevision"])
+        self.assertFalse(self.reads); self.assertFalse(self.writes)
+        self.assertEqual(self.counts(), (0, 0, 0, 0))
+        with backend.db() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM qbo_link_reviews").fetchone()[0], 0)
+
+    def test_business_context_requires_current_admin_company_and_session(self):
+        for role in ("Accounting", "Dispatcher", "Field Technician", "Standard"):
+            self.expect("administrator_required", lambda: self.adopter.context(self.sessions[role], {"companyID": self.company}))
+        self.expect("company_changed", lambda: self.adopter.context(self.admin, {"companyID": str(uuid.uuid4())}))
+        with backend.db() as connection:
+            connection.execute("UPDATE auth_sessions SET revoked_at=? WHERE id=?", (backend.utc_now(), self.admin))
+        self.expect("access_denied", lambda: self.adopter.context(self.admin, {"companyID": self.company}))
+        self.assertFalse(self.reads); self.assertFalse(self.writes)
+
+    def test_business_context_rejects_supplied_provider_scope_and_missing_connection(self):
+        for value in ({}, [], {"companyID": self.company, "realmID": "other"},
+                      {"companyID": self.company, "environment": "production"},
+                      {"companyID": self.company, "operationID": str(uuid.uuid4())}):
+            self.expect("invalid_query", lambda: self.adopter.context(self.admin, value))
+        with backend.db() as connection:
+            connection.execute("DELETE FROM qbo_connections")
+        self.expect("provider_changed", lambda: self.adopter.context(self.admin, {"companyID": self.company}))
+        self.assertFalse(self.reads); self.assertFalse(self.writes)
+
+    def test_discovered_epoch_pins_preview_but_keeps_original_recovery_after_reconnect(self):
+        original = self.adopter.context(self.admin, {"companyID": self.company})
+        payload = self.review_request(connectionRevision=original["connectionRevision"])
+        review = self.preview(payload)
+        with backend.db() as connection:
+            connection.execute("UPDATE qbo_connections SET authorized_at='new-shared-link-grant'")
+        current = self.adopter.context(self.admin, {"companyID": self.company})
+        self.assertNotEqual(current["connectionRevision"], original["connectionRevision"])
+        self.expect("grant_changed", lambda: self.preview(payload))
+        self.assertEqual(self.adopter.lookup(self.admin, self.query(operationID=payload["operationID"]))["review"], review)
+        cancelled = self.adopter.decide(self.admin, review["id"], review["revision"], confirm=False)
+        self.assertEqual(cancelled["state"], "cancelled")
+        self.assertEqual(self.counts(), (0, 0, 0, 0)); self.assertFalse(self.writes)
+
     def test_preview_is_exact_read_only_and_retains_private_evidence_encrypted(self):
         review = self.preview()
         self.assertEqual(self.counts(), (0, 0, 0, 0))
@@ -377,3 +421,16 @@ class LinkAdoptionTests(BillingFixture, unittest.TestCase):
             self.assertEqual(request("/api/qbo-link-reviews?" + urllib.parse.urlencode({**self.query(), "url": "https://outside.invalid"}))[0], 400)
             review = self.preview()
             self.assertEqual(request("/api/qbo-link-reviews/" + review["id"] + "/confirm", {"revision": review["revision"], "force": True})[0], 400)
+
+    def test_http_business_context_is_strict_authenticated_and_read_only(self):
+        path = "/api/qbo-link-reviews/context?companyID=" + self.company
+        with self.http(real_adapter=True) as request:
+            self.assertEqual(request(path), (200, self.adopter.context(self.admin, {"companyID": self.company})))
+            self.assertEqual(request(path, role="Standard")[0], 403)
+            for suffix in ("&realmID=realm", "&companyID=" + self.company, "&unknown=1", "&x=1&y=2&z=3&w=4"):
+                self.assertEqual(request(path + suffix)[0], 400)
+            self.assertEqual(request("/api/qbo-link-reviews/context")[0], 400)
+            self.assertEqual(request("/api/qbo-link-reviews/context/?companyID=" + self.company)[0], 404)
+            self.assertEqual(request("/api/qbo-link-reviews/context", {})[0], 400)
+            self.assertEqual(request("/api/qbo-link-reviews", raw=b'[' * 2000 + b'0' + b']' * 2000)[0], 400)
+        self.assertFalse(self.reads); self.assertFalse(self.writes)
