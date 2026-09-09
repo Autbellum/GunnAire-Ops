@@ -1,3 +1,22 @@
+Schedule deletion correction and full-model semantics candidate, 2026-09-09:
+SCHEDULE_PREVIEW_DELETION.md records the exact hosted SwiftData invalidation
+stack, immutable preview/confirmation values and original-identity revalidation,
+plus a stronger isolated UI regression. STAFF_MODEL_SEMANTICS.md records explicit
+lossless codecs for nine models, full attribute/relationship disposition checks,
+real separate-SQLite reconstruction and excluded charge-capable payment handles.
+These codecs are not wired into core-field-v1 or used to activate a partial staff
+workspace. Final Mac verifies 1,721 actual cases and iPad verifies 1,729, including
+eight exact UI journeys; all 71 Tools tests, workflow lint/diff checks, unsigned
+universal Mac and arm64 iOS Release builds/architectures pass. Four final-source
+screenshots are inspected without account-email footers. Preflight freezes 14
+paths and protects 342 unrelated changes, 361 other matching sources and the
+original branch/HEAD/index. Copy-back/publication are recorded separately.
+Published predecessor 3a6d94a has terminal Backend/Mac passes, iPad group 1 failures
+(schedule deletion and estimate input) and an iPad group 2 timeout. Full 32-model
+semantics, role projection, staff operational store/commands, signed independent
+CloudKit convergence, provider/vendor/payment/Handoff acceptance and full-suite
+usability/accessibility qualification remain required. The goal stays active.
+
 Staff receiving and import-boundary candidate, 2026-09-09:
 STAFF_RECEIPT_IMPORT.md records automatic original-invitation receipt at the staff
 setup/company gate, exact typed core graph and role validation before replacing

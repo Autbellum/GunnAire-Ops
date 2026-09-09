@@ -107,6 +107,11 @@ enum GunnAireCloudKit {
 
     static func modelConfiguration(for schema: Schema) -> ModelConfiguration {
         if usesTestDatabase {
+            #if DEBUG
+            if let name = isolatedUITestStoreName(arguments: ProcessInfo.processInfo.arguments) {
+                return ModelConfiguration(name, schema: schema, isStoredInMemoryOnly: false, cloudKitDatabase: .none)
+            }
+            #endif
             return ModelConfiguration(schema: schema, isStoredInMemoryOnly: false, cloudKitDatabase: .none)
         }
 
@@ -121,6 +126,18 @@ enum GunnAireCloudKit {
 
         return productionModelConfiguration(for: schema)
     }
+
+    #if DEBUG
+    /// A test may retain one named local store across its own relaunches without
+    /// inheriting records created by another test. No path or account is accepted.
+    static func isolatedUITestStoreName(arguments: [String]) -> String? {
+        guard arguments.contains("-disableCloudKitForTesting"),
+              arguments.filter({ $0 == "-uiTestIsolatedStore" }).count == 1,
+              let index = arguments.firstIndex(of: "-uiTestIsolatedStore"), index + 1 < arguments.count,
+              let id = UUID(uuidString: arguments[index + 1]), id.uuidString == arguments[index + 1] else { return nil }
+        return "GunnAireUITest-" + id.uuidString
+    }
+    #endif
 }
 
 enum CloudKitMirroringOperation: String, CaseIterable, Codable, Hashable, Sendable {

@@ -1194,13 +1194,19 @@ private enum GunnAireUITestFixtures {
             context.insert(equipmentDecisionHistoryCall)
         }
         if isScheduleAuthorizationFixture {
+            // This regression needs its removable job in the three-row preview
+            // regardless of runner timezone or earlier tests' persisted records.
+            // The branch is inside DEBUG + the explicit test-database fixture.
+            let deletionPreviewDate = arguments.contains("-uiTestUpcomingDeletionTarget")
+                ? Calendar.current.date(bySettingHour: 23, minute: 59, second: 59, of: fixtureNow) ?? scheduledDate
+                : scheduledDate.addingTimeInterval(2 * 60 * 60)
             context.insert(ServiceCall(
                 id: unassignedScheduleServiceCallID,
                 googleEventManagedByApp: true,
                 eventTitle: "Unassigned confidential dispatch job",
                 siteAddress: "299 Dispatch Only Drive",
                 type: .estimate,
-                scheduledDate: scheduledDate.addingTimeInterval(2 * 60 * 60),
+                scheduledDate: deletionPreviewDate,
                 customer: customer,
                 status: .scheduled
             ))

@@ -2986,10 +2986,15 @@ final class GunnAire_OpsUITests: XCTestCase {
         app.launchArguments = [
             "-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-uiTestAuthenticatedAdmin",
             "-uiTestSeedCollectibleJob", "-uiTestSeedScheduleAuthorization",
+            "-uiTestIsolatedStore", UUID().uuidString, "-uiTestUpcomingDeletionTarget",
             "-GunnAirePendingAppRoute", "scheduleAndJobs"
         ]
         app.launch()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 8))
+        let preview = app.buttons["SchedulePreview-\(unassignedScheduleServiceCallID)"]
+        XCTAssertTrue(app.staticTexts["Upcoming Snapshot"].waitForExistence(timeout: 8), "Wait for schedule content, not just the navigation bar.")
+        if !preview.exists { retainNavigationFailure(app, name: "Missing original schedule preview") }
+        XCTAssertTrue(preview.waitForExistence(timeout: 3), "The job must also be represented in Upcoming Snapshot before deletion.")
         let unassigned = app.buttons["DeleteSchedule-\(unassignedScheduleServiceCallID)"]
         for _ in 0..<10 where !unassigned.isHittable { app.swipeUp() }
         XCTAssertTrue(unassigned.waitForExistence(timeout: 3))
@@ -3006,6 +3011,8 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(confirmation.waitForExistence(timeout: 3))
         confirmation.buttons["Delete Event"].tap()
         XCTAssertTrue(unassigned.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(app.state, .runningForeground, "Deleting a schedule entry must not invalidate a retained preview and terminate the app.")
+        XCTAssertTrue(preview.waitForNonExistence(timeout: 3))
 
         let billed = app.buttons["DeleteSchedule-\(screenshotServiceCallID)"]
         for _ in 0..<10 where !billed.isHittable { app.swipeDown() }

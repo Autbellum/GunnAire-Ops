@@ -56,7 +56,7 @@ struct ScheduleView: View {
     @State private var navigationPath = NavigationPath()
     @State private var isSyncingGoogleCalendar = false
     @State private var syncMessage: String?
-    @State private var deleteConfirmationCall: ServiceCall?
+    @State private var deleteConfirmationCall: ScheduleDeletionConfirmation?
     @State private var jobSearchText = ""
     @State private var showingNewRequestSheet = false
     @State private var showingAvailabilityBlocks = false
@@ -216,8 +216,9 @@ struct ScheduleView: View {
 
     private var callsForSignedInUser: [ServiceCall] {
         let email = AppIdentity.currentEmail
-        let visibleIDs = AppAccess.visibleServiceCallIDs(email: email, users: users, serviceCalls: serviceCalls, technicians: technicians)
-        return serviceCalls.filter { visibleIDs.contains($0.id) }
+        let liveCalls = serviceCalls.filter { ScheduleCallIdentity.isLive($0, context: modelContext) }
+        let visibleIDs = AppAccess.visibleServiceCallIDs(email: email, users: users, serviceCalls: liveCalls, technicians: technicians)
+        return liveCalls.filter { visibleIDs.contains($0.id) }
     }
 
     private var nextFieldRouteCall: ServiceCall? {
@@ -559,16 +560,20 @@ struct ScheduleView: View {
                     ),
                     titleVisibility: .visible,
                     presenting: deleteConfirmationCall
-                ) { call in
+                ) { confirmation in
                     Button("Delete Event", role: .destructive) {
-                        deleteCall(call)
                         deleteConfirmationCall = nil
+                        guard let call = confirmation.identity.resolve(in: callsForSignedInUser, context: modelContext) else {
+                            syncMessage = "This appointment changed or is no longer available. Review the current schedule."
+                            return
+                        }
+                        deleteCall(call)
                     }
                     Button("Cancel", role: .cancel) {
                         deleteConfirmationCall = nil
                     }
-                } message: { call in
-                    Text("Delete \(call.eventTitle ?? call.type.displayName)? App-managed Google events are checked first. Jobs with work or billing history must be cancelled instead.")
+                } message: { confirmation in
+                    Text("Delete \(confirmation.title)? App-managed Google events are checked first. Jobs with work or billing history must be cancelled instead.")
                 }
             }
         }
@@ -904,7 +909,15 @@ struct ScheduleView: View {
     }
 
     private var snapshotSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        // Materialize every preview value before constructing lazy row closures.
+        // Old closures may be rendered after a successful SwiftData deletion.
+        let nextID = nextFieldRouteCall?.id
+        let previews = snapshotCalls.compactMap { call in
+            ScheduleCallPreview(call: call, context: modelContext,
+                isNextStop: call.id == nextID && hasNavigableAddress(for: call),
+                title: displayTitle, subtitle: displaySubtitle)
+        }
+        return VStack(alignment: .leading, spacing: 12) {
             HStack {
                 sectionTitle("Upcoming Snapshot")
                 Spacer()
@@ -915,23 +928,24 @@ struct ScheduleView: View {
                 }
             }
 
-            if snapshotCalls.isEmpty {
+            if previews.isEmpty {
                 Text("No upcoming jobs scheduled.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(snapshotCalls) { job in
+                ForEach(previews) { job in
                     HStack(spacing: 10) {
                         Button {
-                            selectedDate = Calendar.current.startOfDay(for: job.scheduledDate)
-                            navigationPath.append(job)
+                            guard let call = job.identity.resolve(in: callsForSignedInUser, context: modelContext) else { return }
+                            selectedDate = Calendar.current.startOfDay(for: call.scheduledDate)
+                            navigationPath.append(call)
                         } label: {
                             HStack(spacing: 12) {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(displayTitle(for: job))
+                                    Text(job.title)
                                         .font(.subheadline.weight(.semibold))
                                         .foregroundStyle(.primary)
-                                    Text(displaySubtitle(for: job))
+                                    Text(job.subtitle)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
@@ -943,10 +957,12 @@ struct ScheduleView: View {
                         }
                         .buttonStyle(.plain)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("SchedulePreview-\(job.id.uuidString)")
 
-                        if job.id == nextFieldRouteCall?.id, hasNavigableAddress(for: job) {
+                        if job.isNextStop {
                             Button {
-                                openMaps(for: job)
+                                guard let call = job.identity.resolve(in: callsForSignedInUser, context: modelContext) else { return }
+                                openMaps(for: call)
                             } label: {
                                 ViewThatFits(in: .horizontal) {
                                     Label("Next Stop", systemImage: "car.fill")
@@ -961,7 +977,7 @@ struct ScheduleView: View {
                             .accessibilityIdentifier("NavigateNextStop")
                         }
                     }
-                    if job.id != snapshotCalls.last?.id {
+                    if job.id != previews.last?.id {
                         Divider()
                     }
                 }
@@ -1466,7 +1482,7 @@ struct ScheduleView: View {
                     .accessibilityIdentifier("EditSchedule-\(call.id.uuidString)")
 
                     Button(role: .destructive) {
-                        deleteConfirmationCall = call
+                        deleteConfirmationCall = ScheduleDeletionConfirmation(call: call, context: modelContext)
                     } label: {
                         Image(systemName: "trash")
                             .frame(width: 34, height: 34)
