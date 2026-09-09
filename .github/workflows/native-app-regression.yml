@@ -55,11 +55,20 @@ jobs:
             tee "$RUNNER_TEMP/native-results/project.json" |
             jq -e '.project.schemes | index("GunnAire Ops") != null'
 
+      - name: Prepare the pinned iPad simulator
+        if: matrix.platform == 'iPad'
+        timeout-minutes: 5
+        run: bash Tools/prepare_ci_ipad.sh
+
       - name: Run app logic and selected iPad interface regressions
         run: |
           selectors=(-only-testing:"GunnAire OpsTests")
           if [[ "$CI_PLATFORM" == "iPad" ]]; then
-            destination="platform=iOS Simulator,name=iPad Pro 13-inch (M5),OS=26.2"
+            if [[ ! "${CI_IPAD_UDID:-}" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]]; then
+              echo "::error::The pinned iPad simulator has not been prepared."
+              exit 64
+            fi
+            destination="platform=iOS Simulator,id=$CI_IPAD_UDID"
             if [[ "$CI_SHARD" != "0" && "$CI_SHARD" != "1" ]]; then
               exit 64
             fi
