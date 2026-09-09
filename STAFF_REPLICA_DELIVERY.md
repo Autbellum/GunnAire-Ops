@@ -1,5 +1,10 @@
 # Staff CloudKit data delivery — September 9, 2026
 
+The data-authority checkpoint below precedes the new
+[encrypted CloudKit transport](STAFF_CLOUDKIT_TRANSPORT.md). That later stage adds
+upload/download and durable encrypted staging, but not source scheduling, a staff
+operational store, full business schemas or field-edit reconciliation.
+
 ## Current checkpoint and remaining full-suite requirement
 
 Backend `2026.09.09.48` adds an encrypted operational source ledger and immutable,

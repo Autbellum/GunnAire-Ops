@@ -13,7 +13,7 @@ import CloudKit
         .init(invitation: createOrRecoverInvitation, accept: acceptOrRecoverInvitation, cleanup: removeOrRecoverShare)
     }
 
-    private static func container() throws -> CKContainer {
+    static func container() throws -> CKContainer {
         guard !GunnAireCloudKit.usesTestDatabase else { throw CloudKitStaffSharingError.unavailable }
         return CKContainer(identifier: GunnAireCloudKit.containerIdentifier)
     }
@@ -46,7 +46,7 @@ import CloudKit
         return share.url
     }
 
-    private static func readOwner(database: CKDatabase, plan: CloudKitStaffSharePlan, account: CompanyCloudKitAccount,
+    static func readOwner(database: CKDatabase, plan: CloudKitStaffSharePlan, account: CompanyCloudKitAccount,
                                   authorize: Authorize) async throws -> (CKRecord?, CKShare?) {
         let zone = CKRecordZone.ID(zoneName: plan.zoneName, ownerName: CKCurrentUserDefaultName)
         let rootID = CKRecord.ID(recordName: plan.rootRecordName, zoneID: zone)
@@ -122,7 +122,7 @@ import CloudKit
         return url
     }
 
-    private static func metadata(container: CKContainer, url: URL, authorize: Authorize) async throws -> CKShare.Metadata {
+    static func metadata(container: CKContainer, url: URL, authorize: Authorize) async throws -> CKShare.Metadata {
         guard CloudKitStaffSetupPolicy.invitationURL(url) else { throw CloudKitStaffSharingError.invalid }
         try await authorize()
         let values = try await container.shareMetadatas(for: [url])

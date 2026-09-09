@@ -11,6 +11,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import secrets
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.fernet import InvalidToken
 
 try:
@@ -46,6 +48,9 @@ CREATE TABLE IF NOT EXISTS staff_replica_projections (
  created_at TEXT NOT NULL, ciphertext TEXT NOT NULL, authorization_sequence INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS staff_replica_projection_share ON staff_replica_projections(share_id,source_sequence);
+CREATE TABLE IF NOT EXISTS staff_replica_transport_keys (
+ id TEXT PRIMARY KEY, ciphertext TEXT NOT NULL
+);
 """
 
 
@@ -266,6 +271,12 @@ class StaffReplica:
             connection.execute("INSERT INTO staff_replica_projections VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                                (operation, share_id, actor["email"], sharing.digest(payload), sequence, hashlib.sha256(raw).hexdigest(), len(raw), len(records),
                                 self.shares.now().isoformat(), self.encode(value), authorization_sequence))
+            aad = self.transport_aad(scope, member, operation, sequence, authorization_sequence, hashlib.sha256(raw).hexdigest())
+            key = {"aad": aad, "key": base64.b64encode(AESGCM.generate_key(bit_length=256)).decode(),
+                   "nonce": base64.b64encode(secrets.token_bytes(12)).decode()}
+            # The key and immutable projection are one transaction and backup
+            # unit. Reads never generate a replacement key for an older asset.
+            connection.execute("INSERT INTO staff_replica_transport_keys VALUES (?,?)", (operation, self.encode(key)))
             self.shares.audit(actor["email"], "prepare-projection", "staff-replica", operation, connection=connection)
             return self.receipt(connection.execute("SELECT * FROM staff_replica_projections WHERE id=?", (operation,)).fetchone(), member, sequence, authorization_sequence)
 
@@ -302,3 +313,53 @@ class StaffReplica:
                 receipt["payloadBase64"] = base64.b64encode(raw).decode()
             self.shares.audit(actor["email"], "read-projection-payload" if content else "read-projection-authority", "staff-replica", operation_id, connection=connection)
             return receipt
+
+    @staticmethod
+    def transport_aad(scope, member, operation, sequence, authorization_sequence, payload_hash):
+        return "\n".join(("gunnaire-staff-cloud-seal-v1", *scope, member["id"], member["member_revision"],
+                          member["projection_policy"], operation, str(sequence), str(authorization_sequence), payload_hash))
+
+    def read_cloud_transport(self, session_id, share_id, operation_id, payload, *, content=False):
+        """CloudKit carries only sealed bytes; current authority releases the key.
+
+        Projection creation retained its original key/nonce in the same
+        transaction. Reads never initialize packaging or regenerate lost keys.
+        Staff cannot obtain a business-data HTTP response.
+        """
+        exact(payload, "companyID environment")
+        sharing.identifier(operation_id)
+        with self.shares.database() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            actor, scope, member = self.authority(connection, session_id, share_id, payload, owner=content)
+            row = connection.execute("SELECT * FROM staff_replica_projections WHERE id=? AND share_id=?", (operation_id, share_id)).fetchone()
+            if row is None:
+                raise sharing.fail("not_found", "The original staff snapshot is not available.", 404)
+            receipt = self.receipt(row, member, self.sequence(connection, scope), self.authorization_sequence(connection, scope))
+            if not receipt["authorizationCurrent"]:
+                raise sharing.fail("source_changed", "Assignments or data scope changed. The original snapshot key was not released.")
+            # AAD is versioned, canonical, and binds the original data identity.
+            aad = self.transport_aad(scope, member, operation_id, row["source_sequence"], row["authorization_sequence"], row["payload_hash"])
+            stored = connection.execute("SELECT * FROM staff_replica_transport_keys WHERE id=?", (operation_id,)).fetchone()
+            if stored is None:
+                raise sharing.fail("transport_unavailable", "The original snapshot has no recoverable CloudKit key. Restore its backup or prepare a new reviewed snapshot.", 409)
+            try:
+                raw = self.shares.decrypt(row["ciphertext"]).encode()
+                if len(raw) != row["payload_size"] or hashlib.sha256(raw).hexdigest() != row["payload_hash"]:
+                    raise ValueError()
+                value = json.loads(self.shares.decrypt(stored["ciphertext"]))
+                if not isinstance(value, dict) or set(value) != {"aad", "key", "nonce"} or value["aad"] != aad:
+                    raise ValueError()
+                key, nonce = (base64.b64decode(value[name], validate=True) for name in ("key", "nonce"))
+                if len(key) != 32 or len(nonce) != 12:
+                    raise ValueError()
+                # Never reuse this key/nonce for different plaintext. Its exact
+                # immutable payload hash is verified above and bound in AAD.
+                sealed = nonce + AESGCM(key).encrypt(nonce, raw, aad.encode())
+            except (InvalidToken, ValueError, TypeError, KeyError, RuntimeError):
+                raise sharing.fail("storage_unavailable", "Original CloudKit packaging needs recovery review. Its key was retained, not replaced.", 503) from None
+            self.shares.audit(actor["email"], "read-cloud-sealed-payload" if content else "read-cloud-snapshot-key",
+                              "staff-replica", operation_id, connection=connection)
+            result = {**receipt, "sealVersion": 1, "keyBase64": base64.b64encode(key).decode()}
+            if content:
+                result["sealedBase64"] = base64.b64encode(sealed).decode()
+            return result

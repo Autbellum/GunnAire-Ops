@@ -1,3 +1,19 @@
+Encrypted staff CloudKit transport candidate, 2026-09-09:
+STAFF_CLOUDKIT_TRANSPORT.md records backend 2026.09.09.49, original AES-GCM
+packaging/key authority, native private-share upload/download, exact operation
+recovery and encrypted monotonic staging. Apple permissions and current business
+assignment authority are independent checks. Keys commit with their snapshots;
+missing keys cannot be regenerated on read. Mac passes 1,650 logic cases and
+iPad passes 1,654 logic/UI cases, including exact Python-to-Swift payload bytes.
+Both unsigned Release builds and architecture checks pass. The expanded final
+backend suite passes 852 cases after the atomic key-recovery refinement; all
+69 Tools cases and both workflow lint checks pass. Three iPad screenshots were
+visually inspected with no account-email footer.
+Staff store activation,
+source change capture, complete domain coverage, field-edit reconciliation and
+signed independent-account acceptance are not complete. Prior published 4a865d9
+has now passed all hosted Backend/Mac/iPad jobs; no merge or deployment occurred.
+
 Staff operational source and projection authority candidate, 2026-09-09:
 STAFF_REPLICA_DELIVERY.md records backend 2026.09.09.48, an encrypted versioned
 source ledger, exact operation/per-record revision recovery, explicit retained

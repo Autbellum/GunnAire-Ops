@@ -222,18 +222,19 @@ struct SharedTimeWorkerSave: Codable {
 struct SharedTimeLocalStore {
     let read: (String) throws -> Data?
     let write: (String, Data) throws -> Void
-    static func encrypted(directory: URL, key: @escaping (Bool) throws -> Data) -> Self {
+    static func encrypted(directory: URL, maximumBytes: Int = 1024 * 1024, key: @escaping (Bool) throws -> Data) -> Self {
         func file(_ scope: String) -> URL { directory.appendingPathComponent(SharedTimeError.digest(Data(scope.utf8)) + ".sealed") }
         return .init(read: { scope in
             do {
                 let path = file(scope)
                 guard FileManager.default.fileExists(atPath: path.path) else { return nil }
-                guard (try path.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max) <= 1024 * 1024 else { throw SharedTimeError.storage }
+                guard (1024...64 * 1024 * 1024).contains(maximumBytes),
+                      (try path.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max) <= maximumBytes else { throw SharedTimeError.storage }
                 return try AES.GCM.open(AES.GCM.SealedBox(combined: Data(contentsOf: path)), using: SymmetricKey(data: key(false)), authenticating: Data(scope.utf8))
             } catch { throw SharedTimeError.storage }
         }, write: { scope, value in
             do {
-                guard value.count <= 1024 * 1024 - 64 else { throw SharedTimeError.storage }
+                guard (1024...64 * 1024 * 1024).contains(maximumBytes), value.count <= maximumBytes - 64 else { throw SharedTimeError.storage }
                 let path = file(scope)
                 let hasJournals: Bool
                 if FileManager.default.fileExists(atPath: directory.path) {

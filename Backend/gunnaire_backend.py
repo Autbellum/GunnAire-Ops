@@ -62,7 +62,7 @@ except ModuleNotFoundError:
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.09.48"
+SERVICE_VERSION = "2026.09.09.49"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -4275,6 +4275,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 payload = {key: value[0] for key, value in query.items()}
                 if parts is None:
                     result = service.source_page(self._application_session_id, payload)
+                elif len(parts) == 4 and parts[3] in ("cloud-payload", "cloud-key"):
+                    result = service.read_cloud_transport(self._application_session_id, parts[0], parts[2], payload,
+                                                          content=parts[3] == "cloud-payload")
                 elif len(parts) == 3 or (len(parts) == 4 and parts[3] == "payload"):
                     result = service.read_projection(self._application_session_id, parts[0], parts[2], payload, content=len(parts) == 4)
                 else:

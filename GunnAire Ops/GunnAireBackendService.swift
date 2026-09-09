@@ -943,6 +943,41 @@ enum GunnAireBackendService {
         }
     }
 
+    /// Staff may read only projection metadata without mounting the owner's
+    /// private store. Payload bytes still require that verified owner store.
+    static func staffReplicaDeliveryRequest(path: String) async throws -> Data {
+        guard StaffReplicaDeliveryPolicy.allows(path: path), Config.Backend.usesBusinessIdentity,
+              let stamp = CloudKitStaffSetupStamp.current else { throw StaffReplicaDeliveryError.access }
+        let payload = URLComponents(string: path)?.path.hasSuffix("/cloud-payload") == true
+        let candidates = [AppleAuthManager.shared.sessionToken, GoogleAuthManager.shared.applicationSessionToken].compactMap { $0 }
+        guard let token = candidates.first(where: { !$0.isEmpty && CompanyWorkspaceSession.digest($0) == stamp.session.tokenFingerprint }) else {
+            throw StaffReplicaDeliveryError.access
+        }
+        let access = CompanyWorkspaceAccessController.shared, generation = access.generation
+        func check() throws {
+            try Task.checkCancellation()
+            guard CloudKitStaffSetupStamp.current == stamp, Date() < stamp.session.expiresAt,
+                  !payload || (access.generation == generation && access.authorizedContainer != nil && access.verifiedRole == .admin) else {
+                throw StaffReplicaDeliveryError.access
+            }
+        }
+        try check()
+        var request = try baseRequest(path: path, method: "GET", body: nil)
+        request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
+        do {
+            let maximum = payload ? ((StaffReplicaManifest.maximumPayloadBytes + 30) / 3) * 4 + 8192 : 8192
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: maximum)
+            try check(); return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let code) = error {
+                throw GunnAireBackendError.server(statusCode: code, message: "The original staff snapshot was not confirmed.")
+            }
+            throw StaffReplicaDeliveryPolicy.safe(error)
+        }
+    }
+
     static func sharedTimeRequest(path: String, method: String, body: Data?) async throws -> Data {
         guard SharedTimeTransportPolicy.allows(path: path, method: method, bodyBytes: body?.count) else { throw SharedTimeError.invalid }
         guard let identity = CompanyWorkspaceSession.current else { throw SharedTimeError.access }
