@@ -1,3 +1,32 @@
+Shared time publication groundwork, 2026-09-08:
+SHARED_TIME_PUBLICATION.md records candidate backend 2026.09.08.44, additive
+encrypted company-scoped worker mappings and the office-reviewed TimeActivity
+journal. Admin alone changes Employee/Vendor identity; Admin/Accounting review
+paid time with frozen clock values, original job/customer/service-item mapping,
+source review evidence and explicit server approval. Durable single-send claims,
+original-only read recovery, exact legacy adoption, role/grant/reference rechecks,
+strict fixed-origin transport and offline unsent cancellation are implemented.
+Unpaid breaks remain in operational audit; this is not payroll execution.
+All 102 focused tests pass, as do all 766 backend and 56 Tools tests. Both unchanged
+workflows pass actionlint. Predecessor cbe1a74 has now passed all hosted backend,
+Mac and both iPad jobs; new published source still requires its own CI. A separate
+canonical-dependency environment with OS
+time-zone lookup disabled also passes all 766 tests using tzdata 2026.3. Synthetic
+backup/restore retains the encrypted intent, worker mapping and uncertain result,
+then recovers it with exactly one total create. Full logs and source-freeze
+evidence are in Shared Time.wAcPHq. Original preflight covers 12 scoped files,
+273 unrelated changes, the unchanged index and 307 other identical source files.
+Final copy-back verifies all 12 scoped files match, preserving those unrelated
+changes and the original index. No native source, signing, CloudKit schema,
+workflow permission, live accounting/customer/payment data or deployment changed.
+Native Time Clock still uses device QBO OAuth; the shared native mapping/review,
+encrypted device journal and cutover are required next. Unsupported project/payroll
+configuration must not be silently dropped. Large-history reconciliation currently
+fails closed at 10,000 records and needs durable indexing/provider acceptance.
+Independent-staff CloudKit sharing and signed convergence, other Google/QBO
+workflows, vendor onboarding, approved physical Tap to Pay/Handoff and full
+competitor-suite/native acceptance remain open. The whole goal is not complete.
+
 Catalog keyboard navigation qualification, 2026-09-08:
 NATIVE_CATALOG_KEYBOARD_RECOVERY.md records the two retained hosted iPad failures,
 the unchanged-source passing local reproduction, and the scoped correction.

@@ -36,6 +36,9 @@ try:
     from Backend.billing_provider import BillingQBOProvider
     from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads
     from Backend.qbo_document_provider import DocumentQBOProvider
+    from Backend import time_worker_mappings, time_publications
+    from Backend.time_worker_provider import TimeWorkerQBOProvider
+    from Backend.time_publication_provider import TimeQBOProvider
 except ModuleNotFoundError:
     import payment_attempts  # Direct launch from the Backend directory.
     import field_payment_review
@@ -50,10 +53,14 @@ except ModuleNotFoundError:
     import qbo_change_capture
     import qbo_document_uploads
     from qbo_document_provider import DocumentQBOProvider
+    import time_worker_mappings
+    import time_publications
+    from time_worker_provider import TimeWorkerQBOProvider
+    from time_publication_provider import TimeQBOProvider
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.08.43"
+SERVICE_VERSION = "2026.09.08.44"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -2511,6 +2518,8 @@ def initialize_database() -> None:
         google_mail.initialize_schema(connection)
         qbo_change_capture.initialize_schema(connection)
         qbo_document_uploads.initialize_schema(connection)
+        time_worker_mappings.initialize_schema(connection)
+        time_publications.initialize_schema(connection)
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS customer_communications (
@@ -3578,6 +3587,12 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/catalog-publications" or parsed.path.startswith("/api/catalog-publications/"):
             self.handle_catalog_publication(parsed, method="GET")
             return
+        if parsed.path == "/api/time-worker-mappings" or parsed.path.startswith("/api/time-worker-mappings/"):
+            self.handle_time_worker_mapping(parsed, method="GET")
+            return
+        if parsed.path == "/api/time-publications" or parsed.path.startswith("/api/time-publications/"):
+            self.handle_time_publication(parsed, method="GET")
+            return
         if parsed.path == "/api/customer-publications" or parsed.path.startswith("/api/customer-publications/"):
             self.handle_customer_publication(parsed, method="GET")
             return
@@ -3794,6 +3809,12 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/catalog-publications" or parsed.path.startswith("/api/catalog-publications/"):
             self.handle_catalog_publication(parsed, method="POST")
+            return
+        if parsed.path == "/api/time-worker-mappings" or parsed.path.startswith("/api/time-worker-mappings/"):
+            self.handle_time_worker_mapping(parsed, method="POST")
+            return
+        if parsed.path == "/api/time-publications" or parsed.path.startswith("/api/time-publications/"):
+            self.handle_time_publication(parsed, method="POST")
             return
         if parsed.path == "/api/customer-publications" or parsed.path.startswith("/api/customer-publications/"):
             self.handle_customer_publication(parsed, method="POST")
@@ -6244,6 +6265,74 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             self.write_json({"error": "Customer publication storage is unavailable. Keep the original attempt for review.",
                              "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
 
+    def handle_time_publication(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        publisher = time_publications.TimePublisher(
+            db, lambda context, authorize: TimeQBOProvider(context, authorize, qbo_authorized_bearer),
+            lambda context, authorize: TimeWorkerQBOProvider(context, authorize, qbo_authorized_bearer),
+            encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
+        )
+        try:
+            root = "/api/time-publications"
+            session = self._application_session_id
+            action = re.fullmatch(re.escape(root) + r"/([0-9a-f-]{36})/(confirm|recover|cancel|adopt)", parsed.path)
+            if method == "GET" and parsed.path == root:
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True, max_num_fields=2)
+                if any(len(value) != 1 for value in query.values()):
+                    raise time_publications.failure("invalid_query", "Choose one original time entry.", 400)
+                result = publisher.list_for_entry(session, {key: value[0] for key, value in query.items()})
+            elif method == "POST" and not parsed.query and (parsed.path == root or action):
+                payload = qbo_change_capture.strict_json(self.read_limited_body(32768).decode("utf-8"))
+                if parsed.path == root:
+                    result = publisher.prepare(session, payload)
+                else:
+                    identifier, name = action.groups()
+                    if name == "recover":
+                        if payload != {}:
+                            raise time_publications.failure("invalid_request", "Recover the original time without replacement values.", 400)
+                        result = publisher.recover(session, identifier)
+                    elif name == "cancel":
+                        result = publisher.cancel(session, identifier, payload)
+                    else:
+                        result = publisher.decision(session, identifier, payload, adoption=name == "adopt")
+            else:
+                raise time_publications.failure("not_found", "Time publication action not found.", 404)
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError):
+            self.write_json({"error": "Invalid time publication request", "code": "invalid_request"}, status=400)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Time publication storage is unavailable. Keep the original proposal.", "code": "storage_unavailable"}, status=503)
+
+    def handle_time_worker_mapping(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        service = time_worker_mappings.TimeWorkerMappings(
+            db, lambda context, authorize: TimeWorkerQBOProvider(context, authorize, qbo_authorized_bearer),
+            encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
+        )
+        try:
+            if method == "GET" and parsed.path in ("/api/time-worker-mappings", "/api/time-worker-mappings/candidate"):
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True, max_num_fields=4)
+                if any(len(value) != 1 for value in query.values()):
+                    raise time_worker_mappings.failure("invalid_query", "Choose one original worker mapping.", 400)
+                result = service.context(self._application_session_id, {key: value[0] for key, value in query.items()},
+                                         candidate=parsed.path.endswith("/candidate"))
+            elif method == "POST" and parsed.path == "/api/time-worker-mappings" and not parsed.query:
+                payload = qbo_change_capture.strict_json(self.read_limited_body(8192).decode("utf-8"))
+                result = service.save(self._application_session_id, payload)
+            else:
+                raise time_worker_mappings.failure("not_found", "Worker mapping action not found.", 404)
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError):
+            self.write_json({"error": "Invalid worker mapping request", "code": "invalid_request"}, status=400)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Worker mapping storage is unavailable. Keep the original review.", "code": "storage_unavailable"}, status=503)
+
     def handle_catalog_publication(self, parsed, *, method):
         if not self.require_application_session():
             return
@@ -6753,6 +6842,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         message = re.sub(r"/api/qbo/change-capture(?:\?[^\s\"]*)?", "/api/qbo/change-capture", message)
         message = re.sub(r"/api/qbo-document-uploads(?:[/?][^\s\"]*)?", "/api/qbo-document-uploads/[redacted]", message)
         message = re.sub(r"/api/field-payment-review(?:/context)?(?:\?[^\s\"]*)?", "/api/field-payment-review", message)
+        message = re.sub(r"/api/time-worker-mappings(?:[/?][^\s\"]*)?", "/api/time-worker-mappings/[redacted]", message)
+        message = re.sub(r"/api/time-publications(?:[/?][^\s\"]*)?", "/api/time-publications/[redacted]", message)
         print(f"{timestamp} {self.address_string()} {message}")
 
 
