@@ -57,7 +57,7 @@ jobs:
 
       - name: Prepare the pinned iPad simulator
         if: matrix.platform == 'iPad'
-        timeout-minutes: 5
+        timeout-minutes: 10
         run: bash Tools/prepare_ci_ipad.sh
 
       - name: Run app logic and selected iPad interface regressions
