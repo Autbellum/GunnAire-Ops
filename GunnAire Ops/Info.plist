@@ -32,6 +32,8 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>CKSharingSupported</key>
+	<true/>
 	<key>GOOGLE_CALLBACK_SCHEME</key>
 	<string>$(GOOGLE_CALLBACK_SCHEME)</string>
 	<key>GOOGLE_CLIENT_ID</key>

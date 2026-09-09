@@ -61,7 +61,7 @@ except ModuleNotFoundError:
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.09.46"
+SERVICE_VERSION = "2026.09.09.47"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -4215,16 +4215,21 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
     def handle_cloudkit_staff_share(self, parsed, *, method):
         if not self.require_application_session():
             return
-        service = cloudkit_staff_shares.StaffShares(db, record_audit_event)
+        service = cloudkit_staff_shares.StaffShares(db, record_audit_event,
+                                                   encrypt=encrypt_catalog_payload, decrypt=decrypt_catalog_payload)
         suffix = parsed.path.removeprefix("/api/workspace/staff-shares")
         parts = suffix[1:].split("/") if suffix.startswith("/") else []
         try:
-            if method == "GET" and len(parts) <= 1:
+            if method == "GET" and (len(parts) <= 1 or (len(parts) == 2 and parts[1] in ("participant", "owner-authority"))):
                 query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
                 if any(len(value) != 1 for value in query.values()):
                     raise cloudkit_staff_shares.fail("invalid_query", "Use one value for each sharing query field.", 400)
-                result = service.read(self._application_session_id, {key: value[0] for key, value in query.items()},
-                                      parts[0] if parts else None)
+                values = {key: value[0] for key, value in query.items()}
+                if len(parts) == 2 and parts[1] == "participant":
+                    result = service.lookup_participant(self._application_session_id, parts[0], values)
+                else:
+                    result = service.read(self._application_session_id, values, parts[0] if parts else None,
+                                          administrator=len(parts) == 2)
             elif method == "POST" and not parsed.query:
                 payload = json.loads(self.read_limited_body(8192).decode("utf-8"))
                 if not parts:
@@ -4240,7 +4245,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             self.write_json({"error": str(error), "code": error.code}, status=error.status)
         except (ValueError, UnicodeDecodeError, TypeError):
             self.write_json({"error": "Invalid CloudKit staff sharing request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
-        except sqlite3.Error:
+        except (sqlite3.Error, RuntimeError):
             self.write_json({"error": "Sharing storage is unavailable. Keep the original request for recovery.",
                              "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
 

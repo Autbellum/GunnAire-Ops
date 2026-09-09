@@ -1,5 +1,123 @@
 # Independent staff CloudKit sharing — September 9, 2026
 
+## Native onboarding and original-invitation recovery candidate
+
+Backend `2026.09.09.47` and the native setup controller now connect enrollment,
+administrator review, private invitation creation/recovery, participant acceptance
+and separate owner cleanup. Staff can enter from the blocked company-workspace
+screen; the owner enters through Settings > Users > Manage Staff iCloud Access.
+Settings uses its existing navigation stack, not another sheet. The gate opens
+one dismissible setup sheet. Request details show role, plain-language state and
+only applicable actions, with no raw record identifiers or account-email footer.
+
+The current app still does **not** open a staff operational store after acceptance.
+The UI says that business-data synchronization needs to be connected and verified.
+Role-filtered export/import, an independently registered staff store, durable field
+commands, owner reconciliation and signed cross-account convergence remain essential
+unfinished work. An accepted invitation is not a complete staff-sharing feature.
+
+### Identity and API boundary
+
+The actual signed-environment `CKContainer.userRecordID()` supplies the participant
+locator and its environment/container-scoped hash. Enrollment now encrypts this
+locator in the server database with the existing payload-encryption key, binding
+its ciphertext to the original request, company, environment and account hash.
+It never appears in roster responses or HTTP logs. Missing/wrong encryption,
+corrupt ciphertext or a failed audit prevents disclosure or approval; the original
+row remains available for review/revocation. Old hash-only requests cannot silently
+acquire an identity: withdraw and explicitly re-enroll. The field is an additive
+SQLite migration; the encryption key must survive backup/restore and rollout.
+
+`GET /api/workspace/staff-shares/{id}/participant` returns the exact locator only
+to a fresh active administrator after current member/approver checks; it records
+the read in the audit transaction. `GET .../{id}/owner-authority` returns the
+current plan only with a fresh administrator session, including revoked plans that
+need Apple cleanup. Native owner operations repeat this check around Apple calls;
+an expired ten-minute approval cannot silently become a share-creation or removal
+permission. Apple account ownership is independently checked on the signed device.
+These are application-session, strict-path setup exceptions, not exceptions that
+unlock the private SwiftData store or business/provider endpoints.
+
+### Native Apple operations and recovery
+
+`CloudKitStaffRemote` uses the exact server-reserved zone/root/share identifiers.
+It checks for the original zone/share, uses compare-and-swap record saving and
+atomic root/share creation, and returns an existing correctly scoped private share
+instead of creating another invitation. Only the exact looked-up private participant
+is added, read-only; unexpected third participants, writable/public access, changed
+owner/root/policy or disappeared previously invited shares require review. No
+SwiftData internal zone is shared, renamed, deleted or repurposed.
+
+Acceptance re-fetches Apple's metadata, checks the current business member and
+account, exact container/owner/root/share, private/read-only participant and state,
+then accepts only if still pending. It re-fetches accepted metadata and the shared
+root before submitting backend acceptance. Cleanup first requires a revoked
+business plan; it removes only that original `CKShare`, re-reads its absence and
+only then confirms server cleanup. It never deletes the zone or business records.
+Already downloaded copies cannot be remotely erased.
+
+The setup journal uses AES-GCM, device-only Keychain key material, atomic protected
+writes and backup exclusion, separated by backend origin/company/business actor/
+signed environment/actual iCloud account. Every server mutation is durably saved
+with one operation ID and exact bytes before sending; every Apple intent and
+acceptance URL is saved before its first possible mutation. Lost replies, save
+failures, closing the screen and relaunch expose original-only recovery. Session,
+account, role, binding or original-plan substitution stops work without deleting
+the journal. A process-wide scope lock prevents another window replacing an active
+operation. Exact bounded pagination must complete before offering new enrollment;
+malformed, duplicate, foreign or incomplete results are not an empty-success state.
+The present list ceiling is 5,000 records and journal ceiling is 64 KiB; exceeding
+them requires review, not truncation. Larger-history UX/indexing is still needed.
+
+`CKSharingSupported` plus Apple's documented SwiftUI application/scene-delegate
+bridge handle warm invitations and cold-launch connection metadata. An unopened
+original link is retained in device-only Keychain. It is untrusted routing input,
+never an approval. A second unmatched link cannot replace it without explicit
+dismissal. Metadata is fetched and verified anew before acceptance. No portal,
+signing entitlement, production schema, live invitation or deployment was changed.
+
+### Candidate qualification
+
+Evidence: `/Users/gunnaire/Downloads/GunnAire Ops Releases/CloudKit Onboarding.IDCrSX`.
+The current focused run passes 34 backend sharing tests and 30 native sharing/setup
+tests on Mac. All 800 backend and 64 Tools tests pass. Full Mac logic passes 1,621
+tests; iPad passes 1,627 actual cases (1,621 logic plus six selected UI journeys),
+with zero failures/skips and exact execution verification. Five retained screenshots
+were visually inspected, including simple Mail and offline invoice/estimate saves
+without account-email footers. Unsigned Release builds succeed for universal
+arm64/x86_64 Mac and arm64 iOS; binary architectures were independently verified.
+Existing document-concurrency and optional Metal warnings remain unsuppressed.
+
+The preceding published `c344ab0` passed Backend, Mac and iPad group 1, but its
+[native run 34317454070](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34317454070)
+failed one Time Clock recovery UI assertion in group 2. Retained accessibility
+evidence showed the original confirmation correctly required recovery, while the
+message row was below the sheet viewport (scroll position 0%, two pages). The test
+now scrolls the exact review form to the message and original recovery control;
+no production behavior or existing assertion was removed. The corrected journey
+passes separately on the same M5/iOS 26.2 simulator, with exact execution verification,
+original-result recovery after relaunch and return to the linked local time entry.
+Initial setup UI failures also remain in evidence: their toggle taps missed the
+actual switch, and a status label was a combined accessibility value. Corrected
+tests retain explicit disabled/enabled and original-operation assertions.
+
+Final frozen-source copy-back verifies all 22 scoped files match, preserving 286
+unrelated original changes, the original branch/HEAD/index and 318 other matching
+tracked sources. Fresh exact-head hosted checks remain required after publication;
+local fixture runs are not signed cross-account CloudKit acceptance. Two new native UI
+selectors retain all previous 64 journeys in CI, disjoint 33-journey iPad groups,
+complete logic targets, pinned simulator preparation, execution verification,
+read-only permissions, time limits and universal unsigned Mac Release.
+
+Apple primary references checked in Safari on September 9, 2026:
+
+- [Exact CloudKit participant lookup](https://developer.apple.com/documentation/cloudkit/ckfetchshareparticipantsoperation)
+- [SwiftUI application and scene delegates](https://developer.apple.com/documentation/swiftui/uiapplicationdelegateadaptor)
+- [Warm and cold CloudKit invitation delivery](https://developer.apple.com/documentation/uikit/uiwindowscenedelegate/windowscene(_:userdidacceptcloudkitsharewith:))
+- [Focused sheet navigation and dismissal](https://developer.apple.com/design/human-interface-guidelines/sheets)
+
+## Prior authorization-foundation checkpoint (`c344ab0`)
+
 Status: **authorization registry and native invitation-validation foundation**.
 This is not yet an end-to-end staff-sharing implementation or a release gate pass.
 Backend candidate `2026.09.09.46` adds the registry. The existing private SwiftData

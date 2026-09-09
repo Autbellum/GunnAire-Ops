@@ -1231,6 +1231,78 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testStaffCloudKitRequestRecoversAfterRelaunchWithoutOpeningAnotherWorkspace() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-uiTestAuthenticatedAdmin",
+                               "-uiTestWorkspaceProofMismatch", "-uiTestStaffCloudKitSetup", "-uiTestStaffAsParticipant", "-uiTestStaffLostReply"]
+        app.launchEnvironment["GUNNAIRE_STAFF_SETUP_FIXTURE"] = UUID().uuidString
+        app.launch()
+        func openSetup() {
+            let open = app.buttons["OpenStaffCloudKitSetup"]
+            XCTAssertTrue(open.waitForExistence(timeout: 8)); open.tap()
+            XCTAssertTrue(app.navigationBars["Staff iCloud"].waitForExistence(timeout: 5))
+        }
+        openSetup()
+        let request = app.buttons["StaffCloudKitRequestAccess"]
+        XCTAssertTrue(request.waitForExistence(timeout: 5)); XCTAssertFalse(request.isEnabled)
+        app.switches["StaffCloudKitAccountConfirmation"].coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertTrue(request.isEnabled); request.tap()
+        XCTAssertTrue(app.buttons["StaffCloudKitRecoverOriginal"].waitForExistence(timeout: 5))
+        XCTAssertFalse(request.exists)
+        app.terminate(); app.launch(); openSetup()
+        let recover = app.buttons["StaffCloudKitRecoverOriginal"]
+        XCTAssertTrue(recover.waitForExistence(timeout: 5)); recover.tap()
+        let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'StaffCloudKitRequest-'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5)); XCTAssertTrue(waitForHittable(row)); row.tap()
+        XCTAssertTrue(app.staticTexts["Status, Awaiting administrator"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["StaffCloudKitApproveOrInvite"].exists)
+        XCTAssertFalse(app.buttons["StaffCloudKitAcceptInvitation"].exists)
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "@gunnaire.com")).firstMatch.exists)
+        let screenshot = XCTAttachment(screenshot: app.screenshot()); screenshot.name = "Staff original iCloud request recovered"; screenshot.lifetime = .keepAlways; add(screenshot)
+        app.navigationBars["Staff request"].buttons.firstMatch.tap()
+        app.navigationBars["Staff iCloud"].buttons["Close"].tap()
+        XCTAssertTrue(app.staticTexts["Workspace does not match"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.navigationBars["Invoices"].exists)
+    }
+
+    @MainActor
+    func testStaffCloudKitAdministratorReviewReturnsToSettingsAndRetainsOriginalInvitation() throws {
+        let app = XCUIApplication(), identifier = UUID().uuidString.lowercased()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-appStoreScreenshotFixtures", "-uiTestStaffCloudKitSetup"]
+        app.launchEnvironment["GUNNAIRE_STAFF_SETUP_FIXTURE"] = identifier
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+        let settings = app.buttons["Settings"]
+        if !settings.waitForExistence(timeout: 3) { app.buttons["GunnAire Ops"].tap() }
+        XCTAssertTrue(settings.waitForExistence(timeout: 5)); settings.tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+        app.segmentedControls.firstMatch.buttons["Users"].tap()
+        let open = app.buttons["OpenStaffCloudKitSetup"]
+        XCTAssertTrue(open.waitForExistence(timeout: 5)); open.tap()
+        let row = app.buttons["StaffCloudKitRequest-" + identifier]
+        XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
+        let review = app.switches["StaffCloudKitReviewConfirmation"], approve = app.buttons["StaffCloudKitApproveOrInvite"]
+        XCTAssertTrue(approve.waitForExistence(timeout: 5)); XCTAssertFalse(approve.isEnabled)
+        review.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertTrue(approve.isEnabled); approve.tap()
+        XCTAssertTrue(app.staticTexts["Status, Ready for invitation"].waitForExistence(timeout: 5))
+        XCTAssertFalse(approve.isEnabled)
+        review.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertTrue(approve.isEnabled); approve.tap()
+        XCTAssertTrue(app.buttons["StaffCloudKitShareOriginalInvitation"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Status, Invitation available"].exists)
+        XCTAssertFalse(app.buttons["StaffCloudKitAcceptInvitation"].exists)
+        let screenshot = XCTAttachment(screenshot: app.screenshot()); screenshot.name = "Reviewed private staff invitation"; screenshot.lifetime = .keepAlways; add(screenshot)
+        app.navigationBars["Staff request"].buttons.firstMatch.tap()
+        app.navigationBars["Staff iCloud"].buttons["Settings"].tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+        XCTAssertTrue(open.waitForExistence(timeout: 3)); open.tap()
+        XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
+        XCTAssertTrue(app.buttons["StaffCloudKitShareOriginalInvitation"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["StaffCloudKitApproveOrInvite"].exists)
+    }
+
+    @MainActor
     func testCompanyIdentityMismatchGatesAdminBeforeOperationalNavigation() throws {
         let app = XCUIApplication()
         app.launchArguments = [
@@ -1739,14 +1811,23 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(publish.waitForExistence(timeout: 5)); publish.tap()
         let confirm = app.alerts.buttons.matching(identifier: "SharedTimeConfirmPublication").firstMatch
         XCTAssertTrue(confirm.waitForExistence(timeout: 3)); confirm.tap()
-        XCTAssertTrue(app.staticTexts["SharedTimeReviewMessage"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Original confirmation needs recovery"].waitForExistence(timeout: 5))
         XCTAssertFalse(publish.exists)
+        let review = app.collectionViews["SharedTimeReview"]
+        let message = app.staticTexts["SharedTimeReviewMessage"]
+        // The iPad sheet virtualizes rows below its visible review details.
+        for _ in 0..<4 where !message.exists || !message.isHittable { review.swipeUp() }
+        XCTAssertTrue(message.waitForExistence(timeout: 5))
+        XCTAssertTrue(message.isHittable)
         app.terminate(); app.launch()
         openSharedTimeReview(in: app, identifier: identifier)
         let recover = app.buttons["SharedTimeRecover"]
+        for _ in 0..<4 where !recover.exists || !recover.isHittable { review.swipeUp() }
         XCTAssertTrue(recover.waitForExistence(timeout: 5))
+        XCTAssertTrue(recover.isHittable)
         XCTAssertFalse(app.buttons["SharedTimePublish"].exists)
         recover.tap()
+        for _ in 0..<4 where !app.staticTexts["QuickBooks result confirmed"].exists { review.swipeDown() }
         XCTAssertTrue(app.staticTexts["QuickBooks result confirmed"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["SharedTimePublish"].exists)
         XCTAssertFalse(app.buttons["SharedTimeCancelProposal"].exists)

@@ -2,7 +2,7 @@ import Foundation
 import CloudKit
 
 enum CloudKitStaffSharingError: Error, LocalizedError, Equatable {
-    case invalid, changed, account, permission, review
+    case invalid, changed, account, permission, review, storage, unavailable, access
     var errorDescription: String? {
         switch self {
         case .invalid: "This staff invitation could not be verified. Ask the administrator to review the original request."
@@ -10,6 +10,9 @@ enum CloudKitStaffSharingError: Error, LocalizedError, Equatable {
         case .account: "This invitation is for a different iCloud account. No saved workspace was opened or replaced."
         case .permission: "This CloudKit share has unexpected access permissions. Ask the administrator to review it."
         case .review: "Staff sharing needs administrator review before this device can open it."
+        case .storage: "Saved iCloud setup could not be verified on this device. It was retained; ask the administrator to review it before reinstalling."
+        case .unavailable: "iCloud setup could not be confirmed. Reopen the original request and try recovery when connected."
+        case .access: "Sign in again with your approved business account and reopen iCloud setup."
         }
     }
 }
@@ -40,6 +43,7 @@ struct CloudKitStaffSharePlan: Codable, Equatable {
     let localCloudKitProofRequired: Bool
     let reviewRequired: Bool
     let cloudKitRevocationRequired: Bool
+    let participantIdentityAvailable: Bool?
 
     static func policy(for role: String) -> String? {
         switch AppUserRole(rawValue: role) {
@@ -92,6 +96,7 @@ struct CloudKitStaffSharePlan: Codable, Equatable {
               memberRole == prior.memberRole, memberRevision == prior.memberRevision, projectionPolicy == prior.projectionPolicy,
               zoneName == prior.zoneName, rootRecordName == prior.rootRecordName, shareRecordName == prior.shareRecordName,
               createdAt == prior.createdAt, revision >= prior.revision,
+              participantIdentityAvailable == prior.participantIdentityAvailable,
               let before = SharedTimeError.date(prior.updatedAt), let after = SharedTimeError.date(updatedAt), after >= before
         else { throw CloudKitStaffSharingError.changed }
         let order = ["requested": 0, "approved": 1, "invited": 2, "accepted": 3, "revoked": 4]

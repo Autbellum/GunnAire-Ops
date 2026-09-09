@@ -31,7 +31,7 @@ class NativeWorkflowShardTests(unittest.TestCase):
 
     def test_ipad_shards_execute_every_declared_existing_ui_method_once(self):
         declared = re.findall(r'^\s+(test\w+)\s*(?:\\|; do)\s*$', WORKFLOW.read_text(), re.M)
-        self.assertGreaterEqual(len(declared), 64)
+        self.assertGreaterEqual(len(declared), 66)
         self.assertIn("testExistingQuickBooksLinksOfferOfflineRecoveryWithoutDeviceOAuth", declared)
         self.assertIn("testUnverifiedBusinessRoleOffersRecoveryWithoutAdministratorWorkspaces", declared)
         for name in (
@@ -39,6 +39,8 @@ class NativeWorkflowShardTests(unittest.TestCase):
             "testSharedTimeWorkerReviewConfirmsReturnedWorkerAndReturnsToOriginalTime",
             "testSharedTimeLostConfirmationRecoversAfterRelaunchWithoutAnotherPublish",
             "testAdministratorCanMapTechnicianToAnExplicitQuickBooksTimeWorker",
+            "testStaffCloudKitRequestRecoversAfterRelaunchWithoutOpeningAnotherWorkspace",
+            "testStaffCloudKitAdministratorReviewReturnsToSettingsAndRetainsOriginalInvitation",
         ):
             self.assertIn(name, declared)
         self.assertEqual(len(declared), len(set(declared)))

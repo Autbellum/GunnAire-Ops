@@ -106,6 +106,12 @@ enum CompanyWorkspacePhase: Equatable {
 struct CompanyCloudKitAccount {
     let environment: String
     let accountHash: String
+    /// Available only from live CKContainer lookup; never used as a substitute
+    /// for the immutable hash or for private-store ownership verification.
+    let recordName: String?
+    init(environment: String, accountHash: String, recordName: String? = nil) {
+        self.environment = environment; self.accountHash = accountHash; self.recordName = recordName
+    }
 }
 
 /// Only reads metadata. No ModelContainer, model fetch, or mirroring is needed

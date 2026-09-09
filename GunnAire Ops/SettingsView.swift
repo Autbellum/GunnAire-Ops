@@ -47,6 +47,7 @@ struct SettingsView: View {
     @State private var showingFieldFormTemplates = false
     @State private var showingCustomerPortalLinks = false
     @State private var showingGoogleServerAccess = false
+    @State private var showingStaffCloudKitSetup = false
     @State private var cloudKitReadiness: GunnAireCloudKit.AccountReadiness = .couldNotDetermine
 
     @AppStorage("companyName") private var companyName = "GunnAire"
@@ -392,6 +393,10 @@ struct SettingsView: View {
                         integrationsSections
 
                     case .users:
+                        Section("Staff iCloud") {
+                            Button("Manage Staff iCloud Access") { showingStaffCloudKitSetup = true }
+                                .accessibilityIdentifier("OpenStaffCloudKitSetup")
+                        }
                         Section("Application Users") {
                             LabeledContent("Shared Backend") {
                                 Text(GunnAireBackendService.isConfigured ? Config.Backend.displayHost : "Not configured")
@@ -584,6 +589,7 @@ struct SettingsView: View {
                 CustomerPortalLinkManagerView()
                     .tint(Color.brandGold)
             }
+            .navigationDestination(isPresented: $showingStaffCloudKitSetup) { CloudKitStaffSetupView(embedded: true) }
             .navigationDestination(isPresented: $showingGoogleServerAccess) {
                 GoogleServerAccessView(context: modelContext)
                     .tint(Color.brandGold)

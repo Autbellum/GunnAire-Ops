@@ -13,6 +13,7 @@ import json
 import re
 import uuid
 from datetime import datetime, timezone
+from cryptography.fernet import InvalidToken
 
 try:
     from Backend.payment_attempts import AttemptError
@@ -56,6 +57,9 @@ def initialize_schema(connection):
     for statement in SCHEMA.split(";"):
         if statement.strip():
             connection.execute(statement)
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(cloudkit_staff_shares)")}
+    if "participant_identity_ciphertext" not in columns:
+        connection.execute("ALTER TABLE cloudkit_staff_shares ADD COLUMN participant_identity_ciphertext TEXT")
 
 
 def fail(code, message, status=409):
@@ -81,6 +85,14 @@ def account_hash(value):
     return value
 
 
+def record_name(value, environment, expected_hash):
+    if (not isinstance(value, str) or not 1 <= len(value.encode("utf-8")) <= 255
+            or any(ord(c) < 32 or ord(c) == 127 for c in value)
+            or hashlib.sha256(("gunnaire-cloudkit-account-v1\n" + CONTAINER + "\n" + environment + "\n" + value).encode()).hexdigest() != expected_hash):
+        raise fail("account_changed", "Verify the exact current iCloud account before requesting access.", 400)
+    return value
+
+
 def scope(payload):
     company = identifier(payload.get("companyID"))
     environment = payload.get("environment")
@@ -94,9 +106,41 @@ def user_revision(user):
 
 
 class StaffShares:
-    def __init__(self, database, audit, now=None):
+    def __init__(self, database, audit, now=None, *, encrypt=None, decrypt=None):
         self.database, self.audit = database, audit
         self.now = now or (lambda: datetime.now(timezone.utc))
+        self.encrypt, self.decrypt = encrypt, decrypt
+
+    def participant_identity(self, row):
+        if not row["participant_identity_ciphertext"]:
+            raise fail("identity_required", "Ask this team member to withdraw the old request and request access again from their iCloud account.")
+        try:
+            decoded = json.loads(self.decrypt(row["participant_identity_ciphertext"]))
+            if (not isinstance(decoded, dict) or set(decoded) != {"id", "companyID", "environment", "accountHash", "recordName"}
+                    or decoded["id"] != row["id"] or decoded["companyID"] != row["company_id"]
+                    or decoded["environment"] != row["environment"] or decoded["accountHash"] != row["participant_account_hash"]):
+                raise ValueError()
+            return record_name(decoded["recordName"], row["environment"], row["participant_account_hash"])
+        except (ValueError, TypeError, AttemptError, RuntimeError, InvalidToken):
+            raise fail("storage_unavailable", "The original iCloud invitation identity could not be verified. Keep the request for review.", 503) from None
+
+    def lookup_participant(self, session_id, share_id, payload):
+        if not isinstance(payload, dict) or set(payload) != {"companyID", "environment"}:
+            raise fail("invalid_query", "Choose the original invitation identity.", 400)
+        company, environment = scope(payload)
+        identifier(share_id)
+        with self.database() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            actor = self.actor(connection, session_id, administrator=True)
+            row = connection.execute("SELECT * FROM cloudkit_staff_shares WHERE id=?", (share_id,)).fetchone()
+            self.authorize_row(connection, actor, row, company, environment)
+            member_valid, approver_valid = self.eligibility(connection, row)
+            if row["state"] == "revoked" or not member_valid or (row["state"] != "requested" and not approver_valid):
+                raise fail("review_changed", "Review the current business authority before looking up this invitation.")
+            name = self.participant_identity(row)
+            self.audit(actor["email"], "read-identity", "cloudkit-staff-share", share_id, connection=connection)
+            return {"id": row["id"], "companyID": company, "environment": environment, "revision": row["revision"],
+                    "participantAccountHash": row["participant_account_hash"], "recordName": name}
 
     def actor(self, connection, session_id, *, administrator=False):
         actor = connection.execute(
@@ -162,6 +206,7 @@ class StaffShares:
             "memberRevision": row["member_revision"], "projectionPolicy": row["projection_policy"],
             "zoneName": row["zone_name"], "rootRecordName": row["root_record_name"], "shareRecordName": row["share_record_name"],
             "state": row["state"], "revision": row["revision"], "createdAt": row["created_at"], "updatedAt": row["updated_at"],
+            "participantIdentityAvailable": bool(row["participant_identity_ciphertext"]),
             "businessAccessEligible": eligible, "localCloudKitProofRequired": True,
             "reviewRequired": not member_valid or (row["state"] not in ("requested", "revoked") and not approver_valid),
             # Role changes revoke business eligibility but do not erase Apple's
@@ -171,10 +216,12 @@ class StaffShares:
         }
 
     def enroll(self, session_id, payload):
-        if not isinstance(payload, dict) or set(payload) != {"companyID", "environment", "operationID", "participantAccountHash"}:
+        fields = {"companyID", "environment", "operationID", "participantAccountHash"}
+        if not isinstance(payload, dict) or set(payload) not in (fields, fields | {"participantRecordName"}):
             raise fail("invalid_request", "Use only the current account and original sharing request fields.", 400)
         company, environment = scope(payload)
         operation, participant = identifier(payload["operationID"]), account_hash(payload["participantAccountHash"])
+        name = record_name(payload["participantRecordName"], environment, participant) if "participantRecordName" in payload else None
         with self.database() as connection:
             connection.execute("BEGIN IMMEDIATE")
             actor = self.actor(connection, session_id)
@@ -188,6 +235,8 @@ class StaffShares:
                 self.authorize_row(connection, actor, old, company, environment)
                 if old["member_email"] != actor["email"] or old["participant_account_hash"] != participant:
                     raise fail("operation_changed", "Recover the original request without changing its account.")
+                if (name is None) != (old["participant_identity_ciphertext"] is None) or (name is not None and self.participant_identity(old) != name):
+                    raise fail("operation_changed", "Recover the original account request without replacing its identity.")
                 # A late retry returns current state; never reactivates revoked
                 # membership or changes the original reviewed role/account.
                 return self.public(connection, old)
@@ -199,19 +248,25 @@ class StaffShares:
             ).fetchone():
                 raise fail("request_exists", "Recover the existing sharing request. Review revocation before changing iCloud accounts.")
             now = self.now().isoformat()
+            ciphertext = None
+            if name is not None:
+                if self.encrypt is None:
+                    raise fail("storage_unavailable", "Secure invitation identity storage is not configured.", 503)
+                ciphertext = self.encrypt(json.dumps({"id": operation, "companyID": company, "environment": environment,
+                                                     "accountHash": participant, "recordName": name}, separators=(",", ":")))
             connection.execute(
                 """INSERT INTO cloudkit_staff_shares (id,company_id,environment,replica_id,owner_account_hash,
                    member_email,member_role,member_revision,participant_account_hash,projection_policy,
-                   zone_name,root_record_name,share_record_name,state,revision,created_at,updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'requested',1,?,?)""",
+                   zone_name,root_record_name,share_record_name,state,revision,created_at,updated_at,participant_identity_ciphertext)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'requested',1,?,?,?)""",
                 (operation, company, environment, binding["replica_id"], binding["cloud_account_hash"],
                  actor["email"], actor["role"], revision, participant, POLICIES[actor["role"]],
-                 "ga-staff-" + str(uuid.uuid4()), "workspace", "share-" + str(uuid.uuid4()), now, now),
+                 "ga-staff-" + str(uuid.uuid4()), "workspace", "share-" + str(uuid.uuid4()), now, now, ciphertext),
             )
             self.audit(actor["email"], "request", "cloudkit-staff-share", operation, connection=connection)
             return self.public(connection, connection.execute("SELECT * FROM cloudkit_staff_shares WHERE id=?", (operation,)).fetchone())
 
-    def read(self, session_id, payload, share_id=None):
+    def read(self, session_id, payload, share_id=None, *, administrator=False):
         required = {"companyID", "environment"}
         if not isinstance(payload, dict) or set(payload) not in (required, required | {"after"}):
             raise fail("invalid_query", "Choose the original company and CloudKit environment.", 400)
@@ -224,7 +279,7 @@ class StaffShares:
         with self.database() as connection:
             # One consistent authority/rows snapshot, including role changes.
             connection.execute("BEGIN")
-            actor = self.actor(connection, session_id)
+            actor = self.actor(connection, session_id, administrator=administrator)
             self.binding(connection, company, environment)
             if share_id is not None:
                 row = connection.execute("SELECT * FROM cloudkit_staff_shares WHERE id=?", (share_id,)).fetchone()
@@ -285,6 +340,8 @@ class StaffShares:
             member_valid, approver_valid = self.eligibility(connection, row)
             if action in ("approve", "invite", "accept") and not member_valid:
                 raise fail("member_changed", "This team member's access changed. Revoke this request and review a new invitation.")
+            if action in ("approve", "invite"):
+                self.participant_identity(row)
             if action in ("invite", "accept") and not approver_valid:
                 raise fail("approver_changed", "The original approving administrator's access changed. Review a new invitation.")
             expected = {"approve": "requested", "invite": "approved", "accept": "invited", "confirm-cleanup": "revoked"}

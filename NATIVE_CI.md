@@ -1,5 +1,22 @@
 # Native GitHub Actions checks
 
+## Staff iCloud onboarding coverage candidate — September 9, 2026
+
+Two new iPad journeys cover staff enrollment, lost-reply relaunch recovery and
+return to the unchanged workspace gate, plus explicit owner review/private
+invitation and navigation back to Settings with the original link retained.
+All previous 64 journeys remain; the two disjoint groups select 33 journeys each.
+Complete logic targets, exact pinned M5/iOS 26.2 preparation, unsigned universal
+Mac Release, actual-execution verification, read-only permissions and job limits
+remain unchanged. Local qualification passes 800 backend and 64 Tools tests,
+1,621 Mac logic tests, and 1,627 iPad logic/UI cases, plus the separately corrected
+Time Clock relaunch-recovery journey. Both unsigned Release builds succeed.
+Predecessor c344ab0 passed Backend, Mac and iPad group 1; group 2 failed because
+the Time Clock test expected a message below the visible sheet viewport. The
+test now scrolls the exact review form and retains all recovery assertions.
+Publication and fresh exact-head hosted checks remain required; local fixtures
+do not prove live CloudKit or provider acceptance. See CLOUDKIT_STAFF_SHARING.md.
+
 ## Shared native Time Clock regression coverage — September 9, 2026
 
 The candidate workflow retains all prior 60 UI journeys and adds four shared

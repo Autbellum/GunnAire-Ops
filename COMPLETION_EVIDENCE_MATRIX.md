@@ -1,3 +1,29 @@
+Native staff CloudKit onboarding candidate, 2026-09-09:
+CLOUDKIT_STAFF_SHARING.md now records encrypted participant identity storage,
+fresh administrator identity/owner-authority reads, durable native setup journals,
+exact private invitation creation/recovery, accepted-metadata/root verification,
+separate business revocation/Apple share cleanup, and scene invitation intake.
+The actual setup UI is reachable from the company gate and Settings > Users;
+Settings uses the existing navigation stack. Neither server acceptance nor an
+invitation unlocks the private SwiftData store. The UI explicitly explains that
+staff data synchronization is not yet connected. Focused tests pass 34 backend
+and 30 native sharing/setup cases; all 800 backend and 64 Tools tests pass.
+Mac full logic passes 1,621; iPad passes 1,627 actual logic/UI cases with zero
+failures/skips and exact execution verification. Five screenshots were inspected.
+Unsigned universal Mac and arm64 iOS Release builds and architecture checks pass.
+Predecessor c344ab0 failed one hosted Time Clock UI assertion; retained evidence
+shows the message below the sheet viewport. The corrected test scrolls the exact
+form, retains recovery assertions and passes separately on M5/iOS 26.2. Final
+copy-back verifies all 22 scoped files match while preserving 286 unrelated changes
+and the original branch/HEAD/index. Fresh exact-head hosted checks remain required.
+Two new UI
+journeys are additive to all 64 previous CI selections. No production deployment,
+portal/signing/schema promotion, physical install, live CloudKit or accounting
+write is authorized by this checkpoint. Role-scoped serializers, staff-store
+lifecycle, field-command convergence, signed independent-account acceptance,
+remaining provider/vendor work, payment/handoff and full competitor-suite
+usability/accessibility qualification remain open; the full goal is not complete.
+
 Independent staff CloudKit authorization foundation, 2026-09-09:
 CLOUDKIT_STAFF_SHARING.md records backend 2026.09.09.46, the separate-account
 architecture, transactional per-member enrollment/approval/invitation/acceptance/

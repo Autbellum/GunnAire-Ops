@@ -915,6 +915,34 @@ enum GunnAireBackendService {
         }
     }
 
+    /// Identity/setup-only transport for staff who cannot mount the owner's
+    /// private store. Its allowlist must never include operational endpoints.
+    static func staffCloudKitSetupRequest(path: String, method: String, body: Data?) async throws -> Data {
+        guard CloudKitStaffSetupPolicy.allows(path: path, method: method, bytes: body?.count),
+              Config.Backend.usesBusinessIdentity, let stamp = CloudKitStaffSetupStamp.current else { throw CloudKitStaffSharingError.access }
+        let candidates = [AppleAuthManager.shared.sessionToken, GoogleAuthManager.shared.applicationSessionToken].compactMap { $0 }
+        guard let token = candidates.first(where: { !$0.isEmpty && CompanyWorkspaceSession.digest($0) == stamp.session.tokenFingerprint })
+        else { throw CloudKitStaffSharingError.access }
+        var request = try baseRequest(path: path, method: method, body: body)
+        request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 45; request.cachePolicy = .reloadIgnoringLocalCacheData
+        func check() throws {
+            try Task.checkCancellation()
+            guard CloudKitStaffSetupStamp.current == stamp else { throw CloudKitStaffSharingError.access }
+        }
+        try check()
+        do {
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: 512 * 1024)
+            try check(); return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let status) = error {
+                throw GunnAireBackendError.server(statusCode: status, message: "Staff iCloud setup was not confirmed.")
+            }
+            throw CloudKitStaffSetupPolicy.safe(error)
+        }
+    }
+
     static func sharedTimeRequest(path: String, method: String, body: Data?) async throws -> Data {
         guard SharedTimeTransportPolicy.allows(path: path, method: method, bodyBytes: body?.count) else { throw SharedTimeError.invalid }
         guard let identity = CompanyWorkspaceSession.current else { throw SharedTimeError.access }

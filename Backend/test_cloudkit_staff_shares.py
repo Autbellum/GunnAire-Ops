@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import sqlite3
 import unittest
@@ -9,6 +10,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from unittest import mock
+from cryptography.fernet import Fernet
 
 from Backend import cloudkit_staff_shares as sharing
 from Backend import gunnaire_backend as backend
@@ -16,13 +18,22 @@ from Backend import test_workspace_identity as fixture
 
 
 class CloudKitStaffSharingTests(unittest.TestCase):
-    setUp = fixture.WorkspaceIdentityTests.setUp
+    def setUp(self):
+        fixture.WorkspaceIdentityTests.setUp(self)
+        self.cipher = Fernet(Fernet.generate_key())
+        for name, function in (("encrypt_catalog_payload", lambda raw: self.cipher.encrypt(raw.encode()).decode()),
+                               ("decrypt_catalog_payload", lambda raw: self.cipher.decrypt(raw.encode()).decode())):
+            patcher = mock.patch.object(backend, name, side_effect=function)
+            patcher.start()
+            self.addCleanup(patcher.stop)
     tearDown = fixture.WorkspaceIdentityTests.tearDown
     request = fixture.WorkspaceIdentityTests.request
     workspace = fixture.WorkspaceIdentityTests.workspace
     binding_payload = fixture.WorkspaceIdentityTests.binding_payload
     bind = fixture.WorkspaceIdentityTests.bind
     root = "/api/workspace/staff-shares"
+    participant_name = "_fixture-staff-record"
+    participant_hash = hashlib.sha256(("gunnaire-cloudkit-account-v1\niCloud.com.gunnaire.businesssuite\ndevelopment\n" + participant_name).encode()).hexdigest()
 
     def prepare(self):
         payload = self.binding_payload()
@@ -32,7 +43,7 @@ class CloudKitStaffSharingTests(unittest.TestCase):
 
     def enroll(self, actor_role="Field Technician", **changes):
         payload = {"companyID": self.company, "environment": "development", "operationID": str(uuid.uuid4()),
-                   "participantAccountHash": "b" * 64, **changes}
+                   "participantAccountHash": self.participant_hash, "participantRecordName": self.participant_name, **changes}
         return self.request(token=self.tokens[actor_role], payload=payload, method="POST", path=self.root), payload
 
     def read(self, role="Field Technician", identifier=None, **changes):
@@ -47,7 +58,7 @@ class CloudKitStaffSharingTests(unittest.TestCase):
         payload = {"companyID": self.company, "environment": "development", "operationID": str(uuid.uuid4()),
                    "expectedRevision": row["revision"], confirmation: True}
         if action == "accept":
-            payload["participantAccountHash"] = "b" * 64
+            payload["participantAccountHash"] = self.participant_hash
         payload.update(changes)
         return self.request(token=self.tokens[role], payload=payload, method="POST", path=self.root + "/" + row["id"] + "/" + action), payload
 
@@ -119,12 +130,16 @@ class CloudKitStaffSharingTests(unittest.TestCase):
     def test_enrollment_rejects_actor_account_company_and_environment_replacement(self):
         self.prepare()
         (_, row), payload = self.enroll()
-        self.assertEqual(self.enroll(operationID=row["id"], participantAccountHash="c" * 64)[0][0], 409)
+        other_name = "_different-staff"
+        other_hash = hashlib.sha256(("gunnaire-cloudkit-account-v1\n" + sharing.CONTAINER + "\ndevelopment\n" + other_name).encode()).hexdigest()
+        self.assertEqual(self.enroll(operationID=row["id"], participantAccountHash=other_hash, participantRecordName=other_name)[0][0], 409)
         self.assertEqual(self.enroll("Admin", operationID=row["id"])[0][0], 409)
         self.assertEqual(self.enroll("Dispatcher", operationID=row["id"])[0][0], 404)
         self.assertEqual(self.enroll(companyID=str(uuid.uuid4()))[0][0], 403)
-        self.assertEqual(self.enroll(environment="production")[0][1]["code"], "owner_required")
-        self.assertEqual(self.enroll(participantAccountHash="a" * 64)[0][1]["code"], "owner_device")
+        production_hash = hashlib.sha256(("gunnaire-cloudkit-account-v1\n" + sharing.CONTAINER + "\nproduction\n" + self.participant_name).encode()).hexdigest()
+        self.assertEqual(self.enroll(environment="production", participantAccountHash=production_hash)[0][1]["code"], "owner_required")
+        owner_payload = {"companyID": self.company, "environment": "development", "operationID": str(uuid.uuid4()), "participantAccountHash": "a" * 64}
+        self.assertEqual(self.request(token=self.tokens["Field Technician"], payload=owner_payload, method="POST", path=self.root)[1]["code"], "owner_device")
         self.assertEqual(self.read(identifier=row["id"], environment="production")[0], 409)
 
     def test_exact_validation_rejects_extra_authority_fields_and_noncanonical_inputs(self):
@@ -388,6 +403,107 @@ class CloudKitStaffSharingTests(unittest.TestCase):
         self.assertIn("/api/workspace/staff-shares/[redacted]", log)
         self.assertNotIn(row["id"], log)
         self.assertNotIn(self.company, log)
+
+    def participant(self, row, role="Admin"):
+        return self.request(token=self.tokens[role], path=self.root + "/" + row["id"] + "/participant?" +
+                            urllib.parse.urlencode({"companyID": self.company, "environment": "development"}))
+
+    def test_participant_locator_is_encrypted_scoped_and_not_in_roster_responses(self):
+        self.prepare()
+        row = self.requested()
+        self.assertTrue(row["participantIdentityAvailable"])
+        self.assertNotIn(self.participant_name, json.dumps(row))
+        self.assertNotIn(self.participant_name, json.dumps(self.read()[1]))
+        with backend.db() as connection:
+            stored = connection.execute("SELECT * FROM cloudkit_staff_shares WHERE id=?", (row["id"],)).fetchone()
+            self.assertNotIn(self.participant_name, json.dumps(dict(stored)))
+            decoded = json.loads(self.cipher.decrypt(stored["participant_identity_ciphertext"].encode()))
+        self.assertEqual(decoded["id"], row["id"])
+        self.assertEqual(decoded["recordName"], self.participant_name)
+        status, identity = self.participant(row)
+        self.assertEqual(status, 200)
+        self.assertEqual(identity["recordName"], self.participant_name)
+        self.assertEqual(identity["participantAccountHash"], row["participantAccountHash"])
+        self.assertEqual(identity["revision"], row["revision"])
+        for role in self.tokens:
+            if role != "Admin":
+                self.assertEqual(self.participant(row, role)[0], 403)
+
+    def test_locator_requires_fresh_admin_and_current_member_authority(self):
+        self.prepare()
+        row = self.requested()
+        with backend.db() as connection:
+            connection.execute("UPDATE auth_sessions SET created_at=? WHERE email='admin@gunnaire.com'",
+                               ((datetime.now(timezone.utc) - timedelta(seconds=601)).isoformat(),))
+        self.assertEqual(self.participant(row)[0], 403)
+        self.tokens["Admin"] = backend.create_app_session("admin@gunnaire.com", "google", "fresh-admin")[0]
+        with backend.db() as connection:
+            connection.execute("UPDATE users SET role='Standard',updated_at=? WHERE email='field.technician@gunnaire.com'", (backend.utc_now(),))
+        self.assertEqual(self.participant(row)[0], 409)
+
+    def test_locator_rejects_wrong_hash_record_name_and_foreign_encrypted_identity(self):
+        self.prepare()
+        for name in (None, "", "_foreign-record", "x" * 256, "_fixture-staff-record\n"):
+            self.assertEqual(self.enroll(participantRecordName=name)[0][0], 400)
+        row = self.requested()
+        with backend.db() as connection:
+            stored = connection.execute("SELECT participant_identity_ciphertext FROM cloudkit_staff_shares WHERE id=?", (row["id"],)).fetchone()[0]
+            data = json.loads(self.cipher.decrypt(stored.encode()))
+            data["id"] = str(uuid.uuid4())
+            connection.execute("UPDATE cloudkit_staff_shares SET participant_identity_ciphertext=? WHERE id=?",
+                               (self.cipher.encrypt(json.dumps(data).encode()).decode(), row["id"]))
+        self.assertEqual(self.participant(row)[0], 503)
+        self.assertEqual(self.change(row, "approve")[0][0], 503)
+
+    def test_owner_authority_checks_fresh_admin_even_for_revoked_cleanup(self):
+        self.prepare()
+        row = self.advance(self.advance(self.requested(), "approve"), "revoke")
+        path = self.root + "/" + row["id"] + "/owner-authority?" + urllib.parse.urlencode({"companyID": self.company, "environment": "development"})
+        self.assertEqual(self.request(token=self.tokens["Admin"], path=path)[0], 200)
+        self.assertTrue(self.request(token=self.tokens["Admin"], path=path)[1]["cloudKitRevocationRequired"])
+        for role in self.tokens:
+            if role != "Admin":
+                self.assertEqual(self.request(token=self.tokens[role], path=path)[0], 403)
+        with backend.db() as connection:
+            connection.execute("UPDATE auth_sessions SET created_at=? WHERE email='admin@gunnaire.com'", ((datetime.now(timezone.utc) - timedelta(seconds=601)).isoformat(),))
+        self.assertEqual(self.request(token=self.tokens["Admin"], path=path)[0], 403)
+        self.assertEqual(self.read("Admin", identifier=row["id"])[0], 200)
+
+    def test_corrupt_ciphertext_is_retained_and_never_exposed_or_approved(self):
+        self.prepare()
+        row = self.requested()
+        with backend.db() as connection:
+            connection.execute("UPDATE cloudkit_staff_shares SET participant_identity_ciphertext=? WHERE id=?", ("corrupted-ciphertext", row["id"]))
+        status, body = self.participant(row)
+        self.assertEqual(status, 503)
+        self.assertNotIn("corrupted-ciphertext", json.dumps(body))
+        self.assertEqual(self.change(row, "approve")[0][0], 503)
+        self.assertEqual(self.read(identifier=row["id"])[1]["state"], "requested")
+        with backend.db() as connection:
+            self.assertEqual(connection.execute("SELECT participant_identity_ciphertext FROM cloudkit_staff_shares WHERE id=?", (row["id"],)).fetchone()[0], "corrupted-ciphertext")
+
+    def test_missing_encryption_and_failed_identity_audit_do_not_save_or_disclose(self):
+        self.prepare()
+        with mock.patch.object(backend, "encrypt_catalog_payload", side_effect=RuntimeError("missing-key")):
+            self.assertEqual(self.enroll()[0][0], 503)
+        self.assertEqual(self.read()[1]["shares"], [])
+        row = self.requested()
+        with mock.patch.object(backend, "record_audit_event", side_effect=sqlite3.OperationalError("failed")):
+            status, body = self.participant(row)
+        self.assertEqual(status, 503)
+        self.assertNotIn(self.participant_name, json.dumps(body))
+
+    def test_old_hash_only_enrollment_is_retained_but_not_silently_invited(self):
+        self.prepare()
+        payload = {"companyID": self.company, "environment": "development", "operationID": str(uuid.uuid4()), "participantAccountHash": self.participant_hash}
+        status, row = self.request(token=self.tokens["Field Technician"], payload=payload, method="POST", path=self.root)
+        self.assertEqual(status, 200)
+        self.assertFalse(row["participantIdentityAvailable"])
+        self.assertEqual(self.change(row, "approve")[0][1]["code"], "identity_required")
+        self.assertEqual(self.participant(row)[1]["code"], "identity_required")
+        self.assertEqual(self.enroll(operationID=row["id"])[0][1]["code"], "operation_changed")
+        self.advance(row, "revoke", "Field Technician")
+        self.assertTrue(self.requested()["participantIdentityAvailable"])
 
 
 if __name__ == "__main__":

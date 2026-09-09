@@ -49,7 +49,7 @@ enum CompanyCloudKitRuntimeAccount {
         let hash = CompanyWorkspaceSession.digest(
             "gunnaire-cloudkit-account-v1\n\(GunnAireCloudKit.containerIdentifier)\n\(environment)\n\(identifier.recordName)"
         )
-        return CompanyCloudKitAccount(environment: environment, accountHash: hash)
+        return CompanyCloudKitAccount(environment: environment, accountHash: hash, recordName: identifier.recordName)
     }
 }
 
@@ -57,6 +57,8 @@ struct CompanyWorkspaceHost: View {
     @ObservedObject private var access = CompanyWorkspaceAccessController.shared
     @Binding var hasAuthenticatedUser: Bool
     @State private var confirmsOwnership = false
+    @State private var showingStaffSetup = false
+    @ObservedObject private var staffInvitations = CloudKitStaffInvitationInbox.shared
 
     var body: some View {
         Group {
@@ -97,6 +99,9 @@ struct CompanyWorkspaceHost: View {
                             if failure != .restartRequired {
                                 Button("Check Again") { Task { await access.refresh() } }
                                     .buttonStyle(.borderedProminent)
+                                Button("Staff iCloud Setup") { showingStaffSetup = true }
+                                    .buttonStyle(.bordered)
+                                    .accessibilityIdentifier("OpenStaffCloudKitSetup")
                             }
                         }
                         Button("Sign Out") {
@@ -119,6 +124,10 @@ struct CompanyWorkspaceHost: View {
                 .background(Color(uiColor: .systemBackground))
                 .accessibilityIdentifier("CompanyWorkspaceProofGate")
             }
+        }
+        .sheet(isPresented: $showingStaffSetup) { CloudKitStaffSetupView() }
+        .onReceive(staffInvitations.$pending) { invitation in
+            if invitation != nil { showingStaffSetup = true }
         }
         .task { await access.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
