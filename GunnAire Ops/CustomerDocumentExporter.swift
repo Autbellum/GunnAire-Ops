@@ -6,6 +6,7 @@ enum CustomerDocumentExportError: LocalizedError {
     case authoritativeTaxRequired(String)
     case statementNeedsReview(String)
     case fieldFormNeedsReview(String)
+    case textLayoutUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -17,6 +18,8 @@ enum CustomerDocumentExportError: LocalizedError {
             return message
         case .fieldFormNeedsReview(let message):
             return message
+        case .textLayoutUnavailable:
+            return "The complete document could not be laid out. Your saved records and any previous PDF are unchanged. Please try again."
         }
     }
 }
@@ -1662,10 +1665,16 @@ enum CustomerDocumentExporter {
         let pageBounds = CGRect(x: 0, y: 0, width: 612, height: 792)
         let renderer = UIGraphicsPDFRenderer(bounds: pageBounds)
 
-        try renderer.writePDF(to: url) { context in
+        var layoutError: Error?
+        let data = renderer.pdfData { context in
             var y = startPage(context: context, bounds: pageBounds, title: title, customer: customer)
-            for section in sections {
-                y = drawSection(section, at: y, in: pageBounds, context: context, title: title, customer: customer)
+            do {
+                for section in sections {
+                    y = try drawSection(section, at: y, in: pageBounds, context: context, title: title, customer: customer)
+                }
+            } catch {
+                layoutError = error
+                return
             }
             y = drawApprovalSignature(
                 approvalSignatureImageBase64,
@@ -1687,7 +1696,9 @@ enum CustomerDocumentExporter {
             )
             drawFooter(in: pageBounds)
         }
-
+        if let layoutError { throw layoutError }
+        // A layout failure must not replace an existing, complete customer PDF.
+        try data.write(to: url, options: .atomic)
         return url
     }
 
@@ -1765,66 +1776,73 @@ enum CustomerDocumentExporter {
         context: UIGraphicsPDFRendererContext,
         title: String,
         customer: Customer
-    ) -> CGFloat {
+    ) throws -> CGFloat {
+        let rows = section.rows.filter { !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard !rows.isEmpty else { return initialY }
         let margin: CGFloat = 42
         let contentWidth = bounds.width - margin * 2
+        let labelWidth: CGFloat = 138
+        let valueWidth = contentWidth - labelWidth - 14
+        let bottom = bounds.height - 70
+        let headingHeight: CGFloat = 24
+        let minimumFragmentHeight: CGFloat = 30
+        let rowCapacity = bottom - 216 - headingHeight
+        let layouts = rows.map { row in
+            (label: BusinessDocumentTextLayout(row.label, font: .systemFont(ofSize: 10, weight: .semibold), color: .darkGray),
+             value: BusinessDocumentTextLayout(row.value, font: .systemFont(ofSize: 11), color: .black))
+        }
+        let heights = layouts.map { max(22, max($0.label.height(width: labelWidth) + 2, $0.value.height(width: valueWidth)) + 8) }
         var y = initialY
-        let sectionHeight = 24 + section.rows.filter { !$0.value.isEmpty }.reduce(CGFloat(0)) { height, row in
-            let labelHeight = measuredHeight(row.label, width: 138, font: .systemFont(ofSize: 10, weight: .semibold))
-            let valueHeight = measuredHeight(row.value, width: contentWidth - 152, font: .systemFont(ofSize: 11))
-            return height + max(22, max(labelHeight, valueHeight) + 8)
-        }
-        let keepOnNextPage = section.keepsTogether && sectionHeight <= bounds.height - 70 - 216 &&
-            y + sectionHeight > bounds.height - 70
-        if y > bounds.height - 140 || keepOnNextPage {
+        func nextPage() -> CGFloat {
             drawFooter(in: bounds)
-            y = startPage(context: context, bounds: bounds, title: title, customer: customer)
+            return startPage(context: context, bounds: bounds, title: title, customer: customer)
         }
+        func heading(at position: CGFloat, continued: Bool) {
+            (continued ? "\(section.title) (continued)" : section.title).draw(
+                at: CGPoint(x: margin, y: position), withAttributes: [
+                    .font: UIFont.systemFont(ofSize: 15, weight: .semibold),
+                    .foregroundColor: UIColor.black
+                ])
+        }
+        // Use the same safe frame minimum when reserving a heading/group as
+        // when drawing it, so a boundary cannot strand a heading or final row.
+        let finalRowReserve = max(0, minimumFragmentHeight - (heights.last ?? 0))
+        let sectionHeight = headingHeight + heights.reduce(0, +) + finalRowReserve
+        let firstHeight = max(minimumFragmentHeight, heights[0] <= rowCapacity ? heights[0] : minimumFragmentHeight)
+        if y + headingHeight + firstHeight > bottom ||
+            (section.keepsTogether && sectionHeight <= bottom - 216 && y + sectionHeight > bottom) {
+            y = nextPage()
+        }
+        heading(at: y, continued: false)
+        y += headingHeight
 
-        section.title.draw(at: CGPoint(x: margin, y: y), withAttributes: [
-            .font: UIFont.systemFont(ofSize: 15, weight: .semibold),
-            .foregroundColor: UIColor.black
-        ])
-        y += 24
-
-        for row in section.rows where !row.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let labelWidth: CGFloat = 138
-            let valueX = margin + labelWidth + 14
-            let valueWidth = contentWidth - labelWidth - 14
-            let labelFont = UIFont.systemFont(ofSize: 10, weight: .semibold)
-            let valueFont = UIFont.systemFont(ofSize: 11)
-            let labelHeight = measuredHeight(row.label, width: labelWidth, font: labelFont)
-            let valueHeight = measuredHeight(row.value, width: valueWidth, font: valueFont)
-            let rowHeight = max(22, max(labelHeight, valueHeight) + 8)
-            let textHeight = rowHeight - 4
-
-            if y + rowHeight > bounds.height - 70 {
-                drawFooter(in: bounds)
-                y = startPage(context: context, bounds: bounds, title: title, customer: customer)
-                if section.keepsTogether {
-                    "\(section.title) (continued)".draw(at: CGPoint(x: margin, y: y), withAttributes: [
-                        .font: UIFont.systemFont(ofSize: 15, weight: .semibold),
-                        .foregroundColor: UIColor.black
-                    ])
-                    y += 24
+        for (index, pair) in layouts.enumerated() {
+            var label = pair.label
+            var value = pair.value
+            // Keep an ordinary row intact. Only a row taller than a fresh page
+            // needs to consume multiple frames, with each column tracked alone.
+            if heights[index] <= rowCapacity && y + heights[index] > bottom {
+                y = nextPage()
+                heading(at: y, continued: true)
+                y += headingHeight
+            }
+            while !label.isComplete || !value.isComplete {
+                if bottom - y < minimumFragmentHeight {
+                    y = nextPage()
+                    heading(at: y, continued: true)
+                    y += headingHeight
+                }
+                let available = bottom - y - 8
+                let labelHeight = try label.draw(in: CGRect(x: margin, y: y + 2, width: labelWidth, height: available - 2), context: context.cgContext)
+                let valueHeight = try value.draw(in: CGRect(x: margin + labelWidth + 14, y: y, width: valueWidth, height: available), context: context.cgContext)
+                y += max(22, max(labelHeight + 2, valueHeight) + 8)
+                if !label.isComplete || !value.isComplete {
+                    y = nextPage()
+                    heading(at: y, continued: true)
+                    y += headingHeight
                 }
             }
-
-            drawWrapped(
-                row.label,
-                in: CGRect(x: margin, y: y + 2, width: labelWidth, height: textHeight),
-                font: labelFont,
-                color: .darkGray
-            )
-            drawWrapped(row.value, in: CGRect(x: valueX, y: y, width: valueWidth, height: textHeight), font: valueFont, color: .black)
-            y += rowHeight
-
-            if !section.keepsTogether && y > bounds.height - 80 {
-                drawFooter(in: bounds)
-                y = startPage(context: context, bounds: bounds, title: title, customer: customer)
-            }
         }
-
         return y + 12
     }
 

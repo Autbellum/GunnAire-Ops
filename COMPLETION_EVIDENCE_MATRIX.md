@@ -1,3 +1,33 @@
+Business-document pagination candidate, 2026-09-09:
+DOCUMENT_LAYOUT_VALIDATION.md records actual native PDF loss: long answers and
+question labels were drawn through the footer/off-page, and blank report sections
+printed empty headings. Core Text now carries original UTF-16 ranges across pages,
+tracks labels/values independently, omits empty sections and writes complete PDF
+bytes atomically only after layout succeeds. The original three reproductions pass.
+Expanded checks cover invoice completion/estimate notes, unchanged amounts and
+internal-note privacy, short forms, Unicode boundaries and fail-without-consumption.
+The first expanded billing fixture used the wrong invoice field; its failed result
+is retained and the fixture now respects the existing customer/internal distinction.
+MacFull1 passes 1,798 cases; IPadFull1 passes 1,801 with all three UI journeys.
+Both unsigned Release builds/architecture checks and all 74 Tools/workflow checks
+pass. Subsequent review reproduced a real orphan-heading boundary case; the final
+source now reserves the same safe first-frame minimum before drawing a heading
+and before keeping a statement group together. Earlier green runs do not qualify
+this last change. Final Fixed4 passes all eight document cases; MacFull2 verifies
+1,799 actual logic cases and IPadFull2 verifies 1,802 including all three UI
+journeys, with zero failures/skips. All 22 current Mac fixture pages plus both
+iPad boundary pages were rendered and inspected. Final DeviceRelease2 and
+MacRelease2 both pass unsigned Release builds and arm64 iOS/universal Mac
+architecture checks. All local runs are now terminal.
+OriginalPreflight3 protects five scoped paths, 379 unrelated changes, 389 matching
+other tracked sources and original branch/HEAD/index. Final copy-back verifies all
+five files byte-equal and preserves all 379 unrelated changes and branch/HEAD/index.
+The review checkpoint remains unpublished while predecessor native run 34380679032
+has iPad group 1 live (Backend, Mac and group 2 pass). No successor push cancels it.
+Long page headers/titles/captions, report-readiness density, form drafts,
+full staff operational sync, signed CloudKit/provider/payment/Handoff/device and
+whole-app accessibility acceptance remain open. The full goal remains active.
+
 Field-form history integration candidate, 2026-09-09:
 FIELD_FORM_HISTORY_VALIDATION.md records strict bounded original-history parsing,
 unchanged legacy raw evidence, original-template resolution, required closeout
