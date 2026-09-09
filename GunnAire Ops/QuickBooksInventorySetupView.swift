@@ -26,20 +26,29 @@ struct QuickBooksInventorySetupSection: View {
 
     var body: some View {
         Section("Inventory Setup") {
-            TextField("Opening quantity", value: $setup.openingQuantity, format: .number)
-                .catalogNumericKeyboard()
-                .focused(focusedField, equals: .openingQuantity)
-                .submitLabel(.next)
-                .onSubmit { focusedField.wrappedValue = .openingDate }
-                .accessibilityIdentifier("InventoryOpeningQuantity")
-            TextField("Opening date (YYYY-MM-DD)", text: Binding(
-                get: { setup.openingDate ?? "" }, set: { setup.openingDate = $0.isEmpty ? nil : $0 }))
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .focused(focusedField, equals: .openingDate)
-                .submitLabel(.done)
-                .onSubmit { focusedField.wrappedValue = nil }
-                .accessibilityIdentifier("InventoryOpeningDate")
+            LabeledContent("Opening quantity") {
+                TextField("Quantity", value: $setup.openingQuantity, format: .number)
+                    .multilineTextAlignment(.trailing)
+                    .catalogNumericKeyboard()
+                    .focused(focusedField, equals: .openingQuantity)
+                    .submitLabel(.next)
+                    .onSubmit { focusedField.wrappedValue = .openingDate }
+                    .accessibilityLabel("Opening quantity")
+                    .accessibilityIdentifier("InventoryOpeningQuantity")
+            }
+            LabeledContent("Opening date") {
+                TextField("YYYY-MM-DD", text: Binding(
+                    get: { setup.openingDate ?? "" }, set: { setup.openingDate = $0.isEmpty ? nil : $0 }))
+                    .multilineTextAlignment(.trailing)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .focused(focusedField, equals: .openingDate)
+                    .submitLabel(.done)
+                    .onSubmit { focusedField.wrappedValue = nil }
+                    .accessibilityLabel("Opening date")
+                    .accessibilityHint("Enter the date as year, month, and day: YYYY-MM-DD.")
+                    .accessibilityIdentifier("InventoryOpeningDate")
+            }
             if let prior = setup.scope, prior != scope {
                 Text("These accounting choices belong to another QuickBooks connection. The draft is retained; choose the current business only after reviewing the item.")
                     .font(.caption).foregroundStyle(.orange)

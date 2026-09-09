@@ -61,7 +61,17 @@ final class GunnAire_OpsUITests: XCTestCase {
 
     private func waitForHittable(_ element: XCUIElement, timeout: TimeInterval = 3) -> Bool {
         let hittable = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "exists == true AND hittable == true"),
+            // Keyboard accessory windows can briefly report an infinite,
+            // zero-sized frame while appearing. Querying isHittable then makes
+            // XCTest fail immediately instead of honoring this bounded wait.
+            predicate: NSPredicate { _, _ in
+                guard element.exists else { return false }
+                let frame = element.frame
+                guard frame.origin.x.isFinite, frame.origin.y.isFinite,
+                      frame.width.isFinite, frame.height.isFinite,
+                      frame.width > 0, frame.height > 0 else { return false }
+                return element.isHittable
+            },
             object: element
         )
         return XCTWaiter.wait(for: [hittable], timeout: timeout) == .completed
@@ -4687,9 +4697,20 @@ final class GunnAire_OpsUITests: XCTestCase {
         expanded.name = "\(kind) composer - edited bundle retains group and remaining repeated member"
         expanded.lifetime = .keepAlways; add(expanded)
         let save = app.buttons["SaveBillingDocument"]
-        for _ in 0..<12 where !save.exists || !save.isHittable { app.swipeUp() }
-        XCTAssertTrue(save.waitForExistence(timeout: 4)); XCTAssertTrue(save.isEnabled); save.tap()
-        XCTAssertTrue(app.staticTexts["ManagementBillingSavedCustomer"].waitForExistence(timeout: 5))
+        let composerNavigation = app.navigationBars["New \(kind)"]
+        XCTAssertTrue(composerNavigation.buttons["SaveBillingDocument"].waitForExistence(timeout: 4),
+                      "Create must stay in the sheet toolbar, not below the visible form.")
+        XCTAssertEqual(app.buttons.matching(identifier: "SaveBillingDocument").count, 1)
+        XCTAssertTrue(waitForHittable(save, timeout: 4))
+        XCTAssertTrue(composerNavigation.frame.contains(save.frame), "The full primary action must be visible.")
+        XCTAssertTrue(save.isEnabled); save.tap()
+        let savedCustomer = app.staticTexts["ManagementBillingSavedCustomer"]
+        if !savedCustomer.waitForExistence(timeout: 5) {
+            retainNavigationFailure(app, name: "Original \(kind.lowercased()) save did not reach confirmation")
+        }
+        XCTAssertTrue(savedCustomer.exists)
+        XCTAssertTrue(waitForHittable(savedCustomer), "Confirmation must open at the saved customer without extra scrolling.")
+        XCTAssertEqual(savedCustomer.label, "Blue Ridge Dental")
         app.buttons["Saved Items"].tap()
         let summary = app.staticTexts["ManagementBillingSavedItems"]
         XCTAssertTrue(summary.waitForExistence(timeout: 4))
@@ -7889,10 +7910,29 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(waitForHittable(done)); done.tap()
         requireKeyboardDismissed()
         XCTAssertEqual(savedQuantity.value as? String, "4.25", "Done must not reset the saved opening quantity.")
+        XCTAssertTrue(app.staticTexts["Opening quantity"].exists)
+        XCTAssertTrue(app.staticTexts["Opening date"].exists)
         let saved = XCTAttachment(screenshot: app.screenshot())
         saved.name = "Saved inventory setup and original price"; saved.lifetime = .keepAlways; add(saved)
+        // Physical-keyboard editing and Cancel must preserve the saved item,
+        // including its original precision and opening-stock evidence.
+        savedQuantity.tap()
+        savedQuantity.typeKey("a", modifierFlags: .command)
+        for key in "6.5" { savedQuantity.typeKey(String(key), modifierFlags: []) }
+        XCTAssertEqual(savedQuantity.value as? String, "6.5")
+        XCTAssertTrue(waitForHittable(done)); done.tap()
+        requireKeyboardDismissed()
+        XCTAssertEqual(savedQuantity.value as? String, "6.5")
         app.buttons["Cancel"].tap()
         XCTAssertTrue(app.navigationBars["QuickBooks Management"].exists)
+        XCTAssertTrue(waitForHittable(edit)); edit.tap()
+        XCTAssertTrue(app.navigationBars["Edit Catalog Item"].waitForExistence(timeout: 3))
+        XCTAssertEqual(app.textFields["CatalogEditSalesPrice"].value as? String, "125.375")
+        for _ in 0..<8 where !savedQuantity.isHittable { editForm.swipeUp() }
+        XCTAssertTrue(waitForHittable(savedQuantity))
+        XCTAssertEqual(savedQuantity.value as? String, "4.25", "Cancel must discard only this unsaved edit.")
+        XCTAssertEqual(app.textFields["InventoryOpeningDate"].value as? String, "2026-09-08")
+        app.buttons["Cancel"].tap()
     }
 
     @MainActor

@@ -1661,8 +1661,18 @@ GunnAire
                         AnyView(builderDetailsWorkspaceSection)
                     }
                 }
+                // A completed document is a new reading destination, not the
+                // old composer's scroll position near its final input fields.
+                .id(completedNewDocument?.id)
                 .navigationTitle(startsNewDocument ? "New \(selectedDocumentKind.rawValue)" : navigationTitle)
                 .toolbar {
+                    if startsNewDocument, completedNewDocument == nil {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button(documentActionTitle) { createDocument() }
+                                .disabled(documentActionIsDisabled)
+                                .accessibilityIdentifier("SaveBillingDocument")
+                        }
+                    }
                     if showsDismissButton {
                         ToolbarItem(placement: .cancellationAction) {
                             Button(dismissButtonTitle) {
@@ -3515,14 +3525,16 @@ GunnAire
                         Toggle("Open Invoice Builder After Estimate", isOn: $openInvoiceAfterEstimateCreation)
                     }
 
-                    Button(documentActionTitle) {
-                        createDocument()
+                    if !startsNewDocument {
+                        Button(documentActionTitle) {
+                            createDocument()
+                        }
+                        .accessibilityIdentifier("SaveBillingDocument")
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.brandGold)
+                        .foregroundStyle(Color.primaryBlack)
+                        .disabled(documentActionIsDisabled)
                     }
-                    .accessibilityIdentifier("SaveBillingDocument")
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color.brandGold)
-                    .foregroundStyle(Color.primaryBlack)
-                    .disabled(documentActionIsDisabled)
 
                     if selectedDocumentKind == .invoice,
                        let message = invoiceWorkflowBlockedMessage {

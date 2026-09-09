@@ -1,3 +1,23 @@
+iPad editor recovery candidate, 2026-09-09:
+IPAD_EDITOR_RECOVERY.md records the exact hosted clipped-Create and invalid
+keyboard-accessibility geometry evidence, a sole native toolbar Create action,
+original-document confirmation at the top, persistent inventory opening labels,
+and stronger full-visibility and hardware edit/cancel/reopen assertions. Final
+Mac logic verifies 1,755 actual cases; final iPad verifies 1,767, including all 12
+requested UI journeys, with zero failures/skips. All 74 Tools tests, both workflow
+lint checks, unsigned arm64 iOS/universal Mac Release builds and architecture
+checks pass. Three final-run iPad frames were inspected without account-email
+footers. The first added keyboard-driver mistake is corrected and its failed
+result retained. Other catalog field labels, full accessibility/Mac UI, existing
+actor warnings, full independent-account CloudKit, and provider/vendor/device/
+payment/Handoff acceptance remain incomplete. Preflight scopes five files,
+protects 367 unrelated changes and original branch/HEAD/index, and matches 381
+other tracked sources. Copy-back verifies all five files byte-equal and all
+preservation checks pass. The qualified review-branch change remains local.
+Published predecessor
+f8cfc92 has Backend/Mac passes; native run 34362120065 still has both iPad jobs
+running. No successor push cancels them. The full goal remains active.
+
 Receipt transaction selection candidate, 2026-09-09:
 RECEIPT_TRANSACTION_SELECTION.md records the new native searchable transaction
 picker, human-readable original job target, collapsed administrator ID controls,
