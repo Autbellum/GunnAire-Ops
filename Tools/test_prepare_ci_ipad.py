@@ -17,7 +17,8 @@ UDID = "12345678-1234-1234-1234-123456789ABC"
 class PrepareCIIPadTests(unittest.TestCase):
     def run_fixture(self, *, missing_runtime=False, unavailable=False,
                     missing_type=False, invalid_id=False, fail_at="", ready=True,
-                    wrong_runtime=False, wrong_type=False, shard="0"):
+                    wrong_runtime=False, wrong_type=False, wrong_id=False,
+                    ready_unavailable=False, duplicate=False, shard="0"):
         self.assertIsNotNone(shutil.which("jq"), "jq is required, as on the CI runners")
         with tempfile.TemporaryDirectory(prefix="gunnaire-simulator-test-") as directory:
             root = Path(directory)
@@ -28,8 +29,11 @@ class PrepareCIIPadTests(unittest.TestCase):
                 "devices": {},
             }
             after = dict(before, devices={RUNTIME if not wrong_runtime else "other-runtime": [
-                {"udid": UDID, "deviceTypeIdentifier": DEVICE if not wrong_type else "other-type",
-                 "state": "Booted" if ready else "Shutdown", "isAvailable": True}]})
+                {"udid": UDID if not wrong_id else "87654321-1234-1234-1234-123456789ABC",
+                 "deviceTypeIdentifier": DEVICE if not wrong_type else "other-type",
+                 "state": "Booted" if ready else "Shutdown", "isAvailable": not ready_unavailable}]})
+            if duplicate:
+                after["devices"][RUNTIME] *= 2
             (root / "before.json").write_text(json.dumps(before))
             (root / "after.json").write_text(json.dumps(after))
             # This fixture owns only temporary files; no Apple tooling is called.
@@ -42,6 +46,7 @@ printf '%s\\n' "$*" >> "$FIXTURE_ROOT/calls"
 case "$2" in
   list)
     if [[ -f "$FIXTURE_ROOT/listed" ]]; then
+      [[ "$FAIL_AT" != readback ]] || exit 71
       /bin/cat "$FIXTURE_ROOT/after.json"
     else
       /bin/cat "$FIXTURE_ROOT/before.json"
@@ -70,9 +75,38 @@ esac
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(calls, ["simctl list -j",
             "simctl create GunnAire CI iPad 0 " + DEVICE + " " + RUNTIME,
-            "simctl boot " + UDID, "simctl bootstatus " + UDID + " -b", "simctl list -j"])
+            "simctl boot " + UDID, "simctl bootstatus " + UDID + " -b",
+            "simctl list -j devices " + UDID])
         self.assertEqual(exported, "CI_IPAD_UDID=" + UDID + "\n")
-        self.assertEqual(evidence, ["simulator-boot.log", "simulators-before.json", "simulators-ready.json"])
+        self.assertEqual(evidence, ["simulator-boot.log", "simulator-preparation.log",
+                                   "simulators-before.json", "simulators-ready.json"])
+
+    def test_success_records_each_stage_in_order_and_an_explicit_zero_exit(self):
+        result, _, _, _ = self.run_fixture()
+        self.assertEqual(result.returncode, 0)
+        expected = ["stage=" + stage + " event=" + event
+                    for stage in ("inventory", "validate-environment", "create", "boot",
+                                  "bootstatus", "readback", "validate-ready", "export")
+                    for event in ("start", "complete")]
+        expected.append("stage=export event=exit")
+        lines = result.stdout.splitlines()
+        self.assertEqual([" ".join(line.split()[:2]) for line in lines], expected)
+        for line in lines:
+            self.assertRegex(line, r"elapsed_seconds=\d+ stage_seconds=\d+ exit_code=(?:-|0)$")
+        self.assertTrue(lines[-1].endswith("exit_code=0"))
+
+    def test_failed_commands_record_the_stage_and_preserve_failure_status(self):
+        for command, stage in (("list", "inventory"), ("create", "create"),
+                               ("boot", "boot"), ("bootstatus", "bootstatus"),
+                               ("readback", "readback")):
+            with self.subTest(command=command):
+                result, _, exported, _ = self.run_fixture(fail_at=command)
+                self.assertEqual(result.returncode, 71)
+                self.assertEqual(exported, "")
+                self.assertIn("stage=" + stage + " event=start", result.stdout)
+                self.assertNotIn("stage=" + stage + " event=complete", result.stdout)
+                self.assertRegex(result.stdout.splitlines()[-1],
+                                 r"^stage=" + stage + r" event=exit .* exit_code=71$")
 
     def test_each_shard_gets_its_own_job_owned_device(self):
         result, calls, exported, _ = self.run_fixture(shard="1")
@@ -104,7 +138,8 @@ esac
         self.assertFalse(any(" boot" in call for call in calls))
 
     def test_readback_requires_booted_exact_model_and_runtime(self):
-        for options in ({"ready": False}, {"wrong_runtime": True}, {"wrong_type": True}):
+        for options in ({"ready": False}, {"wrong_runtime": True}, {"wrong_type": True},
+                        {"wrong_id": True}, {"ready_unavailable": True}, {"duplicate": True}):
             with self.subTest(options=options):
                 result, _, exported, evidence = self.run_fixture(**options)
                 self.assertNotEqual(result.returncode, 0)

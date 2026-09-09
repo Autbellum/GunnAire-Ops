@@ -87,7 +87,7 @@ class NativeWorkflowShardTests(unittest.TestCase):
         self.assertEqual(self.selectors("Mac", 0, udid=""), ["-only-testing:GunnAire OpsTests"])
         text = WORKFLOW.read_text()
         self.assertIn('destination="platform=iOS Simulator,id=$CI_IPAD_UDID"', text)
-        self.assertIn('timeout-minutes: 5\n        run: bash Tools/prepare_ci_ipad.sh', text)
+        self.assertIn('timeout-minutes: 10\n        run: bash Tools/prepare_ci_ipad.sh', text)
         self.assertLess(text.index('run: bash Tools/prepare_ci_ipad.sh'),
                         text.index('selectors=(-only-testing:'))
 

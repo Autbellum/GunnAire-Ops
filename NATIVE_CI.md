@@ -1,5 +1,35 @@
 # Native GitHub Actions checks
 
+## Observable pinned iPad startup — September 9, 2026
+
+Terminal native run `34354492697` at `33413e4` is **not green**. Backend
+`34354492663` and Mac native passed. iPad group 2 exceeded its five-minute
+preparation limit before app tests ran. Its retained inventory records the exact
+M5/iOS 26.2 device as Booted, but the old log does not time each command, so it
+does not establish which remaining operation consumed the preparation budget.
+iPad group 1 completed preparation and failed two UI journeys:
+`testAdministratorCreatesInventoryOfflineAndReopensExactSetup` could not hit
+`DoneEditingCatalogItem`; `testEstimateBundleComposerSavesEditsWithKeyboardActive`
+failed an assertion at line 4692 of that published source. These are separate,
+unresolved app/UI-test findings, not fixed by extending simulator preparation.
+
+The preparation step now has a bounded ten-minute limit within the unchanged
+90-minute iPad job limit. The script records start/completion/exit and elapsed
+time for inventory, environment validation, create, boot, boot readiness,
+readback, identity validation and export. Post-boot inventory is restricted to
+the created device. Exact runtime, model, UUID, availability and Booted checks
+still gate export; duplicate or incorrect matching records fail. No tests are
+removed, retried or weakened, no existing simulator is erased or retargeted,
+and no signing, provider, concurrency, permissions or deployment setting changes.
+
+Local qualification passes all **74 Tools tests**, both workflows through
+`actionlint`, Bash syntax and `git diff --check`. The actual preparation script
+created and booted a fresh 13-inch M5/iOS 26.2 simulator in 18 seconds, retaining
+inventories, boot output and per-stage timing under the local release evidence
+folder `CI Preparation.k3O4QZ`. This qualifies local preparation only. The
+published candidate still requires fresh hosted CI; the two UI failures must
+remain release blockers until independently corrected and qualified.
+
 ## Scheduled estimate handoff and hosted runtime budget — September 9, 2026
 
 The candidate retains all 66 existing iPad UI journeys and appends the wrong-job
