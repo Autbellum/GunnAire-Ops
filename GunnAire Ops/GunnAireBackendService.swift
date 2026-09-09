@@ -890,9 +890,38 @@ enum GunnAireBackendService {
 
     private struct CatalogPublicationList: Decodable { let publications: [CatalogPublicationRecord] }
 
+    static func catalogPublicationRequest(path: String, method: String, body: Data?) async throws -> Data {
+        guard CatalogPublicationTransportPolicy.allows(path: path, method: method, bodyBytes: body?.count)
+        else { throw CatalogPublicationError.invalidProposal }
+        guard let identity = CompanyWorkspaceSession.current else { throw CatalogPublicationError.accessRequired }
+        var request = try makeRequest(path: path, method: method, body: body)
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        guard bearer.hasPrefix("Bearer "), CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == identity.tokenFingerprint,
+              request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil else { throw CatalogPublicationError.accessRequired }
+        request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
+        let controller = CompanyWorkspaceAccessController.shared, generation = controller.generation
+        func check() throws {
+            try Task.checkCancellation()
+            guard CompanyWorkspaceSession.current == identity, controller.generation == generation,
+                  controller.authorizedContainer != nil else { throw CatalogPublicationError.accessRequired }
+        }
+        try check()
+        do {
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: 256 * 1024)
+            try check()
+            return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let status) = error {
+                throw GunnAireBackendError.server(statusCode: status, message: "Shared catalog action was not confirmed.")
+            }
+            throw SharedCatalogClient.safe(error)
+        }
+    }
+
     static func publishCatalog(_ request: CatalogPublicationRequest) async throws -> CatalogPublicationResponse {
         do {
-            let data = try await send(path: "/api/catalog-publications", method: "POST", body: JSONEncoder().encode(request))
+            let data = try await catalogPublicationRequest(path: "/api/catalog-publications", method: "POST", body: JSONEncoder().encode(request))
             let result = try JSONDecoder().decode(CatalogPublicationResponse.self, from: data)
             try result.validate(companyID: request.companyID, realmID: request.realmID,
                                 environment: request.environment, itemID: request.localItemID)
@@ -903,21 +932,21 @@ enum GunnAireBackendService {
     static func catalogPublications(companyID: UUID, itemID: UUID) async throws -> [CatalogPublicationRecord] {
         do {
             let path = "/api/catalog-publications?companyID=\(companyID.uuidString.lowercased())&localItemID=\(itemID.uuidString.lowercased())"
-            return try JSONDecoder().decode(CatalogPublicationList.self, from: await send(path: path, method: "GET")).publications
+            return try JSONDecoder().decode(CatalogPublicationList.self, from: await catalogPublicationRequest(path: path, method: "GET", body: nil)).publications
         } catch { throw catalogError(error) }
     }
 
     static func recoverCatalogPublication(_ id: UUID) async throws -> CatalogPublicationResponse {
         do {
             return try JSONDecoder().decode(CatalogPublicationResponse.self,
-                from: await send(path: "/api/catalog-publications/\(id.uuidString.lowercased())/recover",
+                from: await catalogPublicationRequest(path: "/api/catalog-publications/\(id.uuidString.lowercased())/recover",
                                  method: "POST", body: Data("{}".utf8)))
         } catch { throw catalogError(error) }
     }
 
     static func cancelCatalogPublication(_ id: UUID) async throws {
         do {
-            _ = try await send(path: "/api/catalog-publications/\(id.uuidString.lowercased())/cancel",
+            _ = try await catalogPublicationRequest(path: "/api/catalog-publications/\(id.uuidString.lowercased())/cancel",
                                method: "POST", body: Data("{}".utf8))
         } catch { throw catalogError(error) }
     }

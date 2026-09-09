@@ -1275,8 +1275,11 @@ struct QuickBooksManagementView: View {
     @State private var activeCatalogReconciliationID: UUID?
     @State private var catalogLifecycle = QuickBooksSyncLifecycle()
     @State private var catalogTask: Task<Void, Never>?
-    @State private var catalogConfirmationWorkflow: QuickBooksDataAPI.CapturedWorkspaceWorkflow?
+    @State private var catalogConfirmationWorkflow: WorkspaceProviderOperation?
     @State private var catalogSnapshotWorkflow: QuickBooksDataAPI.CapturedWorkspaceWorkflow?
+    @State private var catalogComparedItems: [QuickBooksItem] = []
+    @State private var catalogVisit = UUID()
+    @State private var catalogVisible = false
     @State private var catalogPublicationConfirmation: QuickBooksCatalogPublicationConfirmation?
     @State private var catalogMappingResolutionCandidateID: UUID?
     @State private var catalogItemBeingEdited: Item?
@@ -1375,7 +1378,7 @@ struct QuickBooksManagementView: View {
     }
 
     private static var catalogReconciliationFixtureItems: [QuickBooksItem] {
-        let data = Data(#"{"Id":"QBO-UI-CATALOG-RECONCILE","SyncToken":"12","Name":"HVAC Diagnostic Service","Type":"Service","Description":"Diagnostic visit and system evaluation","UnitPrice":189,"PurchaseCost":42,"Taxable":false}"#.utf8)
+        let data = Data(#"{"Id":"QBO-UI-CATALOG-RECONCILE","SyncToken":"12","Name":"HVAC Diagnostic Service","Type":"Service","Description":"Diagnostic visit and system evaluation","UnitPrice":189,"PurchaseCost":42,"Taxable":false,"Active":true}"#.utf8)
         return (try? JSONDecoder().decode(QuickBooksItem.self, from: data)).map { [$0] } ?? []
     }
 
@@ -1556,7 +1559,7 @@ struct QuickBooksManagementView: View {
     private var catalogReconciliationEntries: [QuickBooksCatalogReconciliationEntry] {
         QuickBooksCatalogReconciliation.entries(
             localItems: localCatalogItems,
-            remoteItems: items
+            remoteItems: catalogComparedItems
         )
     }
 
@@ -2091,7 +2094,6 @@ struct QuickBooksManagementView: View {
                                         .tint(Color.brandGold)
                                         .foregroundStyle(Color.primaryBlack)
                                         .disabled(
-                                            !isAuthenticated ||
                                             activeCatalogPublicationID != nil ||
                                             activePricebookReviewID != nil
                                         )
@@ -2176,7 +2178,7 @@ struct QuickBooksManagementView: View {
                                     .foregroundStyle(.orange)
                                     .accessibilityIdentifier("QuickBooksCatalogComparisonWaiting")
 
-                                    Text("The local changes remain saved and no QuickBooks update has been sent. Reconnect or refresh before choosing which version wins.")
+                                    Text("Your changes are saved. Check the business connection for this item before choosing a version.")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
 
@@ -2200,14 +2202,11 @@ struct QuickBooksManagementView: View {
                                             }
                                         }
                                         .accessibilityIdentifier("QuickBooksCatalogComparisonWaitingItem-\(item.id.uuidString)")
+                                        Button("Check QuickBooks comparison") { refreshApprovedLinkedCatalogItem(item) }
+                                            .disabled(catalogTask != nil)
+                                            .accessibilityIdentifier("RefreshQuickBooksCatalogComparison-\(item.id.uuidString)")
+                                        catalogPublicationReviewButton(item)
                                     }
-
-                                    Button(isLoading ? "Refreshing..." : "Refresh QuickBooks") {
-                                        syncAllQuickBooksData()
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .disabled(!isAuthenticated || isLoading)
-                                    .accessibilityIdentifier("RefreshQuickBooksCatalogComparison")
                                 }
 
                                 ForEach(catalogReconciliationEntries) { entry in
@@ -2261,11 +2260,6 @@ struct QuickBooksManagementView: View {
                                             VStack(alignment: .leading) {
                                                 catalogReconciliationButtons(for: entry)
                                             }
-                                        }
-                                        if !isAuthenticated {
-                                            Text("Connect QuickBooks to recheck these values before choosing a version.")
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
                                         }
                                     }
                                     .padding(.vertical, 5)
@@ -2410,8 +2404,8 @@ struct QuickBooksManagementView: View {
                                 "Browse \(activeCompanyPricebookItems.count) active \(activeCompanyPricebookItems.count == 1 ? "item" : "items")",
                                 systemImage: "books.vertical"
                             )
+                            .accessibilityIdentifier("CompanyPricebookDisclosure")
                         }
-                        .accessibilityIdentifier("CompanyPricebookDisclosure")
 
                         Button("Add Catalog Item") { showingNewCatalogItemSheet = true }
                             .buttonStyle(.borderedProminent)
@@ -3185,8 +3179,9 @@ struct QuickBooksManagementView: View {
                     .presentationSizing(.page)
                 }
                 .sheet(item: $catalogPublicationBeingReviewed) { item in
-                    CatalogPublicationReviewSheet(item: item, context: modelContext, api: catalogAPIForCurrentContext(),
-                                                  client: catalogReviewClient()) { identifier in
+                    CatalogPublicationReviewSheet(item: item, context: modelContext,
+                        connectionClient: catalogBusinessClient(), fixtureCompanyID: catalogFixtureCompanyID,
+                        client: catalogReviewClient()) { identifier in
                         startCatalogWorkflow(item, mode: .recover(identifier))
                     }
                 }
@@ -3294,12 +3289,14 @@ struct QuickBooksManagementView: View {
                     )
                 )
                 .onAppear {
+                    catalogVisit = UUID()
+                    catalogVisible = true
                     if let pendingWorkspace = GunnAireAppIntentRouter.consumePendingQuickBooksWorkspace() {
                         selectedWorkspace = pendingWorkspace
                     }
                     #if DEBUG
                     if catalogReconciliationFixtureRequested {
-                        catalogSnapshotWorkflow = try? catalogAPIForCurrentContext().captureWorkspaceWorkflow()
+                        catalogSnapshotWorkflow = try? catalogFixtureSnapshot()
                         if catalogComparisonUnavailableFixtureRequested {
                             items = []
                         } else if linkedPricebookReviewFixtureRequested {
@@ -3307,6 +3304,7 @@ struct QuickBooksManagementView: View {
                         } else {
                             items = Self.catalogReconciliationFixtureItems
                         }
+                        catalogComparedItems = items
                         showCatalogReconciliationQueue = true
                     }
                     if accountingMappingFixtureRequested {
@@ -3335,6 +3333,8 @@ struct QuickBooksManagementView: View {
                     }
                 }
                 .onDisappear {
+                    catalogVisible = false
+                    catalogVisit = UUID()
                     for owner in billingPublicationLifecycles.values { owner.cancel() }
                     billingPublicationLifecycles.removeAll()
                     activeLocalInvoicePublicationID = nil
@@ -3344,6 +3344,7 @@ struct QuickBooksManagementView: View {
                     catalogTask = nil
                     catalogConfirmationWorkflow = nil
                     catalogSnapshotWorkflow = nil
+                    catalogComparedItems = []
                     catalogPublicationConfirmation = nil
                     activePricebookReviewID = nil
                     activeCatalogPublicationID = nil
@@ -3358,7 +3359,7 @@ struct QuickBooksManagementView: View {
     }
 
     private func syncAllQuickBooksData() {
-        guard catalogLifecycle.activeID == nil else {
+        guard catalogLifecycle.activeID == nil, catalogTask == nil else {
             statusMessage = "Finish the current catalog action before refreshing QuickBooks."
             return
         }
@@ -3387,7 +3388,9 @@ struct QuickBooksManagementView: View {
         }
         resourceSyncTask?.cancel()
         clearQuickBooksSyncSnapshot()
-        catalogSnapshotWorkflow = try? quickBooksDataAPI.captureWorkspaceWorkflow()
+        // General device imports are not business-session comparison evidence.
+        catalogSnapshotWorkflow = nil
+        catalogComparedItems = []
         lastSuccessfulSyncAt = syncRun.workflow.successfulSyncDateKey.flatMap {
             UserDefaults.standard.object(forKey: $0) as? Date
         }
@@ -3625,7 +3628,7 @@ struct QuickBooksManagementView: View {
     }
 
     private func createCatalogItem(_ draft: QuickBooksCatalogItemDraft) {
-        guard catalogLifecycle.activeID == nil else { actionMessage = QuickBooksCatalogWorkflowError.busy.localizedDescription; return }
+        guard catalogLifecycle.activeID == nil, catalogTask == nil else { actionMessage = QuickBooksCatalogWorkflowError.busy.localizedDescription; return }
         do { try QuickBooksSyncAccessPolicy.validate(context: modelContext) }
         catch { actionMessage = error.localizedDescription; return }
         let localItem = QuickBooksCatalogLocalCreationPolicy.makeItem(
@@ -3653,11 +3656,6 @@ struct QuickBooksManagementView: View {
             return
         }
 
-        guard isAuthenticated else {
-            activeCatalogPublicationID = nil
-            actionMessage = "Saved \(localItem.name) locally. Connect QuickBooks to publish it."
-            return
-        }
         publishApprovedCatalogItem(localItem)
     }
 
@@ -3723,7 +3721,7 @@ struct QuickBooksManagementView: View {
     }
 
     private func approvePricebookItem(_ item: Item) {
-        guard catalogLifecycle.activeID == nil else { actionMessage = QuickBooksCatalogWorkflowError.busy.localizedDescription; return }
+        guard catalogLifecycle.activeID == nil, catalogTask == nil else { actionMessage = QuickBooksCatalogWorkflowError.busy.localizedDescription; return }
         do { try QuickBooksSyncAccessPolicy.validate(context: modelContext) }
         catch { actionMessage = error.localizedDescription; return }
         let previous = QuickBooksCatalogItemRevision(item)
@@ -3744,18 +3742,7 @@ struct QuickBooksManagementView: View {
 
         if hasLinkedQuickBooksItem {
             showCatalogReconciliationQueue = true
-            guard isAuthenticated else {
-                activePricebookReviewID = nil
-                actionMessage = "\(item.name) is approved for the company pricebook. Connect QuickBooks to load its linked comparison; no QuickBooks change was sent."
-                return
-            }
             refreshApprovedLinkedCatalogItem(item)
-            return
-        }
-
-        guard isAuthenticated else {
-            activePricebookReviewID = nil
-            actionMessage = "\(item.name) is approved for the company pricebook. Connect QuickBooks to publish it."
             return
         }
 
@@ -3766,7 +3753,7 @@ struct QuickBooksManagementView: View {
         let isUnlinked = item.quickBooksID?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .isEmpty != false
-        guard isAuthenticated, isUnlinked else {
+        guard isUnlinked else {
             approvePricebookItem(item)
             return
         }
@@ -3774,17 +3761,16 @@ struct QuickBooksManagementView: View {
     }
 
     private func requestCatalogPublicationRetry(_ item: Item) {
-        guard isAuthenticated else {
-            retryCatalogPublication(item)
-            return
-        }
         requestCatalogConfirmation(item, intent: .retry)
     }
 
     private func requestCatalogConfirmation(_ item: Item, intent: QuickBooksCatalogPublicationConfirmationIntent) {
         do {
             try QuickBooksSyncAccessPolicy.validate(context: modelContext)
-            catalogConfirmationWorkflow = try catalogAPIForCurrentContext().captureWorkspaceWorkflow()
+            let visit = catalogVisit
+            catalogConfirmationWorkflow = try WorkspaceProviderOperation.capture {
+                catalogVisible && catalogVisit == visit
+            }
             catalogPublicationConfirmation = .make(for: item, intent: intent)
         } catch { actionMessage = error.localizedDescription }
     }
@@ -3824,10 +3810,6 @@ struct QuickBooksManagementView: View {
     private func retryCatalogPublication(_ item: Item) {
         guard !item.requiresPricebookReview, !item.isCatalogArchived,
               item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false else { return }
-        guard isAuthenticated else {
-            actionMessage = "Connect QuickBooks before retrying \(item.name)."
-            return
-        }
         startCatalogWorkflow(item, mode: .publish)
     }
 
@@ -3835,28 +3817,48 @@ struct QuickBooksManagementView: View {
         startCatalogWorkflow(item, mode: .publish)
     }
 
-    private func catalogAPIForCurrentContext() -> QuickBooksDataAPI {
+    private var catalogFixtureCompanyID: UUID? {
         #if DEBUG
-        if GunnAireCloudKit.usesTestDatabase &&
-            (catalogReconciliationFixtureRequested ||
-             ProcessInfo.processInfo.arguments.contains("-uiTestForceQuickBooksConnected")) {
-            let fixtureItems = linkedPricebookReviewFixtureRequested
-                ? Self.linkedPricebookReviewFixtureItems : Self.catalogReconciliationFixtureItems
-            return QuickBooksDataAPI(testTokens: .init(accessToken: "catalog-ui-fixture", expiration: .distantFuture),
-                realmID: "catalog-ui-fixture", environment: Config.QuickBooks.environment,
-                catalogCompanyID: UUID(uuidString: "10000000-0000-4000-8000-000000000001")) { request in
-                // UI previews exercise the real lifecycle with isolated GETs.
-                // They never use saved credentials or dispatch provider writes.
-                guard request.httpMethod == "GET", let remote = fixtureItems.first else {
+        if GunnAireCloudKit.usesTestDatabase {
+            return UUID(uuidString: "10000000-0000-4000-8000-000000000001")!
+        }
+        #endif
+        return nil
+    }
+
+    private func catalogBusinessClient() -> SharedCatalogClient {
+        #if DEBUG
+        if GunnAireCloudKit.usesTestDatabase {
+            let fixtures = linkedPricebookReviewFixtureRequested ? Self.linkedPricebookReviewFixtureItems : Self.catalogReconciliationFixtureItems
+            return .init { path, method, body in
+                guard method == "GET", body == nil, catalogReconciliationFixtureRequested,
+                      !ProcessInfo.processInfo.arguments.contains("-uiTestSharedCatalogOffline") else {
                     throw URLError(.notConnectedToInternet)
                 }
-                return (try JSONEncoder().encode(QuickBooksItemResponse(Item: remote)),
-                    HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+                let pairs = URLComponents(string: path)?.queryItems ?? []
+                var values: [String: Any] = Dictionary(uniqueKeysWithValues: pairs.map { ($0.name, $0.value ?? "") })
+                values.merge(["realmID": "catalog-ui-fixture", "environment": Config.QuickBooks.environment,
+                              "protocolVersion": 1, "connectionRevision": String(repeating: "a", count: 64)]) { _, new in new }
+                if let remote = fixtures.first {
+                    values["item"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(remote))
+                }
+                return try JSONSerialization.data(withJSONObject: values)
             }
         }
         #endif
-        return quickBooksDataAPI
+        return .live
     }
+
+    #if DEBUG
+    private func catalogFixtureSnapshot() throws -> QuickBooksDataAPI.CapturedWorkspaceWorkflow {
+        let visit = catalogVisit
+        let operation = try WorkspaceProviderOperation.capture { catalogVisible && catalogVisit == visit }
+        return try QuickBooksDataAPI(sharedCompanyID: catalogFixtureCompanyID!, realmID: "catalog-ui-fixture",
+            environment: Config.QuickBooks.environment, connectionRevision: String(repeating: "a", count: 64),
+            operation: operation, billingPublisher: .init { _, _, _ in throw BillingPublicationError.accessRequired })
+            .captureWorkspaceWorkflow()
+    }
+    #endif
 
     private func catalogReviewClient() -> CatalogPublicationReviewClient {
         #if DEBUG
@@ -3868,9 +3870,10 @@ struct QuickBooksManagementView: View {
     }
 
     private func startCatalogWorkflow(_ item: Item, mode: QuickBooksCatalogWorkflow.Mode) {
-        guard catalogLifecycle.activeID == nil else { actionMessage = QuickBooksCatalogWorkflowError.busy.localizedDescription; return }
-        let workflow: QuickBooksCatalogWorkflow
-        let snapshotOwner: QuickBooksDataAPI.CapturedWorkspaceWorkflow
+        guard catalogLifecycle.activeID == nil, catalogTask == nil else { actionMessage = QuickBooksCatalogWorkflowError.busy.localizedDescription; return }
+        let preparation: SharedCatalogPreparation
+        let previousOwner = catalogSnapshotWorkflow
+        let visit = catalogVisit
         do {
             switch mode {
             case .update, .useProvider:
@@ -3878,10 +3881,9 @@ struct QuickBooksManagementView: View {
                 try owner.check()
             default: break
             }
-            let api = catalogAPIForCurrentContext()
-            snapshotOwner = try api.captureWorkspaceWorkflow()
-            workflow = try QuickBooksCatalogWorkflow(item: item, context: modelContext, api: api,
-                lifecycle: catalogLifecycle, mode: mode, configuration: accountingConfiguration)
+            preparation = try SharedCatalogPreparation(item: item, context: modelContext,
+                isCurrent: { catalogVisible && catalogVisit == visit },
+                client: catalogBusinessClient(), fixtureCompanyID: catalogFixtureCompanyID)
         } catch {
             activePricebookReviewID = nil
             activeCatalogPublicationID = nil
@@ -3902,7 +3904,7 @@ struct QuickBooksManagementView: View {
             guard let owner = catalogSnapshotWorkflow else { throw WorkspaceProviderAccessError.unavailable }
             try owner.check()
         } catch {
-            items = []
+            catalogComparedItems = []
             catalogSnapshotWorkflow = nil
         }
         switch mode {
@@ -3912,8 +3914,10 @@ struct QuickBooksManagementView: View {
         }
         actionMessage = "Checking \(item.name) in QuickBooks…"
         catalogTask = Task { @MainActor in
+            var workflow: QuickBooksCatalogWorkflow?
             defer {
-                if catalogLifecycle.finish(workflow.run) {
+                if let workflow { _ = catalogLifecycle.finish(workflow.run) }
+                if catalogVisible && catalogVisit == visit {
                     activePricebookReviewID = nil
                     activeCatalogPublicationID = nil
                     activeCatalogReconciliationID = nil
@@ -3921,14 +3925,29 @@ struct QuickBooksManagementView: View {
                 }
             }
             do {
-                let outcome = try await workflow.execute()
-                try workflow.run.check()
+                let flow = try await preparation.makeWorkflow(lifecycle: catalogLifecycle, mode: mode)
+                workflow = flow
+                let currentScope = SharedCatalogComparisonScope(flow.snapshotOwner)
+                let sameScope = currentScope != nil && currentScope == SharedCatalogComparisonScope(previousOwner)
+                if !sameScope { catalogComparedItems = []; catalogSnapshotWorkflow = nil }
+                switch mode {
+                case .update, .useProvider:
+                    guard sameScope, let previousOwner else {
+                        throw QuickBooksCatalogWorkflowError.reviewChanged
+                    }
+                    try previousOwner.check()
+                default: break
+                }
+                let outcome = try await flow.execute()
+                try flow.run.check()
                 if let index = items.firstIndex(where: { $0.Id == outcome.remote.Id }) {
                     items[index] = outcome.remote
                 } else {
                     items.append(outcome.remote)
                 }
-                catalogSnapshotWorkflow = snapshotOwner
+                catalogComparedItems.removeAll { $0.Id == outcome.remote.Id }
+                catalogComparedItems.append(outcome.remote)
+                catalogSnapshotWorkflow = flow.snapshotOwner
                 var message: String
                 switch outcome.link {
                 case .reconciliationRequired(let count):
@@ -3955,12 +3974,19 @@ struct QuickBooksManagementView: View {
                 if impact.invoiceCount > 0 { showInvoicePublicationQueue = true }
                 actionMessage = impact.publicationNextStep.map { "\(message) Next, \($0.lowercased())" } ?? message
             } catch {
-                guard catalogLifecycle.isCurrent(workflow.run) else { return }
+                guard catalogVisible && catalogVisit == visit, !Task.isCancelled else { return }
                 // A revoked context or a changed item is deliberately not saved.
-                do { try workflow.recordFailure(error) } catch { /* retained for explicit review */ }
-                showCatalogPublicationQueue = true
-                showCatalogReconciliationQueue = true
-                actionMessage = workflow.failureMessage(error)
+                if let workflow, catalogLifecycle.isCurrent(workflow.run) {
+                    do { try workflow.recordFailure(error) } catch { /* retained for explicit review */ }
+                    switch mode {
+                    case .publish, .recover: showCatalogPublicationQueue = true
+                    case .compare, .update, .useProvider: showCatalogReconciliationQueue = true
+                    }
+                }
+                // A failed connection check has not started a publication.
+                // Keep the current disclosure state instead of expanding every
+                // queue and pushing the approval result off the iPad screen.
+                actionMessage = workflow?.failureMessage(error) ?? error.localizedDescription
             }
         }
     }
@@ -4704,7 +4730,6 @@ struct QuickBooksManagementView: View {
     }
 
     private func pricebookApprovalButtonTitle(for item: Item) -> String {
-        guard isAuthenticated else { return "Approve for Pricebook" }
         return item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
             ? "Approve & Compare"
             : "Approve & Publish"
@@ -4733,7 +4758,7 @@ struct QuickBooksManagementView: View {
             useQuickBooksCatalogVersion(entry)
         }
         .buttonStyle(.bordered)
-        .disabled(!isAuthenticated || catalogLifecycle.activeID != nil)
+        .disabled(catalogTask != nil || catalogLifecycle.activeID != nil)
         .accessibilityIdentifier("UseQuickBooksCatalogVersion-\(entry.localItem.id.uuidString)")
 
         Button(activeCatalogReconciliationID == entry.localItem.id ? "Publishing..." : "Publish GunnAire Version") {
@@ -4743,7 +4768,7 @@ struct QuickBooksManagementView: View {
         .tint(Color.brandGold)
         .foregroundStyle(Color.primaryBlack)
         .disabled(
-            !isAuthenticated ||
+            catalogTask != nil ||
             catalogLifecycle.activeID != nil ||
             !QuickBooksCatalogReconciliation.canPublish(
                 localItem: entry.localItem,
@@ -4756,7 +4781,7 @@ struct QuickBooksManagementView: View {
     private func catalogPublicationReviewButton(_ item: Item) -> some View {
         Button("Catalog publication review") { catalogPublicationBeingReviewed = item }
             .buttonStyle(.bordered)
-            .disabled(!isAuthenticated || catalogLifecycle.activeID != nil)
+            .disabled(catalogTask != nil || catalogLifecycle.activeID != nil)
             .accessibilityIdentifier("ReviewCatalogPublications-\(item.id.uuidString)")
     }
 

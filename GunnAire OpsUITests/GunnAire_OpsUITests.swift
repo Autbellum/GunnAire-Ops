@@ -7114,7 +7114,18 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(reviewItem.exists)
 
         approveItem.tap()
-        XCTAssertTrue(app.staticTexts["No field-created catalog items need review."].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["ConfirmQuickBooksCatalogPublication"].waitForExistence(timeout: 3))
+        // The iPad confirmation popover exposes its button and backing button
+        // under the same identifier. Activate the visible outer control.
+        app.buttons["ConfirmQuickBooksCatalogPublication"].firstMatch.tap()
+        let approved = app.staticTexts["No field-created catalog items need review."]
+        for _ in 0..<10 where !approved.isHittable { app.swipeUp() }
+        XCTAssertTrue(approved.waitForExistence(timeout: 3))
+        XCTAssertFalse(approveItem.exists)
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "Shared catalog - approved item retained offline"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
     }
 
     @MainActor
@@ -7127,7 +7138,7 @@ final class GunnAire_OpsUITests: XCTestCase {
             "-uiTestAuthenticatedAdmin",
             "-uiTestSeedCollectibleJob",
             "-uiTestSeedLinkedPricebookReview",
-            "-uiTestForceQuickBooksConnected",
+            "-uiTestForceQuickBooksDisconnected",
             "-GunnAirePendingAppRoute", "quickBooksManagement"
         ]
         app.launch()
@@ -7173,7 +7184,7 @@ final class GunnAire_OpsUITests: XCTestCase {
             "-uiTestAuthenticatedAdmin",
             "-uiTestSeedCollectibleJob",
             "-uiTestSeedPricebookReview",
-            "-uiTestForceQuickBooksConnected",
+            "-uiTestForceQuickBooksDisconnected",
             "-GunnAirePendingAppRoute", "quickBooksManagement"
         ]
         app.launch()
@@ -7236,11 +7247,12 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(waitForHittable(companyPricebook))
         companyPricebook.tap()
 
-        let syncStatus = app.staticTexts["Synced with QuickBooks"]
-        for _ in 0..<4 where !(syncStatus.exists && syncStatus.isHittable) {
+        let syncStatus = app.staticTexts["CompanyPricebookSyncStatus-\(catalogItemID)"]
+        for _ in 0..<12 where !(syncStatus.exists && syncStatus.isHittable) {
             app.swipeUp()
         }
         XCTAssertTrue(waitForHittable(syncStatus))
+        XCTAssertEqual(syncStatus.label, "Synced with QuickBooks")
         XCTAssertTrue(app.staticTexts["$189.00"].exists)
 
         let edit = app.buttons["Edit HVAC Diagnostic Service"]
@@ -7334,7 +7346,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(waitForHittable(result))
         XCTAssertEqual(
             result.label,
-            "Saved Offline Taxable Capacitor locally. Connect QuickBooks to publish it."
+            "The shared catalog service is unavailable. Your item is saved. No direct QuickBooks retry was sent."
         )
 
         let queuedItem = app.staticTexts["Offline Taxable Capacitor"]
@@ -7346,7 +7358,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Publication pending"].exists)
         let retry = app.buttons["Retry publication for Offline Taxable Capacitor"]
         XCTAssertTrue(retry.exists)
-        XCTAssertFalse(retry.isEnabled)
+        XCTAssertTrue(retry.isEnabled)
     }
 
     @MainActor
@@ -7726,7 +7738,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = [
             "-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-uiTestAuthenticatedAdmin",
-            "-uiTestSeedCollectibleJob", "-uiTestSeedCatalogReconciliation", "-uiTestForceQuickBooksConnected",
+            "-uiTestSeedCollectibleJob", "-uiTestSeedCatalogReconciliation", "-uiTestForceQuickBooksDisconnected",
             "-uiTestCatalogPublicationReview", "-GunnAirePendingAppRoute", "quickBooksManagement"
         ]
         app.launch()
@@ -7770,7 +7782,7 @@ final class GunnAire_OpsUITests: XCTestCase {
             "-uiTestAuthenticatedAdmin",
             "-uiTestSeedCollectibleJob",
             "-uiTestSeedCatalogReconciliation",
-            "-uiTestForceQuickBooksConnected",
+            "-uiTestForceQuickBooksDisconnected",
             "-GunnAirePendingAppRoute", "quickBooksManagement"
         ]
         app.launch()
@@ -7812,21 +7824,32 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
-    func testOfflineCatalogComparisonRequiresReconnectBeforeEitherDirection() throws {
+    func testOfflineSharedCatalogComparisonRetainsPricesWithoutDeviceOAuth() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
         app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting",
             "-uiTestAuthenticatedAdmin", "-uiTestSeedCollectibleJob", "-uiTestSeedCatalogReconciliation",
-            "-uiTestForceQuickBooksDisconnected", "-GunnAirePendingAppRoute", "quickBooksManagement"]
+            "-uiTestForceQuickBooksDisconnected", "-uiTestSharedCatalogOffline",
+            "-GunnAirePendingAppRoute", "quickBooksManagement"]
         app.launch()
         XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
         app.segmentedControls["QuickBooksWorkspacePicker"].buttons["Sales"].tap()
         let useProvider = app.buttons["Use QuickBooks Version"]
         for _ in 0..<12 where !useProvider.exists { app.swipeUp() }
         XCTAssertTrue(useProvider.waitForExistence(timeout: 3))
-        XCTAssertFalse(useProvider.isEnabled)
-        XCTAssertFalse(app.buttons["Publish GunnAire Version"].isEnabled)
+        XCTAssertTrue(useProvider.isEnabled)
+        useProvider.tap()
+        let failure = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Your item is saved.")).firstMatch
+        for _ in 0..<14 where !failure.isHittable { app.swipeDown() }
+        XCTAssertTrue(failure.waitForExistence(timeout: 3))
+        for _ in 0..<14 where !useProvider.isHittable { app.swipeUp() }
+        XCTAssertTrue(useProvider.isEnabled)
+        XCTAssertTrue(app.buttons["Publish GunnAire Version"].isEnabled)
         XCTAssertTrue(app.staticTexts["Sales price"].exists)
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "Shared catalog - offline original prices retained"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
     }
 
     @MainActor
@@ -7918,10 +7941,10 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertEqual(waiting.label, "Waiting for a live QuickBooks comparison")
         XCTAssertTrue(app.staticTexts["HVAC Diagnostic Service"].exists)
         XCTAssertTrue(app.staticTexts["QBO QBO-UI-CATALOG-RECONCILE • Staged locally"].exists)
-        XCTAssertTrue(app.staticTexts["The local changes remain saved and no QuickBooks update has been sent. Reconnect or refresh before choosing which version wins."].exists)
-        let refresh = app.buttons["RefreshQuickBooksCatalogComparison"]
+        XCTAssertTrue(app.staticTexts["Your changes are saved. Check the business connection for this item before choosing a version."].exists)
+        let refresh = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "RefreshQuickBooksCatalogComparison-")).firstMatch
         XCTAssertTrue(refresh.exists)
-        XCTAssertFalse(refresh.isEnabled)
+        XCTAssertTrue(refresh.isEnabled)
         let catalogPublicationRetries = app.buttons.matching(
             NSPredicate(format: "identifier BEGINSWITH %@", "RetryCatalogPublication-")
         )

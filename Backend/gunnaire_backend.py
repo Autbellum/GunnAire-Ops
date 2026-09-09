@@ -53,7 +53,7 @@ except ModuleNotFoundError:
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.08.41"
+SERVICE_VERSION = "2026.09.08.42"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -6263,16 +6263,17 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         )
         session_id = self._application_session_id
         suffix = parsed.path.removeprefix("/api/catalog-publications")
-        parts = suffix.strip("/").split("/") if suffix else []
+        parts = suffix[1:].split("/") if suffix.startswith("/") else []
         try:
-            if method == "GET" and not parts:
-                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+            if method == "GET" and (not suffix or suffix == "/context"):
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True, max_num_fields=2)
                 if set(query) != {"companyID", "localItemID"} or any(len(value) != 1 for value in query.values()):
                     raise payment_attempts.AttemptError("invalid_query", "Choose one business catalog item.", 400)
-                result = {"publications": publisher.list_for_item(session_id, query["companyID"][0], query["localItemID"][0])}
+                result = (publisher.context(session_id, {key: value[0] for key, value in query.items()}) if suffix == "/context" else
+                          {"publications": publisher.list_for_item(session_id, query["companyID"][0], query["localItemID"][0])})
             elif method == "POST" and not parsed.query:
-                payload = json.loads(self.read_limited_body(32768).decode("utf-8"))
-                if not parts:
+                payload = qbo_change_capture.strict_json(self.read_limited_body(32768).decode("utf-8"))
+                if not suffix:
                     result = publisher.publish(session_id, payload)
                 elif len(parts) == 2 and isinstance(payload, dict) and not payload:
                     identifier, action = parts

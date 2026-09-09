@@ -128,6 +128,95 @@ class CatalogPublicationTests(unittest.TestCase):
     def publish(self, payload=None):
         return self.publisher.publish(self.admin, payload or self.payload())
 
+    def shared_context(self, **changes):
+        return self.publisher.context(self.admin, {"companyID": self.company, "localItemID": self.local_id, **changes})
+
+    def test_shared_catalog_context_is_read_only_and_contains_only_scoped_defaults(self):
+        result = self.shared_context()
+        self.assertEqual(result["companyID"], self.company)
+        self.assertEqual(result["localItemID"], self.local_id)
+        self.assertEqual(result["incomeAccount"], {"value": "income"})
+        self.assertEqual(result["expenseAccount"], {"value": "expense"})
+        self.assertEqual(result["protocolVersion"], 1)
+        self.assertIsNone(result["item"])
+        self.assertRegex(result["connectionRevision"], "^[a-f0-9]{64}$")
+        self.assertFalse(self.reads or self.writes)
+        for private in ("cipher", "token", "client", "grant_fingerprint", "actor_email", "session"):
+            self.assertNotIn(private, json.dumps(result))
+        with backend.db() as connection:
+            self.assertEqual(connection.execute("SELECT count(*) FROM catalog_publications").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT count(*) FROM catalog_entity_mappings").fetchone()[0], 0)
+
+    def test_shared_context_requires_current_admin_and_exact_company_before_provider_access(self):
+        payload = {"companyID": self.company, "localItemID": self.local_id}
+        for role in ("Accounting", "Dispatcher", "Field Technician", "Standard"):
+            self.expect_code("administrator_required", lambda: self.publisher.context(self.sessions[role], payload))
+        self.expect_code("administrator_required", lambda: self.publisher.context("missing", payload))
+        self.expect_code("company_changed", lambda: self.shared_context(companyID=str(uuid.uuid4())))
+        self.assertFalse(self.reads or self.writes)
+
+    def test_shared_context_rejects_caller_realm_provider_id_and_malformed_identity(self):
+        for changes in ({"realmID": "foreign"}, {"providerID": "foreign"}, {"environment": "production"},
+                        {"localItemID": "not-a-uuid"}, {"companyID": None}):
+            with self.assertRaises(catalog.AttemptError):
+                self.shared_context(**changes)
+        self.assertFalse(self.reads or self.writes)
+
+    def test_shared_context_reads_only_exact_mapping_without_creating_a_proposal(self):
+        self.publish()
+        self.writes.clear(); self.reads.clear()
+        self.remotes[0]["UnitPrice"] = 299
+        self.remotes[0]["UnneededPrivateData"] = "never return"
+        result = self.shared_context()
+        self.assertEqual(result["item"]["Id"], "qbo-item")
+        self.assertEqual(result["item"]["UnitPrice"], 299)
+        self.assertNotIn("UnneededPrivateData", result["item"])
+        self.assertEqual(self.reads, [("item", "qbo-item")])
+        self.assertFalse(self.writes)
+        with backend.db() as connection:
+            self.assertEqual(connection.execute("SELECT count(*) FROM catalog_publications").fetchone()[0], 1)
+
+    def test_shared_context_stops_if_grant_role_company_mapping_or_config_changes_during_read(self):
+        self.publish()
+        self.writes.clear()
+        for sql, code in (
+            ("UPDATE qbo_connections SET authorized_at='replacement'", "grant_changed"),
+            ("UPDATE users SET role='Standard' WHERE role='Admin'", "administrator_required"),
+            ("UPDATE company_identity SET company_id='different'", "company_changed"),
+            ("UPDATE catalog_entity_mappings SET provider_id='different'", "review_changed"),
+            ("UPDATE qbo_accounting_config SET default_income_account_ref='different'", "review_changed"),
+        ):
+            # Each mutation is rolled back after this independent suspension test.
+            with backend.db() as db:
+                backup = {table: [dict(row) for row in db.execute("SELECT * FROM " + table)] for table in
+                          ("qbo_connections", "users", "company_identity", "catalog_entity_mappings", "qbo_accounting_config")}
+            def change():
+                with backend.db() as db:
+                    db.execute(sql)
+            self.before_read = change
+            self.expect_code(code, self.shared_context)
+            with backend.db() as db:
+                for table, rows in backup.items():
+                    db.execute("DELETE FROM " + table)
+                    for row in rows:
+                        db.execute("INSERT INTO " + table + " (" + ",".join(row) + ") VALUES (" + ",".join("?" for _ in row) + ")", tuple(row.values()))
+        self.assertFalse(self.writes)
+
+    def test_shared_context_epoch_pins_the_following_catalog_publication(self):
+        result = self.shared_context()
+        with backend.db() as connection:
+            connection.execute("UPDATE qbo_connections SET authorized_at='replacement'")
+        self.expect_code("grant_changed", lambda: self.publish(self.payload(connectionRevision=result["connectionRevision"])))
+        self.assertFalse(self.writes)
+
+    def test_shared_context_missing_defaults_does_not_invent_accounts_or_copy_other_realm(self):
+        with backend.db() as connection:
+            connection.execute("UPDATE qbo_accounting_config SET realm_id='foreign'")
+        result = self.shared_context()
+        self.assertIsNone(result["incomeAccount"])
+        self.assertIsNone(result["expenseAccount"])
+        self.assertFalse(self.reads or self.writes)
+
     def test_shared_billing_pin_preserves_catalog_idempotency(self):
         with backend.db() as connection:
             epoch = connection_revision(catalog.grant_fingerprint(connection.execute("SELECT * FROM qbo_connections").fetchone()))
@@ -723,6 +812,14 @@ class CatalogPublicationTests(unittest.TestCase):
             except urllib.error.HTTPError as error:
                 return error.code, json.load(error)
         try:
+            context_path = "/api/catalog-publications/context?companyID=" + self.company + "&localItemID=" + self.local_id
+            status, context = request(context_path)
+            self.assertEqual(status, 200, context)
+            self.assertEqual(context["protocolVersion"], 1)
+            self.assertEqual(request(context_path, token=self.tokens["Standard"])[0], 403)
+            for path in (context_path + "&realmID=foreign", context_path + "&companyID=" + self.company,
+                         context_path.replace("/context?", "/context/?"), context_path.replace("/context?", "//context?")):
+                self.assertIn(request(path)[0], (400, 404))
             status, result = request("/api/catalog-publications", self.payload())
             self.assertEqual(status, 200, result)
             identifier = result["publication"]["id"]

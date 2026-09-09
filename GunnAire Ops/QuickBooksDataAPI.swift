@@ -142,6 +142,7 @@ final class QuickBooksDataAPI: ObservableObject {
     let customerPublicationTransport: CustomerPublicationBoundary.Transport?
     let billingPublicationClient: BillingPublicationClient?
     let catalogRecoveryTransport: (UUID) async throws -> CatalogPublicationResponse
+    private(set) var catalogReadTransport: ((String) async throws -> QuickBooksItem)?
     private let catalogFixtureCompanyID: UUID?
     private var sharedBillingOperation: WorkspaceProviderOperation?
     private(set) var sharedBillingConnectionRevision: String?
@@ -185,14 +186,17 @@ final class QuickBooksDataAPI: ObservableObject {
     init(sharedCompanyID: UUID, realmID: String, environment: String, connectionRevision: String,
          operation: WorkspaceProviderOperation, billingPublisher: BillingPublicationClient,
          catalogPublisher: @escaping CatalogPublicationBoundary.Transport = { _ in throw CatalogPublicationError.accessRequired },
-         customerPublisher: @escaping CustomerPublicationBoundary.Transport = { _ in throw CustomerPublicationError.accessRequired }) {
+         customerPublisher: @escaping CustomerPublicationBoundary.Transport = { _ in throw CustomerPublicationError.accessRequired },
+         catalogRecovery: @escaping (UUID) async throws -> CatalogPublicationResponse = { _ in throw CatalogPublicationError.needsReview },
+         catalogRead: ((String) async throws -> QuickBooksItem)? = nil) {
         requestTransport = { _ in throw BillingPublicationError.accessRequired }
         persistsCredentials = false
         catalogFixtureCompanyID = sharedCompanyID
         catalogPublicationTransport = catalogPublisher
         customerPublicationTransport = customerPublisher
         billingPublicationClient = billingPublisher
-        catalogRecoveryTransport = { _ in throw CatalogPublicationError.needsReview }
+        catalogRecoveryTransport = catalogRecovery
+        catalogReadTransport = catalogRead
         storedRealmID = realmID
         storedEnvironment = environment
         sharedBillingConnectionRevision = connectionRevision

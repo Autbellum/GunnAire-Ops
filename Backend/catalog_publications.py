@@ -481,6 +481,75 @@ class CatalogPublisher:
         row = self.reserve(session_id, payload)
         return self.run(session_id, row["id"], allow_send=True)
 
+    def context(self, session_id, payload):
+        """Business-session discovery and mapped-item read, never link adoption.
+
+        The caller supplies only local identity. Pin current authorization,
+        account defaults and mapping across every provider suspension. No
+        reservation, provider write or inferred mapping is made by this GET.
+        """
+        if not isinstance(payload, dict) or set(payload) != {"companyID", "localItemID"}:
+            raise failure("invalid_query", "Choose one original business catalog item.", 400)
+        company, item_id = canonical_uuid(payload["companyID"]), canonical_uuid(payload["localItemID"])
+
+        def snapshot(connection, intent):
+            _, grant = self.authorize(connection, session_id, intent, require_grant="grant_fingerprint" in intent)
+            mapping = connection.execute(
+                "SELECT provider_id FROM catalog_entity_mappings WHERE company_id=? AND realm_id=? AND environment=? AND local_item_id=?",
+                (*scope(intent), item_id),
+            ).fetchone()
+            config = connection.execute(
+                "SELECT * FROM qbo_accounting_config WHERE realm_id=? AND environment=?",
+                (intent["realm_id"], intent["environment"]),
+            ).fetchone()
+            return grant, mapping[0] if mapping else None, dict(config) if config else None
+
+        with self.database() as connection:
+            grant = connection.execute("SELECT * FROM qbo_connections WHERE id=1").fetchone()
+            if grant is None:
+                # Authorize the actor/company before disclosing connection state.
+                self.authorize(connection, session_id, {"company_id": company, "realm_id": "missing", "environment": "sandbox"}, False)
+            intent = {"company_id": company, "realm_id": grant["realm_id"], "environment": grant["environment"]}
+            grant, provider_id, config = snapshot(connection, intent)
+            reference(intent["realm_id"])
+            if intent["environment"] not in ("sandbox", "production"):
+                raise failure("provider_changed", "Review the business QuickBooks connection.")
+            intent["grant_fingerprint"] = grant["grant_fingerprint"]
+
+        def check():
+            with self.database() as connection:
+                _, current_id, current_config = snapshot(connection, intent)
+                if current_id != provider_id or current_config != config:
+                    raise failure("review_changed", "The saved item link or accounting setup changed. Refresh the original item.")
+
+        remote = None
+        if provider_id is not None:
+            reference(provider_id)
+            remote = validated_remote(self.provider_factory(grant, check).read("item", provider_id))
+            if remote["Id"] != provider_id:
+                raise failure("identity_conflict", "QuickBooks returned a different catalog identity.")
+            # Only supported pricebook evidence, never arbitrary provider data.
+            allowed = {"Id", "SyncToken", "Name", "Type", "Description", "Sku", "PurchaseDesc", "UnitPrice",
+                       "PurchaseCost", "Taxable", "Active", "IncomeAccountRef", "ExpenseAccountRef", "PrefVendorRef"} | INVENTORY_CREATE_FIELDS
+            remote = {key: value for key, value in remote.items() if key in allowed}
+            for key, value in list(remote.items()):
+                if key.endswith("Ref"):
+                    if not isinstance(value, dict):
+                        raise failure("provider_unconfirmed", "QuickBooks returned incomplete accounting references.")
+                    remote[key] = {"value": reference(value.get("value"))}
+                    if isinstance(value.get("name"), str) and len(value["name"]) <= 500:
+                        remote[key]["name"] = value["name"]
+        check()
+
+        def account(kind):
+            value = config.get("default_" + kind + "_account_ref") if config else None
+            return {"value": reference(value)} if value else None
+
+        return {"companyID": company, "localItemID": item_id, "realmID": intent["realm_id"],
+                "environment": intent["environment"], "protocolVersion": 1,
+                "connectionRevision": hashlib.sha256(canonical(["job-billing-connection-v1", grant["grant_fingerprint"]]).encode()).hexdigest(),
+                "incomeAccount": account("income"), "expenseAccount": account("expense"), "item": remote}
+
     def list_for_item(self, session_id, company_id, item_id):
         company_id, item_id = canonical_uuid(company_id), canonical_uuid(item_id)
         with self.database() as connection:

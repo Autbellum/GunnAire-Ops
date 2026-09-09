@@ -97,6 +97,7 @@ final class QuickBooksCatalogWorkflow {
     }
 
     let run: QuickBooksSyncRun
+    let snapshotOwner: QuickBooksDataAPI.CapturedWorkspaceWorkflow
     private let lifecycle: QuickBooksSyncLifecycle
     private let api: QuickBooksDataAPI
     private let context: ModelContext
@@ -138,6 +139,7 @@ final class QuickBooksCatalogWorkflow {
                 throw QuickBooksCatalogWorkflowError.remoteIdentity
             }
         }
+        snapshotOwner = try api.captureWorkspaceWorkflow()
         run = try lifecycle.begin(api: api, validateAccess: validate)
     }
 
@@ -190,11 +192,17 @@ final class QuickBooksCatalogWorkflow {
                 if self.api.catalogPublicationTransport != nil {
                     guard let configuration = configuration ?? self.configuration,
                           configuration.matches(realmID: self.run.workflow.realmID, environment: self.run.workflow.environment),
-                          let income = QuickBooksItemAccountResolver.configuredIncomeAccountRef(configuration: configuration) else {
+                          PaymentAttemptRecord.isReference(configuration.defaultIncomeAccountRef) else {
                         throw QuickBooksDataAPI.QBError.missingDefaultIncomeAccountRef
                     }
-                    let payload = QuickBooksCatalogCreateOperation.payload(for: self.item, incomeAccountRef: income,
-                        expenseAccountRef: QuickBooksItemAccountResolver.configuredExpenseAccountRef(configuration: configuration))
+                    // Catalog publication needs its own accounts, not unrelated
+                    // bank/card/sales-receipt defaults. The server rechecks them.
+                    let expense = configuration.defaultExpenseAccountRef.isEmpty ? nil : configuration.expenseAccountReference
+                    guard expense.map({ PaymentAttemptRecord.isReference($0.value) }) ?? true else {
+                        throw CatalogPublicationError.invalidProposal
+                    }
+                    let payload = QuickBooksCatalogCreateOperation.payload(for: self.item,
+                        incomeAccountRef: configuration.incomeAccountReference, expenseAccountRef: expense)
                     return try await self.publishOnServer(.create(payload))
                 }
                 let remoteItems = try await self.run.receive(self.api.fetchItems)
@@ -229,7 +237,12 @@ final class QuickBooksCatalogWorkflow {
             case .compare, .update, .useProvider:
                 guard let identifier = self.revision.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
                       !identifier.isEmpty else { throw QuickBooksCatalogWorkflowError.remoteIdentity }
-                let current: QuickBooksItem = try await self.run.receive { self.api.fetchItem(id: identifier, completion: $0) }
+                let current: QuickBooksItem
+                if let read = self.api.catalogReadTransport {
+                    current = try await read(identifier)
+                } else {
+                    current = try await self.run.receive { self.api.fetchItem(id: identifier, completion: $0) }
+                }
                 try self.checkItem()
                 guard current.Id == identifier else { throw QuickBooksCatalogWorkflowError.remoteIdentity }
                 switch self.mode {

@@ -31,7 +31,12 @@ struct CatalogPublicationReviewSheet: View {
     @Environment(\.dismiss) private var dismiss
     let item: Item
     let context: ModelContext
-    @State private var workflow: QuickBooksDataAPI.CapturedWorkspaceWorkflow?
+    let connectionClient: SharedCatalogClient
+    let fixtureCompanyID: UUID?
+    @State private var preparation: SharedCatalogPreparation?
+    @State private var connection: SharedCatalogConnection?
+    @State private var visit = UUID()
+    @State private var visible = false
     @State private var client: CatalogPublicationReviewClient
     let onRecover: (UUID) -> Void
     private let itemID: UUID
@@ -41,13 +46,14 @@ struct CatalogPublicationReviewSheet: View {
     @State private var busy = false
     @State private var cancellation: CatalogPublicationRecord?
 
-    init(item: Item, context: ModelContext, api: QuickBooksDataAPI,
+    init(item: Item, context: ModelContext, connectionClient: SharedCatalogClient? = nil, fixtureCompanyID: UUID? = nil,
          client: CatalogPublicationReviewClient? = nil, onRecover: @escaping (UUID) -> Void) {
         self.item = item
         self.itemID = item.id
         self.itemName = item.name
         self.context = context
-        self._workflow = State(initialValue: try? api.captureWorkspaceWorkflow())
+        self.connectionClient = connectionClient ?? .live
+        self.fixtureCompanyID = fixtureCompanyID
         self._client = State(initialValue: client ?? .live)
         self.onRecover = onRecover
     }
@@ -99,7 +105,17 @@ struct CatalogPublicationReviewSheet: View {
                     Button("Refresh", systemImage: "arrow.clockwise") { Task { await refresh() } }.disabled(busy)
                 }
             }
-            .task { await refresh() }
+            .task {
+                visit = UUID(); visible = true
+                let originalVisit = visit
+                do {
+                    preparation = try SharedCatalogPreparation(item: item, context: context,
+                        isCurrent: { visible && visit == originalVisit },
+                        client: connectionClient, fixtureCompanyID: fixtureCompanyID)
+                    await refresh()
+                } catch { message = error.localizedDescription }
+            }
+            .onDisappear { visible = false; visit = UUID(); preparation = nil; connection = nil; cancellation = nil; busy = false }
             .confirmationDialog("Cancel this unsent proposal?", isPresented: Binding(
                 get: { cancellation != nil }, set: { if !$0 { cancellation = nil } }
             ), titleVisibility: .visible, presenting: cancellation) { record in
@@ -116,33 +132,41 @@ struct CatalogPublicationReviewSheet: View {
     }
 
     private func check() throws {
-        guard let workflow, workflow.companyID != nil, workflow.realmID != nil else {
+        guard visible, let preparation else {
             throw CatalogPublicationError.accessRequired
         }
-        try workflow.check()
-        try QuickBooksSyncAccessPolicy.validate(context: context)
-        let matches = try context.fetch(FetchDescriptor<Item>()).filter { $0.id == itemID }
-        guard matches.count == 1, matches.first === item else { throw QuickBooksCatalogWorkflowError.itemChanged }
+        try preparation.check()
     }
 
     private func refresh() async {
         guard !busy else { return }
+        let originalVisit = visit
         busy = true
-        defer { busy = false }
+        defer { if visible && visit == originalVisit { busy = false } }
         do {
             try check()
-            guard let workflow, let companyID = workflow.companyID, let realmID = workflow.realmID else {
+            guard let preparation else {
                 throw CatalogPublicationError.accessRequired
             }
-            let incoming = try await client.list(companyID, itemID)
-            try check()
-            guard Set(incoming.map(\.id)).count == incoming.count else { throw CatalogPublicationError.invalidResponse }
-            for record in incoming {
-                try record.validate(companyID: companyID, realmID: realmID, environment: workflow.environment, itemID: itemID)
+            let current = try await preparation.connection()
+            if let connection {
+                guard connection.realmID == current.realmID, connection.environment == current.environment,
+                      connection.connectionRevision == current.connectionRevision else { throw CatalogPublicationError.needsReview }
             }
+            let incoming = try await client.list(current.companyID, itemID)
+            try check()
+            let after = try await preparation.connection()
+            guard after.realmID == current.realmID, after.environment == current.environment,
+                  after.connectionRevision == current.connectionRevision,
+                  incoming.count <= 100, Set(incoming.map(\.id)).count == incoming.count else { throw CatalogPublicationError.invalidResponse }
+            for record in incoming {
+                try record.validate(companyID: current.companyID, realmID: current.realmID, environment: current.environment, itemID: itemID)
+            }
+            connection = current
             records = incoming
             message = nil
         } catch {
+            guard visible && visit == originalVisit, !Task.isCancelled else { return }
             records = []
             message = error.localizedDescription
         }
@@ -150,14 +174,19 @@ struct CatalogPublicationReviewSheet: View {
 
     private func cancel(_ record: CatalogPublicationRecord) async {
         guard !busy else { return }
+        let originalVisit = visit
         busy = true
         do {
             try check()
+            guard let connection, record.state == "reserved" else { throw CatalogPublicationError.needsReview }
+            try record.validate(companyID: connection.companyID, realmID: connection.realmID,
+                environment: connection.environment, itemID: itemID)
             try await client.cancel(record.id)
             try check()
             busy = false
             await refresh()
         } catch {
+            guard visible && visit == originalVisit, !Task.isCancelled else { return }
             message = error.localizedDescription
             busy = false
         }

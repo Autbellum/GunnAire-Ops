@@ -1,3 +1,37 @@
+Shared business-session catalog qualification, 2026-09-08:
+NATIVE_SHARED_CATALOG_CONNECTION.md records candidate backend 2026.09.08.42
+and native catalog approval, publication, comparison and original-only recovery
+using verified business login instead of separate device QuickBooks OAuth.
+Read-only context derives the server company connection and exact existing item
+mapping; no provider link is guessed or silently adopted. Original item revision,
+business, administrator access, grant and view identity remain pinned across
+awaits. Separate scoped comparison snapshots prevent a later import or changed
+connection from reusing old review evidence. Offline items and sold document
+prices remain intact. Failed discovery no longer expands unrelated queues and
+hides the saved approval result; unsent-only cancellation remains explicit.
+All 659 Backend tests, 56 Tools tests and unchanged workflow lint checks pass.
+Final Mac and iPad logic each pass 1,537 cases; all 12 selected iPad UI journeys
+pass (1,549 total), with zero failures/skips and actual-execution verification.
+All 10 final exported screenshots are visually reviewed: simple Mail, original
+offline prices, inventory setup and the saved approval result have no account
+email footer or raw API response. Unsigned universal Mac Release and both
+architecture checks pass. Existing document-concurrency/Metal warnings remain.
+Original-project preflight covers 13 scoped paths, 255 unrelated changes, the
+unchanged empty index and 296 other byte-identical tracked source files.
+Earlier actor/fixture/accessibility and offscreen-feedback failures are retained
+alongside the final corrective evidence; no regression assertions were removed.
+Hosted predecessor 5287a61 has Backend/Mac/iPad-group-1 success, but group 2 has
+one Xcode background-assertion timeout in the locked-bundle milestone journey.
+The exact error is retained and must not be called a catalog fix or ignored.
+The same unmodified journey passes a separate final-source local reproduction,
+with actual-execution verification and both original-invoice screenshots reviewed.
+The next head still requires full hosted qualification. No workflow, signing,
+schema, production accounting, customer message, payment, deployment, main merge
+or physical installation change is part of this checkpoint. Existing imported
+link onboarding, remaining Google/QBO OAuth-only operations, signed CloudKit
+convergence and independent staff sharing, approved real Tap to Pay/Handoff,
+vendor partner access and full competitor-suite acceptance remain open.
+
 Shared business-session dispatch qualification, 2026-09-08:
 NATIVE_SHARED_DISPATCH_CONNECTION.md records candidate backend 2026.09.08.41
 and the actual job-save, field-billing review and recovery cutover from device
