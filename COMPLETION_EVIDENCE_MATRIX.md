@@ -1,3 +1,29 @@
+Independent staff CloudKit authorization foundation, 2026-09-09:
+CLOUDKIT_STAFF_SHARING.md records backend 2026.09.09.46, the separate-account
+architecture, transactional per-member enrollment/approval/invitation/acceptance/
+revocation registry, role-revision invalidation, and distinct Apple cleanup state.
+Every plan reserves a private read-only role-scoped hierarchy; no plan can unlock
+the existing private SwiftData store. Native code validates exact business/account/
+owner/zone/root/share/role/permission evidence and constructs only empty private
+roots. This is groundwork, not completed cross-account sharing: invitation UI,
+durable native journals, actual Apple operations, role-filtered export/import,
+separate store lifecycle and command reconciliation still need implementation.
+All 793 backend and 64 Tools tests pass, including 27 new sharing tests. Mac passes
+all 1,600 logic tests; M5/iOS26.2 iPad passes 1,602 actual cases (1,600 logic plus
+Mail and offline invoice/estimate journeys), zero failures/skips, with exact
+execution verification and three inspected screenshots without account-email
+footers. Nine new native sharing tests pass on both. Unsigned universal Mac and
+arm64 iOS Release builds succeed; existing document-concurrency/Metal warnings
+remain. Original preflight covers seven scoped files, 293 unrelated changes,
+324 other identical sources and the unchanged branch/HEAD/index. Final copy-back
+verifies all seven scoped files match and preserves all 293 unrelated changes.
+Existing workflow coverage/permissions and signed CloudKit startup are
+unchanged. No deployment, signing/schema promotion, physical install or live
+CloudKit/accounting/customer/payment write occurred. Full independent-account
+convergence, provider/vendor migration, physical Tap to Pay/Handoff, competitor
+feature coverage and complete iPad/Mac usability/accessibility acceptance remain
+open. The overall build goal is not complete.
+
 Native shared Time Clock review qualification, 2026-09-09:
 NATIVE_SHARED_TIME_REVIEW.md records backend 2026.09.09.45 and the native
 business-session Time Clock cutover, without the former device-OAuth callback

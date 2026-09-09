@@ -36,7 +36,7 @@ try:
     from Backend.billing_provider import BillingQBOProvider
     from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads
     from Backend.qbo_document_provider import DocumentQBOProvider
-    from Backend import time_worker_mappings, time_publications
+    from Backend import time_worker_mappings, time_publications, cloudkit_staff_shares
     from Backend.time_worker_provider import TimeWorkerQBOProvider
     from Backend.time_publication_provider import TimeQBOProvider
 except ModuleNotFoundError:
@@ -55,12 +55,13 @@ except ModuleNotFoundError:
     from qbo_document_provider import DocumentQBOProvider
     import time_worker_mappings
     import time_publications
+    import cloudkit_staff_shares
     from time_worker_provider import TimeWorkerQBOProvider
     from time_publication_provider import TimeQBOProvider
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.09.45"
+SERVICE_VERSION = "2026.09.09.46"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -2296,7 +2297,9 @@ def initialize_database() -> None:
             """
         )
         if connection.execute("SELECT 1 FROM company_identity WHERE singleton = 1").fetchone() is None:
-            if connection.execute("SELECT 1 FROM cloudkit_workspace_bindings LIMIT 1").fetchone() is not None:
+            has_staff_table = connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cloudkit_staff_shares'").fetchone() is not None
+            has_staff_history = has_staff_table and connection.execute("SELECT 1 FROM cloudkit_staff_shares LIMIT 1").fetchone() is not None
+            if connection.execute("SELECT 1 FROM cloudkit_workspace_bindings LIMIT 1").fetchone() is not None or has_staff_history:
                 raise sqlite3.DatabaseError("Approved CloudKit workspace has lost its company identity; restore the original database")
             connection.execute(
                 "INSERT INTO company_identity(singleton, company_id, created_at) VALUES (1, ?, ?)",
@@ -2520,6 +2523,7 @@ def initialize_database() -> None:
         qbo_document_uploads.initialize_schema(connection)
         time_worker_mappings.initialize_schema(connection)
         time_publications.initialize_schema(connection)
+        cloudkit_staff_shares.initialize_schema(connection)
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS customer_communications (
@@ -3618,6 +3622,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 return
             self.write_json({"user": self.principal(), "workspace": workspace})
             return
+        if parsed.path == "/api/workspace/staff-shares" or parsed.path.startswith("/api/workspace/staff-shares/"):
+            self.handle_cloudkit_staff_share(parsed, method="GET")
+            return
         if parsed.path == "/api/customer-financing":
             self.write_json(customer_financing_readiness())
             return
@@ -3835,6 +3842,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             if not self.require_application_session() or not self.require_admin():
                 return
             self.approve_cloudkit_workspace()
+            return
+        if parsed.path == "/api/workspace/staff-shares" or parsed.path.startswith("/api/workspace/staff-shares/"):
+            self.handle_cloudkit_staff_share(parsed, method="POST")
             return
         if parsed.path == "/api/push-devices":
             if not self.require_application_session():
@@ -4201,6 +4211,38 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             require_auth=False,
         )
         return False
+
+    def handle_cloudkit_staff_share(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        service = cloudkit_staff_shares.StaffShares(db, record_audit_event)
+        suffix = parsed.path.removeprefix("/api/workspace/staff-shares")
+        parts = suffix[1:].split("/") if suffix.startswith("/") else []
+        try:
+            if method == "GET" and len(parts) <= 1:
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                if any(len(value) != 1 for value in query.values()):
+                    raise cloudkit_staff_shares.fail("invalid_query", "Use one value for each sharing query field.", 400)
+                result = service.read(self._application_session_id, {key: value[0] for key, value in query.items()},
+                                      parts[0] if parts else None)
+            elif method == "POST" and not parsed.query:
+                payload = json.loads(self.read_limited_body(8192).decode("utf-8"))
+                if not parts:
+                    result = service.enroll(self._application_session_id, payload)
+                elif len(parts) == 2:
+                    result = service.change(self._application_session_id, parts[0], parts[1], payload)
+                else:
+                    raise cloudkit_staff_shares.fail("not_found", "Sharing action not found.", 404)
+            else:
+                raise cloudkit_staff_shares.fail("not_found", "Sharing action not found.", 404)
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError):
+            self.write_json({"error": "Invalid CloudKit staff sharing request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
+        except sqlite3.Error:
+            self.write_json({"error": "Sharing storage is unavailable. Keep the original request for recovery.",
+                             "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
 
     def approve_cloudkit_workspace(self) -> None:
         """An explicit, fresh admin approval; never adopt records on login.
@@ -6843,6 +6885,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         message = re.sub(r"/api/qbo-document-uploads(?:[/?][^\s\"]*)?", "/api/qbo-document-uploads/[redacted]", message)
         message = re.sub(r"/api/field-payment-review(?:/context)?(?:\?[^\s\"]*)?", "/api/field-payment-review", message)
         message = re.sub(r"/api/time-worker-mappings(?:[/?][^\s\"]*)?", "/api/time-worker-mappings/[redacted]", message)
+        message = re.sub(r"/api/workspace/staff-shares(?:[/?][^\s\"]*)?", "/api/workspace/staff-shares/[redacted]", message)
         message = re.sub(r"/api/time-publications(?:[/?][^\s\"]*)?", "/api/time-publications/[redacted]", message)
         print(f"{timestamp} {self.address_string()} {message}")
 
