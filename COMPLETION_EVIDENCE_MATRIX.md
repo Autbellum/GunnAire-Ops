@@ -1,4 +1,11 @@
 Saved billing evidence and staff graph locally qualified checkpoint, 2026-09-09:
+Later hosted update, 21:07 UTC: parent 223f1b4 native CI has finished with Mac and
+iPad group 2 passing but group 1 failing one Mail attachment-preview case.
+The exact artifact has 1,862 passes/one failure; its video shows a genuinely
+blank Quick Look sheet. The unchanged journey passes once locally on 929993f,
+which is not proof that the hosted defect is fixed. Evidence and the retained
+failure are recorded below in STAFF_BILLING_SNAPSHOT_INTEGRITY.md. Mail preview
+root cause/recovery remains required; no test is weakened or removed.
 STAFF_BILLING_SNAPSHOT_INTEGRITY.md records two actual failing reproductions on
 parent 223f1b4: future-version saved lines passed QBO publication validation, and
 unknown nested financial metadata passed full staff graph validation. The shared

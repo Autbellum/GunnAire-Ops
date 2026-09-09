@@ -129,6 +129,28 @@ run 34398474919 and Mac job pass; both iPad jobs in native run 34398474947 remai
 active. This new source is not pushed over that live run and has no exact-head
 hosted CI result yet. No predecessor is cancelled or restarted.
 
+## Subsequent hosted Mail failure
+
+Subsequent hosted evidence, 21:07 UTC: parent native run 34398474947 has now
+finished. Mac and iPad group 2 pass; group 1 fails. Its actual xcresult contains
+1,862 passes and one failure out of 1,863 cases. The failure is
+`testMailAttachmentPreviewAndForwardRetainTheOriginalFile`, at the expected
+preview-content assertion (UITests line 358), not invoice recovery.
+
+The exact group-1 artifact `10124571328` was downloaded without forwarding
+credentials, verified against GitHub's byte length and SHA-256
+`ccbb8953595b79908ccc5d9fd73ac50483fd202d7e1407ba691623b1c1e84391`, and safely
+extracted under
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/Mail Preview CI.tZN0aD`.
+The failure's actual accessibility tree has the Equipment title and Done
+control but no expected text. Its recorded Quick Look sheet is visibly blank.
+That is a real observed preview failure, not merely an accessibility-query
+assumption. LocalReproduction1 runs the unchanged exact journey on checkpoint
+`929993f` and verifies one actual passing case; that local pass does not prove
+the intermittent hosted failure fixed. No assertion, test or coverage is
+removed. Root cause and reliable preview recovery remain open, and this PR
+must not be represented as all green.
+
 ## Full goal remains intact
 
 This is not complete nested validation for all business domains, a role-safe
