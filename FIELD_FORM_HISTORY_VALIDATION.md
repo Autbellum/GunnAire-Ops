@@ -102,8 +102,8 @@ No successor push cancels that live run.
 Code review confirms that the response editor still holds unfinished answers
 only in view state. Relaunch/dismissal draft recovery remains incomplete; this
 checkpoint's failed-template-save recovery does not prove response-draft
-persistence. Broader accessibility, Mac UI, copy-back and exact-head hosted
-qualification likewise remain separate gates.
+persistence. Broader accessibility, Mac UI and exact-head hosted qualification
+remain separate gates. Preserved-state copy-back has passed as recorded above.
 
 The PDF presentation follow-up has a concrete source location:
 `CustomerDocumentExporter.drawSection` always draws a heading before checking
@@ -220,7 +220,7 @@ families before detached reconstruction. This does not activate the full staff
 store, distribute raw owner records, grant access or send provider mutations.
 Authorship, timestamp, job identity and original raw data remain unchanged.
 
-## Qualification in progress
+## Earlier isolated qualification
 
 Evidence root:
 `/Users/gunnaire/Downloads/GunnAire Ops Releases/Field Forms.PrRs1X`.
@@ -290,10 +290,10 @@ sent to any customer or provider.
 The follow-up above now qualifies saved-history navigation and saved-row reveal.
 Remaining qualification includes empty-field and repeated-message presentation,
 field-form draft recovery, broader accessibility/large-text and Mac UI acceptance,
-combined-source iPad/Mac and Release verification with the published inventory/
-discriminator candidate, preserved-state copy-back, and exact-head hosted checks.
-The isolated arm64 iOS Release has passed as recorded above; it is not evidence
-for the combined build. This is not evidence of signed-device or live
+and exact-head hosted checks. Combined-source logic, iPad UI, both unsigned
+Release builds and preserved-state copy-back have now passed in their separate
+evidence root above. The isolated arm64 iOS Release is not used as evidence for
+the combined build. This is not evidence of signed-device or live
 independent-account CloudKit acceptance.
 
 The full goal still requires the remaining nested domain contracts, role-safe
