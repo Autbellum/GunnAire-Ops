@@ -48,10 +48,10 @@ struct ReceiptsAndBillsView: View {
     @State private var attachEntityID: String = ""
     @State private var selectedServiceCallID: UUID?
     @State private var selectedJobDocumentStage: JobDocumentStage = .supporting
-    @State private var isLoadingAttachTargets = false
-    @State private var attachLookupID = UUID()
-    @State private var attachTargetOptions: [AttachTargetOption] = []
-    @State private var selectedAttachTargetID: String = ""
+    @StateObject private var transactionBrowser = ReceiptTransactionBrowser()
+    @State private var showingTransactionPicker = false
+    @State private var advancedLinkingExpanded = false
+    @State private var chosenTransaction: ReceiptTransactionChoice?
     @State private var attachLookupMessage: String?
     @State private var isUploadingReceiptToBackend = false
     @State private var backendUploadMessage: String?
@@ -339,7 +339,7 @@ struct ReceiptsAndBillsView: View {
                     }
 
                     if selectedWorkspace == .documents {
-                    Section(header: Text("Sync and Transactions")
+                    Section(header: Text("File Destination")
                         .font(.headline)
                         .foregroundColor(Color.brandGold)) {
                         Picker("Service Call", selection: $selectedServiceCallID) {
@@ -370,60 +370,15 @@ struct ReceiptsAndBillsView: View {
                                 Text("Current photos: \(selectedServiceCall.beforePhotoCount) before • \(selectedServiceCall.afterPhotoCount) after")
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
-                                if selectedServiceCall.linkedInvoiceID == nil {
-                                    Text("Choose the related transaction below, or save the file without a QuickBooks transaction link.")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
                             }
                         }
 
                         if isAdminUser {
-                            Picker("Attach To", selection: Binding(
-                                get: { selectedAttachEntityType },
-                                set: { value in
-                                    selectedAttachEntityType = value
-                                    attachEntityID = ""
-                                    clearAttachLookup()
-                                }
-                            )) {
-                                ForEach(QuickBooksAttachableEntityType.allCases, id: \.self) { type in
-                                    Text(type.rawValue).tag(type)
-                                }
-                            }
-                            .accessibilityIdentifier("DocumentAttachTypePicker")
-                            TextField("QuickBooks Entity ID (optional)", text: $attachEntityID)
-                                .accessibilityIdentifier("DocumentAttachEntityID")
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled(true)
-
-                            Button("Load QuickBooks IDs") {
-                                loadAttachableTargets()
-                            }
-                            .disabled(isLoadingAttachTargets)
+                            receiptTransactionControls
                         } else {
                             Text("QuickBooks receipt and bill sync is admin-only. Field users can upload receipts to company storage from this screen.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                        }
-
-                        if isLoadingAttachTargets {
-                            ProgressView("Loading IDs...")
-                                .tint(Color.brandGold)
-                        }
-
-                        if !attachTargetOptions.isEmpty {
-                            Picker("Select Existing ID", selection: $selectedAttachTargetID) {
-                                Text("Manual Entry").tag("")
-                                ForEach(attachTargetOptions) { option in
-                                    Text(option.label).tag(option.idValue)
-                                }
-                            }
-                            .onChange(of: selectedAttachTargetID) { _, newValue in
-                                if !newValue.isEmpty {
-                                    attachEntityID = newValue
-                                }
-                            }
                         }
 
                         if let attachLookupMessage {
@@ -437,7 +392,7 @@ struct ReceiptsAndBillsView: View {
                                 syncDocuments()
                             }
                             .tint(Color.brandGold)
-                            .disabled(isSyncing || (receiptURL == nil && billURL == nil))
+                            .disabled(isSyncing || (receiptURL == nil && billURL == nil) || !receiptJobTargetIsCurrent)
                         }
 
                         if isSyncing {
@@ -480,9 +435,10 @@ struct ReceiptsAndBillsView: View {
                     }
                 }
                 .scrollContentBackground(.hidden)
-                .background(Color.primaryBlack)
+                .background(Color(uiColor: .systemBackground))
                 .navigationTitle("Receipts & Bills")
-                .foregroundColor(Color.brandGold)
+                .foregroundStyle(Color(uiColor: .label))
+                .tint(Color.brandGold)
             }
         }
         .fileImporter(isPresented: $showingReceiptPicker,
@@ -519,6 +475,17 @@ struct ReceiptsAndBillsView: View {
             CameraImagePicker(sourceType: .camera) { image in
                 handleCapturedReceiptImage(image)
             }
+        }
+        .sheet(isPresented: $showingTransactionPicker, onDismiss: { transactionBrowser.cancel() }) {
+            ReceiptTransactionPicker(browser: transactionBrowser, load: loadAttachableTargets,
+                select: { choice in
+                    guard isAdminUser, selectedServiceCallID == nil,
+                          let selected = transactionBrowser.select(choice) else { return }
+                    selectedAttachEntityType = selected.type
+                    attachEntityID = selected.providerID
+                    chosenTransaction = selected
+                    showingTransactionPicker = false
+                }, cancel: { showingTransactionPicker = false })
         }
         .alert("Camera Not Available", isPresented: $showCameraUnavailableAlert) {
             Button("OK", role: .cancel) {}
@@ -573,6 +540,7 @@ struct ReceiptsAndBillsView: View {
             }
             if !newIsAdminUser {
                 attachEntityID = ""
+                advancedLinkingExpanded = false
                 clearAttachLookup()
             }
         }
@@ -3389,10 +3357,81 @@ private struct InventoryCycleCountSheet: View {
 }
 
 private extension ReceiptsAndBillsView {
-    struct AttachTargetOption: Identifiable {
-        let idValue: String
-        let label: String
-        var id: String { idValue }
+    var originalJobTransaction: ReceiptTransactionChoice? {
+        guard let selectedServiceCall else { return nil }
+        return ReceiptTransactionChoice.linked(to: selectedServiceCall,
+            invoices: invoices, estimates: estimates, payments: payments)
+    }
+
+    var receiptJobTargetIsCurrent: Bool {
+        guard selectedServiceCallID != nil else { return true }
+        guard let original = originalJobTransaction else { return false }
+        return original.type == selectedAttachEntityType &&
+            original.providerID == QuickBooksBillingIdentity.identifier(attachEntityID)
+    }
+
+    var receiptTransactionSummary: ReceiptTransactionChoice? {
+        let choice = selectedServiceCallID == nil ? chosenTransaction : originalJobTransaction
+        guard let choice, choice.type == selectedAttachEntityType,
+              choice.providerID == QuickBooksBillingIdentity.identifier(attachEntityID) else { return nil }
+        return choice
+    }
+
+    @ViewBuilder var receiptTransactionControls: some View {
+        if let choice = receiptTransactionSummary {
+            ReceiptTransactionLabel(choice: choice)
+                .accessibilityIdentifier("ReceiptSelectedTransaction")
+        } else if selectedServiceCallID == nil {
+            Text(QuickBooksBillingIdentity.identifier(attachEntityID) == nil
+                 ? "No QuickBooks transaction selected."
+                 : "\(ReceiptTransactionChoice.title(for: selectedAttachEntityType)) selected using an advanced ID.")
+                .font(.subheadline).foregroundStyle(.secondary)
+        }
+        if selectedServiceCallID == nil {
+            Button(QuickBooksBillingIdentity.identifier(attachEntityID) == nil
+                   ? "Choose a QuickBooks transaction" : "Change transaction") {
+                showingTransactionPicker = true
+                loadAttachableTargets(selectedAttachEntityType)
+            }
+            .accessibilityIdentifier("ReceiptChooseTransaction")
+            if QuickBooksBillingIdentity.identifier(attachEntityID) != nil {
+                Button("Clear selection") {
+                    attachEntityID = ""
+                    clearAttachLookup()
+                }
+                .accessibilityIdentifier("ReceiptRemoveTransaction")
+            }
+        } else if !receiptJobTargetIsCurrent {
+            if originalJobTransaction != nil {
+                Text("Restore this job’s original transaction before syncing its files.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                Button("Restore job transaction") { applyLinkedServiceCallDefaults() }
+                    .accessibilityIdentifier("ReceiptRestoreJobTransaction")
+            } else if attachLookupMessage == nil {
+                Text("This job needs a linked, synced invoice or estimate before its files can go to QuickBooks. Company receipt storage remains available.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
+        DisclosureGroup(isExpanded: $advancedLinkingExpanded) {
+            Picker("Attach To", selection: Binding(get: { selectedAttachEntityType }, set: {
+                selectedAttachEntityType = $0
+                attachEntityID = ""
+                clearAttachLookup()
+            })) {
+                ForEach(QuickBooksAttachableEntityType.allCases, id: \.self) { type in
+                    Text(type.rawValue).tag(type)
+                }
+            }
+            .accessibilityIdentifier("DocumentAttachTypePicker")
+            TextField("QuickBooks Entity ID (optional)", text: $attachEntityID)
+                .accessibilityIdentifier("DocumentAttachEntityID")
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled(true)
+            Text("Use an exact QuickBooks ID only when needed. A job file must keep the job’s original invoice or estimate link.")
+                .font(.caption).foregroundStyle(.secondary)
+        } label: {
+            Text("Advanced QuickBooks linking")
+        }
     }
 
     enum DocumentType {
@@ -3545,159 +3584,23 @@ private extension ReceiptsAndBillsView {
         } catch { syncMessage = QBODocumentNativeWorkflow.message(error) }
     }
 
-    func currencyString(_ amount: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = "USD"
-        formatter.locale = Locale(identifier: "en_US")
-        return formatter.string(from: NSNumber(value: amount)) ?? String(format: "$%.2f", amount)
-    }
-
-    func loadAttachableTargets() {
-        guard requireAdministrator(for: "Loading QuickBooks attachment targets") else { return }
-        isLoadingAttachTargets = true
-        attachLookupMessage = nil
-        attachTargetOptions = []
-        selectedAttachTargetID = ""
-
-        guard QuickBooksDataAPI.shared.isAuthenticated else {
-            isLoadingAttachTargets = false
-            attachLookupMessage = "Connect QuickBooks first to load existing IDs."
+    func loadAttachableTargets(_ type: QuickBooksAttachableEntityType) {
+        guard isAdminUser, selectedServiceCallID == nil else { return }
+        #if DEBUG
+        if ReceiptTransactionPickerFixture.enabled {
+            transactionBrowser.load(type: type, checkAccess: {
+                guard isAdminUser, selectedServiceCallID == nil else { throw QBODocumentError.access }
+            }, using: ReceiptTransactionPickerFixture.load)
             return
         }
-
-        let requestID = UUID()
-        attachLookupID = requestID
-        let entityType = selectedAttachEntityType
-        guard let workflow = try? QuickBooksDataAPI.shared.captureWorkspaceWorkflow() else {
-            isLoadingAttachTargets = false
-            attachLookupMessage = "Reconnect QuickBooks before choosing a transaction."
-            return
-        }
-        func acceptsLookup() -> Bool {
-            attachLookupID == requestID && selectedAttachEntityType == entityType &&
-                isAdminUser && (try? workflow.check()) != nil
-        }
-
-        switch entityType {
-        case .estimate:
-            QuickBooksDataAPI.shared.fetchEstimates { result in
-                DispatchQueue.main.async {
-                    guard acceptsLookup() else { return }
-                    isLoadingAttachTargets = false
-                    switch result {
-                    case .success(let estimates):
-                        attachTargetOptions = estimates.map {
-                            AttachTargetOption(
-                                idValue: $0.Id,
-                                label: "Estimate \($0.Id) • \(currencyString($0.TotalAmt)) • \($0.TxnDate ?? "No date")"
-                            )
-                        }
-                        attachLookupMessage = attachTargetOptions.isEmpty ? "No estimates found." : "Loaded \(attachTargetOptions.count) estimate ID(s)."
-                    case .failure(let error):
-                        attachLookupMessage = "Failed to load estimates: \(error.localizedDescription)"
-                    }
-                }
+        #endif
+        let workflow = try? QuickBooksDataAPI.shared.captureWorkspaceWorkflow()
+        transactionBrowser.load(type: type, checkAccess: {
+            guard isAdminUser, selectedServiceCallID == nil, let workflow else {
+                throw QBODocumentError.access
             }
-        case .invoice:
-            QuickBooksDataAPI.shared.fetchInvoices { result in
-                DispatchQueue.main.async {
-                    guard acceptsLookup() else { return }
-                    isLoadingAttachTargets = false
-                    switch result {
-                    case .success(let invoices):
-                        attachTargetOptions = invoices.map {
-                            AttachTargetOption(
-                                idValue: $0.Id,
-                                label: "Invoice \($0.Id) • \(currencyString($0.TotalAmt)) • \($0.TxnDate ?? "No date")"
-                            )
-                        }
-                        attachLookupMessage = attachTargetOptions.isEmpty ? "No invoices found." : "Loaded \(attachTargetOptions.count) invoice ID(s)."
-                    case .failure(let error):
-                        attachLookupMessage = "Failed to load invoices: \(error.localizedDescription)"
-                    }
-                }
-            }
-        case .bill:
-            QuickBooksDataAPI.shared.fetchBills { result in
-                DispatchQueue.main.async {
-                    guard acceptsLookup() else { return }
-                    isLoadingAttachTargets = false
-                    switch result {
-                    case .success(let bills):
-                        attachTargetOptions = bills.map {
-                            AttachTargetOption(
-                                idValue: $0.Id,
-                                label: "Bill \($0.Id) • \(currencyString($0.TotalAmt)) • \($0.TxnDate ?? "No date")"
-                            )
-                        }
-                        attachLookupMessage = attachTargetOptions.isEmpty ? "No bills found." : "Loaded \(attachTargetOptions.count) bill ID(s)."
-                    case .failure(let error):
-                        attachLookupMessage = "Failed to load bills: \(error.localizedDescription)"
-                    }
-                }
-            }
-        case .payment:
-            QuickBooksDataAPI.shared.fetchPayments { result in
-                DispatchQueue.main.async {
-                    guard acceptsLookup() else { return }
-                    isLoadingAttachTargets = false
-                    switch result {
-                    case .success(let payments):
-                        attachTargetOptions = payments.map {
-                            let customer = $0.CustomerRef?.name ?? $0.CustomerRef?.value ?? "Unknown"
-                            return AttachTargetOption(
-                                idValue: $0.Id,
-                                label: "Payment \($0.Id) • \(customer) • \(currencyString($0.TotalAmt))"
-                            )
-                        }
-                        attachLookupMessage = attachTargetOptions.isEmpty ? "No payments found." : "Loaded \(attachTargetOptions.count) payment ID(s)."
-                    case .failure(let error):
-                        attachLookupMessage = "Failed to load payments: \(error.localizedDescription)"
-                    }
-                }
-            }
-        case .salesReceipt:
-            QuickBooksDataAPI.shared.fetchSalesReceipts { result in
-                DispatchQueue.main.async {
-                    guard acceptsLookup() else { return }
-                    isLoadingAttachTargets = false
-                    switch result {
-                    case .success(let salesReceipts):
-                        attachTargetOptions = salesReceipts.map {
-                            let customer = $0.CustomerRef?.displayName ?? "Walk-in customer"
-                            return AttachTargetOption(
-                                idValue: $0.Id,
-                                label: "Sales Receipt \($0.Id) • \(customer) • \(currencyString($0.TotalAmt))"
-                            )
-                        }
-                        attachLookupMessage = attachTargetOptions.isEmpty ? "No sales receipts found." : "Loaded \(attachTargetOptions.count) sales receipt ID(s)."
-                    case .failure(let error):
-                        attachLookupMessage = "Failed to load sales receipts: \(error.localizedDescription)"
-                    }
-                }
-            }
-        case .purchase:
-            QuickBooksDataAPI.shared.fetchPurchases { result in
-                DispatchQueue.main.async {
-                    guard acceptsLookup() else { return }
-                    isLoadingAttachTargets = false
-                    switch result {
-                    case .success(let purchases):
-                        attachTargetOptions = purchases.map {
-                            let vendor = $0.EntityRef?.displayName ?? "Expense purchase"
-                            return AttachTargetOption(
-                                idValue: $0.Id,
-                                label: "Purchase \($0.Id) • \(vendor) • \(currencyString($0.TotalAmt))"
-                            )
-                        }
-                        attachLookupMessage = attachTargetOptions.isEmpty ? "No purchases found." : "Loaded \(attachTargetOptions.count) purchase ID(s)."
-                    case .failure(let error):
-                        attachLookupMessage = "Failed to load purchases: \(error.localizedDescription)"
-                    }
-                }
-            }
-        }
+            try workflow.check()
+        })
     }
 
     func handleCapturedReceiptImage(_ image: UIImage) {
@@ -3736,10 +3639,9 @@ private extension ReceiptsAndBillsView {
     }
 
     func clearAttachLookup() {
-        attachLookupID = UUID()
-        isLoadingAttachTargets = false
-        attachTargetOptions = []
-        selectedAttachTargetID = ""
+        showingTransactionPicker = false
+        transactionBrowser.cancel()
+        chosenTransaction = nil
         attachLookupMessage = nil
     }
 

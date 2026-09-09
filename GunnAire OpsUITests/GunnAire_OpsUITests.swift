@@ -4785,6 +4785,16 @@ final class GunnAire_OpsUITests: XCTestCase {
         let id = app.textFields["DocumentAttachEntityID"]
         for _ in 0..<8 where !job.exists || !job.isHittable { app.swipeUp() }
         XCTAssertTrue(job.waitForExistence(timeout: 4))
+        XCTAssertFalse(id.exists, "Technical IDs should be hidden in the normal receipts workflow")
+        XCTAssertFalse(type.exists)
+        let choose = app.buttons["ReceiptChooseTransaction"]
+        XCTAssertTrue(choose.waitForExistence(timeout: 3)); choose.tap()
+        XCTAssertTrue(app.navigationBars["Choose Transaction"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Business or QuickBooks access changed. Close this picker and reconnect before choosing a transaction."].waitForExistence(timeout: 3))
+        app.buttons["ReceiptTransactionCategory"].tap(); app.buttons["Estimate"].tap()
+        app.buttons["ReceiptTransactionCancel"].tap()
+        XCTAssertTrue(job.waitForExistence(timeout: 3))
+        XCTAssertFalse(id.exists)
         func selectJob(_ identifier: String) {
             job.tap()
             let option = app.buttons["DocumentServiceCall-\(identifier)"]
@@ -4796,21 +4806,89 @@ final class GunnAire_OpsUITests: XCTestCase {
             waitForExpectations(timeout: 3)
         }
         selectJob(screenshotServiceCallID)
+        let summary = app.descendants(matching: .any)["ReceiptSelectedTransaction"].firstMatch
+        XCTAssertTrue(summary.waitForExistence(timeout: 3))
+        XCTAssertTrue(summary.label.contains("Invoice"))
+        XCTAssertFalse(app.buttons["ReceiptChooseTransaction"].exists, "A job must keep its original billing target")
+        let advanced = app.buttons["Advanced QuickBooks linking"]
+        XCTAssertTrue(advanced.waitForExistence(timeout: 3)); advanced.tap()
         XCTAssertEqual(id.value as? String, "100")
         type.tap(); app.buttons["Estimate"].tap()
         expectEmptyID()
+        app.buttons["ReceiptRestoreJobTransaction"].tap()
+        XCTAssertEqual(id.value as? String, "100")
+        XCTAssertTrue(type.label.contains("Invoice"))
         selectJob(maintenanceServiceCallID)
         XCTAssertEqual(id.value as? String, "QBO-UI-DOCUMENT-ESTIMATE")
         XCTAssertTrue(type.label.contains("Estimate"))
+        advanced.tap()
+        XCTAssertFalse(id.exists)
+        XCTAssertTrue(summary.label.contains("Estimate"))
         let evidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         evidence.name = "Receipts - estimate target retains correct transaction type"
         evidence.lifetime = .keepAlways; add(evidence)
+        advanced.tap()
         selectJob(screenshotServiceCallID)
         XCTAssertEqual(id.value as? String, "100")
         XCTAssertTrue(type.label.contains("Invoice"))
         job.tap(); app.buttons["None"].tap()
         expectEmptyID()
+        XCTAssertTrue(type.label.contains("Invoice"))
+        app.buttons["ReceiptChooseTransaction"].tap()
+        app.buttons["ReceiptTransactionCategory"].tap(); app.buttons["Estimate"].tap()
+        app.buttons["ReceiptTransactionCancel"].tap()
+        XCTAssertTrue(type.waitForExistence(timeout: 3))
+        XCTAssertTrue(type.label.contains("Invoice"), "Cancel must not change the committed transaction type")
+        expectEmptyID()
         XCTAssertFalse(app.buttons["Sync Receipts and Bills with QuickBooks"].isEnabled)
+
+        app.terminate()
+        app.launchArguments.append("-uiTestReceiptTransactions")
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Receipts & Bills"].waitForExistence(timeout: 8))
+        for _ in 0..<8 where !choose.exists || !choose.isHittable { app.swipeUp() }
+        choose.tap()
+        let originalChoice = app.buttons["ReceiptTransaction-Invoice:fixture-original"]
+        XCTAssertTrue(originalChoice.waitForExistence(timeout: 3))
+        let browserEvidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        browserEvidence.name = "Receipts - searchable business transaction picker"
+        browserEvidence.lifetime = .keepAlways; add(browserEvidence)
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 3)); search.tap(); search.typeText("RECEIPT-42")
+        XCTAssertTrue(originalChoice.exists)
+        XCTAssertFalse(app.buttons["ReceiptTransaction-Invoice:fixture-other"].exists)
+        originalChoice.tap()
+        XCTAssertTrue(summary.waitForExistence(timeout: 3))
+        XCTAssertTrue(summary.label.contains("Invoice #RECEIPT-42"))
+        XCTAssertTrue(summary.label.contains("Receipt test customer"))
+        XCTAssertFalse(summary.label.contains("fixture-original"))
+        XCTAssertFalse(id.exists)
+        choose.tap()
+        app.buttons["ReceiptTransactionCategory"].tap(); app.buttons["Estimate"].tap()
+        app.buttons["ReceiptTransactionCancel"].tap()
+        XCTAssertTrue(summary.waitForExistence(timeout: 3))
+        XCTAssertTrue(summary.label.contains("Invoice #RECEIPT-42"))
+        advanced.tap()
+        XCTAssertEqual(id.value as? String, "fixture-original")
+        XCTAssertTrue(type.label.contains("Invoice"))
+        advanced.tap()
+        let pickerEvidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        pickerEvidence.name = "Receipts - human-readable original survives search and cancel"
+        pickerEvidence.lifetime = .keepAlways; add(pickerEvidence)
+        choose.tap()
+        app.buttons["ReceiptTransactionCategory"].tap(); app.buttons["Estimate"].tap()
+        let estimateChoice = app.buttons["ReceiptTransaction-Estimate:fixture-original"]
+        XCTAssertTrue(estimateChoice.waitForExistence(timeout: 3)); estimateChoice.tap()
+        XCTAssertTrue(summary.waitForExistence(timeout: 3))
+        XCTAssertTrue(summary.label.contains("Estimate #RECEIPT-42"))
+        advanced.tap()
+        XCTAssertEqual(id.value as? String, "fixture-original")
+        XCTAssertTrue(type.label.contains("Estimate"), "An equal provider ID in another category still needs the new type")
+        advanced.tap()
+        app.buttons["ReceiptRemoveTransaction"].tap()
+        XCTAssertFalse(summary.exists)
+        advanced.tap()
+        expectEmptyID()
     }
 
     @MainActor
@@ -4825,6 +4903,9 @@ final class GunnAire_OpsUITests: XCTestCase {
         let job = app.buttons["DocumentServiceCallPicker"], id = app.textFields["DocumentAttachEntityID"]
         for _ in 0..<8 where !job.exists || !job.isHittable { app.swipeUp() }
         XCTAssertTrue(job.waitForExistence(timeout: 4))
+        XCTAssertFalse(id.exists)
+        let advanced = app.buttons["Advanced QuickBooks linking"]
+        XCTAssertTrue(advanced.waitForExistence(timeout: 3)); advanced.tap()
         func selectJob(_ identifier: String) {
             job.tap()
             let option = app.buttons["DocumentServiceCall-\(identifier)"]
@@ -4843,6 +4924,9 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.buttons["DocumentAttachTypePicker"].label.contains("Estimate"))
         selectJob(screenshotServiceCallID)
         expectUnresolved()
+        advanced.tap()
+        XCTAssertFalse(id.exists)
+        XCTAssertFalse(app.buttons["ReceiptChooseTransaction"].exists)
         let evidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         evidence.name = "Receipts - wrong scheduled job leaves original transaction unresolved"
         evidence.lifetime = .keepAlways; add(evidence)
@@ -9116,7 +9200,8 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(workspacePicker.exists)
         XCTAssertTrue(workspacePicker.buttons["Documents"].isSelected)
         XCTAssertTrue(app.staticTexts["Upload Receipts"].exists)
-        XCTAssertTrue(app.staticTexts["Sync and Transactions"].exists)
+        XCTAssertTrue(app.staticTexts["File Destination"].exists)
+        XCTAssertFalse(app.textFields["DocumentAttachEntityID"].exists)
         XCTAssertFalse(app.staticTexts["Purchase Orders"].exists)
 
         workspacePicker.buttons["Purchasing"].tap()
@@ -9135,6 +9220,20 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Retry Pending Uploads"].exists)
         XCTAssertFalse(app.buttons["Purge Missing Files"].exists)
         XCTAssertFalse(app.buttons["Clear Queue"].exists)
+        XCTAssertFalse(app.staticTexts["Stock & Replenishment"].exists)
+
+        app.terminate()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedTechnician", "-GunnAirePendingAppRoute", "receiptsBills"]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Receipts & Bills"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["Upload Receipts"].exists)
+        XCTAssertFalse(app.buttons["ReceiptChooseTransaction"].exists)
+        XCTAssertFalse(app.buttons["Advanced QuickBooks linking"].exists)
+        XCTAssertFalse(app.textFields["DocumentAttachEntityID"].exists)
+        XCTAssertFalse(app.buttons["Sync Receipts and Bills with QuickBooks"].exists)
+        XCTAssertFalse(app.staticTexts["Purchase Orders"].exists)
         XCTAssertFalse(app.staticTexts["Stock & Replenishment"].exists)
     }
 

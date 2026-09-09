@@ -1,3 +1,22 @@
+Receipt transaction selection candidate, 2026-09-09:
+RECEIPT_TRANSACTION_SELECTION.md records the new native searchable transaction
+picker, human-readable original job target, collapsed administrator ID controls,
+explicit restoration and cancellation, six preserved provider entity types, and
+captured-access/late-response/duplicate-identity checks. The unchanged original
+file capture/upload/recovery pipeline still enforces exact job ownership. Final
+MacFull3 verifies 1,755 actual cases; IPadFull2 verifies 1,760 with all five requested
+UI journeys (including invoice opening, simple mail and technician restrictions).
+All 72 Tools tests and both unchanged workflow lint checks pass. Two final iPad
+frames are inspected with readable business data and no account-email footers;
+this is not whole-app accessibility acceptance. Final unsigned arm64 iOS and
+universal Mac Release builds and architecture checks pass. Copy-back verifies all
+six scoped files byte-equal, 365 unrelated changes preserved, and original branch,
+HEAD and index unchanged (380 other tracked sources matched in preflight).
+The published predecessor's hosted Mac and backend passed; iPad
+shard 2 timed out in preparation despite a Booted exact-model inventory, and
+shard 1 is still live. No running job is canceled. Full CloudKit staff operation,
+provider/device acceptance and the full-suite goal remain incomplete.
+
 Complete staff relationship and estimate handoff candidate, 2026-09-09:
 STAFF_RECORD_RELATIONSHIPS.md records schema-checked UUID/reference dispositions
 for all 32 models, exact missing-parent rejection, customer/technician/vehicle/
