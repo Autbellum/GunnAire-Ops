@@ -6067,7 +6067,7 @@ private struct QuickBooksLocalCatalogItemEditView: View {
     @State private var assemblySearchText = ""
     @State private var assemblyValidationMessage: String?
     @State private var lifecycleValidationMessage: String?
-    @FocusState private var isEditingNumericValue: Bool
+    @FocusState private var focusedField: QuickBooksCatalogInputField?
 
     init(
         item: Item,
@@ -6196,6 +6196,7 @@ private struct QuickBooksLocalCatalogItemEditView: View {
             Form {
                 Section("Sales") {
                     TextField("Item name", text: $name)
+                        .focused($focusedField, equals: .name)
                         .accessibilityIdentifier("CatalogEditName")
                     if isUnlinkedPricebookReview {
                         Picker("Item Type", selection: $itemType) {
@@ -6206,6 +6207,7 @@ private struct QuickBooksLocalCatalogItemEditView: View {
                         .pickerStyle(.segmented)
                         .accessibilityIdentifier("PricebookReviewItemType")
                         .onChange(of: itemType) { _, newType in
+                            focusedField = nil
                             if newType != .service {
                                 isAssemblyEnabled = false
                             }
@@ -6218,11 +6220,13 @@ private struct QuickBooksLocalCatalogItemEditView: View {
                     }
                     TextField("Description", text: $description, axis: .vertical)
                         .lineLimit(2...4)
+                        .focused($focusedField, equals: .description)
                     TextField("SKU", text: $sku)
                         .textInputAutocapitalization(.characters)
+                        .focused($focusedField, equals: .sku)
                     TextField("Sales price", text: $unitPrice)
                         .catalogNumericKeyboard()
-                        .focused($isEditingNumericValue)
+                        .focused($focusedField, equals: .price)
                         .accessibilityIdentifier("CatalogEditSalesPrice")
                     Toggle("Taxable", isOn: $isTaxable)
                 }
@@ -6230,9 +6234,10 @@ private struct QuickBooksLocalCatalogItemEditView: View {
                 Section("Purchasing") {
                     TextField("Purchase cost", text: $purchaseCost)
                         .catalogNumericKeyboard()
-                        .focused($isEditingNumericValue)
+                        .focused($focusedField, equals: .purchaseCost)
                     TextField("Purchase description", text: $purchaseDescription, axis: .vertical)
                         .lineLimit(2...4)
+                        .focused($focusedField, equals: .purchaseDescription)
                     Picker("Preferred vendor", selection: $preferredVendorID) {
                         if item.preferredVendorQuickBooksID?.isEmpty == false {
                             Text(item.preferredVendorName ?? "Current vendor")
@@ -6253,7 +6258,8 @@ private struct QuickBooksLocalCatalogItemEditView: View {
                     if item.quickBooksID?.isEmpty == false {
                         QuickBooksInventoryBalanceSection(item: item)
                     } else {
-                        QuickBooksInventorySetupSection(setup: $inventorySetup, accounts: accounts, scope: inventoryScope)
+                        QuickBooksInventorySetupSection(setup: $inventorySetup, accounts: accounts,
+                            scope: inventoryScope, focusedField: $focusedField)
                     }
                 }
 
@@ -6347,6 +6353,7 @@ private struct QuickBooksLocalCatalogItemEditView: View {
 
                             TextField("Search pricebook items to include", text: $assemblySearchText)
                                 .textInputAutocapitalization(.never)
+                                .focused($focusedField, equals: .assemblySearch)
                                 .accessibilityIdentifier("CatalogAssemblySearch")
 
                             ForEach(availableAssemblyItems) { candidate in
@@ -6393,6 +6400,8 @@ private struct QuickBooksLocalCatalogItemEditView: View {
                     .foregroundStyle(.secondary)
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
+            .accessibilityIdentifier("CatalogItemEditForm")
             .navigationTitle(isUnlinkedPricebookReview ? "Review Pricebook Item" : "Edit Catalog Item")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -6415,7 +6424,7 @@ private struct QuickBooksLocalCatalogItemEditView: View {
                 }
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
-                    Button("Done") { isEditingNumericValue = false }
+                    Button("Done") { focusedField = nil }
                         .accessibilityLabel("Done Editing Catalog Item")
                         .accessibilityIdentifier("DoneEditingCatalogItem")
                 }
@@ -6558,15 +6567,18 @@ private struct QuickBooksCatalogItemComposeView: View {
     @State private var purchaseDescription = ""
     @State private var selectedVendorID = ""
     @State private var inventorySetup = QuickBooksInventorySetup()
+    @FocusState private var focusedField: QuickBooksCatalogInputField?
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Sales") {
                     TextField("Name", text: $name)
+                        .focused($focusedField, equals: .name)
                         .accessibilityIdentifier("QuickBooksCatalogItemName")
                     TextField("SKU", text: $sku)
                         .textInputAutocapitalization(.characters)
+                        .focused($focusedField, equals: .sku)
                         .accessibilityIdentifier("QuickBooksCatalogItemSKU")
                     Picker("Item Type", selection: $itemType) {
                         ForEach(CatalogItemType.creatableCases) { type in
@@ -6575,17 +6587,21 @@ private struct QuickBooksCatalogItemComposeView: View {
                     }
                     .pickerStyle(.segmented)
                     .accessibilityIdentifier("QuickBooksCatalogItemType")
+                    .onChange(of: itemType) { _, _ in focusedField = nil }
                     TextField("Price (optional)", text: $price)
                         .catalogNumericKeyboard()
+                        .focused($focusedField, equals: .price)
                         .accessibilityIdentifier("QuickBooksCatalogItemPrice")
                     Toggle("Taxable", isOn: $isTaxable)
                         .accessibilityIdentifier("QuickBooksCatalogItemTaxable")
                     TextField("Description", text: $description)
+                        .focused($focusedField, equals: .description)
                 }
 
                 Section("Purchasing") {
                     TextField("Purchase price", text: $purchaseCost)
                         .catalogNumericKeyboard()
+                        .focused($focusedField, equals: .purchaseCost)
                     if !vendors.isEmpty {
                         Picker("Preferred vendor", selection: $selectedVendorID) {
                             Text("None").tag("")
@@ -6596,13 +6612,23 @@ private struct QuickBooksCatalogItemComposeView: View {
                     }
                     TextField("Purchase notes", text: $purchaseDescription, axis: .vertical)
                         .lineLimit(2...3)
+                        .focused($focusedField, equals: .purchaseDescription)
                 }
                 if itemType == .inventory {
-                    QuickBooksInventorySetupSection(setup: $inventorySetup, accounts: accounts, scope: inventoryScope)
+                    QuickBooksInventorySetupSection(setup: $inventorySetup, accounts: accounts,
+                        scope: inventoryScope, focusedField: $focusedField)
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
+            .accessibilityIdentifier("CatalogItemComposeForm")
             .navigationTitle("Add Catalog Item")
             .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { focusedField = nil }
+                        .accessibilityLabel("Done Editing Catalog Item")
+                        .accessibilityIdentifier("DoneEditingCatalogItem")
+                }
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }

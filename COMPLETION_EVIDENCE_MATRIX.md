@@ -1,3 +1,33 @@
+Catalog keyboard navigation qualification, 2026-09-08:
+NATIVE_CATALOG_KEYBOARD_RECOVERY.md records the two retained hosted iPad failures,
+the unchanged-source passing local reproduction, and the scoped correction.
+Catalog create/edit and conditional inventory fields now share distinct focus
+values, standard Done/Next actions, and interactive keyboard dismissal. Changing
+item type releases focus. Stored prices, quantities, dates and accounting payloads
+are unchanged. UI tests scroll the identified form, verify keyboard dismissal,
+and retain the original exact-value assertions. Existing-link selection retains
+all exact assertions with a bounded eight-second accessibility wait and richer
+failure evidence; its hosted timeout is not yet proven resolved.
+Final local Mac qualification passes 1,558 logic tests. Final iPad qualification
+passes 1,573 actual tests (1,558 logic and 15 UI), with zero failures/skips and
+all requested selectors verified. The focused two-journey run also passes.
+All 19 final screenshots are visually reviewed, including dismissed inventory
+keyboards, saved invoice/estimate bundles, link recovery, and simple Mail without
+raw API diagnostics or an account-email sidebar footer. Persistent populated
+catalog field labels remain a usability follow-up; this is not full visual QA.
+All 56 Tools tests and both workflow lint checks pass. Unsigned universal Mac
+Release and arm64 iOS device Release succeed; exact executable hashes are retained
+in the checkpoint document and evidence directory. Existing document-concurrency
+and optional Metal-path warnings remain. Workflow selectors and permissions are
+unchanged. Original-project preflight covers five scoped paths, 270 unrelated
+changes, the unchanged index and 306 other byte-identical tracked source files.
+Final copy-back verifies scoped byte equality and preserves the original index
+and all 270 unrelated changes. Hosted CI must qualify the
+new published head. No merge, deployment, signing/schema change, physical install
+or live accounting/customer/payment mutation is included. Independent-staff
+CloudKit sharing, signed convergence, remaining provider workflows, approved
+physical Tap to Pay and full business-suite acceptance remain open.
+
 Native business-role authority qualification, 2026-09-08:
 NATIVE_BUSINESS_ROLE_AUTHORITY.md records removal of the implicit primary-email
 administrator grant and unapproved startup/roster administrator creation. Live

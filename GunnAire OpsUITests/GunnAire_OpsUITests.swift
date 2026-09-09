@@ -4802,7 +4802,14 @@ final class GunnAire_OpsUITests: XCTestCase {
         func requireSelection(_ selected: Bool) {
             let changed = XCTNSPredicateExpectation(
                 predicate: NSPredicate(format: "value == %@", selected ? "Selected" : "Not selected"), object: choice)
-            XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 4), .completed)
+            // Hosted accessibility snapshots can consume several seconds before
+            // the first predicate result. Keep a bounded wait and the exact
+            // value/trait/action assertions; never tap again to mask a lost tap.
+            let result = XCTWaiter.wait(for: [changed], timeout: 8)
+            if result != .completed {
+                retainNavigationFailure(app, name: "Existing link selection state did not settle")
+            }
+            XCTAssertEqual(result, .completed, "The record must report its exact current selection state.")
             XCTAssertEqual(choice.isSelected, selected)
             XCTAssertEqual(preview.label, "Review selected (\(selected ? 1 : 0))")
             if preview.isEnabled != selected {
@@ -7453,6 +7460,8 @@ final class GunnAire_OpsUITests: XCTestCase {
         for _ in 0..<14 where !addItem.isHittable { app.swipeUp() }
         XCTAssertTrue(waitForHittable(addItem)); addItem.tap()
         XCTAssertTrue(app.navigationBars["Add Catalog Item"].waitForExistence(timeout: 3))
+        let composeForm = app.collectionViews["CatalogItemComposeForm"]
+        XCTAssertTrue(composeForm.waitForExistence(timeout: 3))
         replaceText(in: app.textFields["QuickBooksCatalogItemName"], with: itemName)
         replaceText(in: app.textFields["QuickBooksCatalogItemSKU"], with: "INV-CAP-45")
         replaceText(in: app.textFields["QuickBooksCatalogItemPrice"], with: "125.375")
@@ -7462,13 +7471,28 @@ final class GunnAire_OpsUITests: XCTestCase {
         priceKeyboardEvidence.lifetime = .keepAlways; add(priceKeyboardEvidence)
         let inventoryType = app.segmentedControls["QuickBooksCatalogItemType"].buttons["Inventory"]
         XCTAssertTrue(waitForHittable(inventoryType)); inventoryType.tap()
+        func requireKeyboardDismissed() {
+            let dismissed = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "exists == false"), object: app.keyboards.firstMatch)
+            let result = XCTWaiter.wait(for: [dismissed], timeout: 5)
+            if result != .completed { retainNavigationFailure(app, name: "Catalog keyboard did not dismiss") }
+            XCTAssertEqual(result, .completed, "Catalog controls must release the keyboard without losing the draft.")
+        }
+        requireKeyboardDismissed()
         let quantity = app.textFields["InventoryOpeningQuantity"]
-        for _ in 0..<8 where !quantity.isHittable { app.swipeUp() }
+        for _ in 0..<8 where !quantity.isHittable { composeForm.swipeUp() }
+        if !waitForHittable(quantity) { retainNavigationFailure(app, name: "Inventory opening quantity is not reachable") }
         XCTAssertTrue(waitForHittable(quantity)); replaceText(in: quantity, with: "4.25")
+        let done = app.buttons["DoneEditingCatalogItem"]
+        XCTAssertTrue(waitForHittable(done)); done.tap()
+        requireKeyboardDismissed()
         let date = app.textFields["InventoryOpeningDate"]
+        for _ in 0..<8 where !date.isHittable { composeForm.swipeUp() }
         XCTAssertTrue(waitForHittable(date)); replaceText(in: date, with: "2026-09-08")
         let typed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "2026-09-08"), object: date)
         XCTAssertEqual(XCTWaiter.wait(for: [typed], timeout: 5), .completed)
+        XCTAssertTrue(waitForHittable(done)); done.tap()
+        requireKeyboardDismissed()
         let evidence = XCTAttachment(screenshot: app.screenshot())
         evidence.name = "Inventory opening setup offline"; evidence.lifetime = .keepAlways; add(evidence)
         app.buttons["CreateQuickBooksCatalogItem"].tap()
@@ -7481,11 +7505,17 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(waitForHittable(edit)); edit.tap()
         XCTAssertTrue(app.navigationBars["Edit Catalog Item"].waitForExistence(timeout: 3))
         XCTAssertEqual(app.textFields["CatalogEditSalesPrice"].value as? String, "125.375")
+        let editForm = app.collectionViews["CatalogItemEditForm"]
+        XCTAssertTrue(editForm.exists)
         let savedQuantity = app.textFields["InventoryOpeningQuantity"]
-        for _ in 0..<8 where !savedQuantity.isHittable { app.swipeUp() }
+        for _ in 0..<8 where !savedQuantity.isHittable { editForm.swipeUp() }
         XCTAssertTrue(waitForHittable(savedQuantity))
         XCTAssertEqual(savedQuantity.value as? String, "4.25")
         XCTAssertEqual(app.textFields["InventoryOpeningDate"].value as? String, "2026-09-08")
+        savedQuantity.tap()
+        XCTAssertTrue(waitForHittable(done)); done.tap()
+        requireKeyboardDismissed()
+        XCTAssertEqual(savedQuantity.value as? String, "4.25", "Done must not reset the saved opening quantity.")
         let saved = XCTAttachment(screenshot: app.screenshot())
         saved.name = "Saved inventory setup and original price"; saved.lifetime = .keepAlways; add(saved)
         app.buttons["Cancel"].tap()

@@ -1,6 +1,13 @@
 import SwiftUI
 import UIKit
 
+/// One focus owner spans the catalog form and its conditional inventory fields.
+/// Distinct values avoid binding multiple inputs to the same Boolean focus.
+enum QuickBooksCatalogInputField: Hashable {
+    case name, sku, price, purchaseCost, description, purchaseDescription
+    case openingQuantity, openingDate, assemblySearch
+}
+
 extension View {
     /// iPad's decimal pad can present a floating popover over nearby controls.
     /// Use its standard numeric keyboard; iPhone keeps the compact decimal pad.
@@ -15,16 +22,23 @@ struct QuickBooksInventorySetupSection: View {
     @Binding var setup: QuickBooksInventorySetup
     let accounts: [QuickBooksAccount]
     let scope: QuickBooksChangeHistoryScope?
+    let focusedField: FocusState<QuickBooksCatalogInputField?>.Binding
 
     var body: some View {
         Section("Inventory Setup") {
             TextField("Opening quantity", value: $setup.openingQuantity, format: .number)
                 .catalogNumericKeyboard()
+                .focused(focusedField, equals: .openingQuantity)
+                .submitLabel(.next)
+                .onSubmit { focusedField.wrappedValue = .openingDate }
                 .accessibilityIdentifier("InventoryOpeningQuantity")
             TextField("Opening date (YYYY-MM-DD)", text: Binding(
                 get: { setup.openingDate ?? "" }, set: { setup.openingDate = $0.isEmpty ? nil : $0 }))
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+                .focused(focusedField, equals: .openingDate)
+                .submitLabel(.done)
+                .onSubmit { focusedField.wrappedValue = nil }
                 .accessibilityIdentifier("InventoryOpeningDate")
             if let prior = setup.scope, prior != scope {
                 Text("These accounting choices belong to another QuickBooks connection. The draft is retained; choose the current business only after reviewing the item.")
