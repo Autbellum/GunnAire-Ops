@@ -9,9 +9,9 @@ indirect enum FieldFormJSON {
 
     enum Invalid: Error { case payload }
 
-    static func parse(_ text: String) throws -> Self {
-        guard text.utf8.count <= 1_048_576 else { throw Invalid.payload }
-        var reader = Reader(bytes: Array(text.utf8))
+    static func parse(_ text: String, maximumNodes: Int = 20_000) throws -> Self {
+        guard text.utf8.count <= 1_048_576, (1...100_000).contains(maximumNodes) else { throw Invalid.payload }
+        var reader = Reader(bytes: Array(text.utf8), maximumNodes: maximumNodes)
         let result = try reader.value(depth: 0)
         reader.whitespace()
         guard reader.index == reader.bytes.count else { throw Invalid.payload }
@@ -37,6 +37,7 @@ indirect enum FieldFormJSON {
 
     private struct Reader {
         let bytes: [UInt8]
+        let maximumNodes: Int
         var index = 0
         var nodes = 0
         var current: UInt8? { index < bytes.count ? bytes[index] : nil }
@@ -49,7 +50,7 @@ indirect enum FieldFormJSON {
         }
         mutating func value(depth: Int) throws -> FieldFormJSON {
             nodes += 1
-            guard depth <= 16, nodes <= 20_000 else { throw Invalid.payload }
+            guard depth <= 16, nodes <= maximumNodes else { throw Invalid.payload }
             whitespace()
             switch current {
             case 123:

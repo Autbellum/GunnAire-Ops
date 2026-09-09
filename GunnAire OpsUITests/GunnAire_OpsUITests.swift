@@ -4095,6 +4095,56 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testUnreadableSavedInvoiceKeepsOriginalAndExplainsReviewInJobBilling() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedTechnician", "-uiTestSeedCollectibleJob", "-uiTestUnreadableBillingSnapshot"]
+        app.launch()
+        revealSidebarDestination("Schedule & Jobs", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+        let documentation = app.buttons["OpenDocumentation-A1000000-0000-4000-8000-000000000002"]
+        for _ in 0..<6 where !documentation.exists || !documentation.isHittable { app.swipeUp() }
+        XCTAssertTrue(documentation.waitForExistence(timeout: 3)); XCTAssertTrue(documentation.isHittable)
+        documentation.tap()
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
+        let picker = app.segmentedControls["JobDocumentationStagePicker"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 3)); XCTAssertTrue(picker.buttons["Billing"].isSelected)
+        let issue = app.staticTexts["SavedBillingLinesNeedReview"]
+        for _ in 0..<8 where !issue.exists || !issue.isHittable { app.swipeUp() }
+        XCTAssertTrue(issue.waitForExistence(timeout: 3)); XCTAssertTrue(issue.isHittable)
+        XCTAssertTrue(issue.label.contains("original document has not changed"))
+        XCTAssertTrue(app.buttons["Replace All Saved Lines"].exists)
+        XCTAssertEqual(app.staticTexts["SavedDocumentTotal"].label, "$189.00")
+        XCTAssertFalse(app.staticTexts["DocumentNetSubtotal"].exists)
+        XCTAssertFalse(app.staticTexts["QuickBooks update pending"].exists)
+        XCTAssertFalse(app.buttons["Add Line Items"].exists)
+        XCTAssertFalse(app.buttons["Create New Item"].exists)
+        let frame = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        frame.name = "Unreadable saved invoice retained with ordinary job-billing review"; frame.lifetime = .keepAlways; add(frame)
+        let update = app.buttons["Update Invoice"]
+        for _ in 0..<8 where !update.exists || !update.isHittable { app.swipeUp() }
+        XCTAssertTrue(update.waitForExistence(timeout: 3)); XCTAssertFalse(update.isEnabled)
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "\"version\":999")).firstMatch.exists)
+        let replace = app.buttons["Replace All Saved Lines"]
+        for _ in 0..<8 where !replace.isHittable { app.swipeDown() }
+        XCTAssertTrue(replace.isHittable); replace.tap()
+        let addLines = app.buttons["Add Line Items"]
+        XCTAssertTrue(addLines.waitForExistence(timeout: 3)); XCTAssertTrue(addLines.isEnabled)
+        XCTAssertFalse(issue.exists)
+        XCTAssertFalse(update.isEnabled)
+        let back = app.navigationBars["Job Documentation"].buttons.firstMatch
+        XCTAssertTrue(back.isHittable); back.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+        for _ in 0..<8 where !documentation.exists || !documentation.isHittable { app.swipeUp() }
+        XCTAssertTrue(documentation.isHittable); documentation.tap()
+        for _ in 0..<8 where !issue.exists || !issue.isHittable { app.swipeUp() }
+        XCTAssertTrue(issue.waitForExistence(timeout: 3))
+        XCTAssertEqual(app.staticTexts["SavedDocumentTotal"].label, "$189.00")
+        XCTAssertFalse(app.staticTexts["DocumentNetSubtotal"].exists)
+        XCTAssertEqual(app.state, .runningForeground)
+    }
+
+    @MainActor
     func testFieldBillingKeepsProviderControlsOutOfDocumentScopedDraftFlow() throws {
         let app = XCUIApplication()
         let draftName = "Scoped Draft \(UUID().uuidString.prefix(8))"

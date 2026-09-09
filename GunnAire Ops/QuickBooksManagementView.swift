@@ -96,7 +96,7 @@ enum QuickBooksDocumentLinePublicationError: LocalizedError, Equatable {
 /// customer document.
 enum QuickBooksDocumentLinePublication {
     static func validateSnapshotTotals(snapshotJSON: String?, expectedSubtotal: Double) throws {
-        let snapshots = CatalogLineItemSnapshot.decoded(from: snapshotJSON)
+        let snapshots = try CatalogSnapshotPayload.read(snapshotJSON)?.lines ?? []
         guard !snapshots.isEmpty else { throw QuickBooksDocumentLinePublicationError.missingCatalogSnapshot }
         var gross = 0.0
         for line in snapshots {
@@ -133,7 +133,7 @@ enum QuickBooksDocumentLinePublication {
         expectedSubtotal: Double,
         catalogItems: [Item]
     ) throws -> [QuickBooksLineItem] {
-        let snapshots = CatalogLineItemSnapshot.decoded(from: snapshotJSON)
+        let snapshots = try CatalogSnapshotPayload.read(snapshotJSON)?.lines ?? []
         guard !snapshots.isEmpty else {
             throw QuickBooksDocumentLinePublicationError.missingCatalogSnapshot
         }

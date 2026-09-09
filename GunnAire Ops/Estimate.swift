@@ -190,7 +190,8 @@ final class Estimate {
     }
 
     var customerApprovalBlockedMessage: String? {
-        BillingTaxPolicy.customerCommitmentBlockedMessage(
+        if let message = CatalogSnapshotPayload.reviewMessage(catalogSnapshotJSON) { return message }
+        return BillingTaxPolicy.customerCommitmentBlockedMessage(
             status: taxCalculationStatus,
             documentName: "estimate"
         )

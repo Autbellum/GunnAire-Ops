@@ -8,7 +8,9 @@ import Foundation
     private static let scale: Decimal = 100_000
 
     static func documents(from json: String?, targetAmounts: [Double]) throws -> [String] {
-        let source = CatalogLineItemSnapshot.decoded(from: json)
+        let source: [CatalogLineItemSnapshot]
+        do { source = try CatalogSnapshotPayload.read(json)?.lines ?? [] }
+        catch { throw CatalogBundleError.invalidMembers }
         guard !source.isEmpty, Set(source.map(\.catalogItemID)).count == source.count else {
             throw ProjectBillingValidationError.missingCatalogSnapshot
         }

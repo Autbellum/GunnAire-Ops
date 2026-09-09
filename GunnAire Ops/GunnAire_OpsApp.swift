@@ -953,6 +953,10 @@ private enum GunnAireUITestFixtures {
             invoice.quickBooksBalanceDue = nil
             invoice.status = "paid"
         }
+        if arguments.contains("-uiTestUnreadableBillingSnapshot"), arguments.contains("-uiTestSeedCollectibleJob"),
+           let original = invoice.catalogSnapshotJSON {
+            invoice.catalogSnapshotJSON = "{\"version\":999,\"lines\":" + original + "}"
+        }
         if arguments.contains("-uiTestBillingIdentityConflict") {
             invoice.quickBooksID = "FIXTURE-IDENTITY-REVIEW"
             QuickBooksBillingIdentity.markForReview([invoice])

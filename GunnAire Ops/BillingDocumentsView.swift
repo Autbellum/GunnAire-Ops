@@ -87,6 +87,7 @@ struct BillingDocumentsView: View {
     @State private var bundleEquipmentCustomerID: UUID?
     @State private var bundleSelectionError: String?
     @State private var loadedCatalogIssue: String?
+    @State private var loadedCatalogSavedAmount: Double?
     @State private var bundleEditRequest: CatalogBundleEditRequest?
     @State private var selectedItemizedAssemblyMemberships: [UUID: Set<UUID>] = [:]
     @State private var selectedInvoicePaymentTerms: InvoicePaymentTerms = .dueOnReceipt
@@ -740,6 +741,7 @@ struct BillingDocumentsView: View {
         isCreatingDocument ||
             customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
             selectedItems.isEmpty ||
+            loadedCatalogIssue != nil ||
             documentDiscountValidationMessage != nil ||
             invoiceWorkflowBlockedMessage != nil
     }
@@ -3543,7 +3545,7 @@ GunnAire
                             .foregroundColor(.orange)
                     }
 
-                    if !actionMessage.isEmpty {
+                    if !actionMessage.isEmpty, loadedCatalogIssue == nil {
                         Text(actionMessage)
                             .font(.caption)
                             .foregroundColor(.secondary)
@@ -4051,6 +4053,9 @@ GunnAire
                                 .foregroundStyle(.secondary)
                         }
 
+                        savedCatalogReview
+
+                        if loadedCatalogIssue == nil {
                         HStack {
                             Text("Selected Items")
                             Spacer()
@@ -4201,6 +4206,7 @@ GunnAire
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
+                        }
 
                         if workspaceMode.showsEstimateBuilder {
                             Button(isCreatingDocument && selectedDocumentKind == .estimate ? "Creating Estimate..." : "Create Estimate") {
@@ -4214,6 +4220,7 @@ GunnAire
                                 isCreatingDocument ||
                                 customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
                                 selectedItems.isEmpty ||
+                                loadedCatalogIssue != nil ||
                                 documentDiscountValidationMessage != nil
                             )
                         }
@@ -4244,7 +4251,7 @@ GunnAire
                                 .foregroundColor(.orange)
                         }
 
-                        if !actionMessage.isEmpty {
+                        if !actionMessage.isEmpty, loadedCatalogIssue == nil {
                             Text(actionMessage)
                                 .font(.caption)
                                 .foregroundColor(.secondary)
@@ -4401,12 +4408,34 @@ GunnAire
     }
 
     @ViewBuilder
+    private var savedCatalogReview: some View {
+        if let loadedCatalogIssue {
+            VStack(alignment: .leading, spacing: 8) {
+                if let loadedCatalogSavedAmount {
+                    HStack {
+                        Text("Saved Document Total")
+                        Spacer()
+                        Text(loadedCatalogSavedAmount, format: .currency(code: "USD"))
+                            .font(.headline)
+                            .accessibilityIdentifier("SavedDocumentTotal")
+                    }
+                }
+                Text(loadedCatalogIssue).foregroundStyle(.orange)
+                    .accessibilityIdentifier("SavedBillingLinesNeedReview")
+                Button("Replace All Saved Lines") {
+                    clearSelectedCatalogLines()
+                    actionMessage = "Add the replacement lines, then save when ready. The original document stays unchanged until you save."
+                }
+                    .accessibilityIdentifier("ReplaceUnresolvedBillingLines")
+            }
+        }
+    }
+
+    @ViewBuilder
     private var lineItemBuilderView: some View {
                     VStack(alignment: .leading, spacing: 8) {
-                        if let loadedCatalogIssue {
-                            Text(loadedCatalogIssue).foregroundStyle(.orange)
-                            Button("Replace All Saved Lines") { clearSelectedCatalogLines() }
-                        }
+                        savedCatalogReview
+                        if loadedCatalogIssue == nil {
                         HStack {
                             Text("Line Items")
                                 .font(.headline)
@@ -4604,6 +4633,7 @@ GunnAire
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
                             .disabled(!canAddInlineItem)
+                        }
                         }
                     }
 
@@ -7701,6 +7731,7 @@ GunnAire
             notes: estimate.notes,
             lineItemSummary: estimate.lineItemSummary,
             catalogSnapshotJSON: estimate.catalogSnapshotJSON,
+            savedAmount: estimate.amount,
             preferredKind: .estimate,
             announce: announce
         )
@@ -7720,6 +7751,7 @@ GunnAire
             notes: estimate.notes,
             lineItemSummary: estimate.lineItemSummary,
             catalogSnapshotJSON: estimate.catalogSnapshotJSON,
+            savedAmount: estimate.amount,
             preferredKind: .estimate,
             announce: false
         )
@@ -7790,6 +7822,7 @@ GunnAire
             notes: estimate.notes,
             lineItemSummary: estimate.lineItemSummary,
             catalogSnapshotJSON: estimate.catalogSnapshotJSON,
+            savedAmount: estimate.amount,
             preferredKind: .invoice,
             announce: false
         )
@@ -7854,6 +7887,7 @@ GunnAire
             notes: invoice.notes,
             lineItemSummary: invoice.lineItemSummary,
             catalogSnapshotJSON: invoice.catalogSnapshotJSON,
+            savedAmount: invoice.amount,
             preferredKind: .invoice,
             announce: announce
         )
@@ -7866,6 +7900,7 @@ GunnAire
         notes: String?,
         lineItemSummary: String,
         catalogSnapshotJSON: String?,
+        savedAmount: Double,
         preferredKind: BillingDocumentKind,
         announce: Bool
     ) {
@@ -7884,11 +7919,13 @@ GunnAire
         do { try CatalogBundlePolicy.validateRestoration(catalogSnapshotJSON, catalog: items) }
         catch {
             clearSelectedCatalogLines()
-            loadedCatalogIssue = "The saved line items need catalog review. The original document has not changed. Refresh the catalog, or explicitly replace all saved lines."
+            loadedCatalogSavedAmount = savedAmount.isFinite && savedAmount >= 0 ? savedAmount : nil
+            loadedCatalogIssue = "The saved line items need review. The original document has not changed. You can leave it as saved or replace all lines to edit it."
             actionMessage = loadedCatalogIssue ?? ""
             return
         }
         loadedCatalogIssue = nil
+        loadedCatalogSavedAmount = nil
         if restoredItems.isEmpty {
             clearSelectedCatalogLines()
         } else {
@@ -8702,6 +8739,7 @@ GunnAire
 
     private func clearSelectedCatalogLines() {
         loadedCatalogIssue = nil
+        loadedCatalogSavedAmount = nil
         selectedItems.removeAll()
         newlyCreatedLineItems.removeAll()
         documentScopedReviewItemIDs.removeAll()

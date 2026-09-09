@@ -322,7 +322,7 @@ final class QuickBooksBillingWorkflow {
         try QuickBooksCatalogMappingIntegrity.validateDocumentItems(items, against: currentItems)
         // Validate sold values before any customer/catalog write, while allowing
         // unmapped approved items to obtain their identity during preparation.
-        let snapshots = CatalogLineItemSnapshot.decoded(from: document.snapshotJSON)
+        let snapshots = try CatalogSnapshotPayload.read(document.snapshotJSON)?.lines ?? []
         if snapshots.contains(where: { $0.bundle != nil }) {
             guard let companyID = run.workflow.companyID, let realmID = run.workflow.realmID else {
                 throw CatalogBundleError.originalBusiness

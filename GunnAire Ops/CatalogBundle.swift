@@ -99,7 +99,7 @@ enum CatalogBundlePolicy {
     }
 
     static func validateScope(_ json: String?, expected: QuickBooksChangeHistoryScope) throws {
-        for root in CatalogLineItemSnapshot.decoded(from: json) where root.bundle != nil {
+        for root in try CatalogSnapshotPayload.read(json)?.lines ?? [] where root.bundle != nil {
             try validate(root)
             guard root.bundle?.scope == expected else { throw CatalogBundleError.originalBusiness }
         }
@@ -126,8 +126,11 @@ enum CatalogBundlePolicy {
     }
 
     static func validateRestoration(_ json: String?, catalog: [Item]) throws {
-        guard let json, !json.isEmpty else { return }
-        let snapshots = CatalogLineItemSnapshot.decoded(from: json)
+        let decoded: CatalogSnapshotPayload.Snapshot?
+        do { decoded = try CatalogSnapshotPayload.read(json) }
+        catch { throw CatalogBundleError.invalidMembers }
+        guard let snapshot = decoded else { return }
+        let snapshots = snapshot.lines
         guard !snapshots.isEmpty, Set(snapshots.map(\.catalogItemID)).count == snapshots.count else {
             throw CatalogBundleError.invalidMembers
         }

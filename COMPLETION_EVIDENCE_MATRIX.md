@@ -1,3 +1,34 @@
+Saved billing evidence and staff graph locally qualified checkpoint, 2026-09-09:
+STAFF_BILLING_SNAPSHOT_INTEGRITY.md records two actual failing reproductions on
+parent 223f1b4: future-version saved lines passed QBO publication validation, and
+unknown nested financial metadata passed full staff graph validation. The shared
+strict payload now recognizes legacy arrays, v1 envelopes, sold bundles/assemblies,
+discounts and tax-address evidence without dropping unknown or duplicate fields.
+It gates editing, prerequisite publication, allocation, approval/payment/PDF
+readiness and full staff graph preparation. Historical prices/serials/approvers
+remain original; current catalog values do not rewrite sold evidence.
+Initial compatibility failures and the genuine job-layout recovery-control gap
+remain recorded rather than counted as passing results. Visual review then found
+a misleading $0 draft total and pending-sync cue beside an unreadable saved $189
+invoice. Both billing layouts now show the original saved total and one recovery
+action; editing controls stay closed until explicit replacement. Leaving without
+saving preserves the original document and its recovery context on reopening.
+Final Focused4 passes 125 cases, IPadFocused3 passes 15, and MacFull3 verifies
+1,843 actual cases and seven selectors. IPadFull2 verifies 1,853 actual cases and
+17 selectors: full logic plus ten ordinary iPad journeys. Tools2 passes 74 and
+Backend1 passes 852. MacRelease3 (arm64/x86_64) and DeviceRelease3 (arm64) unsigned
+builds pass; exact hashes, retained warnings and visual evidence are in the report.
+OriginalPreflight3 freezes 16 paths, protects 378 unrelated changes and checks
+386 other matching tracked sources and original branch/HEAD/index. Copy-back
+verifies all 16 files byte-equal, all 378 unrelated edits preserved, and original
+branch/HEAD/index unchanged. Only the isolated review checkout is committed.
+Parent PR18 head 223f1b4 has
+passing Backend/Mac checks and live iPad CI; this candidate is not pushed over it.
+Full independent-staff CloudKit/domain/role/store/command/media convergence,
+provider/vendor/payment/Handoff/device and broad usability/accessibility gates
+remain essential and incomplete. No deployment, live accounting/provider write,
+signing/schema promotion, physical install or main merge occurs here.
+
 Field-form draft recovery locally qualified checkpoint, 2026-09-09:
 FIELD_FORM_DRAFT_RECOVERY.md records the state-only lost-work gap and the new
 encrypted author/workspace/job/template journal, immediately saved readings,

@@ -311,6 +311,7 @@ final class Invoice {
     }
 
     var paymentCollectionBlockedMessage: String? {
+        if let message = CatalogSnapshotPayload.reviewMessage(catalogSnapshotJSON) { return message }
         if milestoneDraftReceiptJSON != nil { return BillingMilestoneReconciliation.retainedMessage }
         if let stage = projectMilestoneID, let customer {
             let related = customer.invoices.filter { $0.projectMilestoneID == stage }
