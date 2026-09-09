@@ -143,6 +143,37 @@ import Testing
         #expect(file.canUploadToQuickBooksEstimate(estimate))
     }
 
+    @Test func scheduledStandaloneEstimateCannotBecomeAnotherJobsTargetOrUploadPermission() {
+        let customer = Customer(name: "Repeated service customer")
+        let first = ServiceCall(type: .service, scheduledDate: Date(), customer: customer)
+        let scheduled = ServiceCall(type: .install, scheduledDate: Date(), customer: customer)
+        let estimate = Estimate(scheduledServiceCallID: scheduled.id, customer: customer, quickBooksID: "101")
+        first.linkedEstimateID = estimate.id
+        let file = attachment(customer, job: first.id, estimate: estimate.id)
+        #expect(JobBillingDocumentLinks.estimate(for: first, in: [estimate]) == nil)
+        #expect(JobBillingDocumentLinks.attachmentTarget(for: first, invoices: [], estimates: [estimate], payments: []) == nil)
+        #expect(!file.canUploadToQuickBooksEstimate(estimate))
+        #expect(QuickBooksInvoiceAttachmentSync.pendingEstimateAttachments(estimates: [estimate], attachments: [file]).isEmpty)
+        #expect(QuickBooksInvoiceAttachmentSync.quickBooksAttachableReferences(for: file, estimates: [estimate], invoices: []).isEmpty)
+        let unlinked = attachment(customer, job: first.id)
+        #expect(QuickBooksInvoiceAttachmentSync.linkServiceCallAttachmentsToBillingDocuments(
+            estimates: [estimate], invoices: [], serviceCalls: [first, scheduled], attachments: [unlinked]) == 0)
+        #expect(unlinked.estimateID == nil)
+        let scheduledFile = attachment(customer, job: scheduled.id, estimate: estimate.id)
+        #expect(JobBillingDocumentLinks.estimate(for: scheduled, in: [estimate]) === estimate)
+        #expect(scheduledFile.canUploadToQuickBooksEstimate(estimate))
+        // A genuine standalone proposal or its actual diagnostic visit remains valid.
+        estimate.scheduledServiceCallID = nil
+        #expect(JobBillingDocumentLinks.estimate(for: first, in: [estimate]) === estimate)
+        #expect(file.canUploadToQuickBooksEstimate(estimate))
+        estimate.serviceCallID = first.id; estimate.scheduledServiceCallID = scheduled.id
+        #expect(JobBillingDocumentLinks.estimate(for: first, in: [estimate]) === estimate)
+        #expect(file.canUploadToQuickBooksEstimate(estimate) && scheduledFile.canUploadToQuickBooksEstimate(estimate))
+        #expect(first.linkedEstimateID == estimate.id && file.estimateID == estimate.id)
+        file.serviceCallID = nil
+        #expect(file.canUploadToQuickBooksEstimate(estimate))
+    }
+
     @Test func documentationStatusDoesNotInferPaymentFromMissingRecords() {
         let customer = Customer(name: "Customer")
         let call = ServiceCall(type: .service, scheduledDate: Date(), customer: customer, linkedInvoiceID: UUID())

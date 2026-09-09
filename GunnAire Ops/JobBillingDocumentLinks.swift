@@ -1,5 +1,16 @@
 import Foundation
 
+/// A proposal may start without a visit, then retain both its diagnostic visit
+/// and scheduled work order. A missing diagnostic visit is not a wildcard once
+/// a work order is recorded. This checks lineage only, never customer access.
+nonisolated enum EstimateJobLineage {
+    static func matches(jobID: UUID?, diagnosticJobID: UUID?, scheduledJobID: UUID?) -> Bool {
+        guard let jobID else { return true }
+        return (diagnosticJobID == nil && scheduledJobID == nil)
+            || diagnosticJobID == jobID || scheduledJobID == jobID
+    }
+}
+
 /// Resolve saved document identities, never creation order, display names or amounts.
 /// This only selects an existing record; it never rewrites historical file ownership.
 @MainActor enum JobBillingDocumentLinks {
@@ -41,7 +52,8 @@ import Foundation
             matches = estimates.filter { $0.serviceCallID == call.id || $0.scheduledServiceCallID == call.id }
         }
         guard let resolved = unique(matches), resolved.customer === customer,
-              resolved.serviceCallID == nil || resolved.serviceCallID == call.id || resolved.scheduledServiceCallID == call.id,
+              EstimateJobLineage.matches(jobID: call.id, diagnosticJobID: resolved.serviceCallID,
+                                        scheduledJobID: resolved.scheduledServiceCallID),
               estimate(id: resolved.id, in: estimates) === resolved else { return nil }
         return resolved
     }

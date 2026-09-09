@@ -4814,6 +4814,41 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testReceiptRejectsAnotherJobsScheduledEstimateAndRecoversOriginalTarget() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-appStoreScreenshotFixtures",
+            "-uiTestSeedCollectibleJob", "-uiTestDocumentLinkTargets", "-uiTestScheduledEstimateJobMismatch",
+            "-GunnAirePendingAppRoute", "receiptsBills"]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Receipts & Bills"].waitForExistence(timeout: 8))
+        let job = app.buttons["DocumentServiceCallPicker"], id = app.textFields["DocumentAttachEntityID"]
+        for _ in 0..<8 where !job.exists || !job.isHittable { app.swipeUp() }
+        XCTAssertTrue(job.waitForExistence(timeout: 4))
+        func selectJob(_ identifier: String) {
+            job.tap()
+            let option = app.buttons["DocumentServiceCall-\(identifier)"]
+            XCTAssertTrue(option.waitForExistence(timeout: 3)); option.tap()
+        }
+        func expectUnresolved() {
+            let empty = NSPredicate(format: "value == %@ OR value == %@", "", "QuickBooks Entity ID (optional)")
+            expectation(for: empty, evaluatedWith: id); waitForExpectations(timeout: 3)
+            XCTAssertTrue(app.staticTexts["The linked transaction needs sync or review. No QuickBooks transaction is selected."].waitForExistence(timeout: 3))
+            XCTAssertFalse(app.buttons["Sync Receipts and Bills with QuickBooks"].isEnabled)
+        }
+        selectJob(screenshotServiceCallID)
+        expectUnresolved()
+        selectJob(maintenanceServiceCallID)
+        XCTAssertEqual(id.value as? String, "QBO-UI-DOCUMENT-ESTIMATE")
+        XCTAssertTrue(app.buttons["DocumentAttachTypePicker"].label.contains("Estimate"))
+        selectJob(screenshotServiceCallID)
+        expectUnresolved()
+        let evidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        evidence.name = "Receipts - wrong scheduled job leaves original transaction unresolved"
+        evidence.lifetime = .keepAlways; add(evidence)
+    }
+
+    @MainActor
     func testDocumentationBillingReviewReturnsToTheOriginalWorkspace() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-appStoreScreenshotFixtures",

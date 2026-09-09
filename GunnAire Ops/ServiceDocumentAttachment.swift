@@ -476,7 +476,8 @@ final class ServiceDocumentAttachment {
             estimateID == estimate.id &&
             estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
             customer === estimate.customer,
-            serviceCallID == nil || estimate.serviceCallID == nil || serviceCallID == estimate.serviceCallID || serviceCallID == estimate.scheduledServiceCallID,
+            EstimateJobLineage.matches(jobID: serviceCallID, diagnosticJobID: estimate.serviceCallID,
+                                      scheduledJobID: estimate.scheduledServiceCallID),
             let reference = quickBooksEstimateReference(for: estimate) else {
             return false
         }

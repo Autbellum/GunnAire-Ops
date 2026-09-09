@@ -1,3 +1,21 @@
+Complete staff relationship and estimate handoff candidate, 2026-09-09:
+STAFF_RECORD_RELATIONSHIPS.md records schema-checked UUID/reference dispositions
+for all 32 models, exact missing-parent rejection, customer/technician/vehicle/
+invoice context boundaries, original back-links, iterative cycle checks and
+strict crew/covered-equipment lists. Review reproduced a live wrong-job estimate
+selection/file eligibility defect; the shared lineage rule now preserves the
+actual diagnostic and scheduled visit, not a nil diagnostic wildcard. Final Mac
+verifies 1,744 actual cases and iPad verifies 1,752 including all eight requested
+UI journeys. All 72 Tools tests, workflow lint, unsigned universal Mac/arm64 iOS
+Release builds and architecture checks pass. Two current-source iPad frames were
+inspected without account-email footers; the admin receipts screen still needs
+broader simplification/accessibility review. CI retains all 66 prior UI selections,
+adds the new receipt regression and gives iPad 90 minutes after an authoritative
+one-hour hosted cancellation. Copy-back verifies all 13 scoped files byte-equal,
+355 unrelated changes preserved and original branch/HEAD/index unchanged. This is
+not full role-safe synchronization, a staff workspace lease, provider acceptance
+or completion of the full-suite goal. The existing core-field-v1 gate is unchanged.
+
 Complete persisted-model coverage candidate, 2026-09-09:
 STAFF_FULL_MODEL_COVERAGE.md extends explicit owner-side preservation to every
 one of the 32 SwiftData entities, with 561 field mappings, exact schema disposition,

@@ -1505,6 +1505,12 @@ private enum GunnAireUITestFixtures {
             maintenanceCall.linkedEstimateID = estimate.id
             estimate.serviceCallID = maintenanceCall.id
             estimate.quickBooksID = "QBO-UI-DOCUMENT-ESTIMATE"
+            if arguments.contains("-uiTestScheduledEstimateJobMismatch") {
+                call.linkedInvoiceID = nil
+                call.linkedEstimateID = estimate.id
+                estimate.serviceCallID = nil
+                estimate.scheduledServiceCallID = maintenanceCall.id
+            }
         }
         if arguments.contains("-uiTestDocumentationCustomerPending") {
             call.linkedInvoiceID = invoice.id
