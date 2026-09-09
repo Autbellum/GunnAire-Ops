@@ -99,6 +99,8 @@ jobs:
               testExistingQuickBooksLinkReviewCancelsAfterReconnection \
               testExistingQuickBooksLinksOfferOfflineRecoveryWithoutDeviceOAuth \
               testUnverifiedBusinessRoleOffersRecoveryWithoutAdministratorWorkspaces \
+              testStaffCloudKitRequestRecoversAfterRelaunchWithoutOpeningAnotherWorkspace \
+              testStaffCloudKitAdministratorReviewReturnsToSettingsAndRetainsOriginalInvitation \
               testNativeBillingReviewCancelsUnsentProposalAndReturnsToOriginalInvoice \
               testNativeBillingBundleReviewShowsRepeatedComponentsAndCancelsOriginalProposal \
               testNativeBillingReviewRecoversAcceptedInvoiceWithoutPublishingAgain \
