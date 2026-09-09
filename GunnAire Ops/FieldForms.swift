@@ -157,7 +157,7 @@ nonisolated private struct FieldFormAssignmentEnvelope: Codable, Sendable {
 
 @Model
 final class FieldFormTemplate {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var title: String = ""
     var questionsJSON: String = "[]"
     var applicableServiceTypesJSON: String?
@@ -376,7 +376,7 @@ final class FieldFormTemplate {
 
 @Model
 final class FieldFormResponse {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var serviceCallID: UUID = UUID()
     var templateID: UUID = UUID()
     var templateTitle: String = ""

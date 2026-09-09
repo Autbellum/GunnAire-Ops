@@ -13,7 +13,7 @@ enum AppUserRole: String, Codable, CaseIterable, Identifiable {
 
 @Model
 final class AppUser {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var email: String = ""
     var roleRawValue: String = AppUserRole.standard.rawValue
     var isActive: Bool = true

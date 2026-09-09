@@ -5,7 +5,7 @@ import SwiftData
 
 @Model
 final class Payment {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     /// CloudKit can deliver relationship records in either order. The invoice
     /// remains required by every payment initializer and creation workflow.
     var invoice: Invoice!

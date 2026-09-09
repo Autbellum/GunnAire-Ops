@@ -114,7 +114,7 @@ struct FleetVehicleReadiness: Equatable, Sendable {
 
 @Model
 final class FleetVehicle {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var unitNumber: String = ""
     var vin: String?
     var licensePlate: String?
@@ -215,7 +215,7 @@ final class FleetVehicle {
 
 @Model
 final class FleetVehicleEvent {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var vehicleID: UUID = UUID()
     var vehicleUnitNumber: String = ""
     var kindRaw: String = FleetVehicleEventKind.created.rawValue

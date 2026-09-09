@@ -83,7 +83,7 @@ enum BusinessTaskValidationError: LocalizedError, Equatable {
 
 @Model
 final class BusinessTask {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var creationOperationID: UUID = UUID()
     var title: String = ""
     var taskDescription: String?
@@ -175,7 +175,7 @@ final class BusinessTask {
 
 @Model
 final class BusinessTaskEvent {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var operationID: UUID = UUID()
     var taskID: UUID = UUID()
     var kindRaw: String = BusinessTaskEventKind.created.rawValue

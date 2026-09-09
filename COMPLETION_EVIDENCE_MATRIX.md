@@ -1,3 +1,28 @@
+Full owner-model history local qualification, 2026-09-09:
+STAFF_FULL_MODEL_HISTORY.md records the actual lost invoice/payment deletion IDs,
+26 missing history attributes, full 32-model typed capture, store/transaction
+fences and encrypted owner-only preparation connected before newer core source
+publication. Original six-kind pending operations retain recovery priority;
+raw full-domain HR/billing fields never enter that existing endpoint or activate
+a partial staff store. Focused3 verifies 42 passing cases including all-32-model
+prior-schema migration with original values, relationships and store UUID.
+All 74 Tools tests pass. A new Release actor-isolation warning was corrected by
+making the history-reader closure explicitly MainActor. Final MacFull2 verifies
+1,874 actual cases and IPadFull2 verifies 1,879, including five ordinary invoice,
+inbox and staff setup UI journeys, all with zero failures/skips. Both final
+unsigned Release builds and architecture checks pass: arm64 iOS and universal
+arm64/x86_64 Mac. Existing QBO warnings remain. Four final iPad frames were
+inspected without account-email footers; invoice density and accepted-state
+invitation controls still need polish. Full server domain/role/lease/commands/
+media and independent signed-account CloudKit convergence remain essential and
+incomplete. OriginalPreflight2 protects 30 scoped paths, 385 unrelated edits,
+379 matching other tracked sources and the owner's original branch/HEAD/index.
+OriginalCopyBack2 verifies all 30 files byte-equal and preserves those unrelated
+changes plus branch/HEAD/index. Only the isolated review checkout is committed.
+Mail checkpoint a0fd766 is now published in PR18 after every predecessor CI job
+passed; its Backend now passes both Python versions and native run 34411588111
+remains live. This history checkpoint is not pushed over that live run.
+
 Native attachment-preview local qualification, 2026-09-09:
 NATIVE_ATTACHMENT_PREVIEW.md records the actual hosted blank text preview,
 unchanged warm/cold local passes, and a native text-reader candidate that retains

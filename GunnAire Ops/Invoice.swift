@@ -73,7 +73,7 @@ enum InvoicePaymentTerms: String, Codable, CaseIterable, Identifiable {
 
 @Model
 final class Invoice {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var serviceCallID: UUID?
     var serviceLocationID: UUID?
     var siteAddress: String?

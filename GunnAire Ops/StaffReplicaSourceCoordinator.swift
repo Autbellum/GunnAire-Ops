@@ -17,6 +17,17 @@ struct StaffReplicaSourceDependencies {
     let store: SharedTimeLocalStore
     var now: () -> Date = Date.init
     var deliver: ((StaffReplicaSourceContext, Int) async throws -> StaffReplicaAutomaticSummary)? = nil
+    var prepareFullWorkspace: ((StaffReplicaSourceContext) throws -> Void)? = nil
+
+    private static func verify(_ context: StaffReplicaSourceContext) throws {
+        try Task.checkCancellation()
+        let access = CompanyWorkspaceAccessController.shared
+        guard !GunnAireCloudKit.usesTestDatabase, access.operationStamp == context.stamp, access.verifiedRole == .admin,
+              access.verifiedCompanyID == context.scope.binding.companyID, Date() < context.stamp.session.expiresAt,
+              try CompanyWorkspaceStore.identity(at: CompanyWorkspaceStore.url) == context.scope.storeUUID else {
+            throw StaffReplicaSourceSyncError.access
+        }
+    }
 
     static var live: Self {
         .init(context: {
@@ -35,19 +46,17 @@ struct StaffReplicaSourceDependencies {
             }
             return .init(scope: .init(backendOrigin: stamp.session.backendOrigin, actorEmail: stamp.session.email,
                                      binding: binding, storeUUID: registration.storeUUID), stamp: stamp)
-        }, check: { context in
-            try Task.checkCancellation()
-            let access = CompanyWorkspaceAccessController.shared
-            guard !GunnAireCloudKit.usesTestDatabase, access.operationStamp == context.stamp, access.verifiedRole == .admin,
-                  access.verifiedCompanyID == context.scope.binding.companyID, Date() < context.stamp.session.expiresAt,
-                  try CompanyWorkspaceStore.identity(at: CompanyWorkspaceStore.url) == context.scope.storeUUID else {
-                throw StaffReplicaSourceSyncError.access
-            }
-        }, capture: { context, token in
+        }, check: { try verify($0) }, capture: { context, token in
             guard let container = CompanyWorkspaceAccessController.shared.authorizedContainer else { throw StaffReplicaSourceSyncError.access }
             return try StaffReplicaSourceHistory.capture(container: container, after: token, storeUUID: context.scope.storeUUID)
         }, request: { try await GunnAireBackendService.staffReplicaSourceRequest(path: $0, method: $1, body: $2) }, store: StaffReplicaSourceStorage.device,
-              deliver: { try await StaffReplicaAutomaticDelivery().deliver(source: $0, sequence: $1) })
+              deliver: { try await StaffReplicaAutomaticDelivery().deliver(source: $0, sequence: $1) },
+              prepareFullWorkspace: { context in
+                  try verify(context)
+                  guard let container = CompanyWorkspaceAccessController.shared.authorizedContainer else { throw StaffReplicaSourceSyncError.access }
+                  try StaffWorkspaceSourceStaging.prepare(container: container, scope: context.scope,
+                      store: StaffWorkspaceSourceStaging.device, check: { try verify(context) })
+              })
     }
 }
 
@@ -182,6 +191,12 @@ enum StaffReplicaSourceStorage {
             // Original in-flight requests are recovered before capturing newer
             // edits, including after process death or a lost acknowledgement.
             try await recover(&journal, context: context)
+            // Prepare all 32 owner model kinds durably under a separate local
+            // schema before publishing newer core facts. Never alter recovery
+            // of an already submitted six-kind operation or send raw HR/billing
+            // records through the existing role-projected core endpoint.
+            try dependencies.prepareFullWorkspace?(context)
+            try dependencies.check(context)
             let capture = try dependencies.capture(context, journal.token)
             try dependencies.check(context)
             journal.snapshot = capture.source; journal.token = capture.token

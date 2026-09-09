@@ -136,6 +136,36 @@ import Testing
         #expect(try h.journal().pending == nil && h.journal().token != nil)
         #expect(c.lastConfirmedAt == h.now && c.conflicts.isEmpty)
     }
+    @Test func fullWorkspacePreparationPrecedesNewCoreCaptureAndPublication() async throws {
+        let h = Fixture(); h.local = [h.record("Original")]
+        var prepared = false, dependencies = h.dependencies()
+        dependencies.prepareFullWorkspace = { context in
+            #expect(context.scope == h.scope && h.captures == 0 && h.posts.isEmpty)
+            prepared = true
+        }
+        h.beforePost = { #expect(prepared) }
+        await StaffReplicaSourceCoordinator(dependencies: dependencies).sync()
+        #expect(prepared && h.posts.count == 1 && h.captures == 1)
+    }
+    @Test func fullPreparationFailureDoesNotLoseOriginalPendingCoreRecovery() async throws {
+        let h = Fixture(); h.local = [h.record("Original")]; h.loseReply = true
+        await h.coordinator().sync()
+        let original = try #require(h.posts.first), captures = h.captures
+        var dependencies = h.dependencies()
+        dependencies.prepareFullWorkspace = { _ in throw StaffReplicaSourceSyncError.history }
+        let coordinator = StaffReplicaSourceCoordinator(dependencies: dependencies)
+        await coordinator.sync()
+        #expect(h.posts.count == 2 && h.posts[1] == original && h.captures == captures)
+        #expect(try h.journal().pending == nil && h.sequence == 1)
+        #expect(coordinator.message == StaffReplicaSourceSyncError.history.localizedDescription)
+    }
+    @Test func fullPreparationScopeChangePreventsNewCaptureAndNetworkPublication() async throws {
+        let h = Fixture(); h.local = [h.record("Original")]
+        var dependencies = h.dependencies()
+        dependencies.prepareFullWorkspace = { _ in h.generation = UUID() }
+        await StaffReplicaSourceCoordinator(dependencies: dependencies).sync()
+        #expect(h.captures == 0 && h.posts.isEmpty && h.reads == 0 && h.saved.isEmpty)
+    }
     @Test func unchangedRecordDoesNotPublishAgainButSavedEditUsesAcknowledgedRevision() async throws {
         let h = Fixture(); try await h.establish()
         await h.coordinator().sync(); #expect(h.posts.isEmpty)

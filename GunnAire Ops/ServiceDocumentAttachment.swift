@@ -182,7 +182,7 @@ enum AttachmentMarkupCopyPolicy {
 
 @Model
 final class ServiceDocumentAttachment {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var customer: Customer?
     var serviceCallID: UUID?
     var customerEquipmentID: UUID?

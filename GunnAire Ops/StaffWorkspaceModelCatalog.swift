@@ -7,6 +7,7 @@ import SwiftData
 @MainActor struct StaffWorkspaceAnyModelCodec {
     let kind: String
     let modelName: String
+    let modelType: any PersistentModel.Type
     let attributes: Set<String>
     let relationships: Set<String>
     let excludedAttributes: [String: String]
@@ -15,11 +16,13 @@ import SwiftData
     let validate: (StaffWorkspaceModelRecord) throws -> Void
     let encode: (any PersistentModel) throws -> StaffWorkspaceModelRecord
     let readSavedRecords: (ModelContext) throws -> [StaffWorkspaceModelRecord]
+    let deletedID: (any HistoryDelete) throws -> UUID?
     let decode: (StaffWorkspaceModelRecord, StaffWorkspaceModelResolver) throws -> any PersistentModel
 
     init<M>(_ codec: StaffWorkspaceModelCodec<M>) {
         kind = codec.kind
         modelName = String(describing: M.self)
+        modelType = M.self
         let owning = codec.fields.filter { $0.referenceKind != nil }
         references = Dictionary(uniqueKeysWithValues: owning.map { ($0.name, $0.referenceKind!) })
         fields = codec.fieldNames
@@ -33,7 +36,18 @@ import SwiftData
         }
         readSavedRecords = { context in
             guard !context.hasChanges else { throw StaffWorkspaceModelError.invalid }
-            return try context.fetch(FetchDescriptor<M>()).map(codec.encode)
+            var descriptor = FetchDescriptor<M>()
+            descriptor.fetchLimit = 20_001
+            let models = try context.fetch(descriptor)
+            guard models.count <= 20_000 else { throw StaffWorkspaceModelError.invalid }
+            return try models.map(codec.encode)
+        }
+        deletedID = { deletion in
+            guard let typed = deletion as? DefaultHistoryDelete<M> else { return nil }
+            // A recognized model with no retained original ID is not an empty
+            // change. It needs recovery; never advance past that deletion.
+            guard let id = typed.tombstone[codec.id] as? UUID else { throw StaffReplicaSourceSyncError.history }
+            return id
         }
         decode = { try codec.decodeDetached($0, resolver: $1) }
     }

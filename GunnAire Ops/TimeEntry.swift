@@ -173,7 +173,7 @@ enum TimeEntryReviewAudit {
 
 @Model
 final class TimeEntry {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var userEmail: String = ""
     var clockIn: Date = Date()
     var clockOut: Date?

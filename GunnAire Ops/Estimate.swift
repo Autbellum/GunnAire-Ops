@@ -62,7 +62,7 @@ enum EstimateApprovalMethod: String, CaseIterable, Identifiable, Codable {
 
 @Model
 final class Estimate {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var serviceCallID: UUID?
     /// Stable property identity plus the address snapshot shown to the customer.
     /// Standalone estimates need this before any work order exists.

@@ -55,7 +55,7 @@ enum ProjectMilestoneDisplayState: Equatable {
 /// accounting document from becoming the only record of field progress.
 @Model
 final class ProjectMilestone {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var projectServiceCallID: UUID = UUID()
     var estimateID: UUID = UUID()
     var sequence: Int = 0

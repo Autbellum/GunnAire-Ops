@@ -60,7 +60,7 @@ enum InventoryMovementType: String, Codable, CaseIterable, Identifiable {
 
 @Model
 final class InventoryMovement {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var itemID: UUID = UUID()
     var itemName: String = ""
     var itemSKU: String?
