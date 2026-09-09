@@ -1,3 +1,23 @@
+Staff operational source and projection authority candidate, 2026-09-09:
+STAFF_REPLICA_DELIVERY.md records backend 2026.09.09.48, an encrypted versioned
+source ledger, exact operation/per-record revision recovery, explicit retained
+deletions/restoration, current membership-filtered snapshot preparation and
+separate source/authorization sequences. Native saved-owner capture allowlists
+six core-field record kinds, retaining customer/property/equipment/crew identity
+without raw provider payloads or payment methods. Actual native JSON passes the
+server schema verifier. This is not a complete staff data pipeline: owner change
+capture/reconciliation, CloudKit transport, staff import/store, full domain
+serializers and durable field commands remain required. All 838 backend tests
+(38 new replica cases), 69 Tools tests, 1,629 Mac logic cases and 1,633 iPad logic/UI
+cases pass with exact execution verification. Both native serialization vectors
+pass the server contract; three iPad screenshots were inspected. Unsigned universal
+Mac and arm64 iOS Release builds and architecture checks pass. The existing private
+store remains closed to staff replica receipts. Original preflight covers 12 scoped
+files, 305 unrelated changes and 335 other matching sources. Final copy-back
+verifies all 12 scoped files match and preserves those unrelated changes and the
+original branch/HEAD/index. New exact-head hosted checks remain required. No production changes or live
+provider writes are included.
+
 Native staff CloudKit onboarding candidate, 2026-09-09:
 CLOUDKIT_STAFF_SHARING.md now records encrypted participant identity storage,
 fresh administrator identity/owner-authority reads, durable native setup journals,

@@ -1,5 +1,9 @@
 # Independent staff CloudKit sharing — September 9, 2026
 
+The next data-authority/serialization stage is documented in
+[Staff replica delivery](STAFF_REPLICA_DELIVERY.md). Its explicit core-field
+coverage does not yet mount a staff operational store or deliver CloudKit payloads.
+
 ## Native onboarding and original-invitation recovery candidate
 
 Backend `2026.09.09.47` and the native setup controller now connect enrollment,

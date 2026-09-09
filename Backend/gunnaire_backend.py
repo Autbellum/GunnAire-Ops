@@ -36,7 +36,7 @@ try:
     from Backend.billing_provider import BillingQBOProvider
     from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads
     from Backend.qbo_document_provider import DocumentQBOProvider
-    from Backend import time_worker_mappings, time_publications, cloudkit_staff_shares
+    from Backend import time_worker_mappings, time_publications, cloudkit_staff_shares, staff_replica
     from Backend.time_worker_provider import TimeWorkerQBOProvider
     from Backend.time_publication_provider import TimeQBOProvider
 except ModuleNotFoundError:
@@ -56,12 +56,13 @@ except ModuleNotFoundError:
     import time_worker_mappings
     import time_publications
     import cloudkit_staff_shares
+    import staff_replica
     from time_worker_provider import TimeWorkerQBOProvider
     from time_publication_provider import TimeQBOProvider
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.09.47"
+SERVICE_VERSION = "2026.09.09.48"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -2524,6 +2525,7 @@ def initialize_database() -> None:
         time_worker_mappings.initialize_schema(connection)
         time_publications.initialize_schema(connection)
         cloudkit_staff_shares.initialize_schema(connection)
+        staff_replica.initialize_schema(connection)
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS customer_communications (
@@ -3625,6 +3627,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/workspace/staff-shares" or parsed.path.startswith("/api/workspace/staff-shares/"):
             self.handle_cloudkit_staff_share(parsed, method="GET")
             return
+        if parsed.path == "/api/workspace/replica-records":
+            self.handle_staff_replica(parsed, method="GET")
+            return
         if parsed.path == "/api/customer-financing":
             self.write_json(customer_financing_readiness())
             return
@@ -3845,6 +3850,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/workspace/staff-shares" or parsed.path.startswith("/api/workspace/staff-shares/"):
             self.handle_cloudkit_staff_share(parsed, method="POST")
+            return
+        if parsed.path == "/api/workspace/replica-records":
+            self.handle_staff_replica(parsed, method="POST")
             return
         if parsed.path == "/api/push-devices":
             if not self.require_application_session():
@@ -4213,6 +4221,10 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         return False
 
     def handle_cloudkit_staff_share(self, parsed, *, method):
+        parts = parsed.path.removeprefix("/api/workspace/staff-shares/").split("/")
+        if len(parts) >= 2 and parts[1] == "projections":
+            self.handle_staff_replica(parsed, method=method, parts=parts)
+            return
         if not self.require_application_session():
             return
         service = cloudkit_staff_shares.StaffShares(db, record_audit_event,
@@ -4247,6 +4259,43 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             self.write_json({"error": "Invalid CloudKit staff sharing request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
         except (sqlite3.Error, RuntimeError):
             self.write_json({"error": "Sharing storage is unavailable. Keep the original request for recovery.",
+                             "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+
+    def handle_staff_replica(self, parsed, *, method, parts=None):
+        if not self.require_application_session():
+            return
+        shares = cloudkit_staff_shares.StaffShares(db, record_audit_event,
+                                                  encrypt=encrypt_catalog_payload, decrypt=decrypt_catalog_payload)
+        service = staff_replica.StaffReplica(shares)
+        try:
+            if method == "GET":
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                if any(len(value) != 1 for value in query.values()):
+                    raise cloudkit_staff_shares.fail("invalid_query", "Use one value for each replica query field.", 400)
+                payload = {key: value[0] for key, value in query.items()}
+                if parts is None:
+                    result = service.source_page(self._application_session_id, payload)
+                elif len(parts) == 3 or (len(parts) == 4 and parts[3] == "payload"):
+                    result = service.read_projection(self._application_session_id, parts[0], parts[2], payload, content=len(parts) == 4)
+                else:
+                    raise cloudkit_staff_shares.fail("not_found", "Replica action not found.", 404)
+            elif method == "POST" and not parsed.query:
+                payload = qbo_change_capture.strict_json(self.read_limited_body(2 * 1024 * 1024 if parts is None else 8192).decode("utf-8"))
+                if parts is None:
+                    result = service.apply(self._application_session_id, payload)
+                elif len(parts) == 2:
+                    result = service.projection(self._application_session_id, parts[0], payload)
+                else:
+                    raise cloudkit_staff_shares.fail("not_found", "Replica action not found.", 404)
+            else:
+                raise cloudkit_staff_shares.fail("not_found", "Replica action not found.", 404)
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError):
+            self.write_json({"error": "Invalid operational replica request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Operational replica storage is unavailable. Keep original local work for recovery.",
                              "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
 
     def approve_cloudkit_workspace(self) -> None:
@@ -6891,6 +6940,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         message = re.sub(r"/api/field-payment-review(?:/context)?(?:\?[^\s\"]*)?", "/api/field-payment-review", message)
         message = re.sub(r"/api/time-worker-mappings(?:[/?][^\s\"]*)?", "/api/time-worker-mappings/[redacted]", message)
         message = re.sub(r"/api/workspace/staff-shares(?:[/?][^\s\"]*)?", "/api/workspace/staff-shares/[redacted]", message)
+        message = re.sub(r"/api/workspace/replica-records(?:[/?][^\s\"]*)?", "/api/workspace/replica-records/[redacted]", message)
         message = re.sub(r"/api/time-publications(?:[/?][^\s\"]*)?", "/api/time-publications/[redacted]", message)
         print(f"{timestamp} {self.address_string()} {message}")
 
