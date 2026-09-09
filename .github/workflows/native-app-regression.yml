@@ -123,6 +123,10 @@ jobs:
               testContactlessCollectionExplainsQuickBooksPublicationAndRecoversToVerifiedEntry \
               testManagementBillingComposerCancelsWithoutCreatingOrSending \
               testManagementBillingComposerSavesOriginalInvoiceAndEstimateOffline \
+              testSharedTimeReviewCancelsOnlyUnsentProposalAndReturnsToApprovedHours \
+              testSharedTimeWorkerReviewConfirmsReturnedWorkerAndReturnsToOriginalTime \
+              testSharedTimeLostConfirmationRecoversAfterRelaunchWithoutAnotherPublish \
+              testAdministratorCanMapTechnicianToAnExplicitQuickBooksTimeWorker \
               testInvoiceComposerBrowsesCategoriesEditsRepeatedBundleMembersAndSavesOriginal \
               testEstimateBundleComposerSavesEditsWithKeyboardActive \
               testBundleComposerSavesAfterHardwareKeyboardSelectAll \
