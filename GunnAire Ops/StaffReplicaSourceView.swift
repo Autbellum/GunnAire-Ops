@@ -45,9 +45,10 @@ struct StaffReplicaSourceReviewView: View {
         List {
             Section("Saved changes") {
                 Text(source.message).accessibilityIdentifier("StaffSourceStatus")
+                if source.isRunning { ProgressView("Checking staff sync…").accessibilityIdentifier("StaffSourceProgress") }
                 Button("Check Again") { Task { await source.sync() } }
                     .disabled(source.isRunning)
-                Text("This prepares customer, property, equipment, crew, job and catalog records. It does not confirm delivery to staff devices or change QuickBooks.")
+                Text("Saved customer, property, equipment, crew, job and catalog records are shared with accepted staff accounts. Sharing does not confirm receipt on their devices or change QuickBooks.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             ForEach(source.conflicts) { conflict in

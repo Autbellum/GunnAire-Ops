@@ -1014,6 +1014,40 @@ enum GunnAireBackendService {
         }
     }
 
+    /// Preparing snapshots requires the verified private owner store and a
+    /// business session. This is not part of the pre-store staff GET exception.
+    static func staffReplicaPreparationRequest(path: String, body: Data) async throws -> Data {
+        let access = CompanyWorkspaceAccessController.shared
+        guard StaffReplicaPreparationPolicy.allows(path: path, body: body), let stamp = access.operationStamp,
+              access.verifiedRole == .admin else { throw StaffReplicaDeliveryError.access }
+        var request = try makeRequest(path: path, method: "POST", body: body)
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        guard bearer.hasPrefix("Bearer "), CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == stamp.session.tokenFingerprint,
+              request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil else { throw StaffReplicaDeliveryError.access }
+        func check() throws {
+            try Task.checkCancellation()
+            guard access.operationStamp == stamp, access.verifiedRole == .admin, access.authorizedContainer != nil,
+                  Date() < stamp.session.expiresAt else { throw StaffReplicaDeliveryError.access }
+        }
+        try check(); request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
+        do {
+            let (data, response) = try await GmailServerHTTPTransfer.data(for: request, maximum: 8192, acceptedStatusCodes: [200, 409])
+            try check()
+            if response.statusCode == 409 {
+                struct Rejection: Decodable { let code: String }
+                guard let value = try? JSONDecoder().decode(Rejection.self, from: data), value.code == "source_changed" else {
+                    throw StaffReplicaDeliveryError.changed
+                }
+                throw StaffReplicaPreparationRejected()
+            }
+            return data
+        } catch {
+            try check()
+            if error is StaffReplicaPreparationRejected { throw error }
+            throw StaffReplicaDeliveryPolicy.safe(error)
+        }
+    }
+
     static func sharedTimeRequest(path: String, method: String, body: Data?) async throws -> Data {
         guard SharedTimeTransportPolicy.allows(path: path, method: method, bodyBytes: body?.count) else { throw SharedTimeError.invalid }
         guard let identity = CompanyWorkspaceSession.current else { throw SharedTimeError.access }

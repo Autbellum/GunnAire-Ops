@@ -96,6 +96,39 @@ import Testing
         }
     }
 
+    @Test func automaticDeliveryWaitsForRecapturedAcknowledgedSourceAndUsesExactSequence() async throws {
+        let h = Fixture(); h.local = [h.record("Original")]
+        var sequences: [Int] = []
+        var dependencies = h.dependencies()
+        dependencies.deliver = { context, sequence in
+            #expect(context.scope == h.scope && h.posts.count == 1)
+            sequences.append(sequence); return .init(shared: 1)
+        }
+        let coordinator = StaffReplicaSourceCoordinator(dependencies: dependencies)
+        await coordinator.sync()
+        #expect(sequences.isEmpty && coordinator.hasMore)
+        await coordinator.sync()
+        #expect(sequences == [1] && !coordinator.hasMore)
+        #expect(coordinator.message.contains("Device receipt is not yet confirmed"))
+    }
+    @Test func automaticDeliveryDoesNotRunWithConflictOrMissingOwnerRecords() async throws {
+        let h = Fixture(); try await h.establish()
+        var deliveries = 0, dependencies = h.dependencies()
+        dependencies.deliver = { _, _ in deliveries += 1; return .init(shared: 1) }
+        let coordinator = StaffReplicaSourceCoordinator(dependencies: dependencies)
+        h.remote = [h.server(h.record("Other owner"), revision: 2)]; h.sequence = 2
+        await coordinator.sync(); #expect(deliveries == 0 && coordinator.message.contains("catch up"))
+        h.local = [h.record("Local edit")]
+        await coordinator.sync(); #expect(deliveries == 0 && coordinator.conflicts.count == 1)
+    }
+    @Test func automaticDeliveryResultCannotLeakAcrossWorkspaceReplacement() async throws {
+        let h = Fixture(); try await h.establish()
+        var dependencies = h.dependencies()
+        dependencies.deliver = { _, _ in h.generation = UUID(); return .init(shared: 1) }
+        let coordinator = StaffReplicaSourceCoordinator(dependencies: dependencies)
+        await coordinator.sync()
+        #expect(!coordinator.message.contains("Core records shared") && coordinator.lastConfirmedAt == nil)
+    }
     @Test func firstSavedSnapshotAndOriginalOperationAreDurableBeforePost() async throws {
         let h = Fixture(); h.local = [h.record("Original")]
         let c = h.coordinator(); await c.sync()

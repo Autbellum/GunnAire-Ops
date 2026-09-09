@@ -88,13 +88,18 @@ struct StaffReplicaProjectionReceipt: Decodable {
         sealedBase64 = try fields.decodeIfPresent(String.self, forKey: .sealedBase64)
     }
     func validate(plan: CloudKitStaffSharePlan, workspace: CompanyWorkspaceIdentity, now: Date = Date()) throws {
+        try validateMetadata(plan: plan, workspace: workspace, now: now)
+        guard authorizationCurrent else { throw StaffReplicaDeliveryError.changed }
+    }
+    /// Allows inspecting an immutable superseded preparation receipt, never
+    /// downloading its key, publishing it, or authorizing an operational store.
+    func validateMetadata(plan: CloudKitStaffSharePlan, workspace: CompanyWorkspaceIdentity, now: Date = Date()) throws {
         try manifest.validate(plan: plan, workspace: workspace, now: now)
         guard (manifest.sourceSequence...2_147_483_647).contains(currentSequence),
               isCurrent == (manifest.sourceSequence == currentSequence),
               (manifest.authorizationSequence...currentSequence).contains(currentAuthorizationSequence),
               authorizationCurrent == (manifest.authorizationSequence == currentAuthorizationSequence),
               localCloudKitProofRequired, !operationalWorkspaceReady else { throw StaffReplicaDeliveryError.invalid }
-        guard authorizationCurrent else { throw StaffReplicaDeliveryError.changed }
     }
     func ownerPayload() throws -> StaffReplicaVerifiedPayload {
         guard let payloadBase64, payloadBase64.utf8.count <= ((StaffReplicaManifest.maximumPayloadBytes + 2) / 3) * 4,

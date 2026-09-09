@@ -121,7 +121,7 @@ struct StaffReplicaDeliveryJournal: Codable {
 
     /// Receives an already prepared backend operation; never invents a new
     /// snapshot on timeout. Reopening this exact ID recovers Apple's original.
-    func publish(operation: UUID, plan: CloudKitStaffSharePlan, context: Context) async throws -> StaffReplicaManifest {
+    func publish(operation: UUID, plan: CloudKitStaffSharePlan, context: Context, requireCurrent: Bool = false) async throws -> StaffReplicaManifest {
         try check(context, plan: plan)
         guard context.ownerAdministrator else { throw StaffReplicaDeliveryError.access }
         let lock = key(context: context, plan: plan), key = key(context: context, plan: plan, operation: operation)
@@ -129,6 +129,7 @@ struct StaffReplicaDeliveryJournal: Codable {
         defer { CloudKitStaffSetupLocks.release(lock) }
         let saved = try load(key, context: context, plan: plan, operation: operation)
         let receipt = try await receipt(operation, plan: plan, context: context, payload: true)
+        guard !requireCurrent || receipt.isCurrent else { throw StaffReplicaDeliveryError.changed }
         let payload = try receipt.ownerSealedPayload()
         guard saved == nil || saved?.manifest == payload.manifest else { throw StaffReplicaDeliveryError.changed }
         let intent = StaffReplicaDeliveryJournal(scope: context.scope, plan: plan, manifest: payload.manifest, state: "prepared", payload: nil)
@@ -137,7 +138,7 @@ struct StaffReplicaDeliveryJournal: Codable {
         try save(intent, key: key, context: context)
         let authorize: CloudKitStaffRemote.Authorize = {
             let current = try await self.receipt(operation, plan: plan, context: context)
-            guard current.manifest == payload.manifest else { throw StaffReplicaDeliveryError.changed }
+            guard current.manifest == payload.manifest, !requireCurrent || current.isCurrent else { throw StaffReplicaDeliveryError.changed }
         }
         let io = try dependencies.ownerIO(plan, context, authorize)
         try await StaffReplicaCloudTransfer.publish(payload, plan: plan, workspace: context.workspace, io: io, now: dependencies.now)
@@ -169,5 +170,29 @@ struct StaffReplicaDeliveryJournal: Codable {
         try await authorize()
         try save(.init(scope: context.scope, plan: plan, manifest: payload.manifest, state: "staged", payload: payload.bytes), key: key, context: context)
         return payload.manifest // Applied sourceSequence remains untouched.
+    }
+
+    /// A second owner device adopts the already delivered original, not a fresh
+    /// equal-sequence operation. No CloudKit mutation occurs during this check.
+    func currentPublication(plan: CloudKitStaffSharePlan, context: Context, sequence: Int) async throws -> StaffReplicaManifest? {
+        try check(context, plan: plan)
+        guard context.ownerAdministrator else { throw StaffReplicaDeliveryError.access }
+        let lock = key(context: context, plan: plan)
+        try CloudKitStaffSetupLocks.acquire(lock); defer { CloudKitStaffSetupLocks.release(lock) }
+        let authorize: CloudKitStaffRemote.Authorize = { try await self.authorize(context, plan: plan) }
+        let io = try dependencies.ownerIO(plan, context, authorize)
+        guard let head = try await StaffReplicaCloudTransfer.ownerHead(plan: plan, workspace: context.workspace, io: io, now: dependencies.now()),
+              head.sourceSequence >= sequence else { return nil }
+        guard head.sourceSequence == sequence else { throw StaffReplicaDeliveryError.superseded }
+        let value = try await receipt(head.operationID, plan: plan, context: context, payload: true)
+        guard value.isCurrent, value.manifest == head else { throw StaffReplicaDeliveryError.changed }
+        let payload = try value.ownerSealedPayload()
+        try await StaffReplicaCloudTransfer.verifyOwnerPublication(payload, plan: plan, workspace: context.workspace, io: io, now: dependencies.now())
+        let fresh = try await receipt(head.operationID, plan: plan, context: context)
+        guard fresh.isCurrent, fresh.manifest == head else { throw StaffReplicaDeliveryError.changed }
+        let key = key(context: context, plan: plan, operation: head.operationID)
+        if let old = try load(key, context: context, plan: plan, operation: head.operationID), old.manifest != head { throw StaffReplicaDeliveryError.changed }
+        try save(.init(scope: context.scope, plan: plan, manifest: head, state: "confirmed", payload: nil), key: key, context: context)
+        return head
     }
 }

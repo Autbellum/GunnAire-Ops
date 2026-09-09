@@ -160,6 +160,33 @@ struct StaffReplicaCloudIO {
         guard current == saved else { throw StaffReplicaDeliveryError.superseded }
     }
 
+    static func ownerHead(plan: CloudKitStaffSharePlan, workspace: CompanyWorkspaceIdentity, io: StaffReplicaCloudIO,
+                          now: Date) async throws -> StaffReplicaManifest? {
+        guard io.zone.zoneName == plan.zoneName, io.zone.ownerName == CKCurrentUserDefaultName else { throw StaffReplicaDeliveryError.access }
+        let id = CKRecord.ID(recordName: StaffReplicaCloudRecords.headName, zoneID: io.zone)
+        guard let record = try await read([id], io: io)[id] else { return nil }
+        return try StaffReplicaCloudRecords.manifest(record, plan: plan, workspace: workspace, zone: io.zone, payload: false, now: now)
+    }
+
+    /// Read-only adoption proof for a snapshot another owner device delivered.
+    /// A matching head alone is insufficient: verify the original encrypted asset
+    /// and re-read the head after checking the bytes. Never repair or overwrite it.
+    static func verifyOwnerPublication(_ original: StaffReplicaSealedPayload, plan: CloudKitStaffSharePlan,
+                                       workspace: CompanyWorkspaceIdentity, io: StaffReplicaCloudIO, now: Date) async throws {
+        guard try await ownerHead(plan: plan, workspace: workspace, io: io, now: now) == original.manifest else {
+            throw StaffReplicaDeliveryError.superseded
+        }
+        let id = CKRecord.ID(recordName: StaffReplicaCloudRecords.payloadName(original.manifest.operationID), zoneID: io.zone)
+        guard let record = try await read([id], io: io)[id] else { throw StaffReplicaDeliveryError.pending }
+        guard try StaffReplicaCloudRecords.manifest(record, plan: plan, workspace: workspace, zone: io.zone, payload: true, now: now) == original.manifest,
+              try StaffReplicaCloudRecords.payload(record, manifest: original.manifest, key: original.key).bytes == original.bytes else {
+            throw StaffReplicaDeliveryError.changed
+        }
+        guard try await ownerHead(plan: plan, workspace: workspace, io: io, now: now) == original.manifest else {
+            throw StaffReplicaDeliveryError.superseded
+        }
+    }
+
     static func download(plan: CloudKitStaffSharePlan, workspace: CompanyWorkspaceIdentity, io: StaffReplicaCloudIO,
                          authority: Authority, now: () -> Date = Date.init) async throws -> StaffReplicaVerifiedPayload {
         guard io.zone.zoneName == plan.zoneName, io.zone.ownerName != CKCurrentUserDefaultName,

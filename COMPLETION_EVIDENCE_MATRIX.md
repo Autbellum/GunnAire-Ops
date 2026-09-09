@@ -1,3 +1,21 @@
+Automatic per-member staff delivery candidate, 2026-09-09:
+STAFF_AUTOMATIC_DELIVERY.md records the connected saved-source-to-projection-to-
+private-CloudKit pipeline, immutable preparation recovery, original archive/index
+recovery, read-only encrypted-asset adoption from another owner device, and physical
+owner-store/current-role/assignment fences throughout nested operations. The app
+distinguishes shared-through-iCloud status from confirmed staff receipt. Final
+Mac verifies 1,699 cases; iPad verifies 1,703 plus three separately replayed existing
+inventory/billing/time UI journeys. All 852 backend and 69 Tools tests pass; both
+unsigned Release builds, architecture checks and workflow lint pass. Three current
+iPad screenshots are inspected with no account-email footer. Copy-back preflight
+covers 13 files, 327 unrelated changes and 348 other matching sources. The prior
+hosted iPad shard canceled after repeated animation-idle waits; its same three UI
+journeys pass locally, but hosted-only behavior is not declared fixed and new-head
+hosted acceptance remains required. Staff model import/isolated store activation,
+full-domain coverage, field-edit reconciliation and signed independent-account
+convergence remain incomplete. No live CloudKit/provider writes, deployment,
+signing changes, physical installation or merge occurred. The full goal stays active.
+
 Owner saved-change preparation candidate, 2026-09-09:
 STAFF_OWNER_SOURCE_SYNC.md records the now-connected authorized-owner lifecycle,
 same-store SwiftData deletion history, encrypted source/cursor/operation journal,

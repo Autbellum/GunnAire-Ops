@@ -16,6 +16,7 @@ struct StaffReplicaSourceDependencies {
     let request: (String, String, Data?) async throws -> Data
     let store: SharedTimeLocalStore
     var now: () -> Date = Date.init
+    var deliver: ((StaffReplicaSourceContext, Int) async throws -> StaffReplicaAutomaticSummary)? = nil
 
     static var live: Self {
         .init(context: {
@@ -45,7 +46,8 @@ struct StaffReplicaSourceDependencies {
         }, capture: { context, token in
             guard let container = CompanyWorkspaceAccessController.shared.authorizedContainer else { throw StaffReplicaSourceSyncError.access }
             return try StaffReplicaSourceHistory.capture(container: container, after: token, storeUUID: context.scope.storeUUID)
-        }, request: { try await GunnAireBackendService.staffReplicaSourceRequest(path: $0, method: $1, body: $2) }, store: StaffReplicaSourceStorage.device)
+        }, request: { try await GunnAireBackendService.staffReplicaSourceRequest(path: $0, method: $1, body: $2) }, store: StaffReplicaSourceStorage.device,
+              deliver: { try await StaffReplicaAutomaticDelivery().deliver(source: $0, sequence: $1) })
     }
 }
 
@@ -206,13 +208,25 @@ enum StaffReplicaSourceStorage {
             if !conflicts.isEmpty { message = "\(conflicts.count) saved change\(conflicts.count == 1 ? " needs" : "s need") review." }
             else if plan.waitingForCloudKit > 0 { message = "Waiting for this device's company iCloud records to catch up." }
             else if hasMore { message = "Preparing more saved changes…" }
-            else { message = "Core records prepared. Staff device delivery is a separate step." }
+            else if let deliver = dependencies.deliver {
+                if !selected.isEmpty {
+                    // Re-capture and fence the acknowledged source in the next
+                    // pass before preparing snapshots from its final sequence.
+                    hasMore = true; message = "Checking saved changes before sharing…"
+                } else {
+                    message = "Sharing saved changes through iCloud…"
+                    let summary = try await deliver(context, sequence)
+                    try dependencies.check(context)
+                    message = summary.message
+                }
+            } else { message = "Core records prepared. Staff device delivery is a separate step." }
         } catch is CancellationError {
             // The durable original is retained for the next foreground run.
         } catch {
             if case StaffReplicaSourceSyncError.access = error { clearDisplay() }
             if let safe = error as? StaffReplicaSourceSyncError { message = safe.localizedDescription }
             else if let safe = error as? StaffReplicaSourceError { message = safe.localizedDescription }
+            else if let safe = error as? StaffReplicaDeliveryError { message = safe.localizedDescription }
             else { message = StaffReplicaSourceSyncError.unavailable.localizedDescription }
         }
     }

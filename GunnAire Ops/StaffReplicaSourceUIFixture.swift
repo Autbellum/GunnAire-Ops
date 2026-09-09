@@ -18,7 +18,11 @@ import Foundation
             guard context.scope == server.context.scope, context.stamp == server.context.stamp else { throw StaffReplicaSourceSyncError.access }
         }, capture: { _, _ in .init(source: .init(schema: StaffReplicaCoreSource.schemaVersion, coverage: StaffReplicaCoreSource.recordKinds,
                                                   records: [server.local]), token: nil, deletions: []) },
-            request: { try server.request($0, $1, $2) }, store: .init(read: { server.saved[$0] }, write: { server.saved[$0] = $1 }))
+            request: { try server.request($0, $1, $2) }, store: .init(read: { server.saved[$0] }, write: { server.saved[$0] = $1 }),
+            deliver: { _, sequence in
+                guard sequence == server.sequence, server.remote.fields == server.local.fields else { throw StaffReplicaDeliveryError.changed }
+                return .init(shared: 1)
+            })
         #else
         return nil
         #endif
