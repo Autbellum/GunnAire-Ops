@@ -19,7 +19,7 @@ jobs:
   test:
     name: ${{ matrix.name }} native tests
     runs-on: macos-26
-    timeout-minutes: ${{ matrix.platform == 'iPad' && 60 || 45 }}
+    timeout-minutes: ${{ matrix.platform == 'iPad' && 90 || 45 }}
     strategy:
       fail-fast: false
       matrix:
@@ -139,7 +139,8 @@ jobs:
               testAdministratorCreatesInventoryOfflineAndReopensExactSetup \
               testPricebookReviewCorrectsFieldItemBeforeApprovalWithoutLosingDocumentPriority \
               testScheduleDeletionRetainsTheConfirmedTargetAndProtectsBilledJobs \
-              testUnreconciledStatementExplainsReviewAndHandsOffToInvoices; do
+              testUnreconciledStatementExplainsReviewAndHandsOffToInvoices \
+              testReceiptRejectsAnotherJobsScheduledEstimateAndRecoversOriginalTarget; do
               if (( index % 2 == CI_SHARD )); then
                 selectors+=("-only-testing:GunnAire OpsUITests/GunnAire_OpsUITests/$test")
               fi
