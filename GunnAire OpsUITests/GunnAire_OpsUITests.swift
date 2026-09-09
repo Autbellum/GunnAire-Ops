@@ -3511,6 +3511,128 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testFieldFormDraftSurvivesTerminationAndCompletesOnlyOnce() throws {
+        let app = fieldFormDraftApp()
+        app.launch(); openFieldFormDraftJob(app)
+        openFixtureFieldForm(app, resume: false)
+        let reading = fieldFormReading(app)
+        XCTAssertTrue(waitForHittable(reading)); reading.tap(); reading.typeText("82.5 degrees — original reading")
+        XCTAssertTrue(app.descendants(matching: .any)["FieldFormDraftSaved"].waitForExistence(timeout: 5))
+        app.terminate()
+        app.launch(); openFieldFormDraftJob(app); openFixtureFieldForm(app, resume: true)
+        XCTAssertEqual(reading.value as? String, "82.5 degrees — original reading")
+        app.buttons["SaveCompletedFieldForm"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["FieldFormDraftIssue"].waitForExistence(timeout: 3))
+        confirmFieldFormSafety(app)
+        app.buttons["SaveCompletedFieldForm"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["FieldFormCompletionSaved"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["ViewCompletedDraftForm"].exists)
+        let evidence = XCTAttachment(screenshot: app.screenshot())
+        evidence.name = "Recovered field readings complete with original answers and a natural saved-form handoff"
+        evidence.lifetime = .keepAlways; add(evidence)
+        app.buttons["ViewCompletedDraftForm"].tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "82.5 degrees — original reading")).firstMatch.waitForExistence(timeout: 3))
+        app.terminate(); app.launch(); openFieldFormDraftJob(app)
+        assertOneCompletedDraftForm(app)
+    }
+
+    @MainActor
+    func testFieldFormLostCompletionAcknowledgementRecoversWithoutAnotherCopy() throws {
+        let app = fieldFormDraftApp()
+        app.launchArguments.append("-uiTestFieldFormAcknowledgementFailure")
+        app.launch(); openFieldFormDraftJob(app); openFixtureFieldForm(app, resume: false)
+        let reading = fieldFormReading(app)
+        XCTAssertTrue(waitForHittable(reading)); reading.tap(); reading.typeText("Original interrupted reading")
+        confirmFieldFormSafety(app)
+        app.buttons["SaveCompletedFieldForm"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["FieldFormDraftIssue"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.buttons["SaveCompletedFieldForm"].label, "Finish saving")
+        XCTAssertFalse(app.buttons["DiscardFieldFormDraft"].exists)
+        app.terminate(); app.launchArguments.removeAll { $0 == "-uiTestFieldFormAcknowledgementFailure" }
+        app.launch(); openFieldFormDraftJob(app); openFixtureFieldForm(app, resume: true)
+        XCTAssertTrue(app.descendants(matching: .any)["FieldFormCompletionSaved"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Original interrupted reading"].exists)
+        app.buttons["CloseFieldFormDraft"].tap()
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
+        assertOneCompletedDraftForm(app)
+    }
+
+    @MainActor
+    func testRetiredFieldFormDraftKeepsOriginalAnswersUntilExplicitDiscard() throws {
+        let app = fieldFormDraftApp()
+        app.launch(); openFieldFormDraftJob(app); openFixtureFieldForm(app, resume: false)
+        let reading = fieldFormReading(app)
+        XCTAssertTrue(waitForHittable(reading)); reading.tap(); reading.typeText("Keep this original equipment reading")
+        XCTAssertTrue(app.descendants(matching: .any)["FieldFormDraftSaved"].waitForExistence(timeout: 5))
+        app.terminate(); app.launchArguments.append("-uiTestRetireDraftForm")
+        app.launch(); openFieldFormDraftJob(app); openFixtureFieldForm(app, resume: true)
+        XCTAssertTrue(app.descendants(matching: .any)["FieldFormDraftIssue"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Keep this original equipment reading"].exists)
+        XCTAssertFalse(app.buttons["SaveCompletedFieldForm"].isEnabled)
+        app.buttons["DiscardFieldFormDraft"].tap()
+        let discard = app.buttons["Discard draft"]
+        XCTAssertTrue(waitForHittable(discard)); discard.tap()
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
+        app.terminate(); app.launch(); openFieldFormDraftJob(app)
+        XCTAssertFalse(app.buttons["ResumeFieldFormDraft-F0F00000-0000-4000-8000-000000000201"].exists)
+        XCTAssertFalse(app.buttons["OpenSavedFieldForms-\(screenshotServiceCallID)"].exists)
+    }
+
+    @MainActor private func fieldFormDraftApp() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob", "-uiTestIsolatedStore", UUID().uuidString, "-uiTestFieldFormDrafts"]
+        return app
+    }
+
+    @MainActor private func fieldFormReading(_ app: XCUIApplication) -> XCUIElement {
+        let evidence = XCTAttachment(screenshot: app.screenshot())
+        evidence.name = "Field form editor before entering the original reading"
+        evidence.lifetime = .keepAlways; add(evidence)
+        let tree = XCTAttachment(string: app.debugDescription)
+        tree.name = "Field form input accessibility tree"; tree.lifetime = .keepAlways; add(tree)
+        return app.descendants(matching: .any).matching(identifier: "FieldFormAnswer-F0F00000-0000-4000-8000-000000000202").firstMatch
+    }
+
+    @MainActor private func confirmFieldFormSafety(_ app: XCUIApplication) {
+        let row = app.switches["FieldFormAnswer-F0F00000-0000-4000-8000-000000000203"]
+        XCTAssertTrue(waitForHittable(row))
+        // SwiftUI exposes the labeled row as a switch containing the actual
+        // native control. The row's blank center is not the switch hit target.
+        let control = row.switches.firstMatch
+        XCTAssertTrue(waitForHittable(control)); control.tap()
+        XCTAssertEqual(row.value as? String, "1")
+        XCTAssertTrue(app.descendants(matching: .any)["FieldFormDraftSaved"].exists)
+    }
+
+    @MainActor private func openFieldFormDraftJob(_ app: XCUIApplication) {
+        revealSidebarDestination("Schedule & Jobs", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+        let documentation = app.buttons["OpenDocumentation-\(screenshotServiceCallID)"]
+        for _ in 0..<8 where !documentation.exists || !documentation.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(documentation)); documentation.tap()
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
+        app.segmentedControls["JobDocumentationStagePicker"].buttons["Work"].tap()
+    }
+
+    @MainActor private func openFixtureFieldForm(_ app: XCUIApplication, resume: Bool) {
+        let prefix = resume ? "ResumeFieldFormDraft-" : "CompleteRequiredFieldForm-"
+        let link = app.buttons[prefix + "F0F00000-0000-4000-8000-000000000201"]
+        for _ in 0..<14 where !link.exists || !link.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(link)); link.tap()
+        XCTAssertTrue(app.buttons["CloseFieldFormDraft"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor private func assertOneCompletedDraftForm(_ app: XCUIApplication) {
+        let saved = app.buttons["OpenSavedFieldForms-\(screenshotServiceCallID)"]
+        for _ in 0..<14 where !saved.exists || !saved.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(saved)); XCTAssertEqual(saved.label, "Saved forms (1)")
+        saved.tap(); XCTAssertTrue(app.navigationBars["Saved Forms"].waitForExistence(timeout: 3))
+        let originals = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "SavedFieldFormResponse-"))
+        XCTAssertEqual(originals.count, 1)
+    }
+
+    @MainActor
     func testJobWorkStageSurfacesRequiredFieldFormsWithoutOverloadingTheWorkspace() throws {
         let app = XCUIApplication()
         app.launchArguments = [

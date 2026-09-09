@@ -1,3 +1,47 @@
+Field-form draft recovery locally qualified checkpoint, 2026-09-09:
+FIELD_FORM_DRAFT_RECOVERY.md records the state-only lost-work gap and the new
+encrypted author/workspace/job/template journal, immediately saved readings,
+original context review, explicit discard, stable completion IDs and atomic
+response/file/activity transaction. Native job navigation resumes active drafts
+in place and retains retired forms and interrupted completion acknowledgements.
+MacFocused1 has five genuine listing failures; the absolute-path correction
+passes all 42 cases in MacFocused2. Expanded lineage checks pass 46 cases in
+MacFocused3 and full MacFull1 verifies 1,822 actual cases. All 74 Tools tests pass.
+IPadFocused1 and IPadFocused2 logic pass 19 and 23 cases respectively; their UI
+journeys fail and are not credited as complete. Retained screen/AX evidence
+identifies a test input-type assumption, a test tap on a labeled switch's blank
+row, and a genuine empty-Group lifecycle defect hiding retired drafts. The
+current correction uses the native switch target and a stable recovery-list
+container. IPadFocused3 then exposed a DEBUG-only relaunch fixture deleting the
+original saved attachment; preserving only the dedicated isolated draft fixture
+fixes that test without changing production startup. IPadFocused4 passes all
+three recovery journeys. Final source adds stable activity identity and fresh
+access/original-record/PDF checks around asynchronous file upload responses.
+MacFocused5 passes 53 cases; MacFull4 verifies 1,829 cases and six selectors;
+IPadFull1 verifies 1,836 cases and 13 selectors, including all seven UI journeys.
+Tools2 passes 74 tests and Backend1 passes 852. DeviceRelease3 (arm64) and
+MacRelease3 (arm64/x86_64) unsigned builds pass; hashes are in the detailed report.
+Final iPad form/handoff, job form links, inbox and compose frames were inspected:
+readable native controls, no raw code and no account-email footer. This is not
+whole-app/Mac accessibility or production-provider acceptance.
+OriginalPreflight2 protects 12 scoped files, 378 unrelated changes, 387 matching
+other tracked sources and the owner branch/HEAD/index. Copy-back verifies all
+12 scoped files byte-equal, all 378 unrelated changes preserved and original
+branch/HEAD/index unchanged. Only the isolated review checkout is committed.
+Published d0faad5 and original workflow commit 517858f are now verified in open
+PR18. Its Backend run 34390624919 and native run 34390624697 both complete
+successfully, including Mac and both iPad groups. These are parent-head checks,
+not CI qualification of the unpublished draft checkpoint.
+Previous e7c6c8a native run 34380679032 ended with an automatic 90-minute iPad
+group-1 timeout, while Mac, group 2 and Backend passed. No agent cancellation
+occurred, and that run is not reported as all green. The retained log narrows
+the timeout to repeated animation waits within one inventory journey for over
+3,300 seconds, without proving whether the app or UI runner caused the waits.
+No live predecessor run is cancelled. Three new draft UI journeys are locally
+qualified but not added to the existing CI selectors in this checkpoint.
+Broad CloudKit/staff/provider/vendor/payment/Handoff/device,
+Mac UI signing and whole-app usability/accessibility gates remain incomplete.
+
 Business-document pagination candidate, 2026-09-09:
 DOCUMENT_LAYOUT_VALIDATION.md records actual native PDF loss: long answers and
 question labels were drawn through the footer/off-page, and blank report sections

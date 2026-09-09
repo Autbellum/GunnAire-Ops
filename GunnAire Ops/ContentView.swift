@@ -2721,9 +2721,7 @@ GunnAire
                                         responses: fieldFormResponses,
                                         originalTemplates: fieldFormTemplates
                                     )
-                                    NavigationLink {
-                                        FieldFormResponseEditor(template: template, serviceCall: call, actorEmail: currentActivityActor)
-                                    } label: {
+                                    FieldFormDraftNavigationLink(template: template, serviceCall: call, actorEmail: currentActivityActor) {
                                         HStack {
                                             Label(
                                                 template.title,
@@ -2744,6 +2742,7 @@ GunnAire
                                     .buttonStyle(.bordered)
                                 }
                             }
+                            FieldFormDraftLinks(serviceCallID: call.id, actorEmail: currentActivityActor)
                             if completedFieldFormResponses.isEmpty {
                                 Text("No reusable field forms completed for this job yet.")
                                     .font(.caption2)

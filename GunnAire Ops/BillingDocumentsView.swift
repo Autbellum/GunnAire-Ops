@@ -5557,6 +5557,7 @@ GunnAire
         let remainingTemplates = templates.filter { !missingIDs.contains($0.id) }
 
         Section("Field Forms") {
+            FieldFormDraftLinks(serviceCallID: call.id, actorEmail: currentUserEmail)
             if templates.isEmpty {
                 Text("No active forms apply to this job type. An administrator can configure them in Settings.")
                     .font(.caption)
@@ -5580,17 +5581,11 @@ GunnAire
 
                 ForEach(readiness.missingRequirements) { requirement in
                     if let template = templates.first(where: { $0.id == requirement.templateID }) {
-                        NavigationLink {
-                            FieldFormResponseEditor(
-                                template: template,
-                                serviceCall: call,
-                                actorEmail: currentUserEmail
-                            )
-                        } label: {
+                        FieldFormDraftNavigationLink(template: template, serviceCall: call, actorEmail: currentUserEmail,
+                            identifier: "CompleteRequiredFieldForm-\(template.id.uuidString)") {
                             Label(template.dataReviewIssue == nil ? "Complete \(template.title)" : "Review \(template.title)",
                                   systemImage: template.dataReviewIssue == nil ? "checklist.unchecked" : "exclamationmark.triangle")
                         }
-                        .accessibilityIdentifier("CompleteRequiredFieldForm-\(template.id.uuidString)")
                     }
                 }
 
@@ -5647,13 +5642,7 @@ GunnAire
                 }
             }
         } else {
-            NavigationLink {
-                FieldFormResponseEditor(
-                    template: template,
-                    serviceCall: call,
-                    actorEmail: currentUserEmail
-                )
-            } label: {
+            FieldFormDraftNavigationLink(template: template, serviceCall: call, actorEmail: currentUserEmail) {
                 Label(
                     template.requiresCompletionForCloseout ? "Complete \(template.title)" : template.title,
                     systemImage: template.requiresCompletionForCloseout ? "checklist.unchecked" : "checklist"

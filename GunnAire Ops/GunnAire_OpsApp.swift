@@ -115,6 +115,7 @@ struct GunnAire_OpsApp: App {
             try GunnAireUITestFixtures.prepareIfRequested(in: modelContainer.mainContext)
             try SharedTimeUIFixture.seedIfRequested(in: modelContainer.mainContext)
             try FieldFormHistoryUIFixture.seedIfRequested(in: modelContainer.mainContext)
+            try FieldFormDraftUIFixture.seedIfRequested(in: modelContainer.mainContext)
             CompanyWorkspaceAccessController.shared.installTestContainer(modelContainer)
             return .ready(modelContainer)
         } catch {
@@ -394,6 +395,14 @@ private enum GunnAireUITestFixtures {
 
         let customers = try context.fetch(FetchDescriptor<Customer>())
         let existingFixtureCustomer = customers.first { $0.id == customerID }
+        // Relaunch acceptance must exercise the real saved graph, not rebuild
+        // its jobs and erase the very attachment whose recovery is under test.
+        // This exception requires the dedicated draft flag and isolated store.
+        if FieldFormDraftWorkflow.fixtureStoreName != nil, existingFixtureCustomer != nil,
+           try context.fetch(FetchDescriptor<ServiceCall>()).filter({ $0.id == serviceCallID }).count == 1 {
+            try context.save()
+            return
+        }
         for customer in customers where customer.name == "Offline QBO Customer" {
             context.delete(customer)
         }
