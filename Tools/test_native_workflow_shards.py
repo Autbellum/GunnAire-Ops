@@ -31,7 +31,7 @@ class NativeWorkflowShardTests(unittest.TestCase):
 
     def test_ipad_shards_execute_every_declared_existing_ui_method_once(self):
         declared = re.findall(r'^\s+(test\w+)\s*(?:\\|; do)\s*$', WORKFLOW.read_text(), re.M)
-        self.assertGreaterEqual(len(declared), 66)
+        self.assertGreaterEqual(len(declared), 67)
         self.assertIn("testExistingQuickBooksLinksOfferOfflineRecoveryWithoutDeviceOAuth", declared)
         self.assertIn("testUnverifiedBusinessRoleOffersRecoveryWithoutAdministratorWorkspaces", declared)
         for name in (
@@ -41,6 +41,7 @@ class NativeWorkflowShardTests(unittest.TestCase):
             "testAdministratorCanMapTechnicianToAnExplicitQuickBooksTimeWorker",
             "testStaffCloudKitRequestRecoversAfterRelaunchWithoutOpeningAnotherWorkspace",
             "testStaffCloudKitAdministratorReviewReturnsToSettingsAndRetainsOriginalInvitation",
+            "testReceiptRejectsAnotherJobsScheduledEstimateAndRecoversOriginalTarget",
         ):
             self.assertIn(name, declared)
         self.assertEqual(len(declared), len(set(declared)))
@@ -62,6 +63,13 @@ class NativeWorkflowShardTests(unittest.TestCase):
         self.assertEqual(self.selectors("Mac", 0), ["-only-testing:GunnAire OpsTests"])
         self.assertIn('ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO', WORKFLOW.read_text())
         self.assertIn("-verify_arch arm64 x86_64", WORKFLOW.read_text())
+
+    def test_hosted_ipad_has_time_for_the_complete_unweakened_suite(self):
+        text = WORKFLOW.read_text()
+        self.assertIn("timeout-minutes: ${{ matrix.platform == 'iPad' && 90 || 45 }}", text)
+        self.assertIn("-parallel-testing-enabled NO", text)
+        self.assertIn("python3 Tools/verify_native_test_execution.py", text)
+        self.assertIn(".failedTests == 0 and .passedTests > 0", text)
 
     def test_invalid_ipad_shard_cannot_report_an_empty_success(self):
         for shard in ("", "2", "-1", "text"):

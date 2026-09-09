@@ -1,5 +1,24 @@
 # Native GitHub Actions checks
 
+## Scheduled estimate handoff and hosted runtime budget — September 9, 2026
+
+The candidate retains all 66 existing iPad UI journeys and appends the wrong-job
+scheduled-estimate receipt regression, leaving their existing shard assignments
+unchanged. The two groups now select 34 and 33 journeys, both with the complete
+logic target. iPad receives 90 minutes; Mac remains at 45. No test, assertion,
+actual-execution check, unsigned universal build, read-only repository permission
+or evidence retention step is removed. All 72 Tools tests and both workflows'
+actionlint validation pass locally. Exact-head hosted acceptance remains required.
+
+This is based on terminal predecessor `40e82aa`, native run `34346715549`:
+GitHub explicitly records “The job has exceeded the maximum execution time of
+1h0m0s” for iPad group 1. It was still progressing: the staff administrator review
+passed at 12:39:35 UTC and the next business-role recovery journey started before
+the 12:40:04 cancellation. Mac and iPad group 2 passed; Backend `34346715118`
+passed Python 3.13 and 3.14. This is not a complete green native predecessor.
+No run was canceled or restarted by the agent. See STAFF_RECORD_RELATIONSHIPS.md
+for the retained local source, test, build and copy-back evidence.
+
 ## Staff iCloud onboarding coverage candidate — September 9, 2026
 
 Two new iPad journeys cover staff enrollment, lost-reply relaunch recovery and
