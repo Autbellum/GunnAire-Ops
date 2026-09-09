@@ -1,3 +1,23 @@
+Complete persisted-model coverage candidate, 2026-09-09:
+STAFF_FULL_MODEL_COVERAGE.md extends explicit owner-side preservation to every
+one of the 32 SwiftData entities, with 561 field mappings, exact schema disposition,
+prevalidated detached owning relationships and no mutation of an existing store.
+Charge-capable payment handles and device-local file paths are excluded; user rows
+are not membership authority. The final focused Mac run verifies 16 cases covering
+all fields/nulls, two actual SQLite stores, rejected incomplete batches and original
+maintenance/purchasing/form/HR/message/reimbursement history. Final strengthened
+logic suites verify 1,730 cases on both Mac and iPad; the identical app/UI source
+also passes six iPad journeys. All 71 Tools cases, both unchanged workflow lint
+checks, unsigned universal Mac/arm64 iOS Release builds and architecture checks
+pass. Two iPad frames are inspected without account-email footers. Copy-back
+verifies all 12 scoped files, 352 preserved unrelated changes and unchanged
+original branch/HEAD/index. The review-branch commit remains local while the
+published predecessor's native CI runs. Existing core-field-v1 transport and gate
+remain unchanged. Nested semantics, scalar-link lineage, full role projections,
+versioned server migration, isolated staff import/lease, durable field commands,
+content delivery, signed CloudKit/provider/vendor/payment/Handoff acceptance and
+complete iPad/Mac usability/accessibility remain required. The goal stays active.
+
 Schedule deletion correction and full-model semantics candidate, 2026-09-09:
 SCHEDULE_PREVIEW_DELETION.md records the exact hosted SwiftData invalidation
 stack, immutable preview/confirmation values and original-identity revalidation,

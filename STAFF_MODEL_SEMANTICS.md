@@ -1,5 +1,11 @@
 # Lossless staff-workspace model semantics
 
+September 9 extension: `STAFF_FULL_MODEL_COVERAGE.md` records the added remaining
+23 codecs and closed 32-entity catalog. The nine-model qualification below is the
+prior baseline, not the current full-model qualification. Full staff role
+projection, domain validation, isolated activation and command reconciliation
+remain required; neither checkpoint unlocks an incomplete staff workspace.
+
 Candidate, September 9, 2026. These are explicit owner-side model codecs, not a
 staff access grant, server projection, or operational store activation. They are
 not wired into the existing `core-field-v1` ledger or encrypted receipt pipeline.

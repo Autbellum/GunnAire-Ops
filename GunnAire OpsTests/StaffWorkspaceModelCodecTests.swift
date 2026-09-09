@@ -20,7 +20,8 @@ import Testing
         try coverage(C.customer); try coverage(C.location); try coverage(C.equipment)
         try coverage(C.technician); try coverage(C.item); try coverage(C.job)
         try coverage(C.invoice); try coverage(C.estimate); try coverage(C.payment)
-        // This mapping is not declared to cover the remaining 23 models.
+        try StaffWorkspaceModelCatalog.validateSchema(GunnAireModelSchema.schema)
+        #expect(StaffWorkspaceModelCatalog.all.count == 32)
         #expect(GunnAireModelSchema.schema.entities.count == 32)
     }
 
