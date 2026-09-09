@@ -1,3 +1,33 @@
+Staff domain validation and inventory entry follow-up, 2026-09-09:
+STAFF_DISCRIMINATOR_VALIDATION.md records strict recognized-value checks for
+every current persisted Raw field across all 32 schema models. The full graph
+rejects unknown codes before reconstruction; original owner values, optional
+nulls, supported historical choices and membership authority remain intact.
+Initial Mac qualification passes 1,763 actual logic cases. The first broad iPad
+run has 1,769 passes and one genuine visible fractional-input failure, not a
+complete pass. IPAD_EDITOR_RECOVERY.md records that retained evidence and the
+text-draft correction. The unchanged inventory journey and 19 inventory logic
+cases now pass in QuantityFocused1. Current combined-source MacFull3 verifies
+1,768 actual cases and IPadFull2 verifies 1,779 (complete logic plus all 11 selected
+UI journeys), with zero failures/skips. Both unsigned Release/architecture checks,
+all 74 Tools tests and both workflow checks pass. Saved inventory/estimate frames
+were inspected without account-email footers. The first repeat result did not
+execute the new test-body assertions; it is not credited as expanded coverage.
+QuantityFreshProcesses1 completed successfully at 16:50 UTC: all three
+independent-app-launch repetitions passed with three new named saved-fractional
+attachments. Each final frame was inspected; values and original date remained
+exact with no account-email footer. The long XCTest animation waits in repetition
+2 and unattributed runtime warnings remain documented. The exact candidate is
+qualified for 11-file copy-back/publication. Preflight preserves 364 unrelated
+changes, 378 other matching tracked sources, and original branch,
+HEAD and index. Published predecessor f8cfc92 now has successful Backend run
+34362120118 and successful native run 34362120065 (Mac and both iPad groups).
+Those hosted passes do not yet cover this newer local source.
+Full nested business semantics, authenticated staff projections,
+isolated operational import/lease, file bytes and field commands, signed
+independent-account CloudKit and provider/vendor/payment/Handoff/device and
+whole-app accessibility acceptance remain required. The full goal stays active.
+
 iPad editor recovery candidate, 2026-09-09:
 IPAD_EDITOR_RECOVERY.md records the exact hosted clipped-Create and invalid
 keyboard-accessibility geometry evidence, a sole native toolbar Create action,

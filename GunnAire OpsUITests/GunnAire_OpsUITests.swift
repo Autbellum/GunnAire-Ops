@@ -7877,6 +7877,12 @@ final class GunnAire_OpsUITests: XCTestCase {
         for _ in 0..<8 where !quantity.isHittable { composeForm.swipeUp() }
         if !waitForHittable(quantity) { retainNavigationFailure(app, name: "Inventory opening quantity is not reachable") }
         XCTAssertTrue(waitForHittable(quantity)); replaceText(in: quantity, with: "4.25")
+        let createInventory = app.buttons["CreateQuickBooksCatalogItem"]
+        replaceText(in: quantity, with: "invalid")
+        XCTAssertFalse(createInventory.isEnabled, "Invalid quantity must not create an item with an old or empty value.")
+        XCTAssertTrue(app.staticTexts["InventoryOpeningQuantityValidation"].exists)
+        replaceText(in: quantity, with: "4.25")
+        XCTAssertTrue(createInventory.isEnabled)
         let done = app.buttons["DoneEditingCatalogItem"]
         XCTAssertTrue(waitForHittable(done)); done.tap()
         requireKeyboardDismissed()
@@ -7899,6 +7905,9 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(waitForHittable(edit)); edit.tap()
         XCTAssertTrue(app.navigationBars["Edit Catalog Item"].waitForExistence(timeout: 3))
         XCTAssertEqual(app.textFields["CatalogEditSalesPrice"].value as? String, "125.375")
+        for label in ["Item name", "SKU", "Sales price", "Purchase cost"] {
+            XCTAssertTrue(app.staticTexts[label].exists, "Entered catalog values need persistent labels.")
+        }
         let editForm = app.collectionViews["CatalogItemEditForm"]
         XCTAssertTrue(editForm.exists)
         let savedQuantity = app.textFields["InventoryOpeningQuantity"]
@@ -7919,6 +7928,9 @@ final class GunnAire_OpsUITests: XCTestCase {
         savedQuantity.tap()
         savedQuantity.typeKey("a", modifierFlags: .command)
         for key in "6.5" { savedQuantity.typeKey(String(key), modifierFlags: []) }
+        if savedQuantity.value as? String != "6.5" {
+            retainNavigationFailure(app, name: "Hardware quantity draft did not retain the full decimal")
+        }
         XCTAssertEqual(savedQuantity.value as? String, "6.5")
         XCTAssertTrue(waitForHittable(done)); done.tap()
         requireKeyboardDismissed()
@@ -7932,6 +7944,24 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(waitForHittable(savedQuantity))
         XCTAssertEqual(savedQuantity.value as? String, "4.25", "Cancel must discard only this unsaved edit.")
         XCTAssertEqual(app.textFields["InventoryOpeningDate"].value as? String, "2026-09-08")
+        let stage = app.buttons["StageCatalogChanges"]
+        replaceText(in: savedQuantity, with: ".")
+        XCTAssertFalse(stage.isEnabled, "Invalid quantity must not stage the prior saved setup.")
+        XCTAssertTrue(app.staticTexts["InventoryOpeningQuantityValidation"].exists)
+        replaceText(in: savedQuantity, with: "6.5")
+        XCTAssertTrue(stage.isEnabled)
+        XCTAssertTrue(waitForHittable(stage)); stage.tap()
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 3))
+        XCTAssertTrue(waitForHittable(edit)); edit.tap()
+        XCTAssertTrue(app.navigationBars["Edit Catalog Item"].waitForExistence(timeout: 3))
+        XCTAssertEqual(app.textFields["CatalogEditSalesPrice"].value as? String, "125.375")
+        for _ in 0..<8 where !savedQuantity.isHittable { editForm.swipeUp() }
+        XCTAssertTrue(waitForHittable(savedQuantity))
+        XCTAssertEqual(savedQuantity.value as? String, "6.5", "Save must use the current draft even with the keyboard active.")
+        XCTAssertEqual(app.textFields["InventoryOpeningDate"].value as? String, "2026-09-08")
+        let savedDecimal = XCTAttachment(screenshot: app.screenshot())
+        savedDecimal.name = "Saved fractional inventory with labeled catalog values"
+        savedDecimal.lifetime = .keepAlways; add(savedDecimal)
         app.buttons["Cancel"].tap()
     }
 

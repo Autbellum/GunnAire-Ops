@@ -61,6 +61,42 @@ struct QuickBooksInventorySetup: Codable, Equatable {
     }
 }
 
+/// Keep the user's text independent of numeric formatting while editing. In
+/// particular, an intermediate `6.` must not be replaced with the number `6`.
+/// This is a local form draft, not a new persisted/provider representation.
+struct QuickBooksInventoryQuantityDraft {
+    var text: String
+    private let decimalSeparator: String
+
+    init(_ quantity: Double? = nil, locale: Locale = .current) {
+        let separator = locale.decimalSeparator ?? "."
+        decimalSeparator = separator
+        text = quantity.map { String($0).replacingOccurrences(of: ".", with: separator) } ?? ""
+    }
+
+    var isValid: Bool { applying(to: QuickBooksInventorySetup()) != nil }
+
+    /// Blank means unfinished setup, not zero. Invalid text cannot silently
+    /// save the prior quantity. The existing publication gate still requires
+    /// complete date/accounts and the original business/realm/environment.
+    func applying(to setup: QuickBooksInventorySetup) -> QuickBooksInventorySetup? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        var result = setup
+        if trimmed.isEmpty {
+            result.openingQuantity = nil
+            return result
+        }
+        let normalized = trimmed.replacingOccurrences(of: decimalSeparator, with: ".")
+        guard normalized.utf8.count <= 128,
+              normalized.range(of: #"\A[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?\z"#,
+                               options: .regularExpression) != nil,
+              let quantity = Double(normalized), quantity.isFinite,
+              quantity >= 0, quantity <= 99_999_999_999 else { return nil }
+        result.openingQuantity = quantity
+        return result
+    }
+}
+
 struct QuickBooksItemGroupDetail: Codable, Equatable {
     struct Line: Codable, Equatable {
         struct Reference: Codable, Equatable {

@@ -112,6 +112,67 @@ struct QuickBooksInventoryTests {
         }
     }
 
+    @Test func quantityDraftKeepsIntermediateTextAndDoesNotMutateSavedSetup() throws {
+        let original = setup
+        var draft = QuickBooksInventoryQuantityDraft(original.openingQuantity, locale: Locale(identifier: "en_US"))
+        #expect(draft.text == "4.25")
+        for text in ["6", "6.", "6.5", "6.500"] {
+            draft.text = text
+            let proposed = try #require(draft.applying(to: original))
+            #expect(draft.text == text)
+            #expect(proposed.openingQuantity == Double(text))
+            #expect(proposed.scope == original.scope && proposed.openingDate == original.openingDate)
+            #expect(proposed.assetAccount == original.assetAccount && proposed.incomeAccount == original.incomeAccount)
+            #expect(proposed.expenseAccount == original.expenseAccount && original.openingQuantity == 4.25)
+        }
+    }
+
+    @Test func invalidQuantityDraftNeverFallsBackToPriorValue() {
+        for text in [".", "-", "-1", "nan", "inf", "1e999", "100000000000", "6..5", "6,5", "1,234", "$6.5", "6 5", "0x1p2"] {
+            var draft = QuickBooksInventoryQuantityDraft(4.25, locale: Locale(identifier: "en_US"))
+            draft.text = text
+            #expect(!draft.isValid && draft.applying(to: setup) == nil)
+            #expect(draft.text == text && setup.openingQuantity == 4.25)
+        }
+    }
+
+    @Test func blankQuantityRemainsAnIncompleteOfflineDraftNotZero() throws {
+        for text in ["", " \n "] {
+            var draft = QuickBooksInventoryQuantityDraft(4.25)
+            draft.text = text
+            let proposed = try #require(draft.applying(to: setup))
+            #expect(draft.isValid && proposed.openingQuantity == nil)
+            #expect(proposed.openingDate == setup.openingDate && proposed.scope == setup.scope)
+            #expect(throws: QuickBooksInventoryError.self) { try proposed.validate(scope: scope) }
+        }
+    }
+
+    @Test func quantityDraftUsesLocaleDecimalSeparatorWithoutStrippingGrouping() throws {
+        var draft = QuickBooksInventoryQuantityDraft(4.25, locale: Locale(identifier: "fr_FR"))
+        #expect(draft.text == "4,25")
+        draft.text = "6,500"
+        #expect(try #require(draft.applying(to: setup)).openingQuantity == 6.5)
+        #expect(draft.text == "6,500")
+        for invalid in ["1.234,5", "1 234,5", "6,5,0"] {
+            draft.text = invalid
+            #expect(!draft.isValid)
+        }
+    }
+
+    @Test func quantityDraftReopensWithoutPrecisionLossAndSavesTheProposedSetup() throws {
+        let item = item(), context = try context(item)
+        for quantity in [0.0, 0.0000001, 4.25123456789, 6.5, 99_999_999_999.0] {
+            let draft = QuickBooksInventoryQuantityDraft(quantity, locale: Locale(identifier: "en_US"))
+            let proposed = try #require(draft.applying(to: setup))
+            #expect(proposed.openingQuantity == quantity)
+            item.inventorySetup = proposed
+            try context.save()
+            #expect(item.inventorySetup == proposed)
+            #expect(item.unitPrice == 125.375 && item.purchaseCost == 19.125)
+            #expect(item.quickBooksID == nil)
+        }
+    }
+
     @Test func accountChoicesUseProviderTypesAndActiveIdentity() {
         func account(_ type: String, _ subtype: String?, active: Bool = true) -> QuickBooksAccount {
             .init(Id: "A-1", Name: "Fixture", FullyQualifiedName: nil, AccountType: type,

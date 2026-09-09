@@ -2,6 +2,88 @@
 
 September 9, 2026. Native candidate; not full-suite or production acceptance.
 
+## Follow-up: intermittent fractional hardware entry
+
+The subsequent `Staff Discriminators.3fSCzM/IPadFull1.xcresult` broad run failed
+the strengthened inventory assertion: after individual hardware `6`, `.`, `5`
+events, the field reported `6`, not `6.5`. The recording's final rendered field
+also reads `6`, so this is not merely a stale accessibility assertion. No Done
+or Save action had occurred between those events. The prior passing run below
+does not prove this intermittent input problem resolved.
+
+The follow-up candidate replaces the optional-number-bound quantity field with
+a native text-bound local draft. Numeric interpretation no longer writes back
+into the field between keystrokes. Both create and edit explicitly validate the
+draft before applying it to the existing inventory setup. Blank remains nil
+(unfinished offline setup), not zero; invalid nonblank text cannot silently save
+the prior quantity. Account scope, opening date and account references remain
+unchanged, as do provider contracts and the complete-setup publication gate.
+Cancel still discards only the local editor state. The original unmodified
+hardware/cancel/reopen journey passes in `QuantityFocused1.xcresult`, alongside
+19 inventory logic cases (20 actual cases, zero failures/skips; both requested
+selectors verified). This supports the draft-state correction but is not by
+itself proof that an intermittent defect is eliminated.
+
+The expanded journey also rejects invalid nonblank quantity in both creation
+and editing, restores valid input, stages a fractional edit with the keyboard
+active, and reopens the exact quantity/date and unrounded sales price. It retains
+the original `6.5` hardware/Done checks and Cancel → original `4.25` assertions.
+Name, SKU, sales price, description, purchase cost and purchase description/notes
+now have persistent native labels in both catalog forms. No input action is
+retried to hide a failure, and neither test selectors nor pass criteria are
+weakened. Complete current-source and fresh-process repeated qualification are
+recorded below.
+
+`QuantityRepeated1.xcresult` reports one passing test with three passing
+repetitions. However, detailed activities/attachments show the original journey,
+not the added invalid-input/save assertions. Its built test binary contains the
+new strings and the rendered app has the new labels, but the runner discrepancy
+is not assumed resolved. These repetitions are not credited as expanded test
+coverage. `IPadFull2` does execute the new invalid-input actions, Stage Changes,
+and named saved-fractional attachment. A further fresh-process repetition run
+will require all three passing Repetition nodes and three new saved-fractional
+attachments. No runner/data reset or live-job cancellation is used.
+
+The local validation helper also required two corrections unrelated to app
+behavior: Bash's empty-array expansion under nounset stopped `MacFull2` before
+building, and editing the helper during the first repeat run broke its later
+shell parsing. `MacFull3` starts from the corrected helper; the completed repeat
+result was inspected and verified separately without restarting that live run.
+Running scripts, as well as compiled sources, are now left unchanged through
+completion. Original failed results and the scope limits above remain retained.
+
+Current-source qualification in `Staff Discriminators.3fSCzM`:
+
+- `MacFull3.xcresult`: 1,768 actual cases, zero failures/skips, complete logic
+  target verified. Unsigned universal Mac Release and arm64 iOS Release pass,
+  with architecture checks; exact hashes are in `STAFF_DISCRIMINATOR_VALIDATION.md`.
+- `IPadFull2.xcresult`: 1,779 actual cases, zero failures/skips, all 12 requested
+  selectors verified (complete logic plus 11 UI journeys). The added inventory
+  actions and saved-fractional attachment are present in its actual activities.
+  Invoice opening, simple Inbox, all three bundle editors, taxable catalog
+  creation, pricebook review and staff-access recovery also pass.
+- All 74 Tools tests and both workflow lint checks pass. No workflow change.
+- Two final-run frames in `FinalInventory` and `FinalEstimate` were inspected:
+  saved quantity `6.5`, unchanged `125.375` price and original opening date,
+  persistent catalog labels, and original-customer estimate confirmation. No
+  account-email footer appears. Existing dense accounting help, multiline-label
+  layout/placeholder polish, whole-app/Mac UI and accessibility remain review
+  work, not certified by these two dark-mode frames.
+
+Existing document-workflow actor warnings remain; repeated-test results also
+record an unattributed non-finite-frame runtime warning. Neither is suppressed
+or represented as resolved.
+
+`QuantityFreshProcesses1.xcresult` completed without cancellation/restart at
+16:50 UTC on September 9. All three independent-app-launch repetitions passed,
+and each retained the new named saved-fractional attachment, proving execution
+of the expanded body rather than assuming it from a stale runner. Every final
+frame was inspected and shows saved `6.5`, full `125.375` price, original date
+and persistent labels without an account-email footer. Repetition 2 took
+3,997.205 seconds during repeated XCTest animation waits; repetitions 1 and 3
+took 116.123 and 114.029 seconds. This resolves the repeat-coverage gate, not the
+remaining runtime-warning, general latency, accessibility or whole-app gates.
+
 ## Exact observed failures
 
 Native run `34354492697`, published head `33413e4`, failed two iPad group-1

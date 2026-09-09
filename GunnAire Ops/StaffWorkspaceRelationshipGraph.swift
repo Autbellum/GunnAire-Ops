@@ -2,7 +2,7 @@ import Foundation
 import SwiftData
 
 /// Complete explicit model-reference preflight, not full domain validity or
-/// tenant authorization. Nested billing/approval JSON, raw enum semantics, role
+/// tenant authorization. Nested billing/approval JSON, financial semantics, role
 /// projection, content delivery and an authenticated store lease remain gates.
 @MainActor struct StaffWorkspaceRelationshipGraph {
     typealias Key = StaffWorkspaceRecordKey
@@ -37,12 +37,15 @@ import SwiftData
             throw StaffWorkspaceModelError.invalid
         }
         try StaffWorkspaceRecordLinks.validateCoverage()
+        try StaffWorkspaceDiscriminators.validateCoverage()
         let codecs = Dictionary(uniqueKeysWithValues: StaffWorkspaceModelCatalog.all.map { ($0.kind, $0) })
+        let discriminatorRules = StaffWorkspaceDiscriminators.rules
         var records: [Key: StaffWorkspaceModelRecord] = [:]
         for record in input {
             let key = Key(kind: record.kind, id: record.id)
             guard let codec = codecs[record.kind], records[key] == nil else { throw StaffWorkspaceModelError.invalid }
             try codec.validate(record)
+            try StaffWorkspaceDiscriminators.validate(record, using: discriminatorRules[record.kind]!)
             records[key] = record
         }
         let graph = Self(records: records)

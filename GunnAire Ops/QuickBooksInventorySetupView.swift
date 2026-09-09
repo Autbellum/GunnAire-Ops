@@ -20,6 +20,7 @@ extension View {
 /// accounting choices; ordinary service creation stays uncluttered.
 struct QuickBooksInventorySetupSection: View {
     @Binding var setup: QuickBooksInventorySetup
+    @Binding var quantityDraft: QuickBooksInventoryQuantityDraft
     let accounts: [QuickBooksAccount]
     let scope: QuickBooksChangeHistoryScope?
     let focusedField: FocusState<QuickBooksCatalogInputField?>.Binding
@@ -27,14 +28,20 @@ struct QuickBooksInventorySetupSection: View {
     var body: some View {
         Section("Inventory Setup") {
             LabeledContent("Opening quantity") {
-                TextField("Quantity", value: $setup.openingQuantity, format: .number)
+                TextField("Quantity", text: $quantityDraft.text)
                     .multilineTextAlignment(.trailing)
                     .catalogNumericKeyboard()
+                    .autocorrectionDisabled()
                     .focused(focusedField, equals: .openingQuantity)
                     .submitLabel(.next)
                     .onSubmit { focusedField.wrappedValue = .openingDate }
                     .accessibilityLabel("Opening quantity")
                     .accessibilityIdentifier("InventoryOpeningQuantity")
+            }
+            if !quantityDraft.isValid {
+                Text("Enter an opening quantity from 0 to 99,999,999,999, or leave it blank to finish setup later.")
+                    .font(.caption).foregroundStyle(.orange)
+                    .accessibilityIdentifier("InventoryOpeningQuantityValidation")
             }
             LabeledContent("Opening date") {
                 TextField("YYYY-MM-DD", text: Binding(

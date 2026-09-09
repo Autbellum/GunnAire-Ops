@@ -6061,6 +6061,7 @@ private struct QuickBooksLocalCatalogItemEditView: View {
     @State private var purchaseDescription: String
     @State private var preferredVendorID: String
     @State private var inventorySetup: QuickBooksInventorySetup
+    @State private var inventoryQuantity: QuickBooksInventoryQuantityDraft
     @State private var isAssemblyEnabled: Bool
     @State private var assemblyPresentation: CatalogAssemblyPresentation
     @State private var assemblyComponents: [CatalogAssemblyComponentDefinition]
@@ -6084,6 +6085,7 @@ private struct QuickBooksLocalCatalogItemEditView: View {
         self.accounts = accounts
         self.inventoryScope = inventoryScope
         _inventorySetup = State(initialValue: item.inventorySetup ?? QuickBooksInventorySetup())
+        _inventoryQuantity = State(initialValue: QuickBooksInventoryQuantityDraft(item.inventorySetup?.openingQuantity))
         self.onSetArchived = onSetArchived
         self.onSaved = onSaved
         let assembly = item.assemblyDefinition
@@ -6121,6 +6123,8 @@ private struct QuickBooksLocalCatalogItemEditView: View {
 
     private var canSave: Bool {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if editableItemType == .inventory, item.quickBooksID?.isEmpty != false,
+           !inventoryQuantity.isValid { return false }
         guard !trimmedName.isEmpty, trimmedName.count <= 100,
               let parsedUnitPrice, parsedUnitPrice.isFinite, parsedUnitPrice >= 0 else { return false }
         if !purchaseCost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -6195,9 +6199,12 @@ private struct QuickBooksLocalCatalogItemEditView: View {
         NavigationStack {
             Form {
                 Section("Sales") {
-                    TextField("Item name", text: $name)
-                        .focused($focusedField, equals: .name)
-                        .accessibilityIdentifier("CatalogEditName")
+                    LabeledContent("Item name") {
+                        TextField("Item name", text: $name)
+                            .multilineTextAlignment(.trailing)
+                            .focused($focusedField, equals: .name)
+                            .accessibilityIdentifier("CatalogEditName")
+                    }
                     if isUnlinkedPricebookReview {
                         Picker("Item Type", selection: $itemType) {
                             ForEach(CatalogItemType.creatableCases) { type in
@@ -6218,26 +6225,39 @@ private struct QuickBooksLocalCatalogItemEditView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    TextField("Description", text: $description, axis: .vertical)
-                        .lineLimit(2...4)
-                        .focused($focusedField, equals: .description)
-                    TextField("SKU", text: $sku)
-                        .textInputAutocapitalization(.characters)
-                        .focused($focusedField, equals: .sku)
-                    TextField("Sales price", text: $unitPrice)
-                        .catalogNumericKeyboard()
-                        .focused($focusedField, equals: .price)
-                        .accessibilityIdentifier("CatalogEditSalesPrice")
+                    LabeledContent("Description") {
+                        TextField("Description", text: $description, axis: .vertical)
+                            .lineLimit(2...4)
+                            .focused($focusedField, equals: .description)
+                    }
+                    LabeledContent("SKU") {
+                        TextField("SKU", text: $sku)
+                            .multilineTextAlignment(.trailing)
+                            .textInputAutocapitalization(.characters)
+                            .focused($focusedField, equals: .sku)
+                    }
+                    LabeledContent("Sales price") {
+                        TextField("Sales price", text: $unitPrice)
+                            .multilineTextAlignment(.trailing)
+                            .catalogNumericKeyboard()
+                            .focused($focusedField, equals: .price)
+                            .accessibilityIdentifier("CatalogEditSalesPrice")
+                    }
                     Toggle("Taxable", isOn: $isTaxable)
                 }
 
                 Section("Purchasing") {
-                    TextField("Purchase cost", text: $purchaseCost)
-                        .catalogNumericKeyboard()
-                        .focused($focusedField, equals: .purchaseCost)
-                    TextField("Purchase description", text: $purchaseDescription, axis: .vertical)
-                        .lineLimit(2...4)
-                        .focused($focusedField, equals: .purchaseDescription)
+                    LabeledContent("Purchase cost") {
+                        TextField("Purchase cost", text: $purchaseCost)
+                            .multilineTextAlignment(.trailing)
+                            .catalogNumericKeyboard()
+                            .focused($focusedField, equals: .purchaseCost)
+                    }
+                    LabeledContent("Purchase description") {
+                        TextField("Purchase description", text: $purchaseDescription, axis: .vertical)
+                            .lineLimit(2...4)
+                            .focused($focusedField, equals: .purchaseDescription)
+                    }
                     Picker("Preferred vendor", selection: $preferredVendorID) {
                         if item.preferredVendorQuickBooksID?.isEmpty == false {
                             Text(item.preferredVendorName ?? "Current vendor")
@@ -6258,7 +6278,7 @@ private struct QuickBooksLocalCatalogItemEditView: View {
                     if item.quickBooksID?.isEmpty == false {
                         QuickBooksInventoryBalanceSection(item: item)
                     } else {
-                        QuickBooksInventorySetupSection(setup: $inventorySetup, accounts: accounts,
+                        QuickBooksInventorySetupSection(setup: $inventorySetup, quantityDraft: $inventoryQuantity, accounts: accounts,
                             scope: inventoryScope, focusedField: $focusedField)
                     }
                 }
@@ -6504,7 +6524,8 @@ private struct QuickBooksLocalCatalogItemEditView: View {
         }
         assemblyValidationMessage = nil
         if editableItemType == .inventory, item.quickBooksID?.isEmpty != false {
-            item.inventorySetup = inventorySetup
+            guard let validatedSetup = inventoryQuantity.applying(to: inventorySetup) else { return }
+            item.inventorySetup = validatedSetup
         }
         item.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if isUnlinkedPricebookReview {
@@ -6567,19 +6588,26 @@ private struct QuickBooksCatalogItemComposeView: View {
     @State private var purchaseDescription = ""
     @State private var selectedVendorID = ""
     @State private var inventorySetup = QuickBooksInventorySetup()
+    @State private var inventoryQuantity = QuickBooksInventoryQuantityDraft()
     @FocusState private var focusedField: QuickBooksCatalogInputField?
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Sales") {
-                    TextField("Name", text: $name)
-                        .focused($focusedField, equals: .name)
-                        .accessibilityIdentifier("QuickBooksCatalogItemName")
-                    TextField("SKU", text: $sku)
-                        .textInputAutocapitalization(.characters)
-                        .focused($focusedField, equals: .sku)
-                        .accessibilityIdentifier("QuickBooksCatalogItemSKU")
+                    LabeledContent("Name") {
+                        TextField("Name", text: $name)
+                            .multilineTextAlignment(.trailing)
+                            .focused($focusedField, equals: .name)
+                            .accessibilityIdentifier("QuickBooksCatalogItemName")
+                    }
+                    LabeledContent("SKU") {
+                        TextField("SKU", text: $sku)
+                            .multilineTextAlignment(.trailing)
+                            .textInputAutocapitalization(.characters)
+                            .focused($focusedField, equals: .sku)
+                            .accessibilityIdentifier("QuickBooksCatalogItemSKU")
+                    }
                     Picker("Item Type", selection: $itemType) {
                         ForEach(CatalogItemType.creatableCases) { type in
                             Text(type.label).tag(type)
@@ -6588,20 +6616,28 @@ private struct QuickBooksCatalogItemComposeView: View {
                     .pickerStyle(.segmented)
                     .accessibilityIdentifier("QuickBooksCatalogItemType")
                     .onChange(of: itemType) { _, _ in focusedField = nil }
-                    TextField("Price (optional)", text: $price)
-                        .catalogNumericKeyboard()
-                        .focused($focusedField, equals: .price)
-                        .accessibilityIdentifier("QuickBooksCatalogItemPrice")
+                    LabeledContent("Sales price") {
+                        TextField("Price (optional)", text: $price)
+                            .multilineTextAlignment(.trailing)
+                            .catalogNumericKeyboard()
+                            .focused($focusedField, equals: .price)
+                            .accessibilityIdentifier("QuickBooksCatalogItemPrice")
+                    }
                     Toggle("Taxable", isOn: $isTaxable)
                         .accessibilityIdentifier("QuickBooksCatalogItemTaxable")
-                    TextField("Description", text: $description)
-                        .focused($focusedField, equals: .description)
+                    LabeledContent("Description") {
+                        TextField("Description", text: $description)
+                            .focused($focusedField, equals: .description)
+                    }
                 }
 
                 Section("Purchasing") {
-                    TextField("Purchase price", text: $purchaseCost)
-                        .catalogNumericKeyboard()
-                        .focused($focusedField, equals: .purchaseCost)
+                    LabeledContent("Purchase cost") {
+                        TextField("Purchase price", text: $purchaseCost)
+                            .multilineTextAlignment(.trailing)
+                            .catalogNumericKeyboard()
+                            .focused($focusedField, equals: .purchaseCost)
+                    }
                     if !vendors.isEmpty {
                         Picker("Preferred vendor", selection: $selectedVendorID) {
                             Text("None").tag("")
@@ -6610,12 +6646,14 @@ private struct QuickBooksCatalogItemComposeView: View {
                             }
                         }
                     }
-                    TextField("Purchase notes", text: $purchaseDescription, axis: .vertical)
-                        .lineLimit(2...3)
-                        .focused($focusedField, equals: .purchaseDescription)
+                    LabeledContent("Purchase notes") {
+                        TextField("Purchase notes", text: $purchaseDescription, axis: .vertical)
+                            .lineLimit(2...3)
+                            .focused($focusedField, equals: .purchaseDescription)
+                    }
                 }
                 if itemType == .inventory {
-                    QuickBooksInventorySetupSection(setup: $inventorySetup, accounts: accounts,
+                    QuickBooksInventorySetupSection(setup: $inventorySetup, quantityDraft: $inventoryQuantity, accounts: accounts,
                         scope: inventoryScope, focusedField: $focusedField)
                 }
             }
@@ -6635,6 +6673,8 @@ private struct QuickBooksCatalogItemComposeView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Create") {
                         guard let amount = QuickBooksCatalogAmountParser.parseRequiredOrZero(price), amount >= 0 else { return }
+                        let validatedInventory = inventoryQuantity.applying(to: inventorySetup)
+                        guard itemType != .inventory || validatedInventory != nil else { return }
                         let vendorRef = vendors.first { $0.Id == selectedVendorID }?.reference
                         onCreate(QuickBooksCatalogItemDraft(
                             name: name.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -6646,7 +6686,7 @@ private struct QuickBooksCatalogItemComposeView: View {
                             description: description.nilIfBlank,
                             purchaseDescription: purchaseDescription.nilIfBlank,
                             vendorRef: vendorRef,
-                            inventorySetup: itemType == .inventory ? inventorySetup : nil
+                            inventorySetup: itemType == .inventory ? validatedInventory : nil
                         )
                         )
                         dismiss()
@@ -6654,7 +6694,8 @@ private struct QuickBooksCatalogItemComposeView: View {
                     .disabled(
                         name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
                         QuickBooksCatalogAmountParser.parseRequiredOrZero(price) == nil ||
-                        !QuickBooksCatalogAmountParser.isValidOptionalAmount(purchaseCost)
+                        !QuickBooksCatalogAmountParser.isValidOptionalAmount(purchaseCost) ||
+                        (itemType == .inventory && !inventoryQuantity.isValid)
                     )
                     .accessibilityIdentifier("CreateQuickBooksCatalogItem")
                 }
