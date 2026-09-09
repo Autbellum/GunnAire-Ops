@@ -1568,18 +1568,6 @@ enum GunnAireBackendService {
             }
         }
 
-        if !currentUsers.contains(where: { $0.email == AppAccess.primaryAdminEmail }) &&
-            !remoteUsers.contains(where: { AppAccess.normalizedEmail($0.email) == AppAccess.primaryAdminEmail }) {
-            let admin = AppUser(email: AppAccess.primaryAdminEmail, role: .admin)
-            modelContext.insert(admin)
-            let technician = AppAccess.ensureTechnicianRecord(
-                for: admin.email,
-                technicians: knownTechnicians,
-                modelContext: modelContext
-            )
-            knownTechnicians.append(technician)
-        }
-
         try? modelContext.save()
         let descriptor = FetchDescriptor<AppUser>(sortBy: [SortDescriptor(\AppUser.email)])
         return (try? modelContext.fetch(descriptor)) ?? currentUsers

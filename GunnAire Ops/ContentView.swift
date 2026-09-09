@@ -141,6 +141,7 @@ struct ContentView: View {
     @State private var isRetryingCustomerCommunicationUploads = false
     @State private var cloudKitReadiness: GunnAireCloudKit.AccountReadiness?
     @State private var showingCloudKitContinuityDetails = false
+    @State private var isCheckingBusinessRole = false
     
     // Authentication states
     @State private var isQuickBooksAuthenticated = false
@@ -274,11 +275,25 @@ struct ContentView: View {
     private var selectedWorkspaceDetail: AnyView {
         guard !visibleSidebarItems.isEmpty else {
             return AnyView(
-                ContentUnavailableView(
-                    "Account setup required",
-                    systemImage: "person.badge.key",
-                    description: Text("Your signed-in business account has not been assigned an active role. Ask an administrator to activate your access, then reopen GunnAire Ops.")
-                )
+                ContentUnavailableView {
+                    Label("Verify business access", systemImage: "person.badge.key")
+                } description: {
+                    Text("Your business permissions could not be confirmed. Your saved work is unchanged. Check again, or ask your administrator to review your access.")
+                } actions: {
+                    Button(isCheckingBusinessRole ? "Checking…" : "Check Again") {
+                        guard !isCheckingBusinessRole else { return }
+                        isCheckingBusinessRole = true
+                        Task {
+                            defer { isCheckingBusinessRole = false }
+                            await CompanyWorkspaceAccessController.shared.refresh()
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isCheckingBusinessRole)
+                    .accessibilityIdentifier("BusinessRoleCheckAgain")
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("BusinessRoleAccessGate")
             )
         }
 
@@ -409,7 +424,7 @@ struct ContentView: View {
                             .accessibilityIdentifier("SidebarAccountIdentity")
                     }
                     if visibleSidebarItems.isEmpty {
-                        Label("Account setup required", systemImage: "person.badge.key")
+                        Label("Verify business access", systemImage: "person.badge.key")
                             .font(.footnote)
                             .foregroundColor(.orange)
                     }
@@ -462,7 +477,6 @@ struct ContentView: View {
             QuickBooksDataAPI.shared.loadTokens()
             isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
             isGoogleAuthenticated = GoogleAuthManager.shared.isAuthenticated
-            ensurePrimaryAdminExists()
             collapseCloudKitUserDuplicatesIfNeeded()
             cleanupCalendarCreatedCustomersIfNeeded()
             refreshGoogleAccountIdentityIfNeeded()
@@ -729,11 +743,6 @@ struct ContentView: View {
         case .syncIntegrations: return "arrow.triangle.2.circlepath"
         case .onsiteDocumentation: return "book"
         }
-    }
-
-    private func ensurePrimaryAdminExists() {
-        guard !users.contains(where: { $0.email == AppAccess.primaryAdminEmail }) else { return }
-        modelContext.insert(AppUser(email: AppAccess.primaryAdminEmail, role: .admin))
     }
 
     private func collapseCloudKitUserDuplicatesIfNeeded() {

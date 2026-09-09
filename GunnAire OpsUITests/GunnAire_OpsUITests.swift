@@ -76,11 +76,27 @@ final class GunnAire_OpsUITests: XCTestCase {
         }
 
         let commandCenterFind = app.buttons["CommandCenterToolbarFindButton"]
+        let findIsHittable = waitForHittable(commandCenterFind)
+        if !findIsHittable {
+            retainNavigationFailure(app, name: "Find is not reachable")
+        }
         XCTAssertTrue(
-            waitForHittable(commandCenterFind),
+            findIsHittable,
             "Find must remain reachable from the visible compact or regular navigation surface."
         )
         commandCenterFind.tap()
+    }
+
+    @MainActor
+    private func retainNavigationFailure(_ app: XCUIApplication, name: String) {
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = name
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        let hierarchy = XCTAttachment(string: app.debugDescription)
+        hierarchy.name = name + " accessibility hierarchy"
+        hierarchy.lifetime = .keepAlways
+        add(hierarchy)
     }
 
     @MainActor
@@ -1232,6 +1248,35 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Workspace does not match"].waitForExistence(timeout: 5))
         app.buttons["Sign Out"].tap()
         XCTAssertTrue(app.buttons["Sign In With Google"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    func testUnverifiedBusinessRoleOffersRecoveryWithoutAdministratorWorkspaces() throws {
+        let app = XCUIApplication()
+        let arguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-uiTestAuthenticatedAdmin"]
+        app.launchArguments = arguments + ["-uiTestUnverifiedBusinessRole"]
+        app.launch()
+        let showsGate = app.otherElements["BusinessRoleAccessGate"].waitForExistence(timeout: 8)
+        if !showsGate { retainNavigationFailure(app, name: "Business role recovery is not visible") }
+        XCTAssertTrue(showsGate)
+        XCTAssertTrue(app.buttons["BusinessRoleCheckAgain"].isEnabled)
+        XCTAssertFalse(app.staticTexts["QuickBooks Management"].exists)
+        XCTAssertFalse(app.navigationBars["Invoices"].exists)
+        app.buttons["BusinessRoleCheckAgain"].tap()
+        XCTAssertTrue(app.buttons["BusinessRoleCheckAgain"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.otherElements["BusinessRoleAccessGate"].exists)
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "Unverified business role retains clear recovery"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        app.terminate()
+        // A new approved fixture models renewed access; this is not a claim
+        // of live identity-provider or CloudKit-account verification.
+        app.launchArguments = arguments
+        app.launch()
+        XCTAssertTrue(app.buttons["GlobalFindButton"].waitForExistence(timeout: 8))
+        XCTAssertFalse(app.otherElements["BusinessRoleAccessGate"].exists)
+        XCTAssertTrue(revealSidebarDestination("Invoices", in: app).exists)
     }
 
     /// The iPad workspace intentionally has a small, role-aware sidebar rather

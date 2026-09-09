@@ -89,6 +89,7 @@ jobs:
               testExistingQuickBooksLinkReviewRecoversConfirmedDecisionWithoutAnotherPost \
               testExistingQuickBooksLinkReviewCancelsAfterReconnection \
               testExistingQuickBooksLinksOfferOfflineRecoveryWithoutDeviceOAuth \
+              testUnverifiedBusinessRoleOffersRecoveryWithoutAdministratorWorkspaces \
               testNativeBillingReviewCancelsUnsentProposalAndReturnsToOriginalInvoice \
               testNativeBillingBundleReviewShowsRepeatedComponentsAndCancelsOriginalProposal \
               testNativeBillingReviewRecoversAcceptedInvoiceWithoutPublishingAgain \

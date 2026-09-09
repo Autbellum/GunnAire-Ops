@@ -1,3 +1,35 @@
+Native business-role authority qualification, 2026-09-08:
+NATIVE_BUSINESS_ROLE_AUTHORITY.md records removal of the implicit primary-email
+administrator grant and unapproved startup/roster administrator creation. Live
+roles require a current verified business lease, exact signed-in identity and
+consistent active mirrored records. Missing, conflicting, unknown and revoked
+roles fail closed. Focused access recovery preserves saved work and refreshes
+through the existing workspace controller. Task assignment and Time Clock entry
+points enforce the same active-role/ownership boundary; remaining device-OAuth
+time publication is not migrated by this checkpoint.
+Eight new policy tests and two controller tests cover role authority and recovery.
+All 1,558 Mac logic tests pass. Final iPad qualification passes 1,569 actual tests
+(1,558 logic plus 11 UI), with zero failures/skips and actual-execution verification.
+All eight final screenshots are visually reviewed, including simple Mail and
+business-access recovery with no account-email footer or raw API diagnostics.
+The workflow adds one recovery journey, retaining all existing selectors and
+full logic targets: 60 UI cases, each in exactly one of two balanced groups.
+All 56 Tools tests and both workflow lint checks pass. Unsigned universal Mac
+Release passes with arm64 and x86_64 verified. Existing document-concurrency
+and optional Metal-path warnings remain. Earlier fixture, accessibility-identity
+and mail-test route-isolation failures are retained with their corrective evidence;
+production role restrictions and existing regression assertions are not weakened.
+Original-project safety preflight covers 14 scoped paths, 260 unrelated changes,
+the unchanged index and 298 other byte-identical tracked source files. Final
+copy-back must verify those boundaries. Hosted CI must qualify the published head.
+Backend code is unchanged and its full suite was not rerun for this checkpoint.
+Independent-staff CloudKit sharing is not implemented: current private-store and
+single-account binding cannot provide role-filtered staff replication. Staff
+iCloud topology, data partitioning/migration and signed two-account acceptance
+remain required. No main merge, production deployment, signing, schema promotion,
+live accounting/customer/payment change or physical installation is included.
+The full business-suite goal remains open.
+
 Shared business-session existing-link review qualification, 2026-09-08:
 NATIVE_SHARED_LINK_REVIEW.md records candidate backend 2026.09.08.43 and the
 native imported-customer/item/invoice/estimate review using verified business

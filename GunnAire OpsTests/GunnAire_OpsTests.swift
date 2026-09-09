@@ -3307,8 +3307,8 @@ struct GunnAire_OpsTests {
         context.insert(second)
         try context.save()
 
-        #expect(AppAccess.activeRole(email: first.email, users: [first, second]) == .standard)
-        #expect(AppAccess.isAuthorized(email: first.email, users: [first, second]))
+        #expect(AppAccess.activeRole(email: first.email, users: [first, second]) == nil)
+        #expect(!AppAccess.isAuthorized(email: first.email, users: [first, second]))
         #expect(AppAccess.isAdmin(email: first.email, users: [first, second]) == false)
         #expect(AppAccess.canManageDispatch(email: first.email, users: [first, second]) == false)
         #expect(AppAccess.canViewFinancialManagement(email: first.email, users: [first, second]) == false)
@@ -5264,7 +5264,8 @@ struct GunnAire_OpsTests {
         let dispatch = AppUser(email: "dispatch-progress@gunnaire.com", role: .dispatcher)
         let standard = AppUser(email: "standard-progress@gunnaire.com", role: .standard)
         let accounting = AppUser(email: "accounting-progress@gunnaire.com", role: .accounting)
-        let users = [field, dispatch, standard, accounting]
+        let admin = AppUser(email: AppAccess.primaryAdminEmail, role: .admin)
+        let users = [field, dispatch, standard, accounting, admin]
 
         #expect(AppAccess.canUpdateJobProgress(email: field.email, users: users))
         #expect(AppAccess.canUpdateJobProgress(email: dispatch.email, users: users))
@@ -18293,6 +18294,10 @@ struct GunnAire_OpsTests {
             maintenanceContractID: maintenanceContractID,
             workflow: .maintenanceRenewal
         )
+        // Consume navigation as the real handoff does, not just its draft.
+        // Leaving Mail pending causes the next Accounting launch to correctly
+        // present an access-restriction alert over its otherwise valid Find UI.
+        #expect(GunnAireAppIntentRouter.consumePendingRoute() == .mail)
         let draft = GunnAireAppIntentRouter.consumePendingMailDraft()
 
         #expect(draft?.to == "customer@example.com")
@@ -18304,6 +18309,7 @@ struct GunnAire_OpsTests {
         #expect(draft?.invoiceID == invoiceID)
         #expect(draft?.maintenanceContractID == maintenanceContractID)
         #expect(draft?.workflow == .maintenanceRenewal)
+        #expect(GunnAireAppIntentRouter.consumePendingRoute() == nil)
     }
 
     @MainActor
@@ -23225,7 +23231,9 @@ struct GunnAire_OpsTests {
 
         #expect(AppAccess.canOfferMaintenanceAgreements(email: field.email, users: [field]))
         #expect(AppAccess.canOfferMaintenanceAgreements(email: dispatcher.email, users: [dispatcher]))
-        #expect(AppAccess.canOfferMaintenanceAgreements(email: AppAccess.primaryAdminEmail, users: []))
+        let admin = AppUser(email: AppAccess.primaryAdminEmail, role: .admin)
+        #expect(AppAccess.canOfferMaintenanceAgreements(email: admin.email, users: [admin]))
+        #expect(!AppAccess.canOfferMaintenanceAgreements(email: admin.email, users: []))
         #expect(!AppAccess.canOfferMaintenanceAgreements(email: accounting.email, users: [accounting]))
         #expect(!AppAccess.canOfferMaintenanceAgreements(email: standard.email, users: [standard]))
     }

@@ -232,8 +232,14 @@ final class CompanyWorkspaceAccessController: ObservableObject {
     }
 
     var verifiedRole: AppUserRole? {
+        verifiedUser.flatMap { AppUserRole(rawValue: $0.role) }
+    }
+
+    /// Obtained only from the current bounded server lease, never SwiftData.
+    /// Expiry, logout, account changes and revocation remove this authority.
+    var verifiedUser: BackendAppUserRecord? {
         guard authorizedContainer != nil, let user = activeLease?.user, user.isActive else { return nil }
-        return AppUserRole(rawValue: user.role)
+        return user
     }
 
     func invalidate(accountChanged: Bool = false, reason: CompanyWorkspaceFailure = .signIn, preserveCachedLease: Bool = false) {

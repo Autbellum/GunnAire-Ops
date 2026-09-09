@@ -404,6 +404,36 @@ struct CompanyWorkspaceAccessTests {
         #expect(h.lease == nil && h.registration != nil && h.clearedContinuations == 1)
     }
 
+    @Test func mirroredAdministratorCannotReplaceVerifiedFieldAuthority() async throws {
+        let h = try Harness(); h.register()
+        let controller = h.controller(); await controller.refresh()
+        let users = try h.modelContainer.mainContext.fetch(FetchDescriptor<AppUser>())
+        let user = try #require(users.first { $0.email == h.user.email })
+        #expect(AppAccess.activeRole(email: user.email, users: users, verifiedUser: controller.verifiedUser) == .fieldTechnician)
+        user.role = .admin
+        try h.modelContainer.mainContext.save()
+        #expect(controller.verifiedRole == .fieldTechnician)
+        #expect(AppAccess.activeRole(email: user.email, users: users, verifiedUser: controller.verifiedUser) == nil)
+        await controller.refresh()
+        #expect(user.role == .fieldTechnician)
+        #expect(AppAccess.activeRole(email: user.email, users: users, verifiedUser: controller.verifiedUser) == .fieldTechnician)
+    }
+
+    @Test func expiredAndRevokedLeasesCannotAuthorizeMirroredUsers() async throws {
+        for expire in [true, false] {
+            let h = try Harness(); h.register()
+            let controller = h.controller(); await controller.refresh()
+            let users = try h.modelContainer.mainContext.fetch(FetchDescriptor<AppUser>())
+            #expect(controller.verifiedUser != nil)
+            if expire { h.now = h.now.addingTimeInterval(86_400) }
+            else { controller.invalidate() }
+            #expect(controller.verifiedUser == nil)
+            #expect(AppAccess.activeRole(email: h.user.email, users: users, verifiedUser: controller.verifiedUser) == nil)
+            #expect(try h.modelContainer.mainContext.fetch(FetchDescriptor<AppUser>()).count == users.count)
+            #expect(h.registration != nil)
+        }
+    }
+
     @Test func providerStampTracksApprovedSessionRoleAndExpiration() async throws {
         let h = try Harness(); h.register()
         let controller = h.controller()

@@ -55,7 +55,7 @@ struct TimeClockView: View {
     }
 
     private var hasAuthenticatedUser: Bool {
-        !signedInEmail.isEmpty
+        !signedInEmail.isEmpty && activeRole != nil
     }
 
     private var isOwnerAccount: Bool {
@@ -71,7 +71,7 @@ struct TimeClockView: View {
     }
 
     private var canRecordOwnTime: Bool {
-        hasAuthenticatedUser && !isOwnerAccount && activeRole != .accounting
+        AppAccess.canRecordOwnTime(email: signedInEmail, users: users)
     }
 
     private var canUseFieldExpenses: Bool {
@@ -1204,6 +1204,7 @@ struct TimeClockView: View {
     }
 
     private func signOffPersonalTimesheet() {
+        guard canRecordOwnTime else { return }
         let originals = personalTimesheetEntries.map { ($0, $0.reviewAuditJSON) }
         do {
             let event = try TimesheetAttestationPolicy.signOff(
@@ -1223,6 +1224,7 @@ struct TimeClockView: View {
     }
 
     private func beginTimesheetExport() {
+        guard canReviewTeamTime else { return }
         guard let teamTimesheetInterval else {
             timesheetExportError = "Select a weekly review period before exporting approved time."
             return
@@ -1240,7 +1242,7 @@ struct TimeClockView: View {
     }
 
     private func clockIn() {
-        guard hasAuthenticatedUser else {
+        guard canRecordOwnTime else {
             syncMessage = "Sign in with an approved GunnAire business account before recording time."
             return
         }
@@ -1266,6 +1268,7 @@ struct TimeClockView: View {
     }
 
     private func clockOut(_ entry: TimeEntry) {
+        guard AppAccess.canEditOwnOpenTime(entry, email: signedInEmail, users: users) else { return }
         let now = Date()
         let previousClockOut = entry.clockOut
         let previousReviewStatusRawValue = entry.reviewStatusRawValue
@@ -1292,6 +1295,7 @@ struct TimeClockView: View {
     }
 
     private func syncCompletedEntryToQuickBooks(_ entry: TimeEntry) {
+        guard canReviewTeamTime else { return }
         guard Config.QuickBooksTime.enabled else { return }
         guard entry.quickBooksTimeActivityID == nil else { return }
         guard entry.isApprovedForQuickBooksPublication else {
@@ -1403,6 +1407,7 @@ struct TimeClockView: View {
     }
 
     private func updateActivity(_ activity: TimeEntryActivity, for entry: TimeEntry) {
+        guard AppAccess.canEditOwnOpenTime(entry, email: signedInEmail, users: users) else { return }
         entry.activity = activity
         if !activity.requiresServiceCall {
             entry.serviceCall = nil
@@ -1411,6 +1416,7 @@ struct TimeClockView: View {
     }
 
     private func updateServiceCall(_ serviceCall: ServiceCall?, for entry: TimeEntry) {
+        guard AppAccess.canEditOwnOpenTime(entry, email: signedInEmail, users: users) else { return }
         entry.serviceCall = serviceCall
         saveOpenTimeContext()
     }

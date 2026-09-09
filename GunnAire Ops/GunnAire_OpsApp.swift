@@ -357,6 +357,14 @@ private enum GunnAireUITestFixtures {
         let isPhotoMarkupFixture = arguments.contains("-uiTestSeedPhotoMarkup")
 
         let appUsers = try context.fetch(FetchDescriptor<AppUser>())
+        if arguments.contains("-uiTestAuthenticatedAdmin") || isScreenshotFixture {
+            let administrators = appUsers.filter { AppAccess.normalizedEmail($0.email) == AppAccess.primaryAdminEmail }
+            if administrators.isEmpty {
+                context.insert(AppUser(email: AppAccess.primaryAdminEmail, role: .admin))
+            } else {
+                for user in administrators { user.role = .admin; user.isActive = true }
+            }
+        }
         for user in appUsers where
             user.id == standardUserID ||
             user.id == technicianUserID ||
@@ -374,6 +382,12 @@ private enum GunnAireUITestFixtures {
         }
         if arguments.contains("-uiTestAuthenticatedAccounting") {
             context.insert(AppUser(id: accountingUserID, email: GunnAireUITestIdentity.accountingEmail, role: .accounting))
+        }
+        if arguments.contains("-uiTestUnverifiedBusinessRole") {
+            for user in try context.fetch(FetchDescriptor<AppUser>())
+                where AppAccess.normalizedEmail(user.email) == AppAccess.primaryAdminEmail {
+                user.isActive = false
+            }
         }
 
         let customers = try context.fetch(FetchDescriptor<Customer>())
