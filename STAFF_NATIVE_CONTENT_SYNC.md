@@ -1,0 +1,49 @@
+# Native full-workspace preparation and recovery
+
+This candidate connects the owner app's real synchronization flow to the full32 selection and content endpoints from backend version `2026.09.09.53`. It replaces the previously uncalled transport component with live request-policy enforcement, encrypted recovery journals, current-account checks and original-source verification. Qualification is in progress; no deployment or signed staff acceptance is claimed.
+
+## Actual flow
+
+1. Recover an older core-source request and fully reconcile the 32-kind owner source, retaining conflicts and offline work.
+2. Fetch current staff setup and verify the active owner session, approved company/iCloud binding, store identity, member role, share and replica.
+3. Save the original selection UUID and exact request bytes before the first POST. Read the immutable original index in bounded pages, preserving its cursor and checking source identities/revisions and the complete selection hash.
+4. Save/replay the original content request. Receive exact hashed content chunks and write each encrypted chunk before advancing the durable offset. Interrupted replies, process restarts and disk-write failures retain recoverable originals.
+5. Reassemble and check the original whole-payload hash, complete header/identity/field coverage, exact original scalar values and independently prepared native billing history. Recheck the server's current source and access before committing a ready pointer.
+6. Recheck the current saved owner history synchronously before the existing core capture. An edit arriving during the added network awaits must not be shared ahead of full-source publication.
+
+The native route policy admits only the exact owner preparation POSTs and scoped selection/content GETs. It rejects broader methods, external URLs, unknown fields, duplicate query keys, malformed UUIDs and noncanonical chunk offsets. The shared authenticated owner request helper requires an approved administrator workspace and rechecks the operation stamp around every asynchronous transfer; staff metadata exceptions are not used.
+
+## Recovery and privacy
+
+Journals and chunks use the existing AES-GCM local store with hashed filenames, per-key authenticated scope, atomic protected writes, backup exclusion and a distinct Keychain encryption key. Recovery never creates a new key over old encrypted data. Original request bytes, immutable archives and previously verified chunks are retained rather than silently replaced. A final archive is saved before the ready pointer changes; either side of a lost write acknowledgement can be recovered.
+
+A newer source may retire an old preparation only with an authoritative receipt or explicit source-change rejection. Current setup determines a changed role/share; the original request is archived under the private owner scope before a successor request can be created. Completed archives are never rewritten when freshness changes. Existing ready data is rechecked against current server authority and reverified from encrypted chunks, not treated as a lasting authorization grant. Corrupt local data is retained for recovery, not deleted or redownloaded over silently.
+
+An invocation reads at most eight additional index pages and eight new chunks per member; subsequent passes resume progress. Indexes are bounded to 20,000 selected records and payloads to 64 MiB. Storage reads/writes have explicit byte limits. No logs contain bearer tokens, private payloads or customer information.
+
+## Important limits
+
+This is owner-side full-content preparation, not independent staff receipt. Operational structured disclosures remain server-authoritative views; the client verifies their explicit field coverage and envelope, while the billing adapter independently compares original native history. Neither is decoded into owner models with fabricated defaults.
+
+Full32 CloudKit sealing/publication, independent-account receive/convergence, complete operational read/write adapters, authenticated media access and staff lease activation remain unfinished. Existing core-only store activation guards remain intact. Signed/device testing, physical iPad-to-iPhone Tap-to-Pay, live QBO/Google/vendor/payment acceptance and full navigation/accessibility/performance acceptance are still required. The full application goal is unchanged and incomplete.
+
+## Evidence
+
+Evidence root: `/Users/gunnaire/Downloads/GunnAire Ops Releases/Native Full Content.p5YGS4`.
+
+- `BackendFocused1` passes 36 tests, including an exact server-generated five-role selection/content fixture consumed by native tests.
+- `NativeFocused1` retains a test compile failure for a missing `try` in the new route-policy assertion; no native runtime pass is claimed for that run.
+- `NativeFocused2` retains a missing `coverage` argument in the new real source-coordinator integration fixture. The fixture now uses the exact existing core-source constructor.
+- `NativeFocused3` retains native runtime failures before content preparation. `SelectionDigestDiagnostic1.log` independently reproduces a genuine cross-language index-hash mismatch for all five roles: Foundation's `JSONSerialization.sortedKeys` places `operationalWorkspaceReady` before `operationID`, while the server's literal key order is the reverse. The client now sorts index keys by explicit UTF-8 order instead of relying on a platform presentation comparator. Arbitrary content continues to use original-byte hashing, not JSON reencoding.
+- The original-content positive verification is now required before the negative tampering cases, so a broken baseline cannot make rejection tests appear sufficient.
+- `NativeFocused4` passes 87 test cases and all five verified selectors, with zero failures/skips and process exit 0. This includes all five actual server role fixtures, every before/after-write recovery boundary, encrypted on-disk recovery, bounded index resumption, exact-byte retry, corrupted-chunk retention, current-source/access fences and the real source-coordinator saved-edit handoff.
+- `NativeFull1` passes 1,940 test cases and all six verified selectors, zero failures/skips, process exit 0. `Tools1` passes 75 tests in 4.175 seconds, process exit 0.
+- `BackendFull1` passes 979 tests on Python 3.9.6 in 178.573 seconds; `BackendPython3121` passes 979 tests on Python 3.12.14 in 177.235 seconds. Both processes exit 0 with no failures/skips.
+- `MacRelease1` and `DeviceRelease1` succeed with exit 0. Architecture checks verify arm64+x86_64 Mac Catalyst and arm64 iOS. The new full-content/selection files emit no warnings; unchanged QBO actor-isolation warnings and the Mac Metal-toolchain path warning remain. Binary SHA-256: Mac `847ca9f713818d8f7dd59146d51c342efd320b9776d3ffe4cebed6aae42896eb`; iOS `010014e33464ac6abb1fa8f0fb3a3be150ac6d722c04fd62688d67b30172c4d2`.
+- All qualification process handles are closed. After qualification, unrelated tracked files were observed missing from the temporary review folder, including the Xcode manifest and older tests/assets. The original owner files remain present, and the protected source/owner checks pass. These deletions were not made by this task, are not restored, and will not be staged. The commit will contain only the 13 scoped changes; its tracked source will be checked against the intact owner project before using a new persistent review checkout. The missing temporary working tree is not claimed to be independently buildable as it stands.
+- The temporary repository also has an invalid remote-HEAD reference and stale invalid reflog entries, but all 6,199 objects reachable from the current commit are present. A branch-specific `ReviewParent.bundle` preserves that intact history without changing the old directory. An independent clone at `/Users/gunnaire/.codex/worktrees/GunnAirePR.i2gC6X` passes connectivity checks and starts at the same `110600e` parent. The qualified 13-path patch will be copied there before commit; no temporary-folder deletions or broken references are adopted. GitHub `origin` is configured without authentication, fetch or push.
+- `OriginalCopyBack1.json` verifies all 13 scoped files are byte-equal and all 451 unrelated owner changes plus owner branch/HEAD/index are preserved. `PersistentReviewPrecommit1.json` verifies all 11 qualified source files retain their frozen hashes, all 13 scoped copies agree, all 454 tracked owner build inputs match, and the persistent Git repository passes connectivity checks. No temporary deletions are adopted. Only the persistent review checkout is staged/committed; `LocalCommit1.txt` and the post-commit verification record its resulting identity.
+
+The API and access-control skills require exact routes and fresh authorization, offline/reliability guidance requires original-request recovery and encrypted atomic storage, and Swift/troubleshooting guidance requires retained failure evidence and actual source-coordinator integration tests. Live audit: `/Users/gunnaire/.codex/skill-audits/skill-usage.jsonl`.
+
+All work is background-only. No screen recording, screenshots, screen inspection, Safari/browser interaction, foreground native app or UI tests, live provider/accounting writes, push, merge, deployment or signing/configuration changes are performed.

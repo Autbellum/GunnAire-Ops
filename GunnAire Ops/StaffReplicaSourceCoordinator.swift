@@ -19,6 +19,7 @@ struct StaffReplicaSourceDependencies {
     var deliver: ((StaffReplicaSourceContext, Int) async throws -> StaffReplicaAutomaticSummary)? = nil
     var prepareFullWorkspace: ((StaffReplicaSourceContext) throws -> Void)? = nil
     var fullWorkspace: StaffWorkspacePublicationCoordinator? = nil
+    var fullContent: StaffWorkspaceContentCoordinator? = nil
 
     static func verify(_ context: StaffReplicaSourceContext) throws {
         try Task.checkCancellation()
@@ -52,7 +53,7 @@ struct StaffReplicaSourceDependencies {
             return try StaffReplicaSourceHistory.capture(container: container, after: token, storeUUID: context.scope.storeUUID)
         }, request: { try await GunnAireBackendService.staffReplicaSourceRequest(path: $0, method: $1, body: $2) }, store: StaffReplicaSourceStorage.device,
               deliver: { try await StaffReplicaAutomaticDelivery().deliver(source: $0, sequence: $1) },
-              fullWorkspace: .shared)
+              fullWorkspace: .shared, fullContent: .shared)
     }
 }
 
@@ -200,6 +201,13 @@ enum StaffReplicaSourceStorage {
                 if summary.hasMore || !summary.conflicts.isEmpty || summary.waitingForCloudKit > 0 {
                     message = summary.message; hasMore = summary.hasMore; lastConfirmedAt = summary.lastConfirmedAt
                     return
+                }
+                if let content = dependencies.fullContent {
+                    let prepared = try await content.synchronize(context, published: summary)
+                    try dependencies.check(context)
+                    if prepared.hasMore {
+                        message = prepared.message; hasMore = true; return
+                    }
                 }
                 guard try publisher.matchesCurrent(summary.preparedStage, context: context) else {
                     hasMore = true; message = "Checking newer saved work before sharing…"

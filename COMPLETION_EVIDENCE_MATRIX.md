@@ -1,4 +1,30 @@
-Full32 field/content transport candidate, 2026-09-09:
+Native full32 synchronization candidate, 2026-09-10:
+STAFF_NATIVE_CONTENT_SYNC.md records the live owner synchronization connection
+to the full32 selection/content endpoints, exact durable request replay,
+encrypted per-chunk recovery, original index/scalar/billing verification and
+server/account/source fences. The actual source coordinator rechecks saved
+owner edits after the added network awaits before capturing newer core facts.
+Retained tests exposed a genuine Foundation/server index-key ordering mismatch;
+explicit UTF-8 key sorting fixes it without changing the server hash contract.
+All five server role fixtures now pass native verification. Focused iPad passes
+87 cases/all five selectors; full iPad passes1,940/all six selectors; Tools
+passes75. Complete backend runs each pass979 cases on Python3.9.6 and3.12.14.
+These processes exit0 with no failures/skips. Unsigned arm64+x86_64 Mac Catalyst
+and arm64 iOS builds and architecture checks pass; existing QBO actor warnings
+and the Mac toolchain-path warning remain. Unrelated deletions subsequently
+observed in the temporary review tree are excluded from this change; the intact
+owner project and persistent candidate are verified separately: all13 scoped
+files agree, all11 changed source hashes remain frozen, and all454 tracked
+owner build inputs match. All451 unrelated owner changes and its branch/HEAD/index
+are preserved. The new review is /Users/gunnaire/.codex/worktrees/GunnAirePR.i2gC6X;
+temporary deletions and broken refs are not adopted. This is owner preparation, not
+full32 sealed CloudKit publication, independent staff receipt or activation.
+Those paths, operational staff read/write adapters, commands/media/lease and
+the full application acceptance requirements remain unfinished. No screen
+capture/inspection/recording, browser changes, foreground app/UI tests, push,
+deployment, credential expansion or live provider/accounting writes occur.
+
+Historical full32 field/content transport candidate, 2026-09-09:
 STAFF_FULL_CONTENT.md records explicit policy for all503 non-billing fields,
 17 structured evidence adapters, actual native discriminator parity for all48
 raw fields and a combined32-kind read-only preparation. An owner-only endpoint

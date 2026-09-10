@@ -21,6 +21,10 @@ enum StaffWorkspacePublicationContract {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return try encoder.encode(value)
     }
+    static func validateJSON(_ bytes: Data, maximum: Int) throws {
+        guard !bytes.isEmpty, bytes.count <= maximum else { throw StaffReplicaSourceSyncError.invalid }
+        try StaffWorkspacePublicationJSON.validate(bytes)
+    }
     static func decode<T: Codable>(_ type: T.Type, from bytes: Data, maximum: Int = maximumResponseBytes) throws -> T {
         guard !bytes.isEmpty, bytes.count <= maximum else { throw StaffReplicaSourceSyncError.invalid }
         try StaffWorkspacePublicationJSON.validate(bytes)

@@ -26,6 +26,8 @@ struct StaffWorkspacePublicationSummary {
     let hasMore: Bool
     let lastConfirmedAt: Date?
     let preparedStage: StaffWorkspaceSourceJournal
+    let sourceSequence: Int
+    let publishedRecords: [StaffWorkspacePublishedRecord]
     var message: String {
         if !conflicts.isEmpty { return "\(conflicts.count) company record\(conflicts.count == 1 ? " needs" : "s need") owner review." }
         if waitingForCloudKit > 0 { return "Waiting for this device's company iCloud records to catch up." }
@@ -216,7 +218,8 @@ struct StaffWorkspacePublicationSummary {
                 snapshot = updated
             }
             return .init(conflicts: plan.conflicts, waitingForCloudKit: plan.waitingForCloudKit,
-                hasMore: !plan.changes.isEmpty, lastConfirmedAt: journal.lastConfirmedAt, preparedStage: stage)
+                hasMore: !plan.changes.isEmpty, lastConfirmedAt: journal.lastConfirmedAt, preparedStage: stage,
+                sourceSequence: snapshot.sequence, publishedRecords: snapshot.records)
         } catch { cache = nil; throw error }
     }
 

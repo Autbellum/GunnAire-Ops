@@ -36,7 +36,7 @@ struct StaffWorkspaceContentReceipt: Codable, Equatable {
     let localCloudKitProofRequired: Bool
 
     func validate(plan: CloudKitStaffSharePlan, workspace: CompanyWorkspaceIdentity,
-                  selection: String, selectionDigest: String, sequence: Int, now: Date) throws {
+                  selection: String, selectionDigest: String, sequence: Int, now: Date, requireCurrent: Bool = true) throws {
         try plan.validate(workspace: workspace, now: now)
         guard plan.state == "accepted", plan.businessAccessEligible, !plan.reviewRequired, !plan.cloudKitRevocationRequired,
               schema == "staff-workspace-delivery-v1", contentSchema == "staff-workspace-content-v1",
@@ -53,7 +53,8 @@ struct StaffWorkspaceContentReceipt: Codable, Equatable {
               shareRevision == plan.revision, projectionPolicy == plan.projectionPolicy,
               coverage == StaffWorkspacePublicationContract.kinds.sorted(),
               (1...2_147_483_647).contains(sourceSequence), sourceSequence == sequence,
-              currentSourceSequence == sourceSequence, sourceCurrent,
+              (sourceSequence...2_147_483_647).contains(currentSourceSequence),
+              sourceCurrent == (currentSourceSequence == sourceSequence), !requireCurrent || sourceCurrent,
               (0...20_000).contains(recordCount), (1...Self.maximumBytes).contains(payloadBytes),
               chunkBytes == Self.chunkSize, !operationalWorkspaceReady, !fieldProjectionRequired,
               localCloudKitProofRequired else { throw StaffReplicaDeliveryError.invalid }
