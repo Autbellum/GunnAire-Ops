@@ -30,16 +30,24 @@ enum StaffOwnerFieldEditWire {
     private static func normalize<T>(_ raw: Any, type: T.Type) throws -> Any {
         if type == StaffOwnerFieldEdit.self { return edit(raw) }
         if type == StaffOwnerFieldEditApplication.self { return application(raw) }
-        if type == StaffOwnerFieldEditResolution.self || type == StaffOwnerFieldObservationReceipt.self { return raw }
+        if type == StaffOwnerFieldEditResolution.self || type == StaffOwnerFieldObservationReceipt.self || type == StaffOwnerFieldHandoffReceipt.self { return raw }
         guard var value = raw as? [String: Any] else { throw StaffReplicaSourceSyncError.invalid }
-        if type == StaffOwnerFieldEditPage.self {
+        if type == StaffOwnerFieldHandoffFence.self {
+            if let original = value["edit"] { value["edit"] = edit(original) }
+            if var item = value["pending"] as? [String: Any] {
+                omitNull(["application", "writeBoundaryVersion"], in: &item)
+                if let original = item["edit"] { item["edit"] = edit(original) }
+                if let receipt = item["application"] { item["application"] = application(receipt) }
+                value["pending"] = item
+            }
+        } else if type == StaffOwnerFieldEditPage.self {
             omitNull(["nextCursor"], in: &value)
         } else if type == StaffOwnerFieldEditJournal.self {
             omitNull(["after", "lastAttempted", "keepOffice", "observations"], in: &value)
             if var pending = value["pending"] as? [String: Any] {
                 for (id, rawItem) in pending {
                     guard var item = rawItem as? [String: Any] else { continue }
-                    omitNull(["application"], in: &item)
+                    omitNull(["application", "writeBoundaryVersion"], in: &item)
                     if let original = item["edit"] { item["edit"] = edit(original) }
                     if let receipt = item["application"] { item["application"] = application(receipt) }
                     pending[id] = item

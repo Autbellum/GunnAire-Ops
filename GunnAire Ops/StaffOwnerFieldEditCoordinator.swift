@@ -22,7 +22,10 @@ struct StaffOwnerFieldEditDependencies {
             read: { try StaffOwnerFieldEditModels.read($0, container: container($1)) },
             apply: { edit, expected, context in
                 try StaffOwnerFieldEditModels.apply(edit, expected: expected, container: container(context),
-                    check: { try StaffReplicaSourceDependencies.verify(context) })
+                    check: {
+                        try StaffReplicaSourceDependencies.verify(context)
+                        try StaffOwnerFieldHandoffFence.checkWrite(context.scope, id: edit.id, store: StaffWorkspaceSourceStaging.device)
+                    })
             }, title: { edit, context in
                 let modelContext = ModelContext(try container(context)); modelContext.autosaveEnabled = false
                 return try StaffOwnerFieldEditModels.target(edit, context: modelContext).title
@@ -30,11 +33,12 @@ struct StaffOwnerFieldEditDependencies {
     }
 }
 
-struct StaffOwnerFieldEditPending: Codable {
+struct StaffOwnerFieldEditPending: Codable, Equatable {
     let edit: StaffOwnerFieldEdit
     let request: StaffOwnerFieldEditPrepare
     var phase: String
     var application: StaffOwnerFieldEditApplication?
+    var writeBoundaryVersion: Int? = nil
 }
 struct StaffOwnerFieldEditJournal: Codable {
     let version: Int
@@ -54,6 +58,7 @@ struct StaffOwnerFieldEditReview: Identifiable {
     let canApplyReviewed: Bool
     var canKeepOffice: Bool = false
     var canConfirmObserved: Bool = false
+    var canRelease: Bool = false
     var id: String { edit.id }
 }
 
@@ -84,8 +89,10 @@ struct StaffOwnerFieldEditReview: Identifiable {
         }
         for (id, pending) in value.pending {
             try pending.request.validate(edit: pending.edit, scope: context.scope)
-            guard id == pending.edit.id, ["prepared", "saved"].contains(pending.phase),
-                  pending.phase != "saved" || pending.application != nil else { throw StaffReplicaSourceSyncError.storage }
+            guard id == pending.edit.id, ["prepared", "applying", "saved"].contains(pending.phase),
+                  pending.phase == "prepared" || pending.application != nil,
+                  pending.writeBoundaryVersion == nil || pending.writeBoundaryVersion == 1,
+                  pending.phase != "applying" || pending.writeBoundaryVersion == 1 else { throw StaffReplicaSourceSyncError.storage }
             try pending.application?.validate(pending.request, scope: context.scope)
         }
         for (id, pending) in value.keepOffice ?? [:] {
@@ -124,19 +131,33 @@ struct StaffOwnerFieldEditReview: Identifiable {
         let state = try? load(context)
         let matchesOffice = edit.current?.deleted == false && local != nil && local == edit.current?.value
         let observing = state?.observations?[edit.id] != nil
-        let canApply = state != nil && !observing && state?.keepOffice?[edit.id] == nil && edit.eligible && edit.application == nil && matchesOffice
+        let writable = (try? StaffOwnerFieldHandoffFence.checkWrite(context.scope, id: edit.id, store: dependencies.store)) != nil
+        let fenced = try? StaffOwnerFieldHandoffFence.load(context.scope, id: edit.id, store: dependencies.store)
+        let canResolveFenced = fenced.map { $0.edit.application == edit.application && edit.application?.state == "prepared" } ?? false
+        let canApply = writable && state != nil && !observing && state?.keepOffice?[edit.id] == nil && edit.eligible && edit.application == nil && matchesOffice
         let claimOwned = edit.application.map { $0.ownerEmail == context.scope.actorEmail && $0.ownerStoreID == context.scope.storeUUID.lowercased() } ?? true
-        let canKeep = state != nil && !observing && edit.resolution == nil && edit.application?.state != "published" && claimOwned && matchesOffice
-        let canObserve = state != nil && state?.pending[edit.id] == nil && state?.keepOffice?[edit.id] == nil && matchesOffice
+        let canKeep = (writable || canResolveFenced) && state != nil && !observing && edit.resolution == nil && edit.application?.state != "published" && claimOwned && matchesOffice
+        let canObserve = writable && state != nil && state?.pending[edit.id] == nil && state?.keepOffice?[edit.id] == nil && matchesOffice
             && edit.application?.state == "prepared"
             && (try? StaffOwnerFieldObservationRequest(edit: edit, scope: context.scope, operation: UUID())) != nil
         reviews.removeAll { $0.id == edit.id }
         let title = (try? dependencies.title?(edit, context)) ?? StaffWorkspacePublicationReview.label(edit.request.recordKind)
+        let canRelease = writable && !observing && state?.keepOffice?[edit.id] == nil && matchesOffice &&
+            state?.pending[edit.id].map { pending in
+                guard let request = try? StaffOwnerFieldHandoffRequest(edit: edit, scope: context.scope, operation: UUID()) else { return false }
+                return (try? StaffOwnerFieldHandoffFence(version: 1, scope: context.scope, edit: edit, pending: pending, request: request).validate(context.scope)) != nil
+            } == true
         reviews.append(.init(edit: edit, title: title, officeValue: local, message: message, canApplyReviewed: canApply,
-                             canKeepOffice: canKeep, canConfirmObserved: canObserve))
+                             canKeepOffice: canKeep, canConfirmObserved: canObserve, canRelease: canRelease))
     }
     private func apply(_ edit: StaffOwnerFieldEdit, reviewed: Bool, state: inout StaffOwnerFieldEditJournal,
                        context: StaffReplicaSourceContext) async throws {
+        if let fence = try StaffOwnerFieldHandoffFence.load(context.scope, id: edit.id, store: dependencies.store) {
+            guard fence.edit.request == edit.request, fence.edit.receipt == edit.receipt, fence.edit.baseValue == edit.baseValue else { throw StaffReplicaSourceSyncError.storage }
+            if edit.resolution != nil { try finishResolution(edit, state: &state, context: context); return }
+            if let pending = state.keepOffice?[edit.id] { try await retryKeep(pending, state: &state, context: context); return }
+            try await retryHandoff(fence, state: &state, context: context); return
+        }
         if let pending = state.observations?[edit.id] { try await retryObservation(pending, current: edit, state: &state, context: context); return }
         if edit.resolution != nil { try finishResolution(edit, state: &state, context: context); return }
         if let pending = state.keepOffice?[edit.id] { try await retryKeep(pending, state: &state, context: context); return }
@@ -157,7 +178,7 @@ struct StaffOwnerFieldEditReview: Identifiable {
                 original = try .init(edit: edit, scope: context.scope, reviewed: reviewed, operation: dependencies.operation())
             }
             try original.validate(edit: edit, scope: context.scope)
-            state.pending[edit.id] = .init(edit: edit, request: original, phase: "prepared", application: nil)
+            state.pending[edit.id] = .init(edit: edit, request: original, phase: "prepared", application: nil, writeBoundaryVersion: edit.application == nil ? 1 : nil)
             try save(state, context) // Original intent durable before claiming or saving a model.
         }
         guard var pending = state.pending[edit.id], pending.edit.request == edit.request, pending.edit.receipt == edit.receipt,
@@ -176,6 +197,13 @@ struct StaffOwnerFieldEditReview: Identifiable {
               latest.value == pending.request.expectedValue || latest.value == edit.request.value
         else { throw StaffOwnerFieldEditError.conflict }
         try dependencies.check(context)
+        try StaffOwnerFieldHandoffFence.checkWrite(context.scope, id: edit.id, store: dependencies.store)
+        // Durable entry into the save boundary precedes any model callback.
+        // Legacy/uncertain work never gains evidence that no save was attempted.
+        if pending.writeBoundaryVersion == 1 {
+            pending.phase = "applying"; state.pending[edit.id] = pending; try save(state, context)
+        }
+        try StaffOwnerFieldHandoffFence.checkWrite(context.scope, id: edit.id, store: dependencies.store)
         try dependencies.apply(edit, pending.request.expectedValue, context)
         try dependencies.check(context)
         pending.phase = "saved"; state.pending[edit.id] = pending
@@ -207,7 +235,13 @@ struct StaffOwnerFieldEditReview: Identifiable {
                 // Re-read the durable journal after a failed write. An in-memory
                 // phase must never be mistaken for a successfully saved intent.
                 state = try load(context)
-                review(edit, context: context, message: (error as? StaffOwnerFieldEditError)?.localizedDescription ?? "This field edit needs another sync or review. Its original was retained.")
+                // Only a new before-save intent needs a post-failure claim
+                // refresh for handoff. Ordinary review backlogs remain one
+                // detail read per command, preserving their bounded work.
+                let needsClaimReview = state.pending[id]?.phase == "prepared" && state.pending[id]?.writeBoundaryVersion == 1
+                let latest = needsClaimReview ? ((try? await detail(id, context)) ?? edit) : edit
+                try dependencies.check(context)
+                review(latest, context: context, message: (error as? StaffOwnerFieldEditError)?.localizedDescription ?? "This field edit needs another sync or review. Its original was retained.")
             }
             state.queue.removeAll { $0 == id }; state.lastAttempted = id; try save(state, context)
         }
@@ -220,6 +254,7 @@ struct StaffOwnerFieldEditReview: Identifiable {
         defer { SharedTimeMutationGate.finish(key, id: lock) }
         var state = try load(context)
         for id in state.pending.keys.sorted() where state.pending[id]?.phase == "saved" && state.keepOffice?[id] == nil {
+            try StaffOwnerFieldHandoffFence.checkWrite(context.scope, id: id, store: dependencies.store)
             guard let pending = state.pending[id] else { throw StaffReplicaSourceSyncError.storage }
             do {
                 let application = try await request(StaffOwnerFieldEditApplication.self,
@@ -240,6 +275,7 @@ struct StaffOwnerFieldEditReview: Identifiable {
         let key = Self.key(context.scope), lock = try SharedTimeMutationGate.begin(key)
         defer { SharedTimeMutationGate.finish(key, id: lock) }
         try dependencies.check(context)
+        try StaffOwnerFieldHandoffFence.checkWrite(context.scope, id: review.id, store: dependencies.store)
         guard displayScope == context.scope, review.canApplyReviewed,
               try dependencies.read(review.edit, context) == review.officeValue else { throw StaffOwnerFieldEditError.conflict }
         let current = try await detail(review.id, context)
@@ -315,6 +351,11 @@ struct StaffOwnerFieldEditReview: Identifiable {
               try dependencies.read(review.edit, context) == review.officeValue else { throw StaffOwnerFieldEditError.conflict }
         let current = try await detail(review.id, context)
         guard current == review.edit, try dependencies.read(current, context) == current.current?.value else { throw StaffOwnerFieldEditError.conflict }
+        if let fence = try StaffOwnerFieldHandoffFence.load(context.scope, id: review.id, store: dependencies.store) {
+            // A rejected/stale release may still be closed without writing any
+            // model field. Never remove its write fence or resolve a new claim.
+            guard current.application == fence.edit.application, current.application?.state == "prepared" else { throw StaffOwnerFieldEditError.released }
+        }
         var state = try load(context)
         guard state.observations?[review.id] == nil else { throw StaffOwnerFieldEditError.conflict }
         if let original = state.keepOffice?[review.id] {
@@ -396,6 +437,7 @@ struct StaffOwnerFieldEditReview: Identifiable {
         let key = Self.key(context.scope), lock = try SharedTimeMutationGate.begin(key)
         defer { SharedTimeMutationGate.finish(key, id: lock) }
         try dependencies.check(context)
+        try StaffOwnerFieldHandoffFence.checkWrite(context.scope, id: review.id, store: dependencies.store)
         guard displayScope == context.scope, review.canConfirmObserved,
               try dependencies.read(review.edit, context) == review.officeValue else { throw StaffOwnerFieldEditError.conflict }
         let current = try await detail(review.id, context)
@@ -416,5 +458,57 @@ struct StaffOwnerFieldEditReview: Identifiable {
         state.observations?[review.id] = pending; try save(state, context)
         try await retryObservation(pending, current: current, state: &state, context: context)
         message = "Existing company update confirmed. No field value was reapplied."
+    }
+
+    private func retryHandoff(_ fence: StaffOwnerFieldHandoffFence, state: inout StaffOwnerFieldEditJournal,
+                              context: StaffReplicaSourceContext) async throws {
+        try dependencies.check(context); try fence.validate(context.scope)
+        let key = StaffOwnerFieldHandoffFence.key(context.scope, id: fence.edit.id) + "\nreceipt"
+        if let bytes = try dependencies.store.read(key) {
+            let original = try StaffOwnerFieldEditWire.decode(StaffOwnerFieldHandoffReceipt.self, from: bytes)
+            try original.validate(fence)
+        } else {
+            let receipt = try await request(StaffOwnerFieldHandoffReceipt.self,
+                path: StaffOwnerFieldEditTransport.root + "/" + fence.edit.id + "/release", method: "POST",
+                body: StaffWorkspacePublicationContract.encode(fence.request), context: context)
+            try receipt.validate(fence)
+            let bytes = try StaffWorkspacePublicationContract.encode(receipt)
+            guard bytes.count <= StaffOwnerFieldEditTransport.maximumResponseBytes else { throw StaffReplicaSourceSyncError.storage }
+            try dependencies.store.write(key, bytes)
+            try dependencies.check(context)
+            guard let durable = try dependencies.store.read(key),
+                  try StaffOwnerFieldEditWire.decode(StaffOwnerFieldHandoffReceipt.self, from: durable) == receipt
+            else { throw StaffReplicaSourceSyncError.storage }
+        }
+        // The immutable fence retains the complete original intent after queue
+        // cleanup. A deleted/rebuilt queue still cannot authorize a local write.
+        if state.pending[fence.edit.id] != nil { state.pending[fence.edit.id] = nil; try save(state, context) }
+        reviews.removeAll { $0.id == fence.edit.id }
+    }
+
+    func release(_ review: StaffOwnerFieldEditReview, context: StaffReplicaSourceContext) async throws {
+        let key = Self.key(context.scope), lock = try SharedTimeMutationGate.begin(key)
+        defer { SharedTimeMutationGate.finish(key, id: lock) }
+        try dependencies.check(context)
+        guard displayScope == context.scope, review.canRelease,
+              try dependencies.read(review.edit, context) == review.officeValue else { throw StaffOwnerFieldEditError.conflict }
+        var state = try load(context)
+        if let fence = try StaffOwnerFieldHandoffFence.load(context.scope, id: review.id, store: dependencies.store) {
+            try await retryHandoff(fence, state: &state, context: context); return
+        }
+        let current = try await detail(review.id, context)
+        guard current == review.edit, try dependencies.read(current, context) == current.current?.value,
+              state.keepOffice?[review.id] == nil, state.observations?[review.id] == nil,
+              let pending = state.pending[review.id] else { throw StaffOwnerFieldEditError.conflict }
+        let fence = StaffOwnerFieldHandoffFence(version: 1, scope: context.scope, edit: current, pending: pending,
+            request: try .init(edit: current, scope: context.scope, operation: dependencies.operation()))
+        try fence.validate(context.scope)
+        let bytes = try StaffWorkspacePublicationContract.encode(fence)
+        guard bytes.count <= 64 * 1024 * 1024 else { throw StaffReplicaSourceSyncError.storage }
+        try dependencies.store.write(StaffOwnerFieldHandoffFence.key(context.scope, id: review.id), bytes)
+        try dependencies.check(context)
+        guard try StaffOwnerFieldHandoffFence.load(context.scope, id: review.id, store: dependencies.store) == fence else { throw StaffReplicaSourceSyncError.storage }
+        try await retryHandoff(fence, state: &state, context: context)
+        message = "Field update handed off. Continue on another approved owner device; this device will not apply it."
     }
 }

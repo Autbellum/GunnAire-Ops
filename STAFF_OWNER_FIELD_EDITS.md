@@ -55,7 +55,9 @@ convergence, a QuickBooks update, or a successful payment.
 - A prepared claim with a later third-value office conflict stays retained and
   can now be explicitly closed with Keep Office Value on the original device;
   see [owner field-edit resolution](STAFF_OWNER_FIELD_RESOLUTION.md). Claim
-  release/takeover remains unimplemented. Never delete a journal to bypass it.
+  release now has a [cooperative original-device handoff](STAFF_OWNER_FIELD_HANDOFF.md)
+  for new intents with durable before-save evidence. Legacy/uncertain claims and
+  an unavailable old device still require recovery; never delete a journal to bypass it.
 - Matching native/backend versions must be deployed together. A missing owner
   API prevents this sync path; there is no pretend-success compatibility fallback.
 - Actual backend/native null interoperability and a retained-decision wire

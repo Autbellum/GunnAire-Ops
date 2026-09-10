@@ -75,6 +75,7 @@ class StaffOwnerFieldResolutions:
             initialize_schema(connection)
             actor, scope = self.source.scope(connection, session_id, payload)
             original = self.resolution_request(connection, scope, command_id, payload)
+            self.assert_store_not_released(connection, command_id, payload["ownerStoreID"])
             existing = self.resolution(connection, scope, command_id)
             if existing:
                 if (existing["receipt"]["ownerEmail"] != actor["email"] or

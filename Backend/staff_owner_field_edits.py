@@ -11,12 +11,13 @@ import re
 from datetime import datetime
 
 try:
-    from Backend import staff_workspace_commands as commands, staff_workspace_source as source, staff_owner_field_resolutions as resolutions, staff_owner_field_observations as observations
+    from Backend import staff_workspace_commands as commands, staff_workspace_source as source, staff_owner_field_resolutions as resolutions, staff_owner_field_observations as observations, staff_owner_field_handoffs as handoffs
 except ModuleNotFoundError:
     import staff_workspace_commands as commands
     import staff_workspace_source as source
     import staff_owner_field_resolutions as resolutions
     import staff_owner_field_observations as observations
+    import staff_owner_field_handoffs as handoffs
 
 contract, sharing = commands.contract, commands.sharing
 SCHEMA = "staff-owner-field-edit-v1"
@@ -32,6 +33,7 @@ def instant(value):
 
 
 def initialize_schema(connection):
+    handoffs.initialize_schema(connection)
     resolutions.initialize_schema(connection)
     observations.initialize_schema(connection)
     connection.execute("""CREATE TABLE IF NOT EXISTS staff_owner_field_edit_applications (
@@ -41,7 +43,7 @@ def initialize_schema(connection):
     )""")
 
 
-class StaffOwnerFieldEdits(observations.StaffOwnerFieldObservations, resolutions.StaffOwnerFieldResolutions, commands.StaffWorkspaceCommands):
+class StaffOwnerFieldEdits(handoffs.StaffOwnerFieldHandoffs, observations.StaffOwnerFieldObservations, resolutions.StaffOwnerFieldResolutions, commands.StaffWorkspaceCommands):
     valid_instant = staticmethod(instant)
 
     @staticmethod
@@ -91,6 +93,9 @@ class StaffOwnerFieldEdits(observations.StaffOwnerFieldObservations, resolutions
         if row is None:
             return None
         saved = self.source.decode(row["ciphertext"])
+        return self.validate_application(connection, command_id, saved, row)
+
+    def validate_application(self, connection, command_id, saved, row):
         try:
             contract.exact(saved, "request receipt")
             contract.exact(saved["request"], PREPARE)
@@ -216,6 +221,8 @@ class StaffOwnerFieldEdits(observations.StaffOwnerFieldObservations, resolutions
             connection.execute("BEGIN IMMEDIATE")
             initialize_schema(connection)
             actor, scope = self.source.scope(connection, session_id, payload)
+            self.command(connection, scope, command_id)
+            self.assert_store_not_released(connection, command_id, payload["ownerStoreID"])
             if self.resolution(connection, scope, command_id):
                 raise sharing.fail("edit_resolved", "This field edit was explicitly retained without replacing office data. Keep its original audit history.", 409)
             entry = self.detail(connection, session_id, scope, command_id, payload)
@@ -245,7 +252,8 @@ class StaffOwnerFieldEdits(observations.StaffOwnerFieldObservations, resolutions
                 if (payload["expectedRevision"] != current["revision"] or payload["expectedValue"] != current["value"] or
                         not payload["reviewedConflict"] and payload["expectedValue"] != entry["baseValue"]):
                     raise sharing.fail("field_changed", "Office data changed. Review the original field edit against the current saved value.", 409)
-                if connection.execute("SELECT 1 FROM staff_owner_field_edit_applications WHERE operation_id=?", (payload["operationID"],)).fetchone():
+                if (connection.execute("SELECT 1 FROM staff_owner_field_edit_applications WHERE operation_id=?", (payload["operationID"],)).fetchone() or
+                        connection.execute("SELECT 1 FROM staff_owner_field_handoffs WHERE claim_operation_id=? OR operation_id=?", (payload["operationID"], payload["operationID"])).fetchone()):
                     raise sharing.fail("edit_claimed", "This operation belongs to another original field edit. Retain both originals for review.", 409)
                 receipt = dict(schema=SCHEMA, commandID=command_id, operationID=payload["operationID"],
                     ownerStoreID=payload["ownerStoreID"], ownerEmail=actor["email"], preparedAt=self.shares.now().isoformat(),

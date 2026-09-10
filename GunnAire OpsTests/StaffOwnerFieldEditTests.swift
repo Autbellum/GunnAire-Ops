@@ -250,7 +250,7 @@ import XCTest
         try await f.coordinator().synchronize(f.source)
         XCTAssertEqual(try f.savedValue(), .text("Original office note"))
         XCTAssertFalse(f.container.mainContext.hasChanges)
-        XCTAssertEqual(try f.journal().pending[f.original.commandID]?.phase, "prepared")
+        XCTAssertEqual(try f.journal().pending[f.original.commandID]?.phase, "applying")
         f.saveModel = nil
         try await f.coordinator().synchronize(f.source)
         XCTAssertEqual(try f.savedValue(), f.original.value)
@@ -266,7 +266,7 @@ import XCTest
         f.saveModel = nil
         try await f.coordinator().synchronize(f.source)
         XCTAssertEqual(try f.savedValue(), .text("Office intervened after interrupted save"))
-        XCTAssertEqual(try f.journal().pending[f.original.commandID]?.phase, "prepared")
+        XCTAssertEqual(try f.journal().pending[f.original.commandID]?.phase, "applying")
     }
 
     func testAccountChangeDuringResponseStopsBeforeAnyModelWrite() async throws {

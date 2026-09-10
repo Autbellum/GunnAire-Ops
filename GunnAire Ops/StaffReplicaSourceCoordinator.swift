@@ -228,6 +228,21 @@ enum StaffReplicaSourceStorage {
         }
     }
 
+    func releaseFieldReview(_ review: StaffOwnerFieldEditReview) async {
+        guard !isRunning, let edits = dependencies.ownerFieldEdits else { return }
+        isRunning = true
+        defer { isRunning = false }
+        do {
+            let context = try await dependencies.context(); try dependencies.check(context)
+            guard displayScope == context.scope else { throw StaffReplicaSourceSyncError.access }
+            try await edits.release(review, context: context)
+            message = "Field update handed off. Continue on another approved owner device."
+        } catch {
+            if case StaffReplicaSourceSyncError.access = error { clearDisplay() }
+            message = "Handoff needs another check. No office value was changed; the original work and any saved handoff remain available for recovery."
+        }
+    }
+
     func sync() async {
         guard !isRunning else { return }
         isRunning = true; hasMore = false

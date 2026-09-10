@@ -7,6 +7,7 @@ struct StaffOwnerFieldEditsReview: View {
     @State private var selected: StaffOwnerFieldEditReview?
     @State private var keepingOffice: StaffOwnerFieldEditReview?
     @State private var confirmingExisting: StaffOwnerFieldEditReview?
+    @State private var handingOff: StaffOwnerFieldEditReview?
     var body: some View {
         Section("Field updates") {
             Text(edits.message).foregroundStyle(.secondary)
@@ -31,6 +32,10 @@ struct StaffOwnerFieldEditsReview: View {
                     }
                     if review.canConfirmObserved {
                         Button("Confirm Existing Update") { confirmingExisting = review }
+                            .disabled(source.isRunning)
+                    }
+                    if review.canRelease {
+                        Button("Continue on Another Device") { handingOff = review }
                             .disabled(source.isRunning)
                     }
                 }.padding(.vertical, 4)
@@ -68,6 +73,17 @@ struct StaffOwnerFieldEditsReview: View {
             Button("Cancel", role: .cancel) { confirmingExisting = nil }
         } message: {
             Text("The original field update is already in company records. Confirm it without changing the value or transferring the original device's claim. Its original author and receipt remain in the audit history.")
+        }
+        .alert("Hand off this field update?", isPresented: Binding(get: { handingOff != nil }, set: { if !$0 { handingOff = nil } })) {
+            if let handingOff {
+                Button("Continue on Another Device") {
+                    let review = handingOff; self.handingOff = nil
+                    Task { await source.releaseFieldReview(review) }
+                }
+            }
+            Button("Cancel", role: .cancel) { handingOff = nil }
+        } message: {
+            Text("No office value will change. This device will stop applying this update. After handoff is confirmed, sync another approved device using the same owner account. The original technician update and handoff history are retained.")
         }
     }
 }

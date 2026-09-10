@@ -75,7 +75,7 @@ except ModuleNotFoundError:
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.10.59"
+SERVICE_VERSION = "2026.09.10.60"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -4435,10 +4435,11 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                     raise cloudkit_staff_shares.fail("invalid_query", "Use one value per field-edit query.", 400)
                 result = service.read(self._application_session_id, parts[0] if parts else None,
                     {key: value[0] for key, value in query.items()})
-            elif method == "POST" and len(parts) == 2 and parts[1] in ("prepare", "confirm", "keep-office", "confirm-observed") and not parsed.query:
+            elif method == "POST" and len(parts) == 2 and parts[1] in ("prepare", "confirm", "keep-office", "confirm-observed", "release") and not parsed.query:
                 payload = qbo_change_capture.strict_json(self.read_limited_body(7 * 1024 * 1024).decode("utf-8"))
                 result = (service.keep_office(self._application_session_id, parts[0], payload) if parts[1] == "keep-office"
                           else service.confirm_observed(self._application_session_id, parts[0], payload) if parts[1] == "confirm-observed"
+                          else service.release_claim(self._application_session_id, parts[0], payload) if parts[1] == "release"
                           else service.change(self._application_session_id, parts[0], parts[1], payload))
             else:
                 raise cloudkit_staff_shares.fail("invalid_request", "Use an exact field-edit endpoint.", 400)
