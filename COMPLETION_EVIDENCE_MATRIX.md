@@ -1,3 +1,19 @@
+Server-enforced billing content candidate, 2026-09-09:
+STAFF_BILLING_DELIVERY.md records immutable encrypted invoice/estimate content
+bound to an authenticated full32 selection, with current role/share/source
+checks, bounded pages, exact retry recovery, and nested historical billing
+validation/disclosure. The actual server output for all five roles equals the
+native preparation from the same original all32-kind fixture. Focused iPad
+validation passes 48 cases/four selectors; full iPad passes 1,918 cases/five
+selectors. Expanded backend focus passes 30; Tools passes 75. Final complete
+backend runs each pass 943 cases on Python 3.9.6 and 3.12.14. All final process
+handles close with exit 0; no failures/skips. Evidence remains local.
+This supplies two server field adapters, not full staff activation. The other
+30 domain adapters, native content request/publishing/receipt path, commands,
+media, lease and signed independent-account CloudKit convergence are unfinished.
+Backend version 2026.09.09.52 is local only; no push, deployment, credential
+expansion, screen access, recording, browser changes or foreground UI testing.
+
 Full32 server record-selection candidate, 2026-09-09:
 STAFF_WORKSPACE_SELECTION.md records an owner-only, current-authority-checked
 API for immutable encrypted indexes covering all 32 model kinds. Indexes contain

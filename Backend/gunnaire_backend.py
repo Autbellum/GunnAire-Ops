@@ -36,7 +36,7 @@ try:
     from Backend.billing_provider import BillingQBOProvider
     from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads
     from Backend.qbo_document_provider import DocumentQBOProvider
-    from Backend import time_worker_mappings, time_publications, cloudkit_staff_shares, staff_replica, staff_workspace_source, staff_workspace_selections
+    from Backend import time_worker_mappings, time_publications, cloudkit_staff_shares, staff_replica, staff_workspace_source, staff_workspace_selections, staff_billing_delivery
     from Backend.time_worker_provider import TimeWorkerQBOProvider
     from Backend.time_publication_provider import TimeQBOProvider
 except ModuleNotFoundError:
@@ -59,12 +59,13 @@ except ModuleNotFoundError:
     import staff_replica
     import staff_workspace_source
     import staff_workspace_selections
+    import staff_billing_delivery
     from time_worker_provider import TimeWorkerQBOProvider
     from time_publication_provider import TimeQBOProvider
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.09.51"
+SERVICE_VERSION = "2026.09.09.52"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -2530,6 +2531,7 @@ def initialize_database() -> None:
         staff_replica.initialize_schema(connection)
         staff_workspace_source.initialize_schema(connection)
         staff_workspace_selections.initialize_schema(connection)
+        staff_billing_delivery.initialize_schema(connection)
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS customer_communications (
@@ -4281,7 +4283,20 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                                                   encrypt=encrypt_catalog_payload, decrypt=decrypt_catalog_payload)
         service = staff_workspace_selections.StaffWorkspaceSelections(shares)
         try:
-            if method == "POST" and len(parts) == 2 and not parsed.query:
+            if len(parts) >= 4 and parts[3] == "billing":
+                delivery = staff_billing_delivery.StaffBillingDelivery(shares)
+                if method == "POST" and len(parts) == 4 and not parsed.query:
+                    payload = qbo_change_capture.strict_json(self.read_limited_body(8192).decode("utf-8"))
+                    result = delivery.prepare(self._application_session_id, parts[0], parts[2], payload)
+                elif method == "GET" and (len(parts) == 4 or len(parts) == 5 and parts[4] == "documents"):
+                    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                    if any(len(value) != 1 for value in query.values()):
+                        raise cloudkit_staff_shares.fail("invalid_query", "Use one value per billing query field.", 400)
+                    result = delivery.read(self._application_session_id, parts[0], parts[2],
+                        {key: value[0] for key, value in query.items()}, documents=len(parts) == 5)
+                else:
+                    raise cloudkit_staff_shares.fail("not_found", "Billing content action not found.", 404)
+            elif method == "POST" and len(parts) == 2 and not parsed.query:
                 payload = qbo_change_capture.strict_json(self.read_limited_body(8192).decode("utf-8"))
                 result = service.prepare(self._application_session_id, parts[0], payload)
             elif method == "GET" and (len(parts) == 3 or len(parts) == 4 and parts[3] == "records"):
