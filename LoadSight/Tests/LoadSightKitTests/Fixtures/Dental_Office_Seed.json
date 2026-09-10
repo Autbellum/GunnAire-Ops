@@ -1,0 +1,3951 @@
+{
+  "schemaVersion": 1,
+  "appVersion": "1.0.0",
+  "created": "2026-09-10",
+  "company": "GunnAire Heating and Air Conditioning",
+  "name": "Forsyth County Health Department - Dental Suite Alteration",
+  "location": "Winston-Salem, NC",
+  "projectNumber": "25-380 / CES 4644",
+  "sourceFile": "02_FC Dental Office - Mech.pdf",
+  "sourceSha256": "427c43073a9b567bf532e2f7f6a4458a3b07c765f646aa0228e16b399f0d0797",
+  "sourceDate": "7-31-26",
+  "status": "PRELIMINARY - NOT FOR BID RELEASE",
+  "scopePolicy": "HVAC / mechanical work only. Plumbing and electrical excluded; conflicting assignments require written resolution. Do not silently delete mechanical interface obligations.",
+  "reviewer": "",
+  "sheets": [
+    {
+      "sheet": "M001",
+      "page": 1,
+      "title": "Mechanical cover, specifications, legends, details and schedules",
+      "scale": "Mixed / details not to scale",
+      "review": "Visual + text review complete",
+      "revision": "Title-block date 7-31-26; full issue/addenda history not supplied",
+      "width": 2592,
+      "height": 1728
+    },
+    {
+      "sheet": "MD101",
+      "page": 2,
+      "title": "Level 1 mechanical demolition plan",
+      "scale": "Main plan 1/4 in = 1 ft",
+      "review": "Visual + text review complete",
+      "revision": "Title-block date 7-31-26; full issue/addenda history not supplied",
+      "width": 2592,
+      "height": 1728
+    },
+    {
+      "sheet": "M101",
+      "page": 3,
+      "title": "Level 1 mechanical new work plan",
+      "scale": "Main 1/4 in = 1 ft; enlarged room 1/2 in = 1 ft",
+      "review": "Visual + text review complete",
+      "revision": "Title-block date 7-31-26; full issue/addenda history not supplied",
+      "width": 2592,
+      "height": 1728
+    },
+    {
+      "sheet": "M111",
+      "page": 4,
+      "title": "Level 1 mechanical new work ceiling plan",
+      "scale": "Main plan 1/4 in = 1 ft",
+      "review": "Visual + text review complete",
+      "revision": "Title-block date 7-31-26; full issue/addenda history not supplied",
+      "width": 2592,
+      "height": 1728
+    },
+    {
+      "sheet": "M601",
+      "page": 5,
+      "title": "Dental equipment installation diagrams",
+      "scale": "Manufacturer diagrams; not a takeoff scale",
+      "review": "Visual + text review complete",
+      "revision": "Title-block date 7-31-26; full issue/addenda history not supplied",
+      "width": 2592,
+      "height": 1728
+    }
+  ],
+  "items": [
+    {
+      "id": "D-01",
+      "category": "Demolition",
+      "description": "Existing diffuser / grille removal: keynote-4 occurrence inventory",
+      "quantity": 34,
+      "unit": "EA",
+      "scope": "Base",
+      "lifecycle": "Remove",
+      "basis": "34 keyed locations; leader endpoint verification pending",
+      "quantityStatus": "Plan-counted",
+      "source": "MD101 keynote 4",
+      "spec": "SP-27",
+      "notes": "Do not equate new-device totals with demo quantities; preserve existing-to-remain devices.",
+      "rfi": "",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "D-02",
+      "category": "Demolition",
+      "description": "Branch duct demolition / removal by size and route",
+      "quantity": null,
+      "unit": "LF",
+      "scope": "Base",
+      "lifecycle": "Remove",
+      "basis": "Length not yet measured",
+      "quantityStatus": "Unmeasured",
+      "source": "MD101",
+      "spec": "",
+      "notes": "Trace demo branches separately from retained primary ducts / trunks. No invented footage.",
+      "rfi": "",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "D-03",
+      "category": "Demolition",
+      "description": "Protect and reconnect retained main trunks and primary risers",
+      "quantity": 1,
+      "unit": "LS",
+      "scope": "Base",
+      "lifecycle": "Modify",
+      "basis": "Scope task, not a measured material quantity",
+      "quantityStatus": "Scope-defined",
+      "source": "MD101 keynotes 5,7; M101",
+      "spec": "SP-27",
+      "notes": "Quantify fittings and connections separately; lump-sum task is an estimating packaging choice.",
+      "rfi": "",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "A-01",
+      "category": "Air devices",
+      "description": "S1 supply diffuser - consistent 6-inch locations",
+      "quantity": 4,
+      "unit": "EA",
+      "scope": "Base",
+      "lifecycle": "New",
+      "basis": "Both plans + schedule: four unconflicted S1 assemblies",
+      "quantityStatus": "Cross-checked",
+      "source": "M101; M111; M001",
+      "spec": "SP-13",
+      "notes": "Imaging, reception/checkout, children area and corridor; White B12; scheduled accessories.",
+      "rfi": "",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "A-02",
+      "category": "Air devices",
+      "description": "S1 supply diffuser - HC treatment 103 neck conflict",
+      "quantity": 1,
+      "unit": "EA",
+      "scope": "Hold",
+      "lifecycle": "New",
+      "basis": "S1 at 100 CFM on both plans",
+      "quantityStatus": "Conflict",
+      "source": "M101 HC103; M111 HC103; M001",
+      "spec": "SP-13",
+      "notes": "M101 6-inch; M111 8-inch; S1 schedule 6-inch.",
+      "rfi": "RFI-03",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "A-03",
+      "category": "Air devices",
+      "description": "S1 supply diffuser - Mechanical 116 neck conflict",
+      "quantity": 1,
+      "unit": "EA",
+      "scope": "Hold",
+      "lifecycle": "New",
+      "basis": "S1 at 200 CFM on both plans",
+      "quantityStatus": "Conflict",
+      "source": "M101 Mech116; M111 Mech116; M001",
+      "spec": "SP-13",
+      "notes": "Both plans 8-inch; S1 schedule 6-inch.",
+      "rfi": "RFI-03",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "A-04",
+      "category": "Air devices",
+      "description": "S2 supply diffuser - 8-inch neck / 24 x 24 face",
+      "quantity": 17,
+      "unit": "EA",
+      "scope": "Base",
+      "lifecycle": "New",
+      "basis": "17 unique devices matched between M101 and M111",
+      "quantityStatus": "Cross-checked",
+      "source": "M101; M111; M001",
+      "spec": "SP-13",
+      "notes": "Price SCD basis; damper, insulated backpan, four-way, White B12.",
+      "rfi": "",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "A-05",
+      "category": "Air devices",
+      "description": "R1 perforated return grille / 24 x 24 face",
+      "quantity": 21,
+      "unit": "EA",
+      "scope": "Base",
+      "lifecycle": "New",
+      "basis": "21 R1 tags on each plan, deduplicated",
+      "quantityStatus": "Cross-checked",
+      "source": "M101; M111; M001",
+      "spec": "SP-14",
+      "notes": "22 x 22 return opening; no scheduled damper. Confirm boot interface before fabrication.",
+      "rfi": "RFI-04",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "A-06",
+      "category": "Air devices",
+      "description": "Return boot assembly - note calls for 22 x 12",
+      "quantity": 21,
+      "unit": "EA",
+      "scope": "Hold",
+      "lifecycle": "New",
+      "basis": "One boot per R1 is an assembly interpretation; geometry unconfirmed",
+      "quantityStatus": "Conditional",
+      "source": "M101 keynote 9",
+      "spec": "SP-15",
+      "notes": "Twenty keynotes, but text says all boots; do not use 20 as total.",
+      "rfi": "RFI-04",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "A-07",
+      "category": "Air devices",
+      "description": "Retained diffusers: adjust only, no new purchase",
+      "quantity": 3,
+      "unit": "EA",
+      "scope": "Base",
+      "lifecycle": "Adjust existing",
+      "basis": "M101 keynote 6: 150, 125 and 150 CFM",
+      "quantityStatus": "Cross-checked",
+      "source": "M101 east boundary keynote 6",
+      "spec": "SP-28",
+      "notes": "Retained terminals total 425 CFM. Include keyed work despite adjacent shading.",
+      "rfi": "",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "A-08",
+      "category": "Ductwork",
+      "description": "Transfer-air duct assembly 10 x 10",
+      "quantity": 2,
+      "unit": "EA",
+      "scope": "Base",
+      "lifecycle": "New",
+      "basis": "Two distinct 10 x 10 TA assemblies on M101",
+      "quantityStatus": "Plan-counted",
+      "source": "M101 reception / corridor interfaces",
+      "spec": "",
+      "notes": "Two assemblies is not duct footage. Offsets, end treatment and supports must be measured / detailed.",
+      "rfi": "",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "DC-01",
+      "category": "Ductwork",
+      "description": "Concealed rectangular supply duct 10 x 8 inches",
+      "quantity": null,
+      "unit": "LF",
+      "scope": "Base",
+      "lifecycle": "New",
+      "basis": "Size identified; centerline route not measured",
+      "quantityStatus": "Unmeasured",
+      "source": "M101",
+      "spec": "SP-05",
+      "notes": "Galvanized; transitions / offsets and fittings separate.",
+      "rfi": "",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "DC-02",
+      "category": "Ductwork",
+      "description": "Concealed rectangular supply duct 10 x 10 inches",
+      "quantity": null,
+      "unit": "LF",
+      "scope": "Base",
+      "lifecycle": "New",
+      "basis": "Size identified; centerline route not measured",
+      "quantityStatus": "Unmeasured",
+      "source": "M101",
+      "spec": "SP-05",
+      "notes": "Galvanized; transitions / offsets and fittings separate.",
+      "rfi": "",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "DC-03",
+      "category": "Ductwork",
+      "description": "Concealed rectangular supply duct 12 x 10 inches",
+      "quantity": null,
+      "unit": "LF",
+      "scope": "Base",
+      "lifecycle": "New",
+      "basis": "Size identified; centerline route not measured",
+      "quantityStatus": "Unmeasured",
+      "source": "M101",
+      "spec": "SP-05",
+      "notes": "Galvanized; transitions / offsets and fittings separate.",
+      "rfi": "",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "DC-04",
+      "category": "Ductwork",
+      "description": "Concealed rectangular supply duct 12 x 12 inches",
+      "quantity": null,
+      "unit": "LF",
+      "scope": "Base",
+      "lifecycle": "New",
+      "basis": "Size identified; centerline route not measured",
+      "quantityStatus": "Unmeasured",
+      "source": "M101",
+      "spec": "SP-05",
+      "notes": "Galvanized; transitions / offsets and fittings separate.",
+      "rfi": "",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "DC-05",
+      "category": "Ductwork",
+      "description": "Rigid round supply duct 6 inches",
+      "quantity": null,
+      "unit": "LF",
+      "scope": "Base",
+      "lifecycle": "New",
+      "basis": "Size identified; centerline route not measured",
+      "quantityStatus": "Unmeasured",
+      "source": "M101",
+      "spec": "SP-05",
+      "notes": "Do not confuse adjacent flex with rigid metal.",
+      "rfi": "",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "DC-06",
+      "category": "Ductwork",
+      "description": "Rigid round supply duct 8 inches",
+      "quantity": null,
+      "unit": "LF",
+      "scope": "Base",
+      "lifecycle": "New",
+      "basis": "Size identified; centerline route not measured",
+      "quantityStatus": "Unmeasured",
+      "source": "M101",
+      "spec": "SP-05",
+      "notes": "Do not confuse adjacent flex with rigid metal.",
+      "rfi": "",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "DC-07",
+      "category": "Ductwork",
+      "description": "R-6 / acoustic flexible connections by final approved diameter",
+      "quantity": null,
+      "unit": "LF",
+      "scope": "Base",
+      "lifecycle": "New",
+      "basis": "Each routed connection remains to be measured",
+      "quantityStatus": "Unmeasured",
+      "source": "M001 Flexible Duct; detail 1/M001; M101",
+      "spec": "SP-06/07",
+      "notes": "Maximum 8 ft per connection, NOT 8 ft automatically per diffuser.",
+      "rfi": "RFI-03",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "DC-08",
+      "category": "Ductwork",
+      "description": "Takeoff fittings with balancing dampers / extractors",
+      "quantity": null,
+      "unit": "EA",
+      "scope": "Base",
+      "lifecycle": "New",
+      "basis": "Count each applicable takeoff; some branches feed multiple diffusers",
+      "quantityStatus": "Unmeasured",
+      "source": "M001 Spin-in Fittings; M101",
+      "spec": "SP-08",
+      "notes": "Do not assume exactly one main takeoff per new diffuser.",
+      "rfi": "",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "DC-09",
+      "category": "Ductwork",
+      "description": "Round elbows, reducers, couplings and end caps",
+      "quantity": null,
+      "unit": "EA",
+      "scope": "Base",
+      "lifecycle": "New",
+      "basis": "Fitting-by-fitting trace required",
+      "quantityStatus": "Unmeasured",
+      "source": "M101; M001",
+      "spec": "",
+      "notes": "Avoid combining with rectangular fittings or installed assembly pricing.",
+      "rfi": "",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "DC-10",
+      "category": "Ductwork",
+      "description": "Rectangular elbows, turning/splitter vanes and transitions",
+      "quantity": null,
+      "unit": "EA",
+      "scope": "Base",
+      "lifecycle": "New",
+      "basis": "Fitting-by-fitting trace required",
+      "quantityStatus": "Unmeasured",
+      "source": "M101; M001 Turning Vanes",
+      "spec": "SP-10",
+      "notes": "Include concealed field offsets only as explicit measured or approved allowance items.",
+      "rfi": "",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "DC-11",
+      "category": "Insulation",
+      "description": "1-1/2-inch foil-faced concealed duct wrap",
+      "quantity": null,
+      "unit": "SF",
+      "scope": "Base",
+      "lifecycle": "New",
+      "basis": "Surface takeoff requires measured dimensions / lengths",
+      "quantityStatus": "Unmeasured",
+      "source": "M001 Duct Insulation",
+      "spec": "SP-04",
+      "notes": "Rectangular bare area = perimeter x length; round bare area = pi x diameter x length. Lap, thickness / stretch-out, fittings and waste separately documented.",
+      "rfi": "",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "DC-12",
+      "category": "Supports",
+      "description": "Duct hangers, attachment hardware and painted supports",
+      "quantity": null,
+      "unit": "EA",
+      "scope": "Base",
+      "lifecycle": "New",
+      "basis": "Hanger counts require run lengths / fitting and end support review",
+      "quantityStatus": "Unmeasured",
+      "source": "M001 Hangers and Painting",
+      "spec": "SP-11/23",
+      "notes": "8-ft or 6-ft maximum spacing as applicable; do not use floor(length/spacing) alone.",
+      "rfi": "",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "DC-13",
+      "category": "Ductwork",
+      "description": "Mastic, clamps, connection hardware and consumables",
+      "quantity": 1,
+      "unit": "LS",
+      "scope": "Base",
+      "lifecycle": "New",
+      "basis": "Estimating packaging allowance basis; not a plan-counted quantity",
+      "quantityStatus": "Scope-defined",
+      "source": "M001 Flexible Duct and Metal Ductwork",
+      "spec": "SP-05/09",
+      "notes": "Build from actual assemblies or price as explicit approved allowance; no duplicate included hardware.",
+      "rfi": "",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "E-01",
+      "category": "Existing HVAC",
+      "description": "Existing dual-inlet VAV assessment / reuse scope",
+      "quantity": 8,
+      "unit": "EA",
+      "scope": "Hold",
+      "lifecycle": "Reuse",
+      "basis": "Eight existing VAVs on demo and new plans",
+      "quantityStatus": "Conditional",
+      "source": "MD101 keynote 1; M101",
+      "spec": "SP-27",
+      "notes": "These are not eight new VAVs. Actual relocation / piping / restoration task scope unresolved.",
+      "rfi": "RFI-01",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "C-01",
+      "category": "Controls",
+      "description": "Existing thermostat / zone symbol inventory",
+      "quantity": 8,
+      "unit": "EA",
+      "scope": "Hold",
+      "lifecycle": "Relocate / reuse",
+      "basis": "Eight T symbols on M101, not a confirmed eight-relocation work order",
+      "quantityStatus": "Conditional",
+      "source": "MD101 keynote 2; M101 keynote 1",
+      "spec": "SP-19",
+      "notes": "Six relocation-keynote placements; two adjacent reception T symbols. Confirm physical moves and zone mappings.",
+      "rfi": "RFI-02",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "C-02",
+      "category": "Controls",
+      "description": "Pneumatic tubing extensions and controls modifications",
+      "quantity": null,
+      "unit": "LF",
+      "scope": "Hold",
+      "lifecycle": "Modify",
+      "basis": "Routing and lengths not field verified",
+      "quantityStatus": "Unmeasured",
+      "source": "M101 keynote 1; M001 controls",
+      "spec": "SP-19",
+      "notes": "Separate from electrical branch power and dental compressed-air distribution.",
+      "rfi": "RFI-02",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "C-03",
+      "category": "Controls",
+      "description": "Building controls vendor / BMS graphics scope",
+      "quantity": 1,
+      "unit": "LS",
+      "scope": "Hold",
+      "lifecycle": "Service",
+      "basis": "Named-vendor scope quote required",
+      "quantityStatus": "Conditional",
+      "source": "M001 Automatic Temperature Controls; M101 keynote 1",
+      "spec": "SP-19",
+      "notes": "Do not assume new DDC boxes from a generic graphics note.",
+      "rfi": "RFI-02",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "DX-01",
+      "category": "Equipment ventilation",
+      "description": "Dental vacuum exhaust route - 2-inch pipe",
+      "quantity": null,
+      "unit": "LF",
+      "scope": "Hold",
+      "lifecycle": "New",
+      "basis": "Route shown, length / interface not confirmed",
+      "quantityStatus": "Unmeasured",
+      "source": "M101; M601 vacuum diagram",
+      "spec": "SP-17",
+      "notes": "HVAC-side intake/exhaust only; equipment utility distribution remains excluded.",
+      "rfi": "RFI-05/06",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "DX-02",
+      "category": "Equipment ventilation",
+      "description": "Dental compressor outdoor-air intake - 2-inch pipe",
+      "quantity": null,
+      "unit": "LF",
+      "scope": "Hold",
+      "lifecycle": "New",
+      "basis": "Route shown, length / interface not confirmed",
+      "quantityStatus": "Unmeasured",
+      "source": "M101; M601 compressor diagram",
+      "spec": "SP-17",
+      "notes": "Protect intake; applicable kit/model and drain details require assignment.",
+      "rfi": "RFI-05/06/08",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "DX-03",
+      "category": "Equipment ventilation",
+      "description": "3-inch vacuum exhaust wall termination",
+      "quantity": 1,
+      "unit": "EA",
+      "scope": "Hold",
+      "lifecycle": "New",
+      "basis": "M101 keynote 5",
+      "quantityStatus": "Conditional",
+      "source": "M101 keynote 5; M001 L-1 schedule",
+      "spec": "SP-18",
+      "notes": "FAMCO SDWV3 scheduled basis; field neck and 2-to-3-inch connection to verify.",
+      "rfi": "RFI-06",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "DX-04",
+      "category": "Equipment ventilation",
+      "description": "3-inch compressor intake wall termination",
+      "quantity": 1,
+      "unit": "EA",
+      "scope": "Hold",
+      "lifecycle": "New",
+      "basis": "M101 keynote 8",
+      "quantityStatus": "Conditional",
+      "source": "M101 keynote 8; M001 L-1 schedule",
+      "spec": "SP-18",
+      "notes": "Do not assume exhaust backdraft-damper assembly is correct for intake.",
+      "rfi": "RFI-06",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "DX-05",
+      "category": "Specialty equipment",
+      "description": "Relocation of existing dental vacuum / compressor / separator",
+      "quantity": null,
+      "unit": "LS",
+      "scope": "Hold",
+      "lifecycle": "Relocate",
+      "basis": "Mechanical note indicates work; responsible trade unresolved",
+      "quantityStatus": "Unmeasured",
+      "source": "M101 keynotes 3,4; M601",
+      "spec": "SP-29",
+      "notes": "Not new equipment purchasing. Written allocation to mechanical or dental/plumbing vendor required.",
+      "rfi": "RFI-05",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "H-01",
+      "category": "HVAC piping",
+      "description": "Hydronic piping / VAV water-coil work and water TAB",
+      "quantity": null,
+      "unit": "LS",
+      "scope": "Hold",
+      "lifecycle": "Modify",
+      "basis": "Specifications mention work; plans identify dual-inlet boxes",
+      "quantityStatus": "Unmeasured",
+      "source": "M001 Work Included / Balancing; MD101 keynote 1",
+      "spec": "SP-12/31",
+      "notes": "HVAC hydronics are not automatically excluded as plumbing, but applicability is unresolved.",
+      "rfi": "RFI-01",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "G-01",
+      "category": "Preconstruction",
+      "description": "Existing-condition survey and field coordination",
+      "quantity": 1,
+      "unit": "LS",
+      "scope": "Base",
+      "lifecycle": "Service",
+      "basis": "Required mechanical scope task",
+      "quantityStatus": "Scope-defined",
+      "source": "M001 contractor and existing-conditions notes",
+      "spec": "SP-03",
+      "notes": "Account for access, measurements, written deficiency reporting and coordination.",
+      "rfi": "RFI-11",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "G-02",
+      "category": "TAB",
+      "description": "Pre-demolition air balance survey and baseline report",
+      "quantity": 1,
+      "unit": "LS",
+      "scope": "Base",
+      "lifecycle": "Service",
+      "basis": "Mandatory specification requirement",
+      "quantityStatus": "Scope-defined",
+      "source": "M001 Balancing",
+      "spec": "SP-01",
+      "notes": "All affected systems / terminals; do not skip because later text says encouraged.",
+      "rfi": "",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "G-03",
+      "category": "TAB",
+      "description": "Postconstruction TAB and combined report",
+      "quantity": 1,
+      "unit": "LS",
+      "scope": "Base",
+      "lifecycle": "Service",
+      "basis": "Mandatory specification requirement",
+      "quantityStatus": "Scope-defined",
+      "source": "M001 Balancing",
+      "spec": "SP-02",
+      "notes": "Preliminary scheduled supply sum 3,765 CFM is a reconciliation only, not a field TAB report.",
+      "rfi": "",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "G-04",
+      "category": "Protection",
+      "description": "Temporary return media / construction protection",
+      "quantity": 1,
+      "unit": "LS",
+      "scope": "Base",
+      "lifecycle": "Service",
+      "basis": "Required task; extent to survey",
+      "quantityStatus": "Scope-defined",
+      "source": "M001 Filters",
+      "spec": "SP-20",
+      "notes": "Avoid counting permanent filters in this line.",
+      "rfi": "RFI-11",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "G-05",
+      "category": "Filters",
+      "description": "Final HVAC equipment filters by size/type",
+      "quantity": null,
+      "unit": "EA",
+      "scope": "Base",
+      "lifecycle": "Replace",
+      "basis": "Affected equipment filter sizes/counts not supplied",
+      "quantityStatus": "Unmeasured",
+      "source": "M001 Filters",
+      "spec": "SP-20",
+      "notes": "Survey actual equipment; do not assume 8 filters for 8 VAV boxes.",
+      "rfi": "RFI-11",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "G-06",
+      "category": "Access / life safety",
+      "description": "Required access doors / fire dampers / firestop assemblies",
+      "quantity": null,
+      "unit": "EA",
+      "scope": "Hold",
+      "lifecycle": "New",
+      "basis": "Locations and ratings need mechanical coordination information",
+      "quantityStatus": "Unmeasured",
+      "source": "M001 Access Doors and Fire Ratings",
+      "spec": "SP-21/22",
+      "notes": "Split into individual rated assemblies and quantities after RFI response.",
+      "rfi": "RFI-10",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "G-07",
+      "category": "Permits",
+      "description": "Mechanical permits, inspections and required tests",
+      "quantity": 1,
+      "unit": "LS",
+      "scope": "Base",
+      "lifecycle": "Service",
+      "basis": "Required task; actual fees not provided",
+      "quantityStatus": "Scope-defined",
+      "source": "M001 Fees and Permits",
+      "spec": "SP-24",
+      "notes": "Enter actual pricing; do not borrow another project fee.",
+      "rfi": "",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "G-08",
+      "category": "Finishes",
+      "description": "Mechanical cutting, patching and support / equipment touchup",
+      "quantity": 1,
+      "unit": "LS",
+      "scope": "Hold",
+      "lifecycle": "Service",
+      "basis": "Scope listed; trade split / extent unresolved",
+      "quantityStatus": "Conditional",
+      "source": "M001 Work Included and Painting",
+      "spec": "SP-23",
+      "notes": "GC mounting of access doors and exposed duct field painting noted separately.",
+      "rfi": "RFI-10",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "G-09",
+      "category": "Closeout",
+      "description": "Applicable submittals, record drawings, owner training and warranty",
+      "quantity": 1,
+      "unit": "LS",
+      "scope": "Base",
+      "lifecycle": "Service",
+      "basis": "Project requirements; deliverable extent to verify",
+      "quantityStatus": "Scope-defined",
+      "source": "M001 Operating Instructions, Guarantee, As-built Note",
+      "spec": "SP-25/26/34",
+      "notes": "No assertion that owner training or records have already been provided.",
+      "rfi": "RFI-09",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "X-01",
+      "category": "Excluded",
+      "description": "Domestic water, sanitary, vent, plumbing fixtures and filtration",
+      "quantity": null,
+      "unit": "LS",
+      "scope": "Excluded",
+      "lifecycle": "By others",
+      "basis": "User-requested plumbing exclusion",
+      "quantityStatus": "Excluded",
+      "source": "User trade boundary; M101 enlarged room; M601",
+      "spec": "SP-30",
+      "notes": "Mechanical-sheet placement does not bring plumbing into this estimate.",
+      "rfi": "RFI-05",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "X-02",
+      "category": "Excluded",
+      "description": "Dental vacuum / compressed-air utility distribution and dental plumbing",
+      "quantity": null,
+      "unit": "LS",
+      "scope": "Excluded",
+      "lifecycle": "By others",
+      "basis": "User-requested plumbing / non-HVAC exclusion pending assignment",
+      "quantityStatus": "Excluded",
+      "source": "M101 enlarged room; M601",
+      "spec": "SP-30",
+      "notes": "Do not confuse these utility systems with HVAC pneumatic thermostat tubing or dedicated equipment intake/exhaust.",
+      "rfi": "RFI-05",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    },
+    {
+      "id": "X-03",
+      "category": "Excluded",
+      "description": "Electrical branch circuits, line-voltage wiring and electrical trade work",
+      "quantity": null,
+      "unit": "LS",
+      "scope": "Excluded",
+      "lifecycle": "By others",
+      "basis": "User-requested electrical exclusion; specification conflict remains",
+      "quantityStatus": "Excluded",
+      "source": "User trade boundary; M001 Work Included",
+      "spec": "SP-30",
+      "notes": "Needs agreed written scope split. Pneumatic HVAC controls / integration are not automatically excluded.",
+      "rfi": "RFI-07",
+      "materialUnit": null,
+      "laborHoursUnit": null,
+      "subcontractUnit": null,
+      "otherUnit": null,
+      "wastePct": 0,
+      "priceSource": "",
+      "allowanceNote": ""
+    }
+  ],
+  "devices": [
+    {
+      "id": "SA-01",
+      "tag": "S1",
+      "room": "HC treatment 103",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": 100,
+      "scheduled_neck": 6,
+      "m101_neck": 6,
+      "m111_neck": 8,
+      "status": "Conflict - procurement hold",
+      "source": "M101 plan; M111 ceiling plan; M001 grille schedule",
+      "note": "Resolve RFI-03 before ordering; do not silently change the S1 tag.",
+      "views": {
+        "M101": {
+          "neck": 6,
+          "x": 1126.799560546875,
+          "y": 188.97669982910156,
+          "page": 3
+        },
+        "M111": {
+          "neck": 8,
+          "x": 1147.6795654296875,
+          "y": 272.0167541503906,
+          "page": 4
+        }
+      }
+    },
+    {
+      "id": "SA-02",
+      "tag": "S1",
+      "room": "Imaging 102",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": 100,
+      "scheduled_neck": 6,
+      "m101_neck": 6,
+      "m111_neck": 6,
+      "status": "Cross-checked plan count",
+      "source": "M101 plan; M111 ceiling plan; M001 grille schedule",
+      "note": "Count and airflow cross-checked between plans; field coordination remains.",
+      "views": {
+        "M101": {
+          "neck": 6,
+          "x": 1412.0394287109375,
+          "y": 196.77674865722656,
+          "page": 3
+        },
+        "M111": {
+          "neck": 6,
+          "x": 1435.4393310546875,
+          "y": 339.2167053222656,
+          "page": 4
+        }
+      }
+    },
+    {
+      "id": "SA-03",
+      "tag": "S1",
+      "room": "Reception / checkout 110",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": 100,
+      "scheduled_neck": 6,
+      "m101_neck": 6,
+      "m111_neck": 6,
+      "status": "Cross-checked plan count",
+      "source": "M101 plan; M111 ceiling plan; M001 grille schedule",
+      "note": "Count and airflow cross-checked between plans; field coordination remains.",
+      "views": {
+        "M101": {
+          "neck": 6,
+          "x": 1557.599365234375,
+          "y": 399.8166809082031,
+          "page": 3
+        },
+        "M111": {
+          "neck": 6,
+          "x": 1541.3994140625,
+          "y": 533.9765625,
+          "page": 4
+        }
+      }
+    },
+    {
+      "id": "SA-04",
+      "tag": "S1",
+      "room": "Children area",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": 100,
+      "scheduled_neck": 6,
+      "m101_neck": 6,
+      "m111_neck": 6,
+      "status": "Cross-checked plan count",
+      "source": "M101 plan; M111 ceiling plan; M001 grille schedule",
+      "note": "Count and airflow cross-checked between plans; field coordination remains.",
+      "views": {
+        "M101": {
+          "neck": 6,
+          "x": 1761.3592529296875,
+          "y": 491.3766174316406,
+          "page": 3
+        },
+        "M111": {
+          "neck": 6,
+          "x": 1714.19921875,
+          "y": 672.8165283203125,
+          "page": 4
+        }
+      }
+    },
+    {
+      "id": "SA-05",
+      "tag": "S1",
+      "room": "Corridor 122",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": 50,
+      "scheduled_neck": 6,
+      "m101_neck": 6,
+      "m111_neck": 6,
+      "status": "Cross-checked plan count",
+      "source": "M101 plan; M111 ceiling plan; M001 grille schedule",
+      "note": "Count and airflow cross-checked between plans; field coordination remains.",
+      "views": {
+        "M101": {
+          "neck": 6,
+          "x": 1298.03955078125,
+          "y": 543.8165283203125,
+          "page": 3
+        },
+        "M111": {
+          "neck": 6,
+          "x": 1340.87939453125,
+          "y": 706.2965087890625,
+          "page": 4
+        }
+      }
+    },
+    {
+      "id": "SA-06",
+      "tag": "S1",
+      "room": "Mechanical 116",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": 200,
+      "scheduled_neck": 6,
+      "m101_neck": 8,
+      "m111_neck": 8,
+      "status": "Conflict - procurement hold",
+      "source": "M101 plan; M111 ceiling plan; M001 grille schedule",
+      "note": "Resolve RFI-03 before ordering; do not silently change the S1 tag.",
+      "views": {
+        "M101": {
+          "neck": 8,
+          "x": 242.03988647460938,
+          "y": 845.7364501953125,
+          "page": 3
+        },
+        "M111": {
+          "neck": 8,
+          "x": 270.9598693847656,
+          "y": 997.6563720703125,
+          "page": 4
+        }
+      }
+    },
+    {
+      "id": "SA-07",
+      "tag": "S2",
+      "room": "Office 101",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": 150,
+      "scheduled_neck": 8,
+      "m101_neck": 8,
+      "m111_neck": 8,
+      "status": "Cross-checked plan count",
+      "source": "M101 plan; M111 ceiling plan; M001 grille schedule",
+      "note": "Count and airflow cross-checked between plans; field coordination remains.",
+      "views": {
+        "M101": {
+          "neck": 8,
+          "x": 1586.87939453125,
+          "y": 126.4566879272461,
+          "page": 3
+        },
+        "M111": {
+          "neck": 8,
+          "x": 1537.91943359375,
+          "y": 338.9767150878906,
+          "page": 4
+        }
+      }
+    },
+    {
+      "id": "SA-08",
+      "tag": "S2",
+      "room": "Q. treatment 104",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": 150,
+      "scheduled_neck": 8,
+      "m101_neck": 8,
+      "m111_neck": 8,
+      "status": "Cross-checked plan count",
+      "source": "M101 plan; M111 ceiling plan; M001 grille schedule",
+      "note": "Count and airflow cross-checked between plans; field coordination remains.",
+      "views": {
+        "M101": {
+          "neck": 8,
+          "x": 1036.9195556640625,
+          "y": 128.85670471191406,
+          "page": 3
+        },
+        "M111": {
+          "neck": 8,
+          "x": 1060.9195556640625,
+          "y": 272.0167541503906,
+          "page": 4
+        }
+      }
+    },
+    {
+      "id": "SA-09",
+      "tag": "S2",
+      "room": "Q. treatment 105",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": 150,
+      "scheduled_neck": 8,
+      "m101_neck": 8,
+      "m111_neck": 8,
+      "status": "Cross-checked plan count",
+      "source": "M101 plan; M111 ceiling plan; M001 grille schedule",
+      "note": "Count and airflow cross-checked between plans; field coordination remains.",
+      "views": {
+        "M101": {
+          "neck": 8,
+          "x": 735.2396850585938,
+          "y": 160.77674865722656,
+          "page": 3
+        },
+        "M111": {
+          "neck": 8,
+          "x": 710.2797241210938,
+          "y": 270.6966857910156,
+          "page": 4
+        }
+      }
+    },
+    {
+      "id": "SA-10",
+      "tag": "S2",
+      "room": "Office 100",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": 150,
+      "scheduled_neck": 8,
+      "m101_neck": 8,
+      "m111_neck": 8,
+      "status": "Cross-checked plan count",
+      "source": "M101 plan; M111 ceiling plan; M001 grille schedule",
+      "note": "Count and airflow cross-checked between plans; field coordination remains.",
+      "views": {
+        "M101": {
+          "neck": 8,
+          "x": 1699.0792236328125,
+          "y": 227.61671447753906,
+          "page": 3
+        },
+        "M111": {
+          "neck": 8,
+          "x": 1774.3192138671875,
+          "y": 339.2167053222656,
+          "page": 4
+        }
+      }
+    },
+    {
+      "id": "SA-11",
+      "tag": "S2",
+      "room": "Future 107",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": 150,
+      "scheduled_neck": 8,
+      "m101_neck": 8,
+      "m111_neck": 8,
+      "status": "Cross-checked plan count",
+      "source": "M101 plan; M111 ceiling plan; M001 grille schedule",
+      "note": "Count and airflow cross-checked between plans; field coordination remains.",
+      "views": {
+        "M101": {
+          "neck": 8,
+          "x": 421.0798034667969,
+          "y": 302.3767395019531,
+          "page": 3
+        },
+        "M111": {
+          "neck": 8,
+          "x": 384.3598327636719,
+          "y": 428.2566223144531,
+          "page": 4
+        }
+      }
+    },
+    {
+      "id": "SA-12",
+      "tag": "S2",
+      "room": "Future 106",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": 150,
+      "scheduled_neck": 8,
+      "m101_neck": 8,
+      "m111_neck": 8,
+      "status": "Cross-checked plan count",
+      "source": "M101 plan; M111 ceiling plan; M001 grille schedule",
+      "note": "Count and airflow cross-checked between plans; field coordination remains.",
+      "views": {
+        "M101": {
+          "neck": 8,
+          "x": 590.3997802734375,
+          "y": 302.3767395019531,
+          "page": 3
+        },
+        "M111": {
+          "neck": 8,
+          "x": 553.6797485351562,
+          "y": 428.2566223144531,
+          "page": 4
+        }
+      }
+    },
+    {
+      "id": "SA-13",
+      "tag": "S2",
+      "room": "Vestibule 113A",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": 150,
+      "scheduled_neck": 8,
+      "m101_neck": 8,
+      "m111_neck": 8,
+      "status": "Cross-checked plan count",
+      "source": "M101 plan; M111 ceiling plan; M001 grille schedule",
+      "note": "Count and airflow cross-checked between plans; field coordination remains.",
+      "views": {
+        "M101": {
+          "neck": 8,
+          "x": 756.3596801757812,
+          "y": 333.4566955566406,
+          "page": 3
+        },
+        "M111": {
+          "neck": 8,
+          "x": 714.7196655273438,
+          "y": 499.2966613769531,
+          "page": 4
+        }
+      }
+    },
+    {
+      "id": "SA-14",
+      "tag": "S2",
+      "room": "Sterilization 112",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": 150,
+      "scheduled_neck": 8,
+      "m101_neck": 8,
+      "m111_neck": 8,
+      "status": "Cross-checked plan count",
+      "source": "M101 plan; M111 ceiling plan; M001 grille schedule",
+      "note": "Count and airflow cross-checked between plans; field coordination remains.",
+      "views": {
+        "M101": {
+          "neck": 8,
+          "x": 1240.199462890625,
+          "y": 452.1366271972656,
+          "page": 3
+        },
+        "M111": {
+          "neck": 8,
+          "x": 1277.759521484375,
+          "y": 589.6566162109375,
+          "page": 4
+        }
+      }
+    },
+    {
+      "id": "SA-15",
+      "tag": "S2",
+      "room": "Lab 113",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": 150,
+      "scheduled_neck": 8,
+      "m101_neck": 8,
+      "m111_neck": 8,
+      "status": "Cross-checked plan count",
+      "source": "M101 plan; M111 ceiling plan; M001 grille schedule",
+      "note": "Count and airflow cross-checked between plans; field coordination remains.",
+      "views": {
+        "M101": {
+          "neck": 8,
+          "x": 872.7596435546875,
+          "y": 480.3365783691406,
+          "page": 3
+        },
+        "M111": {
+          "neck": 8,
+          "x": 925.0796508789062,
+          "y": 563.9765625,
+          "page": 4
+        }
+      }
+    },
+    {
+      "id": "SA-16",
+      "tag": "S2",
+      "room": "Staff 115",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": 200,
+      "scheduled_neck": 8,
+      "m101_neck": 8,
+      "m111_neck": 8,
+      "status": "Cross-checked plan count",
+      "source": "M101 plan; M111 ceiling plan; M001 grille schedule",
+      "note": "Count and airflow cross-checked between plans; field coordination remains.",
+      "views": {
+        "M101": {
+          "neck": 8,
+          "x": 203.39990234375,
+          "y": 669.8165283203125,
+          "page": 3
+        },
+        "M111": {
+          "neck": 8,
+          "x": 309.7198791503906,
+          "y": 770.2565307617188,
+          "page": 4
+        }
+      }
+    },
+    {
+      "id": "SA-17",
+      "tag": "S2",
+      "room": "Waiting 109 west",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": 125,
+      "scheduled_neck": 8,
+      "m101_neck": 8,
+      "m111_neck": 8,
+      "status": "Cross-checked plan count",
+      "source": "M101 plan; M111 ceiling plan; M001 grille schedule",
+      "note": "Count and airflow cross-checked between plans; field coordination remains.",
+      "views": {
+        "M101": {
+          "neck": 8,
+          "x": 1590.119384765625,
+          "y": 712.656494140625,
+          "page": 3
+        },
+        "M111": {
+          "neck": 8,
+          "x": 1580.3994140625,
+          "y": 823.2964477539062,
+          "page": 4
+        }
+      }
+    },
+    {
+      "id": "SA-18",
+      "tag": "S2",
+      "room": "Waiting 109 east",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": 125,
+      "scheduled_neck": 8,
+      "m101_neck": 8,
+      "m111_neck": 8,
+      "status": "Cross-checked plan count",
+      "source": "M101 plan; M111 ceiling plan; M001 grille schedule",
+      "note": "Count and airflow cross-checked between plans; field coordination remains.",
+      "views": {
+        "M101": {
+          "neck": 8,
+          "x": 1711.3192138671875,
+          "y": 712.656494140625,
+          "page": 3
+        },
+        "M111": {
+          "neck": 8,
+          "x": 1796.279296875,
+          "y": 823.2964477539062,
+          "page": 4
+        }
+      }
+    },
+    {
+      "id": "SA-19",
+      "tag": "S2",
+      "room": "Treatment 123",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": 185,
+      "scheduled_neck": 8,
+      "m101_neck": 8,
+      "m111_neck": 8,
+      "status": "Cross-checked plan count",
+      "source": "M101 plan; M111 ceiling plan; M001 grille schedule",
+      "note": "Count and airflow cross-checked between plans; field coordination remains.",
+      "views": {
+        "M101": {
+          "neck": 8,
+          "x": 1212.3594970703125,
+          "y": 714.8165283203125,
+          "page": 3
+        },
+        "M111": {
+          "neck": 8,
+          "x": 1226.99951171875,
+          "y": 918.3363647460938,
+          "page": 4
+        }
+      }
+    },
+    {
+      "id": "SA-20",
+      "tag": "S2",
+      "room": "Treatment 124",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": 185,
+      "scheduled_neck": 8,
+      "m101_neck": 8,
+      "m111_neck": 8,
+      "status": "Cross-checked plan count",
+      "source": "M101 plan; M111 ceiling plan; M001 grille schedule",
+      "note": "Count and airflow cross-checked between plans; field coordination remains.",
+      "views": {
+        "M101": {
+          "neck": 8,
+          "x": 1374.4793701171875,
+          "y": 714.8165283203125,
+          "page": 3
+        },
+        "M111": {
+          "neck": 8,
+          "x": 1418.7593994140625,
+          "y": 918.576416015625,
+          "page": 4
+        }
+      }
+    },
+    {
+      "id": "SA-21",
+      "tag": "S2",
+      "room": "Office 117",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": 150,
+      "scheduled_neck": 8,
+      "m101_neck": 8,
+      "m111_neck": 8,
+      "status": "Cross-checked plan count",
+      "source": "M101 plan; M111 ceiling plan; M001 grille schedule",
+      "note": "Count and airflow cross-checked between plans; field coordination remains.",
+      "views": {
+        "M101": {
+          "neck": 8,
+          "x": 559.0797729492188,
+          "y": 754.896484375,
+          "page": 3
+        },
+        "M111": {
+          "neck": 8,
+          "x": 579.5997314453125,
+          "y": 895.6564331054688,
+          "page": 4
+        }
+      }
+    },
+    {
+      "id": "SA-22",
+      "tag": "S2",
+      "room": "Treatment 120",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": 185,
+      "scheduled_neck": 8,
+      "m101_neck": 8,
+      "m111_neck": 8,
+      "status": "Cross-checked plan count",
+      "source": "M101 plan; M111 ceiling plan; M001 grille schedule",
+      "note": "Count and airflow cross-checked between plans; field coordination remains.",
+      "views": {
+        "M101": {
+          "neck": 8,
+          "x": 835.9196166992188,
+          "y": 773.8564453125,
+          "page": 3
+        },
+        "M111": {
+          "neck": 8,
+          "x": 867.359619140625,
+          "y": 918.3363647460938,
+          "page": 4
+        }
+      }
+    },
+    {
+      "id": "SA-23",
+      "tag": "S2",
+      "room": "Treatment 121",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": 185,
+      "scheduled_neck": 8,
+      "m101_neck": 8,
+      "m111_neck": 8,
+      "status": "Cross-checked plan count",
+      "source": "M101 plan; M111 ceiling plan; M001 grille schedule",
+      "note": "Count and airflow cross-checked between plans; field coordination remains.",
+      "views": {
+        "M101": {
+          "neck": 8,
+          "x": 951.2395629882812,
+          "y": 773.8564453125,
+          "page": 3
+        },
+        "M111": {
+          "neck": 8,
+          "x": 972.2395629882812,
+          "y": 918.3363647460938,
+          "page": 4
+        }
+      }
+    },
+    {
+      "id": "RA-01",
+      "tag": "R1",
+      "room": "M101 source marker 1",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": "22 x 22 opening",
+      "m101_neck": "22 x 22 tag / 22 x 12 boot note",
+      "m111_neck": "22 x 22 tag",
+      "status": "Cross-checked count; boot interface open",
+      "source": "M101 keynote 9; M111 plan; M001 grille schedule",
+      "note": "Twenty-one R1 tags on each plan, not forty-two. Return boot geometry / transition unresolved; RFI-04."
+    },
+    {
+      "id": "RA-02",
+      "tag": "R1",
+      "room": "M101 source marker 2",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": "22 x 22 opening",
+      "m101_neck": "22 x 22 tag / 22 x 12 boot note",
+      "m111_neck": "22 x 22 tag",
+      "status": "Cross-checked count; boot interface open",
+      "source": "M101 keynote 9; M111 plan; M001 grille schedule",
+      "note": "Twenty-one R1 tags on each plan, not forty-two. Return boot geometry / transition unresolved; RFI-04."
+    },
+    {
+      "id": "RA-03",
+      "tag": "R1",
+      "room": "M101 source marker 3",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": "22 x 22 opening",
+      "m101_neck": "22 x 22 tag / 22 x 12 boot note",
+      "m111_neck": "22 x 22 tag",
+      "status": "Cross-checked count; boot interface open",
+      "source": "M101 keynote 9; M111 plan; M001 grille schedule",
+      "note": "Twenty-one R1 tags on each plan, not forty-two. Return boot geometry / transition unresolved; RFI-04."
+    },
+    {
+      "id": "RA-04",
+      "tag": "R1",
+      "room": "M101 source marker 4",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": "22 x 22 opening",
+      "m101_neck": "22 x 22 tag / 22 x 12 boot note",
+      "m111_neck": "22 x 22 tag",
+      "status": "Cross-checked count; boot interface open",
+      "source": "M101 keynote 9; M111 plan; M001 grille schedule",
+      "note": "Twenty-one R1 tags on each plan, not forty-two. Return boot geometry / transition unresolved; RFI-04."
+    },
+    {
+      "id": "RA-05",
+      "tag": "R1",
+      "room": "M101 source marker 5",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": "22 x 22 opening",
+      "m101_neck": "22 x 22 tag / 22 x 12 boot note",
+      "m111_neck": "22 x 22 tag",
+      "status": "Cross-checked count; boot interface open",
+      "source": "M101 keynote 9; M111 plan; M001 grille schedule",
+      "note": "Twenty-one R1 tags on each plan, not forty-two. Return boot geometry / transition unresolved; RFI-04."
+    },
+    {
+      "id": "RA-06",
+      "tag": "R1",
+      "room": "M101 source marker 6",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": "22 x 22 opening",
+      "m101_neck": "22 x 22 tag / 22 x 12 boot note",
+      "m111_neck": "22 x 22 tag",
+      "status": "Cross-checked count; boot interface open",
+      "source": "M101 keynote 9; M111 plan; M001 grille schedule",
+      "note": "Twenty-one R1 tags on each plan, not forty-two. Return boot geometry / transition unresolved; RFI-04."
+    },
+    {
+      "id": "RA-07",
+      "tag": "R1",
+      "room": "M101 source marker 7",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": "22 x 22 opening",
+      "m101_neck": "22 x 22 tag / 22 x 12 boot note",
+      "m111_neck": "22 x 22 tag",
+      "status": "Cross-checked count; boot interface open",
+      "source": "M101 keynote 9; M111 plan; M001 grille schedule",
+      "note": "Twenty-one R1 tags on each plan, not forty-two. Return boot geometry / transition unresolved; RFI-04."
+    },
+    {
+      "id": "RA-08",
+      "tag": "R1",
+      "room": "M101 source marker 8",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": "22 x 22 opening",
+      "m101_neck": "22 x 22 tag / 22 x 12 boot note",
+      "m111_neck": "22 x 22 tag",
+      "status": "Cross-checked count; boot interface open",
+      "source": "M101 keynote 9; M111 plan; M001 grille schedule",
+      "note": "Twenty-one R1 tags on each plan, not forty-two. Return boot geometry / transition unresolved; RFI-04."
+    },
+    {
+      "id": "RA-09",
+      "tag": "R1",
+      "room": "M101 source marker 9",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": "22 x 22 opening",
+      "m101_neck": "22 x 22 tag / 22 x 12 boot note",
+      "m111_neck": "22 x 22 tag",
+      "status": "Cross-checked count; boot interface open",
+      "source": "M101 keynote 9; M111 plan; M001 grille schedule",
+      "note": "Twenty-one R1 tags on each plan, not forty-two. Return boot geometry / transition unresolved; RFI-04."
+    },
+    {
+      "id": "RA-10",
+      "tag": "R1",
+      "room": "M101 source marker 10",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": "22 x 22 opening",
+      "m101_neck": "22 x 22 tag / 22 x 12 boot note",
+      "m111_neck": "22 x 22 tag",
+      "status": "Cross-checked count; boot interface open",
+      "source": "M101 keynote 9; M111 plan; M001 grille schedule",
+      "note": "Twenty-one R1 tags on each plan, not forty-two. Return boot geometry / transition unresolved; RFI-04."
+    },
+    {
+      "id": "RA-11",
+      "tag": "R1",
+      "room": "M101 source marker 11",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": "22 x 22 opening",
+      "m101_neck": "22 x 22 tag / 22 x 12 boot note",
+      "m111_neck": "22 x 22 tag",
+      "status": "Cross-checked count; boot interface open",
+      "source": "M101 keynote 9; M111 plan; M001 grille schedule",
+      "note": "Twenty-one R1 tags on each plan, not forty-two. Return boot geometry / transition unresolved; RFI-04."
+    },
+    {
+      "id": "RA-12",
+      "tag": "R1",
+      "room": "M101 source marker 12",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": "22 x 22 opening",
+      "m101_neck": "22 x 22 tag / 22 x 12 boot note",
+      "m111_neck": "22 x 22 tag",
+      "status": "Cross-checked count; boot interface open",
+      "source": "M101 keynote 9; M111 plan; M001 grille schedule",
+      "note": "Twenty-one R1 tags on each plan, not forty-two. Return boot geometry / transition unresolved; RFI-04."
+    },
+    {
+      "id": "RA-13",
+      "tag": "R1",
+      "room": "M101 source marker 13",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": "22 x 22 opening",
+      "m101_neck": "22 x 22 tag / 22 x 12 boot note",
+      "m111_neck": "22 x 22 tag",
+      "status": "Cross-checked count; boot interface open",
+      "source": "M101 keynote 9; M111 plan; M001 grille schedule",
+      "note": "Twenty-one R1 tags on each plan, not forty-two. Return boot geometry / transition unresolved; RFI-04."
+    },
+    {
+      "id": "RA-14",
+      "tag": "R1",
+      "room": "M101 source marker 14",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": "22 x 22 opening",
+      "m101_neck": "22 x 22 tag / 22 x 12 boot note",
+      "m111_neck": "22 x 22 tag",
+      "status": "Cross-checked count; boot interface open",
+      "source": "M101 keynote 9; M111 plan; M001 grille schedule",
+      "note": "Twenty-one R1 tags on each plan, not forty-two. Return boot geometry / transition unresolved; RFI-04."
+    },
+    {
+      "id": "RA-15",
+      "tag": "R1",
+      "room": "M101 source marker 15",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": "22 x 22 opening",
+      "m101_neck": "22 x 22 tag / 22 x 12 boot note",
+      "m111_neck": "22 x 22 tag",
+      "status": "Cross-checked count; boot interface open",
+      "source": "M101 keynote 9; M111 plan; M001 grille schedule",
+      "note": "Twenty-one R1 tags on each plan, not forty-two. Return boot geometry / transition unresolved; RFI-04."
+    },
+    {
+      "id": "RA-16",
+      "tag": "R1",
+      "room": "M101 source marker 16",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": "22 x 22 opening",
+      "m101_neck": "22 x 22 tag / 22 x 12 boot note",
+      "m111_neck": "22 x 22 tag",
+      "status": "Cross-checked count; boot interface open",
+      "source": "M101 keynote 9; M111 plan; M001 grille schedule",
+      "note": "Twenty-one R1 tags on each plan, not forty-two. Return boot geometry / transition unresolved; RFI-04."
+    },
+    {
+      "id": "RA-17",
+      "tag": "R1",
+      "room": "M101 source marker 17",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": "22 x 22 opening",
+      "m101_neck": "22 x 22 tag / 22 x 12 boot note",
+      "m111_neck": "22 x 22 tag",
+      "status": "Cross-checked count; boot interface open",
+      "source": "M101 keynote 9; M111 plan; M001 grille schedule",
+      "note": "Twenty-one R1 tags on each plan, not forty-two. Return boot geometry / transition unresolved; RFI-04."
+    },
+    {
+      "id": "RA-18",
+      "tag": "R1",
+      "room": "M101 source marker 18",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": "22 x 22 opening",
+      "m101_neck": "22 x 22 tag / 22 x 12 boot note",
+      "m111_neck": "22 x 22 tag",
+      "status": "Cross-checked count; boot interface open",
+      "source": "M101 keynote 9; M111 plan; M001 grille schedule",
+      "note": "Twenty-one R1 tags on each plan, not forty-two. Return boot geometry / transition unresolved; RFI-04."
+    },
+    {
+      "id": "RA-19",
+      "tag": "R1",
+      "room": "M101 source marker 19",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": "22 x 22 opening",
+      "m101_neck": "22 x 22 tag / 22 x 12 boot note",
+      "m111_neck": "22 x 22 tag",
+      "status": "Cross-checked count; boot interface open",
+      "source": "M101 keynote 9; M111 plan; M001 grille schedule",
+      "note": "Twenty-one R1 tags on each plan, not forty-two. Return boot geometry / transition unresolved; RFI-04."
+    },
+    {
+      "id": "RA-20",
+      "tag": "R1",
+      "room": "M101 source marker 20",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": "22 x 22 opening",
+      "m101_neck": "22 x 22 tag / 22 x 12 boot note",
+      "m111_neck": "22 x 22 tag",
+      "status": "Cross-checked count; boot interface open",
+      "source": "M101 keynote 9; M111 plan; M001 grille schedule",
+      "note": "Twenty-one R1 tags on each plan, not forty-two. Return boot geometry / transition unresolved; RFI-04."
+    },
+    {
+      "id": "RA-21",
+      "tag": "R1",
+      "room": "M101 source marker 21",
+      "lifecycle": "New",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": "22 x 22 opening",
+      "m101_neck": "22 x 22 tag / 22 x 12 boot note",
+      "m111_neck": "22 x 22 tag",
+      "status": "Cross-checked count; boot interface open",
+      "source": "M101 keynote 9; M111 plan; M001 grille schedule",
+      "note": "Twenty-one R1 tags on each plan, not forty-two. Return boot geometry / transition unresolved; RFI-04."
+    },
+    {
+      "id": "EVAV-01",
+      "tag": "(E) VAV",
+      "room": "Plan-coordinate identifier; not an engineer equipment tag",
+      "lifecycle": "Existing to reuse",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": null,
+      "m101_neck": null,
+      "m111_neck": null,
+      "status": "Observed existing count; scope hold",
+      "source": "MD101 keynote 1; M101 existing VAV symbols",
+      "note": "Eight existing boxes, not eight new boxes. Actual type / relocation / service scope requires RFI-01."
+    },
+    {
+      "id": "EVAV-02",
+      "tag": "(E) VAV",
+      "room": "Plan-coordinate identifier; not an engineer equipment tag",
+      "lifecycle": "Existing to reuse",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": null,
+      "m101_neck": null,
+      "m111_neck": null,
+      "status": "Observed existing count; scope hold",
+      "source": "MD101 keynote 1; M101 existing VAV symbols",
+      "note": "Eight existing boxes, not eight new boxes. Actual type / relocation / service scope requires RFI-01."
+    },
+    {
+      "id": "EVAV-03",
+      "tag": "(E) VAV",
+      "room": "Plan-coordinate identifier; not an engineer equipment tag",
+      "lifecycle": "Existing to reuse",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": null,
+      "m101_neck": null,
+      "m111_neck": null,
+      "status": "Observed existing count; scope hold",
+      "source": "MD101 keynote 1; M101 existing VAV symbols",
+      "note": "Eight existing boxes, not eight new boxes. Actual type / relocation / service scope requires RFI-01."
+    },
+    {
+      "id": "EVAV-04",
+      "tag": "(E) VAV",
+      "room": "Plan-coordinate identifier; not an engineer equipment tag",
+      "lifecycle": "Existing to reuse",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": null,
+      "m101_neck": null,
+      "m111_neck": null,
+      "status": "Observed existing count; scope hold",
+      "source": "MD101 keynote 1; M101 existing VAV symbols",
+      "note": "Eight existing boxes, not eight new boxes. Actual type / relocation / service scope requires RFI-01."
+    },
+    {
+      "id": "EVAV-05",
+      "tag": "(E) VAV",
+      "room": "Plan-coordinate identifier; not an engineer equipment tag",
+      "lifecycle": "Existing to reuse",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": null,
+      "m101_neck": null,
+      "m111_neck": null,
+      "status": "Observed existing count; scope hold",
+      "source": "MD101 keynote 1; M101 existing VAV symbols",
+      "note": "Eight existing boxes, not eight new boxes. Actual type / relocation / service scope requires RFI-01."
+    },
+    {
+      "id": "EVAV-06",
+      "tag": "(E) VAV",
+      "room": "Plan-coordinate identifier; not an engineer equipment tag",
+      "lifecycle": "Existing to reuse",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": null,
+      "m101_neck": null,
+      "m111_neck": null,
+      "status": "Observed existing count; scope hold",
+      "source": "MD101 keynote 1; M101 existing VAV symbols",
+      "note": "Eight existing boxes, not eight new boxes. Actual type / relocation / service scope requires RFI-01."
+    },
+    {
+      "id": "EVAV-07",
+      "tag": "(E) VAV",
+      "room": "Plan-coordinate identifier; not an engineer equipment tag",
+      "lifecycle": "Existing to reuse",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": null,
+      "m101_neck": null,
+      "m111_neck": null,
+      "status": "Observed existing count; scope hold",
+      "source": "MD101 keynote 1; M101 existing VAV symbols",
+      "note": "Eight existing boxes, not eight new boxes. Actual type / relocation / service scope requires RFI-01."
+    },
+    {
+      "id": "EVAV-08",
+      "tag": "(E) VAV",
+      "room": "Plan-coordinate identifier; not an engineer equipment tag",
+      "lifecycle": "Existing to reuse",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": null,
+      "m101_neck": null,
+      "m111_neck": null,
+      "status": "Observed existing count; scope hold",
+      "source": "MD101 keynote 1; M101 existing VAV symbols",
+      "note": "Eight existing boxes, not eight new boxes. Actual type / relocation / service scope requires RFI-01."
+    },
+    {
+      "id": "T-01",
+      "tag": "T",
+      "room": "M101 thermostat symbol 1",
+      "lifecycle": "Existing / relocation to confirm",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": null,
+      "m101_neck": null,
+      "m111_neck": null,
+      "status": "Observed symbol count; scope hold",
+      "source": "MD101 keynote 2; M101 keynote 1; M001 controls notes",
+      "note": "Eight T symbols versus six relocation-keynote placements on M101; two adjacent T symbols at reception. Confirm zone mapping and relocation scope with controls vendor (RFI-02)."
+    },
+    {
+      "id": "T-02",
+      "tag": "T",
+      "room": "M101 thermostat symbol 2",
+      "lifecycle": "Existing / relocation to confirm",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": null,
+      "m101_neck": null,
+      "m111_neck": null,
+      "status": "Observed symbol count; scope hold",
+      "source": "MD101 keynote 2; M101 keynote 1; M001 controls notes",
+      "note": "Eight T symbols versus six relocation-keynote placements on M101; two adjacent T symbols at reception. Confirm zone mapping and relocation scope with controls vendor (RFI-02)."
+    },
+    {
+      "id": "T-03",
+      "tag": "T",
+      "room": "M101 thermostat symbol 3",
+      "lifecycle": "Existing / relocation to confirm",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": null,
+      "m101_neck": null,
+      "m111_neck": null,
+      "status": "Observed symbol count; scope hold",
+      "source": "MD101 keynote 2; M101 keynote 1; M001 controls notes",
+      "note": "Eight T symbols versus six relocation-keynote placements on M101; two adjacent T symbols at reception. Confirm zone mapping and relocation scope with controls vendor (RFI-02)."
+    },
+    {
+      "id": "T-04",
+      "tag": "T",
+      "room": "M101 thermostat symbol 4",
+      "lifecycle": "Existing / relocation to confirm",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": null,
+      "m101_neck": null,
+      "m111_neck": null,
+      "status": "Observed symbol count; scope hold",
+      "source": "MD101 keynote 2; M101 keynote 1; M001 controls notes",
+      "note": "Eight T symbols versus six relocation-keynote placements on M101; two adjacent T symbols at reception. Confirm zone mapping and relocation scope with controls vendor (RFI-02)."
+    },
+    {
+      "id": "T-05",
+      "tag": "T",
+      "room": "M101 thermostat symbol 5",
+      "lifecycle": "Existing / relocation to confirm",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": null,
+      "m101_neck": null,
+      "m111_neck": null,
+      "status": "Observed symbol count; scope hold",
+      "source": "MD101 keynote 2; M101 keynote 1; M001 controls notes",
+      "note": "Eight T symbols versus six relocation-keynote placements on M101; two adjacent T symbols at reception. Confirm zone mapping and relocation scope with controls vendor (RFI-02)."
+    },
+    {
+      "id": "T-06",
+      "tag": "T",
+      "room": "M101 thermostat symbol 6",
+      "lifecycle": "Existing / relocation to confirm",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": null,
+      "m101_neck": null,
+      "m111_neck": null,
+      "status": "Observed symbol count; scope hold",
+      "source": "MD101 keynote 2; M101 keynote 1; M001 controls notes",
+      "note": "Eight T symbols versus six relocation-keynote placements on M101; two adjacent T symbols at reception. Confirm zone mapping and relocation scope with controls vendor (RFI-02)."
+    },
+    {
+      "id": "T-07",
+      "tag": "T",
+      "room": "M101 thermostat symbol 7",
+      "lifecycle": "Existing / relocation to confirm",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": null,
+      "m101_neck": null,
+      "m111_neck": null,
+      "status": "Observed symbol count; scope hold",
+      "source": "MD101 keynote 2; M101 keynote 1; M001 controls notes",
+      "note": "Eight T symbols versus six relocation-keynote placements on M101; two adjacent T symbols at reception. Confirm zone mapping and relocation scope with controls vendor (RFI-02)."
+    },
+    {
+      "id": "T-08",
+      "tag": "T",
+      "room": "M101 thermostat symbol 8",
+      "lifecycle": "Existing / relocation to confirm",
+      "quantity": 1,
+      "cfm": null,
+      "scheduled_neck": null,
+      "m101_neck": null,
+      "m111_neck": null,
+      "status": "Observed symbol count; scope hold",
+      "source": "MD101 keynote 2; M101 keynote 1; M001 controls notes",
+      "note": "Eight T symbols versus six relocation-keynote placements on M101; two adjacent T symbols at reception. Confirm zone mapping and relocation scope with controls vendor (RFI-02)."
+    }
+  ],
+  "markers": [
+    {
+      "sheet": "M101",
+      "id": "SA-01",
+      "tag": "S1",
+      "x": 1126.799560546875,
+      "y": 188.97669982910156,
+      "note": "HC treatment 103 | 100 CFM | 6 in plan neck"
+    },
+    {
+      "sheet": "M111",
+      "id": "SA-01",
+      "tag": "S1",
+      "x": 1147.6795654296875,
+      "y": 272.0167541503906,
+      "note": "HC treatment 103 | 100 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M101",
+      "id": "SA-02",
+      "tag": "S1",
+      "x": 1412.0394287109375,
+      "y": 196.77674865722656,
+      "note": "Imaging 102 | 100 CFM | 6 in plan neck"
+    },
+    {
+      "sheet": "M111",
+      "id": "SA-02",
+      "tag": "S1",
+      "x": 1435.4393310546875,
+      "y": 339.2167053222656,
+      "note": "Imaging 102 | 100 CFM | 6 in plan neck"
+    },
+    {
+      "sheet": "M101",
+      "id": "SA-03",
+      "tag": "S1",
+      "x": 1557.599365234375,
+      "y": 399.8166809082031,
+      "note": "Reception / checkout 110 | 100 CFM | 6 in plan neck"
+    },
+    {
+      "sheet": "M111",
+      "id": "SA-03",
+      "tag": "S1",
+      "x": 1541.3994140625,
+      "y": 533.9765625,
+      "note": "Reception / checkout 110 | 100 CFM | 6 in plan neck"
+    },
+    {
+      "sheet": "M101",
+      "id": "SA-04",
+      "tag": "S1",
+      "x": 1761.3592529296875,
+      "y": 491.3766174316406,
+      "note": "Children area | 100 CFM | 6 in plan neck"
+    },
+    {
+      "sheet": "M111",
+      "id": "SA-04",
+      "tag": "S1",
+      "x": 1714.19921875,
+      "y": 672.8165283203125,
+      "note": "Children area | 100 CFM | 6 in plan neck"
+    },
+    {
+      "sheet": "M101",
+      "id": "SA-05",
+      "tag": "S1",
+      "x": 1298.03955078125,
+      "y": 543.8165283203125,
+      "note": "Corridor 122 | 50 CFM | 6 in plan neck"
+    },
+    {
+      "sheet": "M111",
+      "id": "SA-05",
+      "tag": "S1",
+      "x": 1340.87939453125,
+      "y": 706.2965087890625,
+      "note": "Corridor 122 | 50 CFM | 6 in plan neck"
+    },
+    {
+      "sheet": "M101",
+      "id": "SA-06",
+      "tag": "S1",
+      "x": 242.03988647460938,
+      "y": 845.7364501953125,
+      "note": "Mechanical 116 | 200 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M111",
+      "id": "SA-06",
+      "tag": "S1",
+      "x": 270.9598693847656,
+      "y": 997.6563720703125,
+      "note": "Mechanical 116 | 200 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M101",
+      "id": "SA-07",
+      "tag": "S2",
+      "x": 1586.87939453125,
+      "y": 126.4566879272461,
+      "note": "Office 101 | 150 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M111",
+      "id": "SA-07",
+      "tag": "S2",
+      "x": 1537.91943359375,
+      "y": 338.9767150878906,
+      "note": "Office 101 | 150 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M101",
+      "id": "SA-08",
+      "tag": "S2",
+      "x": 1036.9195556640625,
+      "y": 128.85670471191406,
+      "note": "Q. treatment 104 | 150 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M111",
+      "id": "SA-08",
+      "tag": "S2",
+      "x": 1060.9195556640625,
+      "y": 272.0167541503906,
+      "note": "Q. treatment 104 | 150 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M101",
+      "id": "SA-09",
+      "tag": "S2",
+      "x": 735.2396850585938,
+      "y": 160.77674865722656,
+      "note": "Q. treatment 105 | 150 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M111",
+      "id": "SA-09",
+      "tag": "S2",
+      "x": 710.2797241210938,
+      "y": 270.6966857910156,
+      "note": "Q. treatment 105 | 150 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M101",
+      "id": "SA-10",
+      "tag": "S2",
+      "x": 1699.0792236328125,
+      "y": 227.61671447753906,
+      "note": "Office 100 | 150 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M111",
+      "id": "SA-10",
+      "tag": "S2",
+      "x": 1774.3192138671875,
+      "y": 339.2167053222656,
+      "note": "Office 100 | 150 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M101",
+      "id": "SA-11",
+      "tag": "S2",
+      "x": 421.0798034667969,
+      "y": 302.3767395019531,
+      "note": "Future 107 | 150 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M111",
+      "id": "SA-11",
+      "tag": "S2",
+      "x": 384.3598327636719,
+      "y": 428.2566223144531,
+      "note": "Future 107 | 150 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M101",
+      "id": "SA-12",
+      "tag": "S2",
+      "x": 590.3997802734375,
+      "y": 302.3767395019531,
+      "note": "Future 106 | 150 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M111",
+      "id": "SA-12",
+      "tag": "S2",
+      "x": 553.6797485351562,
+      "y": 428.2566223144531,
+      "note": "Future 106 | 150 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M101",
+      "id": "SA-13",
+      "tag": "S2",
+      "x": 756.3596801757812,
+      "y": 333.4566955566406,
+      "note": "Vestibule 113A | 150 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M111",
+      "id": "SA-13",
+      "tag": "S2",
+      "x": 714.7196655273438,
+      "y": 499.2966613769531,
+      "note": "Vestibule 113A | 150 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M101",
+      "id": "SA-14",
+      "tag": "S2",
+      "x": 1240.199462890625,
+      "y": 452.1366271972656,
+      "note": "Sterilization 112 | 150 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M111",
+      "id": "SA-14",
+      "tag": "S2",
+      "x": 1277.759521484375,
+      "y": 589.6566162109375,
+      "note": "Sterilization 112 | 150 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M101",
+      "id": "SA-15",
+      "tag": "S2",
+      "x": 872.7596435546875,
+      "y": 480.3365783691406,
+      "note": "Lab 113 | 150 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M111",
+      "id": "SA-15",
+      "tag": "S2",
+      "x": 925.0796508789062,
+      "y": 563.9765625,
+      "note": "Lab 113 | 150 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M101",
+      "id": "SA-16",
+      "tag": "S2",
+      "x": 203.39990234375,
+      "y": 669.8165283203125,
+      "note": "Staff 115 | 200 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M111",
+      "id": "SA-16",
+      "tag": "S2",
+      "x": 309.7198791503906,
+      "y": 770.2565307617188,
+      "note": "Staff 115 | 200 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M101",
+      "id": "SA-17",
+      "tag": "S2",
+      "x": 1590.119384765625,
+      "y": 712.656494140625,
+      "note": "Waiting 109 west | 125 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M111",
+      "id": "SA-17",
+      "tag": "S2",
+      "x": 1580.3994140625,
+      "y": 823.2964477539062,
+      "note": "Waiting 109 west | 125 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M101",
+      "id": "SA-18",
+      "tag": "S2",
+      "x": 1711.3192138671875,
+      "y": 712.656494140625,
+      "note": "Waiting 109 east | 125 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M111",
+      "id": "SA-18",
+      "tag": "S2",
+      "x": 1796.279296875,
+      "y": 823.2964477539062,
+      "note": "Waiting 109 east | 125 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M101",
+      "id": "SA-19",
+      "tag": "S2",
+      "x": 1212.3594970703125,
+      "y": 714.8165283203125,
+      "note": "Treatment 123 | 185 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M111",
+      "id": "SA-19",
+      "tag": "S2",
+      "x": 1226.99951171875,
+      "y": 918.3363647460938,
+      "note": "Treatment 123 | 185 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M101",
+      "id": "SA-20",
+      "tag": "S2",
+      "x": 1374.4793701171875,
+      "y": 714.8165283203125,
+      "note": "Treatment 124 | 185 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M111",
+      "id": "SA-20",
+      "tag": "S2",
+      "x": 1418.7593994140625,
+      "y": 918.576416015625,
+      "note": "Treatment 124 | 185 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M101",
+      "id": "SA-21",
+      "tag": "S2",
+      "x": 559.0797729492188,
+      "y": 754.896484375,
+      "note": "Office 117 | 150 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M111",
+      "id": "SA-21",
+      "tag": "S2",
+      "x": 579.5997314453125,
+      "y": 895.6564331054688,
+      "note": "Office 117 | 150 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M101",
+      "id": "SA-22",
+      "tag": "S2",
+      "x": 835.9196166992188,
+      "y": 773.8564453125,
+      "note": "Treatment 120 | 185 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M111",
+      "id": "SA-22",
+      "tag": "S2",
+      "x": 867.359619140625,
+      "y": 918.3363647460938,
+      "note": "Treatment 120 | 185 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M101",
+      "id": "SA-23",
+      "tag": "S2",
+      "x": 951.2395629882812,
+      "y": 773.8564453125,
+      "note": "Treatment 121 | 185 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M111",
+      "id": "SA-23",
+      "tag": "S2",
+      "x": 972.2395629882812,
+      "y": 918.3363647460938,
+      "note": "Treatment 121 | 185 CFM | 8 in plan neck"
+    },
+    {
+      "sheet": "M101",
+      "id": "RA-view3-01",
+      "tag": "R1",
+      "x": 1776.474365234375,
+      "y": 205.398193359375,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M101",
+      "id": "RA-view3-02",
+      "tag": "R1",
+      "x": 1423.555419921875,
+      "y": 220.6380615234375,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M101",
+      "id": "RA-view3-03",
+      "tag": "R1",
+      "x": 1585.4349365234375,
+      "y": 225.6781005859375,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M101",
+      "id": "RA-view3-04",
+      "tag": "R1",
+      "x": 801.59814453125,
+      "y": 260.597900390625,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M101",
+      "id": "RA-view3-05",
+      "tag": "R1",
+      "x": 910.7976684570312,
+      "y": 261.43798828125,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M101",
+      "id": "RA-view3-06",
+      "tag": "R1",
+      "x": 1244.0367431640625,
+      "y": 271.5179443359375,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M101",
+      "id": "RA-view3-07",
+      "tag": "R1",
+      "x": 1397.2755126953125,
+      "y": 303.0780029296875,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M101",
+      "id": "RA-view3-08",
+      "tag": "R1",
+      "x": 389.6398620605469,
+      "y": 432.79901123046875,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M101",
+      "id": "RA-view3-09",
+      "tag": "R1",
+      "x": 812.1580810546875,
+      "y": 452.118408203125,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M101",
+      "id": "RA-view3-10",
+      "tag": "R1",
+      "x": 558.8394165039062,
+      "y": 459.19775390625,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M101",
+      "id": "RA-view3-11",
+      "tag": "R1",
+      "x": 1021.5570678710938,
+      "y": 480.55859375,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M101",
+      "id": "RA-view3-12",
+      "tag": "R1",
+      "x": 833.157958984375,
+      "y": 515.83837890625,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M101",
+      "id": "RA-view3-13",
+      "tag": "R1",
+      "x": 359.0394287109375,
+      "y": 548.478515625,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M101",
+      "id": "RA-view3-14",
+      "tag": "R1",
+      "x": 1554.115478515625,
+      "y": 564.9180908203125,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M101",
+      "id": "RA-view3-15",
+      "tag": "R1",
+      "x": 1612.6746826171875,
+      "y": 607.398193359375,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M101",
+      "id": "RA-view3-16",
+      "tag": "R1",
+      "x": 563.158447265625,
+      "y": 609.318603515625,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M101",
+      "id": "RA-view3-17",
+      "tag": "R1",
+      "x": 1110.1168212890625,
+      "y": 611.71826171875,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M101",
+      "id": "RA-view3-18",
+      "tag": "R1",
+      "x": 1354.555908203125,
+      "y": 629.7181396484375,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M101",
+      "id": "RA-view3-19",
+      "tag": "R1",
+      "x": 460.43939208984375,
+      "y": 667.398681640625,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M101",
+      "id": "RA-view3-20",
+      "tag": "R1",
+      "x": 759.23828125,
+      "y": 668.598388671875,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M101",
+      "id": "RA-view3-21",
+      "tag": "R1",
+      "x": 1050.7171630859375,
+      "y": 672.9183349609375,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M111",
+      "id": "RA-view4-01",
+      "tag": "R1",
+      "x": 814.5596313476562,
+      "y": 343.637939453125,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M111",
+      "id": "RA-view4-02",
+      "tag": "R1",
+      "x": 926.879150390625,
+      "y": 343.637939453125,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M111",
+      "id": "RA-view4-03",
+      "tag": "R1",
+      "x": 1274.6378173828125,
+      "y": 343.637939453125,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M111",
+      "id": "RA-view4-04",
+      "tag": "R1",
+      "x": 1639.916259765625,
+      "y": 371.9581298828125,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M111",
+      "id": "RA-view4-05",
+      "tag": "R1",
+      "x": 1799.8756103515625,
+      "y": 408.0780029296875,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M111",
+      "id": "RA-view4-06",
+      "tag": "R1",
+      "x": 1386.957275390625,
+      "y": 412.8779296875,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M111",
+      "id": "RA-view4-07",
+      "tag": "R1",
+      "x": 1461.597412109375,
+      "y": 475.51806640625,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M111",
+      "id": "RA-view4-08",
+      "tag": "R1",
+      "x": 1067.63916015625,
+      "y": 562.3980712890625,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M111",
+      "id": "RA-view4-09",
+      "tag": "R1",
+      "x": 840.0003051757812,
+      "y": 590.358154296875,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M111",
+      "id": "RA-view4-10",
+      "tag": "R1",
+      "x": 462.9615173339844,
+      "y": 601.0379638671875,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M111",
+      "id": "RA-view4-11",
+      "tag": "R1",
+      "x": 586.441162109375,
+      "y": 603.3179931640625,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M111",
+      "id": "RA-view4-12",
+      "tag": "R1",
+      "x": 1539.1168212890625,
+      "y": 668.8380126953125,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M111",
+      "id": "RA-view4-13",
+      "tag": "R1",
+      "x": 915.7200317382812,
+      "y": 685.8779296875,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M111",
+      "id": "RA-view4-14",
+      "tag": "R1",
+      "x": 426.2416687011719,
+      "y": 711.5579223632812,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M111",
+      "id": "RA-view4-15",
+      "tag": "R1",
+      "x": 595.9214477539062,
+      "y": 759.7979125976562,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M111",
+      "id": "RA-view4-16",
+      "tag": "R1",
+      "x": 1686.95654296875,
+      "y": 776.4779052734375,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M111",
+      "id": "RA-view4-17",
+      "tag": "R1",
+      "x": 840.2402954101562,
+      "y": 784.6378784179688,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M111",
+      "id": "RA-view4-18",
+      "tag": "R1",
+      "x": 1005.0,
+      "y": 784.6378784179688,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M111",
+      "id": "RA-view4-19",
+      "tag": "R1",
+      "x": 1201.3189697265625,
+      "y": 784.6378784179688,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M111",
+      "id": "RA-view4-20",
+      "tag": "R1",
+      "x": 1387.078125,
+      "y": 784.6378784179688,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M111",
+      "id": "RA-view4-21",
+      "tag": "R1",
+      "x": 461.5218811035156,
+      "y": 892.998046875,
+      "note": "Independent return-tag enumeration for this view; do not add view totals."
+    },
+    {
+      "sheet": "M101",
+      "id": "EVAV-01",
+      "tag": "VAV",
+      "x": 1144.5595703125,
+      "y": 246.71502685546875,
+      "note": "Existing box; do not price as new equipment."
+    },
+    {
+      "sheet": "M101",
+      "id": "EVAV-02",
+      "tag": "VAV",
+      "x": 1576.91943359375,
+      "y": 246.95501708984375,
+      "note": "Existing box; do not price as new equipment."
+    },
+    {
+      "sheet": "M101",
+      "id": "EVAV-03",
+      "tag": "VAV",
+      "x": 1033.439453125,
+      "y": 264.47503662109375,
+      "note": "Existing box; do not price as new equipment."
+    },
+    {
+      "sheet": "M101",
+      "id": "EVAV-04",
+      "tag": "VAV",
+      "x": 1749.479248046875,
+      "y": 395.87493896484375,
+      "note": "Existing box; do not price as new equipment."
+    },
+    {
+      "sheet": "M101",
+      "id": "EVAV-05",
+      "tag": "VAV",
+      "x": 671.3997192382812,
+      "y": 573.7149047851562,
+      "note": "Existing box; do not price as new equipment."
+    },
+    {
+      "sheet": "M101",
+      "id": "EVAV-06",
+      "tag": "VAV",
+      "x": 322.31988525390625,
+      "y": 582.4749145507812,
+      "note": "Existing box; do not price as new equipment."
+    },
+    {
+      "sheet": "M101",
+      "id": "EVAV-07",
+      "tag": "VAV",
+      "x": 1564.1993408203125,
+      "y": 665.2748413085938,
+      "note": "Existing box; do not price as new equipment."
+    },
+    {
+      "sheet": "M101",
+      "id": "EVAV-08",
+      "tag": "VAV",
+      "x": 962.8795776367188,
+      "y": 689.2748413085938,
+      "note": "Existing box; do not price as new equipment."
+    },
+    {
+      "sheet": "M101",
+      "id": "T-01",
+      "tag": "T",
+      "x": 1497.359375,
+      "y": 264.717041015625,
+      "note": "Thermostat symbol inventory; relocation task count not independently confirmed."
+    },
+    {
+      "sheet": "M101",
+      "id": "T-02",
+      "tag": "T",
+      "x": 850.1996459960938,
+      "y": 275.0369873046875,
+      "note": "Thermostat symbol inventory; relocation task count not independently confirmed."
+    },
+    {
+      "sheet": "M101",
+      "id": "T-03",
+      "tag": "T",
+      "x": 1388.5194091796875,
+      "y": 275.0369873046875,
+      "note": "Thermostat symbol inventory; relocation task count not independently confirmed."
+    },
+    {
+      "sheet": "M101",
+      "id": "T-04",
+      "tag": "T",
+      "x": 497.9997863769531,
+      "y": 429.116943359375,
+      "note": "Thermostat symbol inventory; relocation task count not independently confirmed."
+    },
+    {
+      "sheet": "M101",
+      "id": "T-05",
+      "tag": "T",
+      "x": 1465.679443359375,
+      "y": 450.116943359375,
+      "note": "Thermostat symbol inventory; relocation task count not independently confirmed."
+    },
+    {
+      "sheet": "M101",
+      "id": "T-06",
+      "tag": "T",
+      "x": 1479.9593505859375,
+      "y": 450.116943359375,
+      "note": "Thermostat symbol inventory; relocation task count not independently confirmed."
+    },
+    {
+      "sheet": "M101",
+      "id": "T-07",
+      "tag": "T",
+      "x": 1285.5595703125,
+      "y": 602.1568603515625,
+      "note": "Thermostat symbol inventory; relocation task count not independently confirmed."
+    },
+    {
+      "sheet": "M101",
+      "id": "T-08",
+      "tag": "T",
+      "x": 337.079833984375,
+      "y": 732.476806640625,
+      "note": "Thermostat symbol inventory; relocation task count not independently confirmed."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-01",
+      "tag": "Demo",
+      "x": 779.0396728515625,
+      "y": 195.88589477539062,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-02",
+      "tag": "Demo",
+      "x": 1015.07958984375,
+      "y": 195.88589477539062,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-03",
+      "tag": "Demo",
+      "x": 1216.439453125,
+      "y": 195.88589477539062,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-04",
+      "tag": "Demo",
+      "x": 1447.1993408203125,
+      "y": 195.88589477539062,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-05",
+      "tag": "Demo",
+      "x": 1599.9593505859375,
+      "y": 195.88589477539062,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-06",
+      "tag": "Demo",
+      "x": 1747.0792236328125,
+      "y": 195.88589477539062,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-07",
+      "tag": "Demo",
+      "x": 440.87982177734375,
+      "y": 364.0058898925781,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-08",
+      "tag": "Demo",
+      "x": 568.9197387695312,
+      "y": 364.0058898925781,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-09",
+      "tag": "Demo",
+      "x": 1463.2794189453125,
+      "y": 385.6058654785156,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-10",
+      "tag": "Demo",
+      "x": 901.6796264648438,
+      "y": 413.4457092285156,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-11",
+      "tag": "Demo",
+      "x": 772.19970703125,
+      "y": 425.6856994628906,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-12",
+      "tag": "Demo",
+      "x": 1335.83935546875,
+      "y": 429.4057922363281,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-13",
+      "tag": "Demo",
+      "x": 1048.439453125,
+      "y": 460.7257385253906,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-14",
+      "tag": "Demo",
+      "x": 1653.71923828125,
+      "y": 464.9256896972656,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-15",
+      "tag": "Demo",
+      "x": 1760.519287109375,
+      "y": 473.5657043457031,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-16",
+      "tag": "Demo",
+      "x": 490.9197998046875,
+      "y": 522.2858276367188,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-17",
+      "tag": "Demo",
+      "x": 929.7596435546875,
+      "y": 615.2858276367188,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-18",
+      "tag": "Demo",
+      "x": 614.6397705078125,
+      "y": 628.8457641601562,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-19",
+      "tag": "Demo",
+      "x": 392.7598571777344,
+      "y": 644.5657348632812,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-20",
+      "tag": "Demo",
+      "x": 532.4397583007812,
+      "y": 658.3657836914062,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-21",
+      "tag": "Demo",
+      "x": 655.7997436523438,
+      "y": 660.8858032226562,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-22",
+      "tag": "Demo",
+      "x": 193.67991638183594,
+      "y": 677.0857543945312,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-23",
+      "tag": "Demo",
+      "x": 1732.79931640625,
+      "y": 729.4057006835938,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-24",
+      "tag": "Demo",
+      "x": 1165.799560546875,
+      "y": 730.2457275390625,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-25",
+      "tag": "Demo",
+      "x": 1302.3594970703125,
+      "y": 740.4457397460938,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-26",
+      "tag": "Demo",
+      "x": 1490.5194091796875,
+      "y": 743.6857299804688,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-27",
+      "tag": "Demo",
+      "x": 667.7996826171875,
+      "y": 784.1256713867188,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-28",
+      "tag": "Demo",
+      "x": 1401.599365234375,
+      "y": 808.1256713867188,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-29",
+      "tag": "Demo",
+      "x": 315.35986328125,
+      "y": 817.9656372070312,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-30",
+      "tag": "Demo",
+      "x": 1123.439453125,
+      "y": 959.3255615234375,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-31",
+      "tag": "Demo",
+      "x": 1314.95947265625,
+      "y": 959.3255615234375,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-32",
+      "tag": "Demo",
+      "x": 1451.9993896484375,
+      "y": 959.3255615234375,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-33",
+      "tag": "Demo",
+      "x": 1632.479248046875,
+      "y": 959.3255615234375,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    },
+    {
+      "sheet": "MD101",
+      "id": "DEMO-34",
+      "tag": "Demo",
+      "x": 1738.19921875,
+      "y": 959.3255615234375,
+      "note": "Keynote 4 occurrence; review leader endpoint before release."
+    }
+  ],
+  "requirements": [
+    {
+      "id": "SP-01",
+      "topic": "Preconstruction",
+      "requirement": "Complete pre-demolition supply, return and exhaust airflow survey of systems serving the work area; submit baseline report before demolition.",
+      "source": "M001 Balancing",
+      "applicability": "Included",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-02",
+      "topic": "Final TAB",
+      "requirement": "Complete final TAB of affected systems; report pre/post airflows, procedures, deficiencies and corrective actions. Final quantities equal or exceed baseline unless otherwise indicated or approved.",
+      "source": "M001 Balancing",
+      "applicability": "Included",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-03",
+      "topic": "Existing systems",
+      "requirement": "Inspect existing HVAC, ductwork and controls; report deficiencies in writing before work; verify dimensions, access, clearances and routing before ordering.",
+      "source": "M001 Contractor Responsibilities; Existing Conditions; Measurements",
+      "applicability": "Included",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-04",
+      "topic": "Duct insulation",
+      "requirement": "All concealed ductwork specified as 1-1/2-inch fiberglass with foil jacket. Preserve this thickness; do not invent an unlisted thermal value.",
+      "source": "M001 Duct Insulation",
+      "applicability": "Included",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-05",
+      "topic": "Metal duct",
+      "requirement": "Concealed rectangular and round galvanized metal duct; sizes are net free area; allow for offsets and transitions; UL-listed latex mastic at joints.",
+      "source": "M001 Metal Ductwork (Concealed)",
+      "applicability": "Included",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-06",
+      "topic": "Flex duct",
+      "requirement": "R-6 insulated flexible duct in specifications; diffuser detail calls for Flexmaster Type 8M or equal insulated acoustic flex. Reconcile selected product with both clauses.",
+      "source": "M001 Flexible Duct; detail 1/M001",
+      "applicability": "Included",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-07",
+      "topic": "Flex maximum",
+      "requirement": "Flexible duct connection maximum 8 feet per detail 1/M001. This is a limit, not the measured length of every run.",
+      "source": "M001 detail 1 Diffuser",
+      "applicability": "Included",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-08",
+      "topic": "Takeoffs and dampers",
+      "requirement": "Specified spin-in takeoffs have air extractor and balancing damper with locking wing nut; homemade collars not accepted. Detail calls for side takeoff with damper. Count only applicable connections.",
+      "source": "M001 Spin-in Fittings; detail 1/M001",
+      "applicability": "Included",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-09",
+      "topic": "Flex connections",
+      "requirement": "Use metal worm-drive bands / specified clamps and sealed connections. Do not assume tape alone or double-count parts included in a purchased assembly.",
+      "source": "M001 Flexible Duct; detail 1/M001",
+      "applicability": "Included",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-10",
+      "topic": "Elbows",
+      "requirement": "Rectangular elbows require turning/splitter vanes: mitered CR3-9 at 1.5-inch vane spacing or radius CR3-3 with one splitter. Round elbows do not require vanes under this clause.",
+      "source": "M001 Turning Vanes; detail 2/M001",
+      "applicability": "Included",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-11",
+      "topic": "Rectangular duct supports",
+      "requirement": "Heavy-gauge straps turned under at least 2 inches. Hanger spacing up to 48 x 18 duct: 8 feet; larger: 6 feet. Add end / fitting / field support requirements as applicable.",
+      "source": "M001 Hangers",
+      "applicability": "Included",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-12",
+      "topic": "Pipe supports",
+      "requirement": "Pipe hanger and insulation-shield requirements are present. Applicability depends on confirmed HVAC piping scope; do not extend to excluded plumbing.",
+      "source": "M001 Pipe Hangers & Supports; detail 3/M001",
+      "applicability": "Conditional - RFI-01",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-13",
+      "topic": "Supply diffusers",
+      "requirement": "Price SCD S1: 6-inch neck; S2: 8-inch neck; 24 x 24 lay-in face, four-way throw, damper, insulated backpan, removable face, White B12. Two plan/tag size conflicts remain.",
+      "source": "M001 grille schedule",
+      "applicability": "Included / 2 assemblies held",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-14",
+      "topic": "Return grilles",
+      "requirement": "Price PDDR R1: 24 x 24 lay-in face, 22 x 22 return opening, perforated face / grid core, White B12; no damper scheduled.",
+      "source": "M001 grille schedule",
+      "applicability": "Included",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-15",
+      "topic": "Return boots",
+      "requirement": "All return boots specified as 22 x 12. Record separately from 22 x 22 grille opening; obtain transition/fabrication clarification.",
+      "source": "M101 keynote 9",
+      "applicability": "Conditional - RFI-04",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-16",
+      "topic": "Brand alternatives",
+      "requirement": "Grilles/registers may be Price, Krueger, Metalaire or Titus per specification; schedule basis is Price. Substitution must satisfy schedule performance/finish and approval requirements.",
+      "source": "M001 Grilles and Registers; Conformance",
+      "applicability": "Included",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-17",
+      "topic": "Intake and exhaust",
+      "requirement": "Provide 3-inch discharge cap for dental vacuum and 3-inch intake cap for air compressor; drawing routes are 2-inch EA/OA. Keep equipment utility distribution excluded.",
+      "source": "M101 keynotes 5 and 8; M601",
+      "applicability": "Conditional - RFI-05/06",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-18",
+      "topic": "Hood schedule",
+      "requirement": "L-1: FAMCO SDWV3, nominal 3-inch, exhaust service for VACSTAR 80H; backdraft damper, architect color approval, field-verify neck. Intake use unresolved.",
+      "source": "M001 exhaust hood schedule",
+      "applicability": "Conditional - RFI-06",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-19",
+      "topic": "Controls",
+      "requirement": "Existing controls described as pneumatic; relocate/reuse thermostats and extend tubing as necessary. Coordinate controls vendor and County for BMS graphics. Automatic-controls paragraph names Envirotrol, LLC, (866) 903-8765; availability and exact scope not independently verified.",
+      "source": "M101 keynote 1; M001 pneumatic and automatic controls",
+      "applicability": "Conditional - RFI-02",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-20",
+      "topic": "Construction filters",
+      "requirement": "Provide temporary media over return grilles/openings during construction and replace all filters in affected HVAC equipment before handover. Sizes and quantities require survey.",
+      "source": "M001 Filters",
+      "applicability": "Included",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-21",
+      "topic": "Access doors",
+      "requirement": "Mechanical contractor furnishes required building access doors; general contractor mounts them. Duct-access / rated-wall provisions require location and applicability review.",
+      "source": "M001 Access Doors",
+      "applicability": "Conditional - RFI-10",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-22",
+      "topic": "Rated penetrations",
+      "requirement": "Coordinate ratings and furnish applicable firestopping / fire dampers; submit UL assemblies as required by notes. Mechanical drawings alone do not identify every required location.",
+      "source": "M001 Fire Ratings",
+      "applicability": "Conditional - RFI-10",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-23",
+      "topic": "Paint and finishes",
+      "requirement": "Touch up damaged factory finishes; paint hangers and exposed/exterior supports as specified. Exposed paint-grip duct field painting assigned to GC by M001.",
+      "source": "M001 Painting; Metal Ductwork (Exposed)",
+      "applicability": "Included",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-24",
+      "topic": "Permits / inspection",
+      "requirement": "Mechanical contractor responsible for mechanical fees, permits and required tests under the provided specifications. No permit fee has been assumed.",
+      "source": "M001 Fees and Permits",
+      "applicability": "Included",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-25",
+      "topic": "Closeout",
+      "requirement": "Provide digital PDF engineering data, cut sheets, operating instructions, warranties, contents and owner instruction for applicable installed work.",
+      "source": "M001 Operating Instructions",
+      "applicability": "Included",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-26",
+      "topic": "Warranty",
+      "requirement": "Specification states a 12-month materials, equipment and workmanship guarantee; define applicable work and commencement in agreed proposal terms.",
+      "source": "M001 Guarantee",
+      "applicability": "Included",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-27",
+      "topic": "Protection / retention",
+      "requirement": "Reuse existing dual-inlet VAV boxes; preserve primary heating/cooling risers and main trunks. Modify/reconnect as indicated, not blanket replacement.",
+      "source": "MD101 keynotes 1,5,7; M101",
+      "applicability": "Included",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-28",
+      "topic": "Retained-area connections",
+      "requirement": "Existing lobby ducts/diffusers remain; reconnect at indicated points and adjust three retained diffusers to shown airflows. Explicit keyed work at a shaded boundary is not automatically excluded.",
+      "source": "M101 keynotes 2 and 6",
+      "applicability": "Included",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-29",
+      "topic": "Dental equipment",
+      "requirement": "Existing dental vacuum, compressor and amalgam separator relocation is indicated; no new dental equipment provision. Assignment to HVAC versus dental/plumbing vendor is unresolved.",
+      "source": "M101 keynotes 3 and 4",
+      "applicability": "Conditional - RFI-05",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-30",
+      "topic": "Excluded utilities",
+      "requirement": "Do not quantify/prices domestic water, sanitary, vent, fixtures, water filtration, dental vacuum distribution, compressed-air distribution or electrical under this mechanical-only package. Log mechanical-interface obligations instead.",
+      "source": "User trade boundary; M101 enlarged room; M601",
+      "applicability": "Excluded / interface only",
+      "action": "Written scope split required where M notes assign cross-trade work"
+    },
+    {
+      "id": "SP-31",
+      "topic": "Hydronic water TAB",
+      "requirement": "Water-system balancing and flow-control calibration are specified, but applicable boxes/coils/piping are not resolved. Do not silently omit or fabricate a water scope.",
+      "source": "M001 Balancing and Work Included",
+      "applicability": "Conditional - RFI-01",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-32",
+      "topic": "Detectors",
+      "requirement": "M001 explicitly states duct smoke detectors and carbon monoxide detector are not required in this set. Do not insert them as default base-bid equipment.",
+      "source": "M001 detector notes",
+      "applicability": "Not required by supplied M notes",
+      "action": "Recheck only upon new project direction / documents"
+    },
+    {
+      "id": "SP-33",
+      "topic": "Asset labels",
+      "requirement": "P3-VAV numbering / Atrium Health asset-tag notes appear, despite Forsyth County project identification; applicability requires written clarification.",
+      "source": "M001 Labeling and Asset Tagging",
+      "applicability": "Conditional - RFI-09",
+      "action": "Carry in mechanical estimate / proposal"
+    },
+    {
+      "id": "SP-34",
+      "topic": "As-built review",
+      "requirement": "Maintain as-built drawings throughout the project; leave a paper copy in a clear plastic envelope on the electrical/IT room wall and provide digital copies to the owner and engineer of record.",
+      "source": "M001 As-built Drawing Note",
+      "applicability": "Included",
+      "action": "Carry project-long redlines, paper closeout copy/envelope and digital delivery; document actual recipient requirements."
+    }
+  ],
+  "rfis": [
+    {
+      "id": "RFI-01",
+      "title": "VAV type, location and hydronic work",
+      "question": "MD101 keynote 1 describes reused dual-inlet primary heating/cooling boxes. M001 legend describes electric reheat, while Work Included calls for hot-water reheat relocation and hydronic rework. Confirm actual box type, which boxes physically relocate, whether any hydronic piping / coil work exists, and whether water TAB, valves and VAV labels apply.",
+      "source": "MD101/1 keynote 1; M101 existing VAVs; M001 legend, Work Included, Balancing and Labeling",
+      "impact": "VAV, piping, labor, controls and water TAB cannot be safely bought or priced from one interpretation.",
+      "priority": "High",
+      "status": "Open",
+      "response": "",
+      "resolvedBy": "",
+      "resolvedDate": ""
+    },
+    {
+      "id": "RFI-02",
+      "title": "Pneumatic controls scope and thermostat count",
+      "question": "Confirm reuse versus new thermostats/sensors, the eight T-symbol to VAV-zone mapping and exact relocation count. M101 has six relocation-keynote placements and two adjacent T symbols in reception. Confirm pneumatic tubing changes, responsible controls vendor and applicable BMS graphics / integration scope.",
+      "source": "MD101 keynote 2; M101 keynote 1 and symbols; M001 Pneumatic Mechanical Temperature Controls and Automatic Temperature Controls",
+      "impact": "Controls subcontract and relocation labor; avoid buying eight new thermostats or assuming every symbol requires a distinct relocation.",
+      "priority": "High",
+      "status": "Open",
+      "response": "",
+      "resolvedBy": "",
+      "resolvedDate": ""
+    },
+    {
+      "id": "RFI-03",
+      "title": "Two S1 diffuser neck-size conflicts",
+      "question": "For Mechanical 116, both M101 and M111 tag S1 at 200 CFM with an 8-inch neck, but M001 schedules S1 with a 6-inch neck. For HC treatment 103, M101 shows S1 / 6-inch at 100 CFM but M111 shows S1 / 8-inch. Issue corrected tags / neck sizes for both devices.",
+      "source": "M001 grille schedule; M101 Mechanical 116 and HC treatment 103; M111 matching rooms",
+      "impact": "Hold procurement of the two affected diffuser / branch assemblies; the observed total remains six S1 tags.",
+      "priority": "High",
+      "status": "Open",
+      "response": "",
+      "resolvedBy": "",
+      "resolvedDate": ""
+    },
+    {
+      "id": "RFI-04",
+      "title": "Return boot and grille interface",
+      "question": "All 21 R1 tags indicate 22 x 22 openings; M101 keynote 9 specifies all return boots as 22 x 12. Confirm the intended transition, boot height / elbow geometry, lining or insulation and fit with the scheduled Price PDDR face. Dimensions may describe different components; do not assume a typo.",
+      "source": "M001 R1 schedule; M101 keynote 9; M111 return symbols",
+      "impact": "Custom fabrication and material/labor quantities. Twenty keynote-9 placements do not override the note applying to all return boots.",
+      "priority": "Medium",
+      "status": "Open",
+      "response": "",
+      "resolvedBy": "",
+      "resolvedDate": ""
+    },
+    {
+      "id": "RFI-05",
+      "title": "Dental equipment trade assignment",
+      "question": "Assign removal, transport, reinstallation, connections and startup of the existing dental vacuum, air compressor and amalgam separator to the responsible trade / dental vendor. Confirm GunnAire scope for only the 2-inch equipment intake/exhaust versus full equipment relocation. Plumbing, sanitary, water, vacuum distribution, compressed-air distribution and electrical are excluded from this requested package pending a written scope split.",
+      "source": "M101 keynotes 3,4,5,7,8 and enlarged equipment room; M601 diagrams",
+      "impact": "Potentially material subcontract, rigging and specialty equipment liability. Do not hide equipment relocation inside HVAC ductwork.",
+      "priority": "High",
+      "status": "Open",
+      "response": "",
+      "resolvedBy": "",
+      "resolvedDate": ""
+    },
+    {
+      "id": "RFI-06",
+      "title": "Intake/exhaust termination selection",
+      "question": "Confirm the approved 3-inch intake cap / hood and 2-to-3-inch connection for each 2-inch equipment line. The same L1 tag is used for intake and exhaust, but M001 schedules an exhaust hood with a backdraft damper. Confirm intake suitability, damper treatment, weather/screen protection, routing and field neck size before purchase.",
+      "source": "M001 exhaust hood schedule L-1; M101 keynotes 5 and 8; M601 compressor and vacuum diagrams",
+      "impact": "Two terminations are indicated; the exact intake assembly cannot be copied from the exhaust schedule.",
+      "priority": "High",
+      "status": "Open",
+      "response": "",
+      "resolvedBy": "",
+      "resolvedDate": ""
+    },
+    {
+      "id": "RFI-07",
+      "title": "Electrical exclusion versus mechanical specification",
+      "question": "Confirm in writing that branch power, line-voltage wiring, disconnects, starters and electrical trade work are by others. M001 Work Included assigns power and control wiring to this contract. Identify HVAC controls/pneumatic work remaining in mechanical scope rather than excluding all controls.",
+      "source": "M001 Work Included; M001 Automatic Temperature Controls; user mechanical-only boundary",
+      "impact": "A user-requested exclusion does not by itself amend the project bid requirements.",
+      "priority": "High",
+      "status": "Open",
+      "response": "",
+      "resolvedBy": "",
+      "resolvedDate": ""
+    },
+    {
+      "id": "RFI-08",
+      "title": "Installation diagram reference / correct equipment manuals",
+      "question": "M101 keynote 7 refers to M600, which is not in the provided five-sheet index. M601 contains diagrams. Confirm that M601 is intended and supply the applicable model/revision manuals. The compressor caption says AIRSTAR 50 while the embedded illustration appears to show AirStar 30; verify actual existing model and required installation accessories.",
+      "source": "M001 sheet index; M101 keynote 7; M601 lower-right illustration and caption",
+      "impact": "Avoid taking utility connection, clearance or accessory requirements from the wrong model.",
+      "priority": "Medium",
+      "status": "Open",
+      "response": "",
+      "resolvedBy": "",
+      "resolvedDate": ""
+    },
+    {
+      "id": "RFI-09",
+      "title": "Project-specific applicability of copied-looking requirements",
+      "question": "Confirm whether the Atrium Health asset-tagging paragraph, P3-VAV-# labeling, new VAV locations and exhaust-fan references apply to this Forsyth County dental suite. Identify any applicable asset tagging / labeling deliverables. These are unresolved project notes, not automatically deleted boilerplate.",
+      "source": "M001 Labeling, Automatic Temperature Controls and Atrium Health Asset Tagging",
+      "impact": "Closeout / controls scope and possible unshown equipment requirements.",
+      "priority": "Medium",
+      "status": "Open",
+      "response": "",
+      "resolvedBy": "",
+      "resolvedDate": ""
+    },
+    {
+      "id": "RFI-10",
+      "title": "Fire ratings, penetrations, access and finish scope",
+      "question": "The provided mechanical set does not establish every partition rating or ceiling service-access condition. Provide the applicable rating / penetration information, confirm fire dampers and firestop assemblies, and assign access-door furnishing, installation, cutting/patching and finish restoration. Request only mechanical coordination information; do not take off other trades.",
+      "source": "M001 Access Doors, Fire Ratings, Painting and Work Included",
+      "impact": "Conditional materials and labor cannot be treated as zero because locations are not shown.",
+      "priority": "High",
+      "status": "Open",
+      "response": "",
+      "resolvedBy": "",
+      "resolvedDate": ""
+    },
+    {
+      "id": "RFI-11",
+      "title": "Existing-condition survey, access and phasing",
+      "question": "Confirm required site-access windows, shutdown approval, protection / dust-control expectations and the process for reporting existing deficiencies before work. Coordinate the mandatory pre-demolition airflow survey and confirm affected equipment filter quantities and existing system capacities.",
+      "source": "M001 Contractor Responsibilities, Mechanical Existing Conditions, Filters and Balancing",
+      "impact": "Pre-TAB, construction logistics, concealed offsets, filter quantities and existing-condition cost exposure.",
+      "priority": "High",
+      "status": "Open",
+      "response": "",
+      "resolvedBy": "",
+      "resolvedDate": ""
+    },
+    {
+      "id": "RFI-12",
+      "title": "Complete bid-document and addenda basis",
+      "question": "Confirm the five supplied sheets dated 7-31-26 are the current mechanical bid basis; provide applicable mechanical specifications and addenda not embedded in this file. Confirm which contractual terms govern discrepancies rather than assuming an undocumented drawing/specification precedence.",
+      "source": "Provided five-sheet set; M001 sheet index and contractor responsibilities",
+      "impact": "Final release must not imply review of documents or revisions that were not supplied.",
+      "priority": "High",
+      "status": "Open",
+      "response": "",
+      "resolvedBy": "",
+      "resolvedDate": ""
+    }
+  ],
+  "zones": [
+    {
+      "id": "Z-01",
+      "label": "Staff / Mechanical / Office 117",
+      "boxCFM": 550,
+      "terminalCFM": 550,
+      "detail": "200 + 200 + 150; Mechanical 116 diffuser neck conflict remains."
+    },
+    {
+      "id": "Z-02",
+      "label": "Future 106/107 / Vestibule 113A",
+      "boxCFM": 450,
+      "terminalCFM": 450,
+      "detail": "150 + 150 + 150"
+    },
+    {
+      "id": "Z-03",
+      "label": "Q. treatment 104/105 / Lab 113",
+      "boxCFM": 450,
+      "terminalCFM": 450,
+      "detail": "150 + 150 + 150"
+    },
+    {
+      "id": "Z-04",
+      "label": "HC103 / Imaging102 / Sterilization112",
+      "boxCFM": 350,
+      "terminalCFM": 350,
+      "detail": "100 + 100 + 150; HC103 neck conflict"
+    },
+    {
+      "id": "Z-05",
+      "label": "Office100/101 + retained east terminal",
+      "boxCFM": 450,
+      "terminalCFM": 450,
+      "detail": "150 + 150 + existing 150"
+    },
+    {
+      "id": "Z-06",
+      "label": "Reception / Children + retained east terminal",
+      "boxCFM": 325,
+      "terminalCFM": 325,
+      "detail": "100 + 100 + existing 125"
+    },
+    {
+      "id": "Z-07",
+      "label": "Treatment120/121/123/124",
+      "boxCFM": 740,
+      "terminalCFM": 740,
+      "detail": "185 x 4"
+    },
+    {
+      "id": "Z-08",
+      "label": "Waiting / Corridor + retained east terminal",
+      "boxCFM": 450,
+      "terminalCFM": 450,
+      "detail": "125 + 125 + 50 + existing 150"
+    }
+  ],
+  "qa": [
+    {
+      "id": "QA-01",
+      "check": "Supplied mechanical sheet inventory and source fingerprint",
+      "status": "Complete",
+      "note": "All five supplied sheets inventoried; does not assert complete contract set.",
+      "reviewer": "",
+      "date": ""
+    },
+    {
+      "id": "QA-02",
+      "check": "Visual review of each supplied page and embedded schedules/details",
+      "status": "Complete",
+      "note": "M001 schedules and M601 diagrams reviewed as images, not text alone.",
+      "reviewer": "",
+      "date": ""
+    },
+    {
+      "id": "QA-03",
+      "check": "Unique new-device count / duplicate-view check",
+      "status": "Complete",
+      "note": "23 new supply; 21 new return; not doubled between M101 and M111.",
+      "reviewer": "",
+      "date": ""
+    },
+    {
+      "id": "QA-04",
+      "check": "New-plan zone airflow arithmetic",
+      "status": "Complete",
+      "note": "3,340 new + 425 retained = 3,765 CFM; zone sums reconcile, not field capacity verification.",
+      "reviewer": "",
+      "date": ""
+    },
+    {
+      "id": "QA-05",
+      "check": "All relevant RFIs and trade responsibilities resolved",
+      "status": "Open",
+      "note": "Twelve requests remain open.",
+      "reviewer": "",
+      "date": ""
+    },
+    {
+      "id": "QA-06",
+      "check": "Calibrated per-view length / area measurements and fittings",
+      "status": "Open",
+      "note": "No duct, pipe, insulation or tubing length has been finalized.",
+      "reviewer": "",
+      "date": ""
+    },
+    {
+      "id": "QA-07",
+      "check": "Demolition leader endpoints, existing/new/reuse reconciliation",
+      "status": "Open",
+      "note": "34 keynote-4 positions inventoried; verify endpoints and demo lengths.",
+      "reviewer": "",
+      "date": ""
+    },
+    {
+      "id": "QA-08",
+      "check": "Site survey, baseline TAB and existing-condition evidence",
+      "status": "Open",
+      "note": "No site visit or flow measurement has been performed by this platform.",
+      "reviewer": "",
+      "date": ""
+    },
+    {
+      "id": "QA-09",
+      "check": "Supplier / subcontract pricing and labor basis checked",
+      "status": "Open",
+      "note": "No invented rates; all cost inputs are blank.",
+      "reviewer": "",
+      "date": ""
+    },
+    {
+      "id": "QA-10",
+      "check": "Allowances, exclusions and proposal commercial terms approved",
+      "status": "Open",
+      "note": "Electrical and dental trade boundary need written agreement.",
+      "reviewer": "",
+      "date": ""
+    },
+    {
+      "id": "QA-11",
+      "check": "Current addenda / complete mechanical bid basis confirmed",
+      "status": "Open",
+      "note": "Only uploaded five-sheet set available.",
+      "reviewer": "",
+      "date": ""
+    },
+    {
+      "id": "QA-12",
+      "check": "Independent reviewer signoff and final purchasing check",
+      "status": "Open",
+      "note": "Human estimator approval required; no automated guarantee.",
+      "reviewer": "",
+      "date": ""
+    }
+  ],
+  "measurements": [],
+  "calibrations": {},
+  "inputs": {
+    "laborRate": null,
+    "markupPct": null,
+    "taxAllowance": null,
+    "jobCosts": null,
+    "contingency": null,
+    "proposalTerms": "",
+    "customer": ""
+  },
+  "counts": {
+    "newSupply": 23,
+    "newReturn": 21,
+    "existingVAV": 8,
+    "thermostatSymbols": 8,
+    "retainedSupply": 3,
+    "newSupplyCFM": 3340,
+    "retainedSupplyCFM": 425,
+    "totalSupplyCFM": 3765,
+    "demoKeynoteLocations": 34,
+    "transferAssemblies": 2,
+    "terminations": 2
+  }
+}

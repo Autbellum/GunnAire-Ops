@@ -2,6 +2,8 @@ import SwiftUI
 import SwiftData
 import UIKit
 import UniformTypeIdentifiers
+import LoadSightUI
+import LoadSightKit
 
 struct BillingDocumentsView: View {
     @Environment(\.dismiss) private var dismiss
@@ -55,6 +57,7 @@ struct BillingDocumentsView: View {
     @State private var newDocumentSaveConfirmed = false
     @State private var standaloneInvoiceWorkType: InvoiceWorkType = .service
     @State private var showingNewDocumentDismissConfirmation = false
+    @State private var showingLoadSightWorkspace = false
     @State private var selectedJobStage: JobDocumentationStage = .work
     @State private var selectedCustomerID: UUID?
     @State private var selectedServiceLocationID: UUID?
@@ -230,6 +233,20 @@ struct BillingDocumentsView: View {
     private var selectedHasTaxableLines: Bool {
         selectedLineItems.contains {
             selectedBundleSnapshots[$0.id]?.soldLeaves.contains(where: \.isTaxable) ?? $0.isTaxable
+        }
+    }
+
+    /// Ignore ambiguous IDs and unresolved relationships instead of guessing a link.
+    private var loadSightContextChoices: [OpsProjectContext] {
+        let customerCounts = Dictionary(grouping: customers, by: \.id).mapValues(\.count)
+        let jobCounts = Dictionary(grouping: serviceCalls, by: \.id).mapValues(\.count)
+        return customers.filter { customerCounts[$0.id] == 1 && !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.flatMap { customer in
+            let snapshot = OpsCustomerSnapshot(id: customer.id, name: customer.name, address: customer.address ?? "")
+            let jobs = serviceCalls.filter { jobCounts[$0.id] == 1 && $0.customer?.id == customer.id }.map { job in
+                OpsProjectContext(customer: snapshot, job: OpsJobSnapshot(id: job.id, customerID: customer.id,
+                    title: job.eventTitle ?? "", siteAddress: job.siteAddress ?? "", serviceLocationID: job.serviceLocationID))
+            }
+            return [OpsProjectContext(customer: snapshot)] + jobs
         }
     }
 
@@ -1998,6 +2015,18 @@ GunnAire
                 NavigationStack {
                     AnyView(
             List {
+                if canViewFinancials && workspaceMode.showsEstimates && !isJobDocumentationMode {
+                    Section("Mechanical estimating") {
+                        Button("Open LoadSight workspace") { showingLoadSightWorkspace = true }
+                            .accessibilityIdentifier("OpenLoadSightWorkspace")
+                            .fullScreenCover(isPresented: $showingLoadSightWorkspace) {
+                                LoadSightFileWorkspaceView(opsContexts: loadSightContextChoices)
+                            }
+                        Text("Review mechanical takeoff, calculations, RFIs and change orders. Export the project to retain edits; billing uses the existing Ops review and approval workflow.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+
                 activeJobSections
 
                 AnyView(Group {
