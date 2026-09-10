@@ -148,7 +148,7 @@ enum StaffOwnerFieldEditError: Error, LocalizedError {
         case .conflict: "Office data changed. Review both values before applying this field edit."
         case .unsaved: "Save or finish your current office changes before applying field edits."
         case .missing: "The original office record is missing. The field edit was retained."
-        case .otherDevice: "This edit was prepared on another office device. Recover it there."
+        case .otherDevice: "This edit was prepared on another office device. If the update is already in company records, confirm it here using the same owner account. Otherwise recover it on the original device."
         }
     }
 }
@@ -173,7 +173,7 @@ enum StaffOwnerFieldEditTransport {
         let suffix = String(url.path.dropFirst(root.count))
         let parts = suffix.isEmpty ? [] : suffix.dropFirst().split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         if method == "POST" {
-            return parts.count == 2 && CloudKitStaffSetupPolicy.canonicalID(parts[0]) && ["prepare", "confirm", "keep-office"].contains(parts[1])
+            return parts.count == 2 && CloudKitStaffSetupPolicy.canonicalID(parts[0]) && ["prepare", "confirm", "keep-office", "confirm-observed"].contains(parts[1])
                 && url.query == nil && body.map { !$0.isEmpty && $0.count <= maximumRequestBytes } == true
         }
         guard method == "GET", body == nil, parts.count <= 1, parts.first.map(CloudKitStaffSetupPolicy.canonicalID) ?? true,

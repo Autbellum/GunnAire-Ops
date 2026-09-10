@@ -11,11 +11,12 @@ import re
 from datetime import datetime
 
 try:
-    from Backend import staff_workspace_commands as commands, staff_workspace_source as source, staff_owner_field_resolutions as resolutions
+    from Backend import staff_workspace_commands as commands, staff_workspace_source as source, staff_owner_field_resolutions as resolutions, staff_owner_field_observations as observations
 except ModuleNotFoundError:
     import staff_workspace_commands as commands
     import staff_workspace_source as source
     import staff_owner_field_resolutions as resolutions
+    import staff_owner_field_observations as observations
 
 contract, sharing = commands.contract, commands.sharing
 SCHEMA = "staff-owner-field-edit-v1"
@@ -32,6 +33,7 @@ def instant(value):
 
 def initialize_schema(connection):
     resolutions.initialize_schema(connection)
+    observations.initialize_schema(connection)
     connection.execute("""CREATE TABLE IF NOT EXISTS staff_owner_field_edit_applications (
         command_id TEXT PRIMARY KEY, operation_id TEXT NOT NULL UNIQUE,
         owner_email TEXT NOT NULL, owner_store_id TEXT NOT NULL, state TEXT NOT NULL,
@@ -39,7 +41,7 @@ def initialize_schema(connection):
     )""")
 
 
-class StaffOwnerFieldEdits(resolutions.StaffOwnerFieldResolutions, commands.StaffWorkspaceCommands):
+class StaffOwnerFieldEdits(observations.StaffOwnerFieldObservations, resolutions.StaffOwnerFieldResolutions, commands.StaffWorkspaceCommands):
     valid_instant = staticmethod(instant)
 
     @staticmethod
@@ -249,6 +251,8 @@ class StaffOwnerFieldEdits(resolutions.StaffOwnerFieldResolutions, commands.Staf
                     ownerStoreID=payload["ownerStoreID"], ownerEmail=actor["email"], preparedAt=self.shares.now().isoformat(),
                     expectedRevision=current["revision"], expectedValue=copy.deepcopy(current["value"]),
                     reviewedConflict=payload["reviewedConflict"], state="prepared", publishedAt=None)
+                if self.valid_instant(receipt["preparedAt"]) < self.valid_instant(entry["receipt"]["createdAt"]):
+                    raise self.source.unavailable()
                 connection.execute("INSERT INTO staff_owner_field_edit_applications VALUES (?,?,?,?,?,?)",
                     (command_id, payload["operationID"], actor["email"], payload["ownerStoreID"], "prepared",
                      self.source.encode(dict(request=payload, receipt=receipt))))
@@ -258,6 +262,8 @@ class StaffOwnerFieldEdits(resolutions.StaffOwnerFieldResolutions, commands.Staf
                 if current["value"] != entry["request"]["value"] or current["revision"] < existing["receipt"]["expectedRevision"]:
                     raise sharing.fail("edit_not_published", "The saved field value has not reached the company source. Keep the original application for recovery.", 409)
                 receipt = dict(existing["receipt"], state="published", publishedAt=self.shares.now().isoformat())
+                if self.valid_instant(receipt["publishedAt"]) < self.valid_instant(receipt["preparedAt"]):
+                    raise self.source.unavailable()
                 connection.execute("UPDATE staff_owner_field_edit_applications SET state='published',ciphertext=? WHERE command_id=?",
                     (self.source.encode(dict(request=existing["request"], receipt=receipt)), command_id))
             self.shares.audit(actor["email"], action + "-field-edit", "staff-command", command_id, connection=connection)

@@ -6,6 +6,7 @@ struct StaffOwnerFieldEditsReview: View {
     @ObservedObject var source: StaffReplicaSourceCoordinator
     @State private var selected: StaffOwnerFieldEditReview?
     @State private var keepingOffice: StaffOwnerFieldEditReview?
+    @State private var confirmingExisting: StaffOwnerFieldEditReview?
     var body: some View {
         Section("Field updates") {
             Text(edits.message).foregroundStyle(.secondary)
@@ -26,6 +27,10 @@ struct StaffOwnerFieldEditsReview: View {
                     }
                     if review.canKeepOffice {
                         Button("Keep Office Value") { keepingOffice = review }
+                            .disabled(source.isRunning)
+                    }
+                    if review.canConfirmObserved {
+                        Button("Confirm Existing Update") { confirmingExisting = review }
                             .disabled(source.isRunning)
                     }
                 }.padding(.vertical, 4)
@@ -52,6 +57,17 @@ struct StaffOwnerFieldEditsReview: View {
             Button("Cancel", role: .cancel) { keepingOffice = nil }
         } message: {
             Text("The office record will not change. This field update will stop retrying, and its original author, value, and receipt will stay in the audit history.")
+        }
+        .alert("Confirm the existing company update?", isPresented: Binding(get: { confirmingExisting != nil }, set: { if !$0 { confirmingExisting = nil } })) {
+            if let confirmingExisting {
+                Button("Confirm Existing Update") {
+                    let review = confirmingExisting; self.confirmingExisting = nil
+                    Task { await source.confirmObservedFieldReview(review) }
+                }
+            }
+            Button("Cancel", role: .cancel) { confirmingExisting = nil }
+        } message: {
+            Text("The original field update is already in company records. Confirm it without changing the value or transferring the original device's claim. Its original author and receipt remain in the audit history.")
         }
     }
 }

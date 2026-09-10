@@ -48,6 +48,10 @@ convergence, a QuickBooks update, or a successful payment.
 
 ## Remaining release requirements
 
+- Same-owner, other-device confirmation of a value already present in company
+  records is now implemented; see [publication recovery](STAFF_OWNER_PUBLICATION_RECOVERY.md).
+  This preserves the original claim and never reapplies its field value.
+
 - A prepared claim with a later third-value office conflict stays retained and
   can now be explicitly closed with Keep Office Value on the original device;
   see [owner field-edit resolution](STAFF_OWNER_FIELD_RESOLUTION.md). Claim

@@ -213,6 +213,21 @@ enum StaffReplicaSourceStorage {
         }
     }
 
+    func confirmObservedFieldReview(_ review: StaffOwnerFieldEditReview) async {
+        guard !isRunning, let edits = dependencies.ownerFieldEdits else { return }
+        isRunning = true
+        defer { isRunning = false }
+        do {
+            let context = try await dependencies.context(); try dependencies.check(context)
+            guard displayScope == context.scope else { throw StaffReplicaSourceSyncError.access }
+            try await edits.confirmObserved(review, context: context)
+            message = "Existing field update confirmed. Company records were not changed."
+        } catch {
+            if case StaffReplicaSourceSyncError.access = error { clearDisplay() }
+            message = "Confirmation needs another check. No field value was reapplied; the original request was retained."
+        }
+    }
+
     func sync() async {
         guard !isRunning else { return }
         isRunning = true; hasMore = false

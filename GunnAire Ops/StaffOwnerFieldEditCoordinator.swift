@@ -44,6 +44,7 @@ struct StaffOwnerFieldEditJournal: Codable {
     var lastAttempted: String?
     var pending: [String: StaffOwnerFieldEditPending] = [:]
     var keepOffice: [String: StaffOwnerFieldEditKeepPending]? = nil
+    var observations: [String: StaffOwnerFieldObservationPending]? = nil
 }
 struct StaffOwnerFieldEditReview: Identifiable {
     let edit: StaffOwnerFieldEdit
@@ -52,6 +53,7 @@ struct StaffOwnerFieldEditReview: Identifiable {
     let message: String
     let canApplyReviewed: Bool
     var canKeepOffice: Bool = false
+    var canConfirmObserved: Bool = false
     var id: String { edit.id }
 }
 
@@ -77,7 +79,7 @@ struct StaffOwnerFieldEditReview: Identifiable {
               value.queue == Set(value.queue).sorted(), value.queue.allSatisfy(CloudKitStaffSetupPolicy.canonicalID),
               value.after.map(CloudKitStaffSetupPolicy.canonicalID) ?? true,
               value.lastAttempted.map(CloudKitStaffSetupPolicy.canonicalID) ?? true, value.pending.count <= 32,
-              (value.keepOffice?.count ?? 0) <= 32 else {
+              (value.keepOffice?.count ?? 0) <= 32, (value.observations?.count ?? 0) <= 32 else {
             throw StaffReplicaSourceSyncError.storage
         }
         for (id, pending) in value.pending {
@@ -88,6 +90,10 @@ struct StaffOwnerFieldEditReview: Identifiable {
         }
         for (id, pending) in value.keepOffice ?? [:] {
             guard id == pending.edit.id else { throw StaffReplicaSourceSyncError.storage }
+            try pending.request.validate(context.scope, edit: pending.edit)
+        }
+        for (id, pending) in value.observations ?? [:] {
+            guard id == pending.edit.id, value.pending[id] == nil, value.keepOffice?[id] == nil else { throw StaffReplicaSourceSyncError.storage }
             try pending.request.validate(context.scope, edit: pending.edit)
         }
     }
@@ -117,15 +123,21 @@ struct StaffOwnerFieldEditReview: Identifiable {
         let local = try? dependencies.read(edit, context)
         let state = try? load(context)
         let matchesOffice = edit.current?.deleted == false && local != nil && local == edit.current?.value
-        let canApply = state != nil && state?.keepOffice?[edit.id] == nil && edit.eligible && edit.application == nil && matchesOffice
+        let observing = state?.observations?[edit.id] != nil
+        let canApply = state != nil && !observing && state?.keepOffice?[edit.id] == nil && edit.eligible && edit.application == nil && matchesOffice
         let claimOwned = edit.application.map { $0.ownerEmail == context.scope.actorEmail && $0.ownerStoreID == context.scope.storeUUID.lowercased() } ?? true
-        let canKeep = state != nil && edit.resolution == nil && edit.application?.state != "published" && claimOwned && matchesOffice
+        let canKeep = state != nil && !observing && edit.resolution == nil && edit.application?.state != "published" && claimOwned && matchesOffice
+        let canObserve = state != nil && state?.pending[edit.id] == nil && state?.keepOffice?[edit.id] == nil && matchesOffice
+            && edit.application?.state == "prepared"
+            && (try? StaffOwnerFieldObservationRequest(edit: edit, scope: context.scope, operation: UUID())) != nil
         reviews.removeAll { $0.id == edit.id }
         let title = (try? dependencies.title?(edit, context)) ?? StaffWorkspacePublicationReview.label(edit.request.recordKind)
-        reviews.append(.init(edit: edit, title: title, officeValue: local, message: message, canApplyReviewed: canApply, canKeepOffice: canKeep))
+        reviews.append(.init(edit: edit, title: title, officeValue: local, message: message, canApplyReviewed: canApply,
+                             canKeepOffice: canKeep, canConfirmObserved: canObserve))
     }
     private func apply(_ edit: StaffOwnerFieldEdit, reviewed: Bool, state: inout StaffOwnerFieldEditJournal,
                        context: StaffReplicaSourceContext) async throws {
+        if let pending = state.observations?[edit.id] { try await retryObservation(pending, current: edit, state: &state, context: context); return }
         if edit.resolution != nil { try finishResolution(edit, state: &state, context: context); return }
         if let pending = state.keepOffice?[edit.id] { try await retryKeep(pending, state: &state, context: context); return }
         if edit.application?.state == "published" {
@@ -183,7 +195,7 @@ struct StaffOwnerFieldEditReview: Identifiable {
             try page.validate(context.scope, after: state.after)
             state.queue = page.commandIDs; state.after = page.nextCursor; try save(state, context)
         }
-        let ids = Set(state.queue).union(state.pending.keys).union((state.keepOffice ?? [:]).keys).sorted()
+        let ids = Set(state.queue).union(state.pending.keys).union((state.keepOffice ?? [:]).keys).union((state.observations ?? [:]).keys).sorted()
         let ordered = ids.filter { $0 > (state.lastAttempted ?? "") } + ids.filter { $0 <= (state.lastAttempted ?? "") }
         for id in ordered.prefix(8) {
             let edit = try await detail(id, context)
@@ -233,7 +245,7 @@ struct StaffOwnerFieldEditReview: Identifiable {
         let current = try await detail(review.id, context)
         guard current == review.edit else { throw StaffOwnerFieldEditError.conflict }
         var state = try load(context)
-        guard state.keepOffice?[review.id] == nil else { throw StaffOwnerFieldEditError.conflict }
+        guard state.keepOffice?[review.id] == nil, state.observations?[review.id] == nil else { throw StaffOwnerFieldEditError.conflict }
         try await apply(current, reviewed: true, state: &state, context: context)
     }
 
@@ -304,6 +316,7 @@ struct StaffOwnerFieldEditReview: Identifiable {
         let current = try await detail(review.id, context)
         guard current == review.edit, try dependencies.read(current, context) == current.current?.value else { throw StaffOwnerFieldEditError.conflict }
         var state = try load(context)
+        guard state.observations?[review.id] == nil else { throw StaffOwnerFieldEditError.conflict }
         if let original = state.keepOffice?[review.id] {
             let claim = current.application?.operationID ?? ""
             if original.request.expectedRevision == current.current?.revision && original.request.claimOperationID == claim {
@@ -325,5 +338,83 @@ struct StaffOwnerFieldEditReview: Identifiable {
         state.keepOffice?[review.id] = pending; try save(state, context)
         try await retryKeep(pending, state: &state, context: context)
         message = "Office value kept. The original field update remains in the audit history."
+    }
+
+    static func observationArchiveKey(_ scope: StaffReplicaSourceScope, operationID: String) -> String {
+        "owner-field-observation-history-v1\n" + scope.key + "\n" + operationID
+    }
+    private func archiveObservation(_ archive: StaffOwnerFieldObservationArchive, context: StaffReplicaSourceContext) throws {
+        try dependencies.check(context); try archive.validate(context.scope)
+        let key = Self.observationArchiveKey(context.scope, operationID: archive.pending.request.operationID)
+            + (archive.supersededAtRevision != nil ? "\nsuperseded" : "")
+        if let bytes = try dependencies.store.read(key) {
+            let original = try StaffWorkspacePublicationContract.decode(StaffOwnerFieldObservationArchive.self, from: bytes, maximum: 64 * 1024 * 1024)
+            try original.validate(context.scope)
+            guard original.pending == archive.pending else { throw StaffReplicaSourceSyncError.storage }
+            if let revision = original.supersededAtRevision {
+                guard let newer = archive.supersededAtRevision, newer >= revision else { throw StaffReplicaSourceSyncError.storage }
+            } else {
+                guard archive.supersededAtRevision == nil,
+                      (original.receipt?.application ?? original.publishedElsewhere) == (archive.receipt?.application ?? archive.publishedElsewhere)
+                else { throw StaffReplicaSourceSyncError.storage }
+                if let receipt = original.receipt, let received = archive.receipt {
+                    guard receipt == received else { throw StaffReplicaSourceSyncError.storage }
+                }
+            }
+        } else {
+            let bytes = try StaffWorkspacePublicationContract.encode(archive)
+            guard bytes.count <= 64 * 1024 * 1024 else { throw StaffReplicaSourceSyncError.storage }
+            try dependencies.store.write(key, bytes)
+        }
+        try dependencies.check(context)
+    }
+    private func retryObservation(_ pending: StaffOwnerFieldObservationPending, current: StaffOwnerFieldEdit,
+                                  state: inout StaffOwnerFieldEditJournal, context: StaffReplicaSourceContext) async throws {
+        try pending.request.validate(context.scope, edit: pending.edit)
+        guard current.request == pending.edit.request, current.receipt == pending.edit.receipt,
+              current.shareID == pending.edit.shareID, current.baseValue == pending.edit.baseValue,
+              current.resolution == nil else { throw StaffReplicaSourceSyncError.invalid }
+        var archive = StaffOwnerFieldObservationArchive(version: 1, scope: context.scope, pending: pending)
+        do {
+            let receipt = try await request(StaffOwnerFieldObservationReceipt.self,
+                path: StaffOwnerFieldEditTransport.root + "/" + current.id + "/confirm-observed", method: "POST",
+                body: StaffWorkspacePublicationContract.encode(pending.request), context: context)
+            try receipt.validate(pending, scope: context.scope); archive.receipt = receipt
+        } catch {
+            try dependencies.check(context)
+            // The authenticated detail can prove the original claim completed
+            // elsewhere even when today's field has moved on. This is NOT a
+            // fabricated witness for an unacknowledged observation request.
+            guard let application = current.application, application.state == "published" else { throw error }
+            try application.validatePublication(of: pending.edit); archive.publishedElsewhere = application
+        }
+        try archiveObservation(archive, context: context)
+        state.observations?[current.id] = nil; try save(state, context)
+        reviews.removeAll { $0.id == current.id }
+    }
+    func confirmObserved(_ review: StaffOwnerFieldEditReview, context: StaffReplicaSourceContext) async throws {
+        let key = Self.key(context.scope), lock = try SharedTimeMutationGate.begin(key)
+        defer { SharedTimeMutationGate.finish(key, id: lock) }
+        try dependencies.check(context)
+        guard displayScope == context.scope, review.canConfirmObserved,
+              try dependencies.read(review.edit, context) == review.officeValue else { throw StaffOwnerFieldEditError.conflict }
+        let current = try await detail(review.id, context)
+        guard current == review.edit, try dependencies.read(current, context) == current.current?.value else { throw StaffOwnerFieldEditError.conflict }
+        var state = try load(context)
+        guard state.pending[review.id] == nil, state.keepOffice?[review.id] == nil else { throw StaffOwnerFieldEditError.conflict }
+        if let original = state.observations?[review.id] {
+            if original.request.expectedRevision == current.current?.revision {
+                try await retryObservation(original, current: current, state: &state, context: context); return
+            }
+            guard let revision = current.current?.revision, revision > original.request.expectedRevision else { throw StaffOwnerFieldEditError.conflict }
+            try archiveObservation(.init(version: 1, scope: context.scope, pending: original, supersededAtRevision: revision), context: context)
+        }
+        guard (state.observations?.count ?? 0) < 32 || state.observations?[review.id] != nil else { throw StaffReplicaSourceSyncError.storage }
+        let pending = StaffOwnerFieldObservationPending(edit: current,
+            request: try .init(edit: current, scope: context.scope, operation: dependencies.operation()))
+        if state.observations == nil { state.observations = [:] }
+        state.observations?[review.id] = pending; try save(state, context)
+        try await retryObservation(pending, current: current, state: &state, context: context)
+        message = "Existing company update confirmed. No field value was reapplied."
     }
 }

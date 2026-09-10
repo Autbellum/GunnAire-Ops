@@ -30,12 +30,12 @@ enum StaffOwnerFieldEditWire {
     private static func normalize<T>(_ raw: Any, type: T.Type) throws -> Any {
         if type == StaffOwnerFieldEdit.self { return edit(raw) }
         if type == StaffOwnerFieldEditApplication.self { return application(raw) }
-        if type == StaffOwnerFieldEditResolution.self { return raw }
+        if type == StaffOwnerFieldEditResolution.self || type == StaffOwnerFieldObservationReceipt.self { return raw }
         guard var value = raw as? [String: Any] else { throw StaffReplicaSourceSyncError.invalid }
         if type == StaffOwnerFieldEditPage.self {
             omitNull(["nextCursor"], in: &value)
         } else if type == StaffOwnerFieldEditJournal.self {
-            omitNull(["after", "lastAttempted", "keepOffice"], in: &value)
+            omitNull(["after", "lastAttempted", "keepOffice", "observations"], in: &value)
             if var pending = value["pending"] as? [String: Any] {
                 for (id, rawItem) in pending {
                     guard var item = rawItem as? [String: Any] else { continue }
@@ -46,13 +46,15 @@ enum StaffOwnerFieldEditWire {
                 }
                 value["pending"] = pending
             }
-            if var pending = value["keepOffice"] as? [String: Any] {
+            for key in ["keepOffice", "observations"] {
+              if var pending = value[key] as? [String: Any] {
                 for (id, rawItem) in pending {
                     guard var item = rawItem as? [String: Any] else { continue }
                     if let original = item["edit"] { item["edit"] = edit(original) }
                     pending[id] = item
                 }
-                value["keepOffice"] = pending
+                value[key] = pending
+              }
             }
         } else { throw StaffReplicaSourceSyncError.invalid }
         return value
