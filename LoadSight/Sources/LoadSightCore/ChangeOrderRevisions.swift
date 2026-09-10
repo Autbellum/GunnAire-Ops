@@ -1,6 +1,20 @@
 import Foundation
 import CryptoKit
 
+private func changeOrderFingerprint(record: JSONValue, latestRevision: JSONValue) throws -> String {
+    let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+    return SHA256.hash(data: try encoder.encode(JSONValue.object([
+        "record": record, "latestRevision": latestRevision
+    ]))).map { String(format: "%02x", $0) }.joined()
+}
+
+public struct ChangeOrderReadEntry: Sendable {
+    public let record: ChangeOrderRecord
+    public let rawRecord: JSONValue
+    public let history: [JSONValue]
+    public let editFingerprint: String
+}
+
 public struct ChangeOrderRevision: Codable, Identifiable, Sendable {
     public let id: String
     public let changeOrderID: String
@@ -37,8 +51,14 @@ public extension ProjectDocument {
             if let preceding = latest[revision.changeOrderID] { try require(preceding == revision.before, "Change revision snapshots have a broken chain.") }
             latest[revision.changeOrderID] = revision.after
         }
+        var current: [String: JSONValue] = [:]
+        for row in root["changeOrders"].array ?? [] {
+            guard let id = row["id"].string else { throw LoadSightError.invalid("Change order ID is missing.") }
+            try require(current[id] == nil, "Duplicate change-order IDs.")
+            current[id] = row
+        }
         for (id, snapshot) in latest {
-            try require(root["changeOrders"].array?.first { $0["id"].string == id } == snapshot, "Current change order disagrees with its latest revision.")
+            try require(current[id] == snapshot, "Current change order disagrees with its latest revision.")
         }
         return history
     }
@@ -46,8 +66,19 @@ public extension ProjectDocument {
         _ = try changeOrders(); _ = try changeOrderHistory()
         guard let record = root["changeOrders"].array?.first(where: { $0["id"].string == id }) else { throw LoadSightError.invalid("Change order not found.") }
         let latest = root["changeOrderHistory"].array?.last(where: { $0["changeOrderID"].string == id })?["id"] ?? .null
-        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-        return SHA256.hash(data: try encoder.encode(JSONValue.object(["record": record, "latestRevision": latest]))).map { String(format: "%02x", $0) }.joined()
+        return try changeOrderFingerprint(record: record, latestRevision: latest)
+    }
+    func changeOrderReadSnapshot() throws -> [ChangeOrderReadEntry] {
+        let records = try changeOrders(), history = try changeOrderHistory()
+        var grouped: [String: [JSONValue]] = [:], latest: [String: JSONValue] = [:]
+        for (event, raw) in zip(history, root["changeOrderHistory"].array ?? []) {
+            grouped[event.changeOrderID, default: []].append(raw)
+            latest[event.changeOrderID] = raw["id"]
+        }
+        return try zip(records, root["changeOrders"].array ?? []).map { record, raw in
+            .init(record: record, rawRecord: raw, history: grouped[record.id] ?? [],
+                  editFingerprint: try changeOrderFingerprint(record: raw, latestRevision: latest[record.id] ?? .null))
+        }
     }
     @discardableResult
     mutating func reviseChangeOrder(id: String, expectedFingerprint: String, draft: ChangeOrderDraft, author: String, reason: String) throws -> String {

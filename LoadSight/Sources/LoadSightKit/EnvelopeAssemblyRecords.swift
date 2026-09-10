@@ -89,8 +89,8 @@ public extension ProjectDocument {
 
     func envelopeReview() throws -> JSONValue {
         try validatePortableProject()
-        return .object(["status": .string("Assembly worksheet; complete room loads and compliance remain separate"), "assemblies": .array(try envelopeAssemblies().map { record in
-            .object(["record": try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(record)),
+        return .object(["status": .string("Assembly worksheet; complete room loads and compliance remain separate"), "assemblies": .array(try zip(envelopeAssemblies(), root["envelopeAssemblies"].array ?? []).map { record, raw in
+            .object(["record": raw,
                      "result": try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(record.calculate()))])
         })])
     }

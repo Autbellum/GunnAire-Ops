@@ -2,7 +2,7 @@ import XCTest
 import LoadSightKit
 
 final class CatalogReadSnapshotTests: XCTestCase {
-    private func project(itemCount: Int) throws -> ProjectDocument {
+    func project(itemCount: Int) throws -> ProjectDocument {
         var base = try LoadSightTests().readyProject()
         let catalog = OpsMaterialCatalogSnapshot(id: UUID(), source: "Synthetic read fixture", name: "Duct", purchaseCost: 50, updatedAt: "2026-09-10T12:00:00Z")
         let mapping = CatalogMaterialMapping(catalog: catalog, currency: "USD", purchaseUnit: "5-foot length", catalogUnitsPerTakeoffUnit: 0.2, takeoffUnit: "LF", itemDescription: "Duct", lifecycle: "", basis: "Synthetic five-foot conversion")

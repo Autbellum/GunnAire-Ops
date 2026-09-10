@@ -158,18 +158,19 @@ public extension ProjectDocument {
         try validatePortableProject()
         let assemblies = try envelopeAssemblies()
         let rooms = try roomTransmissions()
+        let fingerprints = try roomTransmissionEditFingerprints()
         let used = Set(rooms.flatMap { $0.surfaces.map(\.assemblyID) })
-        let supporting: [JSONValue] = try assemblies.filter { used.contains($0.id) }.map { assembly in
-            .object(["record":try JSONDecoder().decode(JSONValue.self,from:JSONEncoder().encode(assembly)),"result":try JSONDecoder().decode(JSONValue.self,from:JSONEncoder().encode(assembly.calculate()))])
+        let supporting: [JSONValue] = try zip(assemblies, root["envelopeAssemblies"].array ?? []).filter { used.contains($0.0.id) }.map { assembly, raw in
+            .object(["record":raw,"result":try JSONDecoder().decode(JSONValue.self,from:JSONEncoder().encode(assembly.calculate()))])
         }
-        let historyRows: [JSONValue] = try roomTransmissionHistory().map { revision in
-            var row = root["roomTransmissionHistory"].array!.first(where:{$0["id"].string == revision.id})!.object!
+        let historyRows: [JSONValue] = try zip(roomTransmissionHistory(), root["roomTransmissionHistory"].array ?? []).map { revision, raw in
+            var row = raw.object!
             row["beforeResult"] = try JSONDecoder().decode(JSONValue.self,from:JSONEncoder().encode(revision.result(before:true)))
             row["afterResult"] = try JSONDecoder().decode(JSONValue.self,from:JSONEncoder().encode(revision.result(before:false)))
             return .object(row)
         }
-        return .object(["status":.string("Partial room transmission; combined envelope subtotals require all listed opening ratings; other loads remain unmodeled"),"assemblies":.array(supporting),"history":.array(historyRows),"rooms":.array(try rooms.map { room in
-            .object(["editFingerprint":.string(try roomTransmissionEditFingerprint(id:room.id)),"record":try JSONDecoder().decode(JSONValue.self,from:JSONEncoder().encode(room)),"result":try JSONDecoder().decode(JSONValue.self,from:JSONEncoder().encode(room.calculate(assemblies:assemblies)))])
+        return .object(["status":.string("Partial room transmission; combined envelope subtotals require all listed opening ratings; other loads remain unmodeled"),"assemblies":.array(supporting),"history":.array(historyRows),"rooms":.array(try zip(rooms, root["roomTransmissions"].array ?? []).map { room, raw in
+            .object(["editFingerprint":.string(fingerprints[room.id]!),"record":raw,"result":try JSONDecoder().decode(JSONValue.self,from:JSONEncoder().encode(room.calculate(assemblies:assemblies)))])
         })])
     }
 }

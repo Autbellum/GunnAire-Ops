@@ -1,6 +1,13 @@
 import Foundation
 import CryptoKit
 
+private func roomFingerprint(room: JSONValue, assemblies: [JSONValue], latestRevision: JSONValue) throws -> String {
+    let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+    return SHA256.hash(data: try encoder.encode(JSONValue.object([
+        "room": room, "assemblies": .array(assemblies), "latestRevision": latestRevision
+    ]))).map { String(format: "%02x", $0) }.joined()
+}
+
 public struct RoomTransmissionRevision: Codable, Identifiable, Sendable {
     public let id: String
     public let roomID: String
@@ -35,8 +42,14 @@ public extension ProjectDocument {
             _ = try revision.result(before:true); _ = try revision.result(before:false)
             latest[revision.roomID] = revision.after
         }
+        var current: [String: JSONValue] = [:]
+        for row in root["roomTransmissions"].array ?? [] {
+            guard let id = row["id"].string else { throw LoadSightError.invalid("Room transmission ID is missing.") }
+            try require(current[id] == nil, "Duplicate room transmission IDs.")
+            current[id] = row
+        }
         for (id, last) in latest {
-            try require(root["roomTransmissions"].array?.first(where:{$0["id"].string == id}) == last,"Room inputs disagree with their latest recorded revision.")
+            try require(current[id] == last,"Room inputs disagree with their latest recorded revision.")
         }
         return records
     }
@@ -47,8 +60,20 @@ public extension ProjectDocument {
         guard let room = root["roomTransmissions"].array?.first(where:{$0["id"].string == id}) else { throw LoadSightError.invalid("Room transmission case not found.") }
         let assemblies = (root["envelopeAssemblies"].array ?? []).sorted { ($0["id"].string ?? "") < ($1["id"].string ?? "") }
         let latestRevision = root["roomTransmissionHistory"].array?.last(where:{$0["roomID"].string == id})?["id"] ?? .null
-        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-        return SHA256.hash(data:try encoder.encode(JSONValue.object(["room":room,"assemblies":.array(assemblies),"latestRevision":latestRevision]))).map { String(format:"%02x",$0) }.joined()
+        return try roomFingerprint(room: room, assemblies: assemblies, latestRevision: latestRevision)
+    }
+
+    /// Internal bulk read: validates once and uses the same token contract as an individual edit.
+    internal func roomTransmissionEditFingerprints() throws -> [String: String] {
+        _ = try roomTransmissions()
+        let assemblies = (root["envelopeAssemblies"].array ?? []).sorted { ($0["id"].string ?? "") < ($1["id"].string ?? "") }
+        var latest: [String: JSONValue] = [:], tokens: [String: String] = [:]
+        for row in root["roomTransmissionHistory"].array ?? [] { latest[row["roomID"].string!] = row["id"] }
+        for room in root["roomTransmissions"].array ?? [] {
+            let id = room["id"].string!
+            tokens[id] = try roomFingerprint(room: room, assemblies: assemblies, latestRevision: latest[id] ?? .null)
+        }
+        return tokens
     }
 
     @discardableResult

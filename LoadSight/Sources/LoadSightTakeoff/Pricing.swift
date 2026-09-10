@@ -34,7 +34,8 @@ public enum EstimatePricing {
         try require(result.total.isFinite, "Cost overflow for \(result.id).")
         return result
     }
-    public static func review(_ project: ProjectDocument) throws -> BidReview {
+    public static func review(_ project: ProjectDocument, asOf: Date = Date()) throws -> BidReview {
+        try require(asOf.timeIntervalSince1970.isFinite, "Pricing review time must be finite.")
         try project.validate()
         try project.validateMarkupQuantities()
         let root = project.root, inputs = root["inputs"]
@@ -61,8 +62,16 @@ public enum EstimatePricing {
         if !stale.isEmpty { blockers.append("\(stale.count) QA reviews refer to an earlier project state.") }
         if included.count != lines.count { blockers.append("\(included.count - lines.count) included rows lack deliberate quantity or cost inputs.") }
         for item in included {
-            if let mapping = try CatalogMaterialMapping.recorded(in: item), !mapping.matches(item) {
-                blockers.append("Catalog material mapping for \(item["id"]!.string!) is stale; review the changed item or cost.")
+            if let mapping = try CatalogMaterialMapping.recorded(in: item) {
+                if !mapping.matches(item) {
+                    blockers.append("Catalog material mapping for \(item["id"]!.string!) is stale; review the changed item or cost.")
+                }
+                if let quote = mapping.quote {
+                    let review = try quote.review(asOf: asOf)
+                    if review.status != .withinRecordedPeriod {
+                        blockers.append("Supplier quote for \(item["id"]!.string!): \(review.message)")
+                    }
+                }
             }
         }
         let accepted = ["Verified", "Field-verified", "Cross-checked", "Scope-defined", "Approved allowance"]

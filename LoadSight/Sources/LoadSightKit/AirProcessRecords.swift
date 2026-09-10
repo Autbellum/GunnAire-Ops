@@ -36,15 +36,17 @@ public extension ProjectDocument {
     func airProcessReview() throws -> JSONValue {
         try validatePortableProject()
         func json<T: Encodable>(_ value: T) throws -> JSONValue { try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(value)) }
-        let conditions = try airConditions()
-        let conditionResults = try conditions.map { row in JSONValue.object(["record": try json(row), "state": try json(row.calculate()), "inputTrace": try json(row.inputTrace())]) }
-        let processes = try airProcesses().map { row -> JSONValue in
+        let network = try airNetwork()
+        let conditionResults = try zip(network.conditions, root["airConditions"].array ?? []).map { row, raw in
+            JSONValue.object(["record": raw, "state": try json(row.calculate()), "inputTrace": try json(row.inputTrace())])
+        }
+        let processes = try zip(network.processes, root["airProcesses"].array ?? []).map { row, raw -> JSONValue in
             let value: JSONValue
-            switch try row.calculate(conditions: conditions) {
+            switch network.results[row.id]! {
             case .mixing(let output): value = try json(output)
             case .coolingCoil(let output): value = try json(output)
             }
-            return .object(["record": try json(row), "result": value])
+            return .object(["record": raw, "result": value])
         }
         return .object(["status": .string("Engineering worksheet; not equipment selection or a complete building load"), "conditions": .array(conditionResults), "processes": .array(processes)])
     }

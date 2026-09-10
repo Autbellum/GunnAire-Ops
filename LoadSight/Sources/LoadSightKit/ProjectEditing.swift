@@ -75,7 +75,8 @@ public enum ProjectEditing {
                 func exact(_ value: JSONValue, _ keys: [String]) throws {
                     try require(value.object.map { Set($0.keys) == Set(keys) } == true, "Catalog mapping objects must contain exactly their documented fields.")
                 }
-                try exact(raw, ["version", "catalog", "currency", "purchaseUnit", "catalogUnitsPerTakeoffUnit", "takeoffUnit", "itemDescription", "lifecycle", "basis"])
+                try exact(raw, ["version", "catalog", "currency", "purchaseUnit", "catalogUnitsPerTakeoffUnit", "takeoffUnit", "itemDescription", "lifecycle", "basis"] + (raw.object?["quote"] != nil ? ["quote"] : []))
+                if raw["quote"] != .null { try exact(raw["quote"], ["supplier", "reference", "source", "issuedAt", "validUntil", "conditions"]) }
                 try exact(raw["catalog"], ["id", "source", "name", "sku", "supplier", "supplierPartNumber", "purchaseCost", "updatedAt"])
                 mapping = try JSONDecoder().decode(CatalogMaterialMapping.self, from: JSONEncoder().encode(raw))
             }

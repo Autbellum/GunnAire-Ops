@@ -39,15 +39,17 @@ public struct CatalogMaterialMapping: Codable, Equatable, Sendable {
     public let itemDescription: String
     public let lifecycle: String
     public let basis: String
-    public init(catalog: OpsMaterialCatalogSnapshot, currency: String, purchaseUnit: String, catalogUnitsPerTakeoffUnit: Double, takeoffUnit: String, itemDescription: String, lifecycle: String, basis: String) {
+    public let quote: SupplierQuoteEvidence?
+    public init(catalog: OpsMaterialCatalogSnapshot, currency: String, purchaseUnit: String, catalogUnitsPerTakeoffUnit: Double, takeoffUnit: String, itemDescription: String, lifecycle: String, basis: String, quote: SupplierQuoteEvidence? = nil) {
         version = 1; self.catalog = catalog; self.currency = currency; self.purchaseUnit = purchaseUnit
         self.catalogUnitsPerTakeoffUnit = catalogUnitsPerTakeoffUnit; self.takeoffUnit = takeoffUnit
-        self.itemDescription = itemDescription; self.lifecycle = lifecycle; self.basis = basis
+        self.itemDescription = itemDescription; self.lifecycle = lifecycle; self.basis = basis; self.quote = quote
     }
     public var materialUnit: Double? { catalog.purchaseCost.map { $0 * catalogUnitsPerTakeoffUnit } }
     public func validate() throws {
         try require(version == 1, "Unsupported catalog mapping version.")
         try catalog.validate()
+        try quote?.validate()
         try require(currency == "USD", "Confirm USD purchase cost before mapping into this USD estimate.")
         for text in [purchaseUnit, takeoffUnit, itemDescription, basis] {
             try require(!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "Catalog mapping requires purchase/takeoff units, description and conversion evidence.")
