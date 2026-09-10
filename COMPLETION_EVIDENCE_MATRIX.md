@@ -1,3 +1,18 @@
+Full32 server record-selection candidate, 2026-09-09:
+STAFF_WORKSPACE_SELECTION.md records an owner-only, current-authority-checked
+API for immutable encrypted indexes covering all 32 model kinds. Indexes contain
+original record identities/revisions and unavailable links, never business field
+values. Role-specific job, invoice, workforce, expense, task, property, stock,
+attachment and communication selection precedes mandatory field projection.
+The final policy/role consistency guard fixes a retained 200-versus-403
+reproduction. Final full backend regressions each pass 913 cases on Python
+3.9.6 and 3.12.14 with no failures/skips; 75 Tools tests pass. Both final
+process handles closed with exit 0. Earlier reproduction evidence is retained.
+This is not staff content delivery or store activation: field adapters, native
+integration, staff commands/media/lease and signed CloudKit convergence remain
+unfinished. Source version 2026.09.09.51 is local only, not deployed or pushed.
+No screen access, recording, screenshots, browser changes or foreground apps.
+
 Role-safe staff billing preparation candidate, 2026-09-09:
 STAFF_BILLING_DISCLOSURE.md records the separate typed billing view, explicit
 restricted/not-recorded/zero cost states, nested sold-line/assembly/bundle

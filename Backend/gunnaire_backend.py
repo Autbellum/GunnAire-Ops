@@ -36,7 +36,7 @@ try:
     from Backend.billing_provider import BillingQBOProvider
     from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads
     from Backend.qbo_document_provider import DocumentQBOProvider
-    from Backend import time_worker_mappings, time_publications, cloudkit_staff_shares, staff_replica, staff_workspace_source
+    from Backend import time_worker_mappings, time_publications, cloudkit_staff_shares, staff_replica, staff_workspace_source, staff_workspace_selections
     from Backend.time_worker_provider import TimeWorkerQBOProvider
     from Backend.time_publication_provider import TimeQBOProvider
 except ModuleNotFoundError:
@@ -58,12 +58,13 @@ except ModuleNotFoundError:
     import cloudkit_staff_shares
     import staff_replica
     import staff_workspace_source
+    import staff_workspace_selections
     from time_worker_provider import TimeWorkerQBOProvider
     from time_publication_provider import TimeQBOProvider
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.09.50"
+SERVICE_VERSION = "2026.09.09.51"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -2528,6 +2529,7 @@ def initialize_database() -> None:
         cloudkit_staff_shares.initialize_schema(connection)
         staff_replica.initialize_schema(connection)
         staff_workspace_source.initialize_schema(connection)
+        staff_workspace_selections.initialize_schema(connection)
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS customer_communications (
@@ -4230,6 +4232,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
 
     def handle_cloudkit_staff_share(self, parsed, *, method):
         parts = parsed.path.removeprefix("/api/workspace/staff-shares/").split("/")
+        if len(parts) >= 2 and parts[1] == "full-selections":
+            self.handle_staff_workspace_selection(parsed, method=method, parts=parts)
+            return
         if len(parts) >= 2 and parts[1] == "projections":
             self.handle_staff_replica(parsed, method=method, parts=parts)
             return
@@ -4267,6 +4272,33 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             self.write_json({"error": "Invalid CloudKit staff sharing request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
         except (sqlite3.Error, RuntimeError):
             self.write_json({"error": "Sharing storage is unavailable. Keep the original request for recovery.",
+                             "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+
+    def handle_staff_workspace_selection(self, parsed, *, method, parts):
+        if not self.require_application_session():
+            return
+        shares = cloudkit_staff_shares.StaffShares(db, record_audit_event,
+                                                  encrypt=encrypt_catalog_payload, decrypt=decrypt_catalog_payload)
+        service = staff_workspace_selections.StaffWorkspaceSelections(shares)
+        try:
+            if method == "POST" and len(parts) == 2 and not parsed.query:
+                payload = qbo_change_capture.strict_json(self.read_limited_body(8192).decode("utf-8"))
+                result = service.prepare(self._application_session_id, parts[0], payload)
+            elif method == "GET" and (len(parts) == 3 or len(parts) == 4 and parts[3] == "records"):
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                if any(len(value) != 1 for value in query.values()):
+                    raise cloudkit_staff_shares.fail("invalid_query", "Use one value per selection query field.", 400)
+                result = service.read(self._application_session_id, parts[0], parts[2],
+                                      {key: value[0] for key, value in query.items()}, records=len(parts) == 4)
+            else:
+                raise cloudkit_staff_shares.fail("not_found", "Full selection action not found.", 404)
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError, RecursionError):
+            self.write_json({"error": "Invalid full workspace selection request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Selection storage is unavailable. Retain the original operation for recovery.",
                              "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
 
     def handle_staff_workspace_source(self, parsed, *, method):
