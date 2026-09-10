@@ -212,7 +212,7 @@ enum GunnAireAppIntentAccessPolicy {
     }
 }
 
-enum GunnAireMailWorkflow: String, Codable, Sendable {
+enum GunnAireMailWorkflow: String, Codable, Sendable, CaseIterable {
     case general
     case estimateFollowUp
     case paymentReminder

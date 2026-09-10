@@ -1,4 +1,26 @@
-Server-enforced billing content candidate, 2026-09-09:
+Full32 field/content transport candidate, 2026-09-09:
+STAFF_FULL_CONTENT.md records explicit policy for all503 non-billing fields,
+17 structured evidence adapters, actual native discriminator parity for all48
+raw fields and a combined32-kind read-only preparation. An owner-only endpoint
+persists encrypted exact UTF-8 bytes, checks current creator/member/share/source
+authority on every request, and returns immutable hashed1 MiB chunks. The native
+assembler verifies scope, versions, offsets and exact bytes without cross-language
+JSON reencoding; failed chunks preserve prior progress. It grants no staff lease.
+Focused backend checks pass35; focused iPad checks pass42/all five selectors;
+full iPad passes1,926/all six selectors; complete backend passes978 on each of
+Python3.9.6 and3.12.14; Tools passes75. All completed runs exit0 with no failures
+or skips. Unsigned arm64+x86_64 Mac Catalyst and arm64 iOS release builds and
+architecture checks also pass. QBO actor-isolation and Mac toolchain-path warnings
+remain; there are no warnings in the new transport file. Protected copy-back
+verifies all18 scoped files equal,439 unrelated owner changes preserved and
+unchanged owner branch/HEAD/index. The new native path
+is transport integrity only, not full operational semantic acceptance or live
+publishing/CloudKit receipt. Staff adapters, commands, media, lease, independent
+signed CloudKit convergence and overall app acceptance remain unfinished.
+Backend version2026.09.09.53 is local only. No screen capture/inspection/recording,
+browser changes, foreground app/UI tests, push, deployment or provider writes.
+
+Historical server-enforced billing content candidate, 2026-09-09:
 STAFF_BILLING_DELIVERY.md records immutable encrypted invoice/estimate content
 bound to an authenticated full32 selection, with current role/share/source
 checks, bounded pages, exact retry recovery, and nested historical billing

@@ -1,6 +1,6 @@
 import Foundation
 
-enum BillingTaxCalculationStatus: String, Codable, Equatable {
+enum BillingTaxCalculationStatus: String, Codable, Equatable, CaseIterable {
     case notApplicable = "not_applicable"
     case pendingQuickBooks = "pending_quickbooks"
     case calculatedByQuickBooks = "calculated_by_quickbooks"
