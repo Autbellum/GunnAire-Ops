@@ -2,6 +2,25 @@ import XCTest
 import LoadSightKit
 
 final class ScheduleNumericInterpretationTests: XCTestCase {
+    func testTemperatureDomainUsesLiteralDecimalsBeforeBinaryRounding() {
+        for field in [EquipmentScheduleField.enteringWaterTemperature, .leavingWaterTemperature] {
+            for (unit, boundary) in [("C", "273.15"), ("°C", "273.15"), ("F", "459.67"), ("°F", "459.67")] {
+                for suffix in ["000000000000001", String(repeating: "0", count: 90) + "1"] {
+                    let text = "-" + boundary + suffix
+                    let result = ScheduleNumericInterpreter.interpret(field: field, text: text, unitText: unit)
+                    XCTAssertEqual(result.status, .unresolved, text + unit)
+                    XCTAssertNil(result.value)
+                }
+                for text in ["-" + boundary, "-000" + boundary + "000"] {
+                    XCTAssertEqual(ScheduleNumericInterpreter.interpret(field: field, text: text, unitText: unit).status, .interpreted, text + unit)
+                }
+            }
+            for (text, unit) in [("-273.14999999999999999", "C"), ("-459.66999999999999999", "F"), ("-0.000", "K"), ("+.0001", "K")] {
+                XCTAssertEqual(ScheduleNumericInterpreter.interpret(field: field, text: text, unitText: unit).status, .interpreted, text + unit)
+            }
+            XCTAssertEqual(ScheduleNumericInterpreter.interpret(field: field, text: "-.00000000000000000001", unitText: "K").status, .unresolved)
+        }
+    }
     func testFractionalCountsCannotRoundIntoIntegers() {
         for (field, unit) in [(EquipmentScheduleField.quantity, "each"), (.phase, "ph")] {
             for value in ["1.0000000000000001", "0.99999999999999999", "3.00000000000000001"] {
@@ -27,6 +46,7 @@ final class ScheduleNumericInterpretationTests: XCTestCase {
             (.enteringWaterTemperature, "32", "°F", 0, "°C"),
             (.leavingWaterTemperature, "212", "F", 100, "°C"),
             (.enteringWaterTemperature, "273.15", "K", 0, "°C"),
+            (.enteringWaterTemperature, "-459.67", "F", -273.15, "°C"),
             (.weight, "100", "lb", 45.359237, "kg"),
             (.minimumCircuitAmpacity, "18", "A", 18, "A"),
             (.voltage, "208", "V", 208, "V"),

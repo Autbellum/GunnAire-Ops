@@ -46,6 +46,7 @@ public enum ProjectEditing {
         switch operation {
         case "schedule.map.save": payloadKeys = ["id", "name", "request", "expectedFingerprint", "reason"]
         case "schedule.map.remove": payloadKeys = ["id", "expectedFingerprint", "reason"]
+        case "schedule.rfi.create": payloadKeys = ["request", "rowID", "findingID", "question", "impact"]
         case "text.rfi.create": payloadKeys = ["candidateID", "question", "impact"]
         case "catalog.material.update": payloadKeys = ["id", "mapping", "expectedFingerprint", "reason"]
         case "ops.context.update": payloadKeys = ["context", "expectedFingerprint", "reason"]
@@ -83,6 +84,15 @@ public enum ProjectEditing {
             let archive = try DrawingArchive(projectJSON: copy.root["nativeDrawings"])
             try copy.removeScheduleMap(id: id, drawings: archive, expectedFingerprint: text("expectedFingerprint"), author: author, reason: text("reason"))
             recordID = id.uuidString
+        case "schedule.rfi.create":
+            guard let raw = fields["request"] else { throw LoadSightError.invalid("Supply the complete schedule column request.") }
+            let map = try EquipmentScheduleRequest.decode(JSONEncoder().encode(raw))
+            let archive = try DrawingArchive(projectJSON: copy.root["nativeDrawings"]), rowID = try text("rowID")
+            guard let row = try EquipmentScheduleExtractor.extract(archive, request: map).rows.first(where: { $0.id == rowID }) else {
+                throw LoadSightError.invalid("Schedule row is missing or changed. Read the current schedule again.")
+            }
+            recordID = try copy.createRFI(from: row, findingID: text("findingID"), drawings: archive,
+                                        question: text("question"), impact: text("impact"), author: author)
         case "text.rfi.create":
             let archive = try DrawingArchive(projectJSON: copy.root["nativeDrawings"])
             let candidateID = try text("candidateID")

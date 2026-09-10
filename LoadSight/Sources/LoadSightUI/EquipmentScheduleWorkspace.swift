@@ -49,24 +49,7 @@ public struct EquipmentScheduleWorkspace: View {
                         }.buttonStyle(.plain).accessibilityIdentifier("ScheduleRow-" + row.id)
                     }
                 }
-                Section("Additional review") {
-                    if !result.unassigned.isEmpty {
-                        Label("\(result.unassigned.count) text fragments still need source review", systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.orange)
-                    }
-                    DisclosureGroup("Unassigned text (\(result.unassigned.count))") {
-                        ForEach(Array(result.unassigned.enumerated()), id: \.offset) { _, item in
-                            VStack(alignment: .leading) { Text(item.evidence.text); Text(item.reason).font(.caption) }
-                        }
-                        if result.unassigned.isEmpty { Text("No recognized text left unassigned inside the mapped bodies. Unread image content may still exist.").font(.caption) }
-                    }
-                    DisclosureGroup("Unmatched tag text (\(result.unmatchedTagOccurrences.count))") {
-                        ForEach(result.unmatchedTagOccurrences) { tag in Text("\(tag.matchedText) · \(tag.filename) · page \(tag.pageNumber)") }
-                    }
-                    DisclosureGroup("Review notes (\(result.warnings.count + result.limitations.count))") {
-                        ForEach(Array((result.warnings + result.limitations).enumerated()), id: \.offset) { _, warning in Text(warning).font(.caption) }
-                    }
-                }
+                ScheduleAdditionalReview(result: result)
             }
             ScheduleMapHistorySection(project: document.project, mapID: nil)
         }
@@ -120,6 +103,7 @@ private struct EquipmentScheduleRowReview: View {
     let session: DrawingReviewSession
     @Environment(\.dismiss) private var dismiss
     @State private var preview = false
+    @State private var rfiFinding: ScheduleConsistencyCheck?
     var body: some View {
         NavigationStack {
             List {
@@ -129,10 +113,30 @@ private struct EquipmentScheduleRowReview: View {
                     Text("Column mapping: \(row.region.recordedBy)")
                     Text(row.region.mappingBasis).font(.caption)
                 }
+                Section("Consistency review") {
+                    ForEach(row.consistencyReview.checks) { check in
+                        DisclosureGroup {
+                            Text(check.detail).font(.caption)
+                            Button("Draft RFI for finding") { rfiFinding = check }.accessibilityIdentifier("DraftScheduleRFI-" + check.id)
+                            ForEach(check.values, id: \.field) { value in
+                                if let number = value.value, let unit = value.unit {
+                                    Text("\(value.field.title): \(number.formatted(.number.precision(.significantDigits(1...8)))) \(unit)").font(.caption)
+                                }
+                            }
+                        } label: {
+                            VStack(alignment: .leading) {
+                                Text(check.fields.map(\.title).joined(separator: " / "))
+                                Text(check.status.title).font(.caption)
+                            }
+                        }.accessibilityIdentifier("ScheduleCheck-" + check.id)
+                    }
+                    Text(row.consistencyReview.limitations).font(.caption)
+                }
                 ForEach(row.cells, id: \.field) { cell in
                     Section(cell.field.title) {
                         Text(cell.text ?? "Unknown — no recognized cell text").textSelection(.enabled)
                         if let unit = cell.unitText { Text("Header units: \(unit)").font(.caption) }
+                        if let dimensions = cell.dimensionInterpretation { ScheduleDimensionReviewView(interpretation: dimensions) }
                         let numeric = cell.numericInterpretation
                         if numeric.status != .notNumeric {
                             if let value = numeric.value, let unit = numeric.unit {
@@ -160,6 +164,7 @@ private struct EquipmentScheduleRowReview: View {
                 Section("Review required") { ForEach(Array(row.warnings.enumerated()), id: \.offset) { _, warning in Text(warning).font(.caption) } }
             }.navigationTitle(row.tag)
             .toolbar { Button("Done") { dismiss() } }
+            .sheet(item: $rfiFinding) { finding in ScheduleRFIEditor(document: $document, row: row, finding: finding, session: session) }
             .sheet(isPresented: $preview) {
                 NavigationStack {
                     if let source = session.drawings.records.first(where: { $0.id == row.sourceID }), let data = session.drawings.files[row.sourceID] {
@@ -205,5 +210,42 @@ extension EquipmentScheduleField {
         case .accessories: "Accessories"
         case .notes: "Notes"
         }
+    }
+}
+
+extension ScheduleConsistencyCheck.Status {
+    var title: String {
+        switch self {
+        case .missing: "Missing — check source and applicability"
+        case .unresolved: "Unresolved — review evidence"
+        case .needsReview: "Possible conflict — review required"
+        case .noConflict: "No ordering conflict — basis unconfirmed"
+        case .recorded: "Recorded — applicability unconfirmed"
+        }
+    }
+}
+
+private struct ScheduleAdditionalReview: View {
+    let result: EquipmentScheduleExtraction
+    private var notes: [String] { result.warnings + result.limitations }
+    var body: some View {
+                Section("Additional review") {
+                    if !result.unassigned.isEmpty {
+                        Label("\(result.unassigned.count) text fragments still need source review", systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                    }
+                    DisclosureGroup("Unassigned text (\(result.unassigned.count))") {
+                        ForEach(Array(result.unassigned.enumerated()), id: \.offset) { _, item in
+                            VStack(alignment: .leading) { Text(item.evidence.text); Text(item.reason).font(.caption) }
+                        }
+                        if result.unassigned.isEmpty { Text("No recognized text left unassigned inside the mapped bodies. Unread image content may still exist.").font(.caption) }
+                    }
+                    DisclosureGroup("Unmatched tag text (\(result.unmatchedTagOccurrences.count))") {
+                        ForEach(result.unmatchedTagOccurrences) { tag in Text("\(tag.matchedText) · \(tag.filename) · page \(tag.pageNumber)") }
+                    }
+                    DisclosureGroup("Review notes (\(result.warnings.count + result.limitations.count))") {
+                        ForEach(Array(notes.enumerated()), id: \.offset) { _, warning in Text(warning).font(.caption) }
+                    }
+                }
     }
 }

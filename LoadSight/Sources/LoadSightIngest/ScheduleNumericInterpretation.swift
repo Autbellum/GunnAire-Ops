@@ -90,10 +90,12 @@ public enum ScheduleNumericInterpreter {
         default: conversion = nil
         }
         guard let conversion else { return result(.unresolved, "Unsupported or ambiguous unit for this field. Record an explicit supported unit from the source; GPM, MBH, plain Btu/h and water-column pressure require a clarified convention.") }
-        let value = number * conversion.factor + conversion.offset
+        var value = number * conversion.factor + conversion.offset
         guard value.isFinite else { return result(.unresolved, "Conversion exceeds the finite numeric range.") }
         let temperature = field == .enteringWaterTemperature || field == .leavingWaterTemperature
-        guard temperature ? value >= -273.15 : value >= 0 else { return result(.unresolved, "Value is outside the nonnegative scalar or absolute-temperature domain; inspect the source.") }
+        let minimumMagnitude = ["F", "°F"].contains(unit) ? "459.67" : (unit == "K" ? "0" : "273.15")
+        guard temperature ? !negativeMagnitudeExceeds(scalar, minimumMagnitude) : value >= 0 else { return result(.unresolved, "Value is outside the nonnegative scalar or absolute-temperature domain; inspect the source.") }
+        if temperature { value = max(-273.15, value) } // Avoid a conversion-rounding artifact at absolute zero.
         if field == .quantity || field == .phase {
             // Binary rounding can turn literal 0.99999999999999999 into 1.
             // Counts require an integral source decimal, not just an integral Double.
@@ -103,6 +105,24 @@ public enum ScheduleNumericInterpreter {
                   field != .phase || [1, 3].contains(number) else { return result(.unresolved, "Count must be an exactly representable nonnegative integer; supported phase values are 1 and 3.") }
         }
         return result(.interpreted, "Unreviewed arithmetic: source value × factor + offset. Verify number format, unit, mapping, recognition and row boundaries before use. No equipment count or engineering approval inferred.", value: value, conversion: conversion)
+    }
+
+    /// Compare already-validated ASCII decimals without rounding an out-of-domain
+    /// source onto the boundary. Decimal/Double precision must not erase a late digit.
+    private static func negativeMagnitudeExceeds(_ scalar: String, _ boundary: String) -> Bool {
+        guard scalar.hasPrefix("-") else { return false }
+        func parts(_ text: String) -> (whole: String, fraction: String) {
+            let pieces = text.replacingOccurrences(of: ",", with: "")
+                .split(separator: ".", omittingEmptySubsequences: false)
+            let whole = String(pieces[0].drop(while: { $0 == "0" }))
+            return (whole, pieces.count == 2 ? String(pieces[1]) : "")
+        }
+        let source = parts(String(scalar.dropFirst())), limit = parts(boundary)
+        if source.whole.count != limit.whole.count { return source.whole.count > limit.whole.count }
+        if source.whole != limit.whole { return source.whole > limit.whole }
+        let length = max(source.fraction.count, limit.fraction.count)
+        return source.fraction + String(repeating: "0", count: length - source.fraction.count)
+            > limit.fraction + String(repeating: "0", count: length - limit.fraction.count)
     }
 }
 

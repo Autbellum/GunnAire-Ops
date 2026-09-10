@@ -95,6 +95,8 @@ public struct EquipmentScheduleExtraction: Codable, Sendable {
     public let rows: [EquipmentScheduleRow]
     public let unassigned: [EquipmentScheduleUnassignedText]
     public let unmatchedTagOccurrences: [MechanicalTextCandidate]
+    public let consistencyReview: [ScheduleConsistencyReview]
+    public let dimensionReview: [ScheduleRowDimensionReview]
     public let numericReview: [ScheduleRowNumericReview]
     public let warnings: [String]
     public let limitations: [String]
@@ -102,6 +104,7 @@ public struct EquipmentScheduleExtraction: Codable, Sendable {
 
 public enum EquipmentScheduleExtractor {
     public static let method = "Mapped schedule rows v1"
+    public static let partialRowWarning = "Row has unassigned or boundary-crossing text. Cell text may be partial; inspect all unassigned evidence before use."
     public static let limitations = [
         "Unreviewed row candidates from explicitly mapped table bodies and columns; not autonomous table/header detection or engineering approval.",
         "Row bands are inferred between tag baselines. Merged cells, multiline tags, continuations and repeated headers require visual review.",
@@ -203,7 +206,7 @@ public enum EquipmentScheduleExtractor {
                 let matching = (occurrencesByTag[tag.uppercased()] ?? []).filter { !($0.sourceID == source.id && $0.pageID == page.id && $0.anchor.bounds.rect.intersects(body)) }
                 var flags = ["Unreviewed row; check header mapping, row boundaries, notes and source page."]
                 if partialRows.contains(rowIndex) {
-                    flags.append("Row has unassigned or boundary-crossing text. Cell text may be partial; inspect all unassigned evidence before use.")
+                    flags.append(partialRowWarning)
                 }
                 let missing = cells.filter { $0.text == nil }.map { $0.field.rawValue }
                 if !missing.isEmpty { flags.append("Mapped cells without recognized text remain unknown: " + missing.joined(separator: ", ")) }
@@ -228,7 +231,7 @@ public enum EquipmentScheduleExtractor {
             tags[candidate.matchedText.uppercased()] == nil && !request.regions.contains { $0.sourceID == candidate.sourceID && $0.pageID == candidate.pageID && $0.bodyBounds.rect.intersects(candidate.anchor.bounds.rect) }
         }
         try Task.checkCancellation()
-        return .init(method: method, rows: rows, unassigned: unassigned, unmatchedTagOccurrences: unmatched, numericReview: rows.map { .init(rowID: $0.id, cells: $0.cells.map(\.numericInterpretation)) }, warnings: warnings, limitations: limitations)
+        return .init(method: method, rows: rows, unassigned: unassigned, unmatchedTagOccurrences: unmatched, consistencyReview: rows.map(\.consistencyReview), dimensionReview: rows.map(\.dimensionReview), numericReview: rows.map { .init(rowID: $0.id, cells: $0.cells.map(\.numericInterpretation)) }, warnings: warnings, limitations: limitations)
     }
     private static func order(_ a: DrawingText, _ b: DrawingText) -> Bool {
         if a.bounds.rect.midY != b.bounds.rect.midY { return a.bounds.rect.midY > b.bounds.rect.midY }
