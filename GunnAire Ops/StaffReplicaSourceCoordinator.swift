@@ -193,7 +193,23 @@ enum StaffReplicaSourceStorage {
             await sync()
         } catch {
             isRunning = false
+            if case StaffReplicaSourceSyncError.access = error { clearDisplay() }
             message = (error as? StaffOwnerFieldEditError)?.localizedDescription ?? "The reviewed field edit changed or could not be saved. Check again; the original was retained."
+        }
+    }
+
+    func keepOfficeFieldReview(_ review: StaffOwnerFieldEditReview) async {
+        guard !isRunning, let edits = dependencies.ownerFieldEdits else { return }
+        isRunning = true
+        do {
+            let context = try await dependencies.context(); try dependencies.check(context)
+            guard displayScope == context.scope else { throw StaffReplicaSourceSyncError.access }
+            try await edits.keepOffice(review, context: context)
+            isRunning = false; await sync()
+        } catch {
+            isRunning = false
+            if case StaffReplicaSourceSyncError.access = error { clearDisplay() }
+            message = "The office value was not changed. Check the field-update review again; the original decision was retained."
         }
     }
 
@@ -262,10 +278,10 @@ enum StaffReplicaSourceStorage {
                 try await recover(&journal, context: context)
             }
             lastConfirmedAt = journal.lastConfirmedAt
-            hasMore = selected.count < plan.changes.count
+            hasMore = selected.count < plan.changes.count || dependencies.ownerFieldEdits?.hasMore == true
             if !conflicts.isEmpty { message = "\(conflicts.count) saved change\(conflicts.count == 1 ? " needs" : "s need") review." }
             else if plan.waitingForCloudKit > 0 { message = "Waiting for this device's company iCloud records to catch up." }
-            else if hasMore { message = "Preparing more saved changes…" }
+            else if hasMore { message = dependencies.ownerFieldEdits?.hasMore == true ? "Checking more field updates…" : "Preparing more saved changes…" }
             else if let deliver = dependencies.deliver {
                 if !selected.isEmpty {
                     // Re-capture and fence the acknowledged source in the next

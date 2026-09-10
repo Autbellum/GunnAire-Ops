@@ -16,6 +16,10 @@ import XCTest
         var serverValue: StaffWorkspaceValue = .text("Original office note")
         var serverRevision = 1
         var application: StaffOwnerFieldEditApplication?
+        var resolution: StaffOwnerFieldEditResolution?
+        var keepRequests: [StaffOwnerFieldEditKeepRequest] = []
+        var loseKeep = false
+        var beforeKeep: (() throws -> Void)?
         var prepareRequests: [StaffOwnerFieldEditPrepare] = []
         var losePrepare = false, loseConfirm = false
         var afterResponse: (() -> Void)?
@@ -47,25 +51,43 @@ import XCTest
                 recordID: original.recordID, expectedRevision: 1, fieldName: "notes", value: original.value,
                 actorEmail: "field.technician@gunnaire.com", createdAt: "2026-09-10T08:00:00Z", state: "recorded", operationalWorkspaceReady: false)
         }
-        func cleanup() { base.cleanup(); try? FileManager.default.removeItem(at: directory) }
+        // SwiftData can retain live SQLite handles through registered models.
+        // Never unlink an open store; the simulator owns these temporary files.
+        func cleanup() { base.cleanup() }
         var edit: StaffOwnerFieldEdit {
             .init(schema: StaffOwnerFieldEdit.schema, shareID: base.plan.id.uuidString.lowercased(), request: original,
                 receipt: receipt, baseValue: .text("Original office note"), current: .init(revision: serverRevision,
-                    deleted: false, value: serverValue), eligible: true, sourceSequence: serverRevision, application: application)
+                    deleted: false, value: serverValue), eligible: resolution == nil, sourceSequence: serverRevision, application: application, resolution: resolution)
         }
         func check(_ context: StaffReplicaSourceContext) throws {
             guard allowed, context.scope == source.scope, context.stamp == source.stamp else { throw StaffReplicaSourceSyncError.access }
         }
         func response(_ path: String, method: String, bytes: Data?) throws -> Data {
             XCTAssertTrue(StaffOwnerFieldEditTransport.allows(path: path, method: method, body: bytes))
-            let result: Data
+            var result: Data
             if method == "GET" {
                 if URLComponents(string: path)?.path == StaffOwnerFieldEditTransport.root {
                     result = try StaffWorkspacePublicationContract.encode(StaffOwnerFieldEditPage(schema: StaffOwnerFieldEdit.schema,
                         companyID: original.companyID, environment: original.environment, replicaID: original.replicaID,
-                        commandIDs: application?.state == "published" ? [] : [original.commandID], nextCursor: nil))
+                        commandIDs: application?.state == "published" || resolution != nil ? [] : [original.commandID], nextCursor: nil))
                 } else { result = try StaffWorkspacePublicationContract.encode(edit) }
+            } else if path.hasSuffix("/keep-office") {
+                let request = try StaffWorkspacePublicationContract.decode(StaffOwnerFieldEditKeepRequest.self, from: XCTUnwrap(bytes))
+                keepRequests.append(request)
+                try beforeKeep?()
+                if let resolution {
+                    guard resolution.request == request else { throw StaffReplicaSourceRejected(code: "edit_resolved") }
+                } else {
+                    guard application?.state != "published" else { throw StaffReplicaSourceRejected(code: "edit_published") }
+                    guard request.claimOperationID == (application?.operationID ?? "") else { throw StaffReplicaSourceRejected(code: "edit_claimed") }
+                    guard request.expectedRevision == serverRevision, request.expectedValue == serverValue else { throw StaffReplicaSourceRejected(code: "field_changed") }
+                    resolution = .init(schema: StaffOwnerFieldEditKeepRequest.schema, request: request,
+                        ownerEmail: source.scope.actorEmail, resolvedAt: "2026-09-10T08:03:00Z", outcome: "keptOffice")
+                }
+                if loseKeep { loseKeep = false; throw StaffReplicaSourceSyncError.unavailable }
+                result = try StaffWorkspacePublicationContract.encode(XCTUnwrap(resolution))
             } else if path.hasSuffix("/prepare") {
+                guard resolution == nil else { throw StaffReplicaSourceRejected(code: "edit_resolved") }
                 let request = try StaffWorkspacePublicationContract.decode(StaffOwnerFieldEditPrepare.self, from: XCTUnwrap(bytes))
                 if let first = prepareRequests.first { XCTAssertEqual(first, request) }
                 prepareRequests.append(request)
@@ -80,6 +102,7 @@ import XCTest
                 if losePrepare { losePrepare = false; throw StaffReplicaSourceSyncError.unavailable }
                 result = try StaffWorkspacePublicationContract.encode(XCTUnwrap(application))
             } else {
+                guard resolution == nil else { throw StaffReplicaSourceRejected(code: "edit_resolved") }
                 let request = try StaffWorkspacePublicationContract.decode(StaffOwnerFieldEditConfirmation.self, from: XCTUnwrap(bytes))
                 let prepared = try XCTUnwrap(application)
                 XCTAssertEqual(request.operationID, prepared.operationID)
@@ -91,6 +114,19 @@ import XCTest
                 if loseConfirm { loseConfirm = false; throw StaffReplicaSourceSyncError.unavailable }
                 result = try StaffWorkspacePublicationContract.encode(XCTUnwrap(application))
             }
+            // Match Python's actual HTTP representation, including explicit
+            // optional nulls; Swift-only round trips previously hid this gap.
+            var wire = try XCTUnwrap(JSONSerialization.jsonObject(with: result) as? [String: Any])
+            if wire["commandIDs"] != nil { wire["nextCursor"] = wire["nextCursor"] ?? NSNull() }
+            if wire["shareID"] != nil && wire["receipt"] != nil {
+                wire["current"] = wire["current"] ?? NSNull()
+                wire["application"] = wire["application"] ?? NSNull()
+                if var receipt = wire["application"] as? [String: Any] {
+                    receipt["publishedAt"] = receipt["publishedAt"] ?? NSNull(); wire["application"] = receipt
+                }
+            }
+            if wire["operationID"] != nil { wire["publishedAt"] = wire["publishedAt"] ?? NSNull() }
+            result = try JSONSerialization.data(withJSONObject: wire, options: [.sortedKeys])
             afterResponse?()
             if escapeUnicode { return Data(String(decoding: result, as: UTF8.self).replacingOccurrences(of: "é", with: "\\u00e9").utf8) }
             return result

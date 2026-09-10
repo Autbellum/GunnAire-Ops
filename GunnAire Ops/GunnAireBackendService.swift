@@ -1110,7 +1110,7 @@ enum GunnAireBackendService {
             if response.statusCode == 409 {
                 struct Rejection: Decodable { let code: String }
                 guard data.count <= 8192, let value = try? JSONDecoder().decode(Rejection.self, from: data),
-                      ["source_changed", "record_changed", "deletion_changed", "field_changed", "edit_claimed", "edit_changed", "edit_not_prepared", "edit_not_published"].contains(value.code) else { throw StaffReplicaSourceSyncError.invalid }
+                      ["source_changed", "record_changed", "deletion_changed", "field_changed", "edit_claimed", "edit_changed", "edit_not_prepared", "edit_not_published", "edit_resolved", "edit_published"].contains(value.code) else { throw StaffReplicaSourceSyncError.invalid }
                 if method == "POST" { throw StaffReplicaSourceRejected(code: value.code) }
                 throw StaffReplicaSourceSyncError.sourceChanged
             }

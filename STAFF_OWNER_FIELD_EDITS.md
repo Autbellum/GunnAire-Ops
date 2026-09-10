@@ -49,10 +49,14 @@ convergence, a QuickBooks update, or a successful payment.
 ## Remaining release requirements
 
 - A prepared claim with a later third-value office conflict stays retained and
-  needs further resolution. Claim release/takeover and an explicit keep-office
-  outcome are not implemented. Do not delete the journal to bypass that fence.
+  can now be explicitly closed with Keep Office Value on the original device;
+  see [owner field-edit resolution](STAFF_OWNER_FIELD_RESOLUTION.md). Claim
+  release/takeover remains unimplemented. Never delete a journal to bypass it.
 - Matching native/backend versions must be deployed together. A missing owner
   API prevents this sync path; there is no pretend-success compatibility fallback.
+- Actual backend/native null interoperability and a retained-decision wire
+  fixture are covered in the subsequent resolution slice; Swift-only protocol
+  round trips did not prove that boundary in the original application slice.
 - Separate-account physical CloudKit acceptance, production schema/signing,
   parallel navigation qualification, and live QBO/Google/payment acceptance are
   still required. This slice does not enable arbitrary model or accounting edits.

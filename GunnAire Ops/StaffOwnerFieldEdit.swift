@@ -16,6 +16,7 @@ struct StaffOwnerFieldEdit: Codable, Equatable, Identifiable {
     let eligible: Bool
     let sourceSequence: Int
     let application: StaffOwnerFieldEditApplication?
+    var resolution: StaffOwnerFieldEditResolution? = nil
     var id: String { request.commandID }
 
     func validate(_ scope: StaffReplicaSourceScope) throws {
@@ -25,15 +26,24 @@ struct StaffOwnerFieldEdit: Codable, Equatable, Identifiable {
               request.environment == scope.binding.environment,
               request.replicaID == scope.binding.replicaID.uuidString.lowercased(),
               sourceSequence >= request.sourceSequence,
+              sourceSequence < 2_147_483_647,
               let field = StaffWorkspaceModelCatalog.all.first(where: { $0.kind == request.recordKind })?.fieldSchema[request.fieldName]
         else { throw StaffReplicaSourceSyncError.invalid }
         try field.validateScalar(baseValue)
         if let current {
-            guard (1...2_147_483_647).contains(current.revision) else { throw StaffReplicaSourceSyncError.invalid }
+            guard (1..<2_147_483_647).contains(current.revision) else { throw StaffReplicaSourceSyncError.invalid }
             try field.validateScalar(current.value)
         }
         try application?.validate(commandID: id)
-        if let application { try field.validateScalar(application.expectedValue) }
+        if let application {
+            try field.validateScalar(application.expectedValue)
+            guard let prepared = StaffOwnerFieldEditApplication.instant(application.preparedAt),
+                  let recorded = StaffOwnerFieldEditApplication.instant(receipt.createdAt), prepared >= recorded else { throw StaffReplicaSourceSyncError.invalid }
+        }
+        if let resolution {
+            guard !eligible else { throw StaffReplicaSourceSyncError.invalid }
+            try resolution.validate(edit: self, scope: scope)
+        }
     }
 }
 
@@ -71,7 +81,7 @@ struct StaffOwnerFieldEditPrepare: Codable, Equatable {
               environment == edit.request.environment, replicaID == edit.request.replicaID,
               commandID == edit.id, ownerStoreID == scope.storeUUID.lowercased(),
               CloudKitStaffSetupPolicy.canonicalID(operationID), CloudKitStaffSetupPolicy.canonicalID(ownerStoreID),
-              (1...2_147_483_647).contains(expectedRevision) else { throw StaffReplicaSourceSyncError.storage }
+              (1..<2_147_483_647).contains(expectedRevision) else { throw StaffReplicaSourceSyncError.storage }
         guard let field = StaffWorkspaceModelCatalog.all.first(where: { $0.kind == edit.request.recordKind })?.fieldSchema[edit.request.fieldName]
         else { throw StaffReplicaSourceSyncError.invalid }
         try field.validateScalar(expectedValue)
@@ -93,20 +103,20 @@ struct StaffOwnerFieldEditApplication: Codable, Equatable {
     let reviewedConflict: Bool
     let state: String
     let publishedAt: String?
+    static func instant(_ text: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let value = formatter.date(from: text) { return value }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: text)
+    }
     func validate(commandID: String) throws {
-        func instant(_ text: String) -> Bool {
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            if formatter.date(from: text) != nil { return true }
-            formatter.formatOptions = [.withInternetDateTime]
-            return formatter.date(from: text) != nil
-        }
         guard schema == StaffOwnerFieldEdit.schema, self.commandID == commandID,
               CloudKitStaffSetupPolicy.canonicalID(commandID), CloudKitStaffSetupPolicy.canonicalID(operationID),
               CloudKitStaffSetupPolicy.canonicalID(ownerStoreID), SharedTimeError.validEmail(ownerEmail),
-              instant(preparedAt), (1...2_147_483_647).contains(expectedRevision),
+              let prepared = Self.instant(preparedAt), (1..<2_147_483_647).contains(expectedRevision),
               ["prepared", "published"].contains(state),
-              (state == "prepared" && publishedAt == nil) || (state == "published" && publishedAt.map(instant) == true)
+              (state == "prepared" && publishedAt == nil) || (state == "published" && publishedAt.flatMap(Self.instant).map { $0 >= prepared } == true)
         else { throw StaffReplicaSourceSyncError.invalid }
     }
     func validate(_ original: StaffOwnerFieldEditPrepare, scope: StaffReplicaSourceScope) throws {
@@ -163,7 +173,7 @@ enum StaffOwnerFieldEditTransport {
         let suffix = String(url.path.dropFirst(root.count))
         let parts = suffix.isEmpty ? [] : suffix.dropFirst().split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         if method == "POST" {
-            return parts.count == 2 && CloudKitStaffSetupPolicy.canonicalID(parts[0]) && ["prepare", "confirm"].contains(parts[1])
+            return parts.count == 2 && CloudKitStaffSetupPolicy.canonicalID(parts[0]) && ["prepare", "confirm", "keep-office"].contains(parts[1])
                 && url.query == nil && body.map { !$0.isEmpty && $0.count <= maximumRequestBytes } == true
         }
         guard method == "GET", body == nil, parts.count <= 1, parts.first.map(CloudKitStaffSetupPolicy.canonicalID) ?? true,

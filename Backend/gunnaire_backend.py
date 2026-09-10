@@ -4393,9 +4393,10 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                     raise cloudkit_staff_shares.fail("invalid_query", "Use one value per field-edit query.", 400)
                 result = service.read(self._application_session_id, parts[0] if parts else None,
                     {key: value[0] for key, value in query.items()})
-            elif method == "POST" and len(parts) == 2 and parts[1] in ("prepare", "confirm") and not parsed.query:
+            elif method == "POST" and len(parts) == 2 and parts[1] in ("prepare", "confirm", "keep-office") and not parsed.query:
                 payload = qbo_change_capture.strict_json(self.read_limited_body(7 * 1024 * 1024).decode("utf-8"))
-                result = service.change(self._application_session_id, parts[0], parts[1], payload)
+                result = (service.keep_office(self._application_session_id, parts[0], payload) if parts[1] == "keep-office"
+                          else service.change(self._application_session_id, parts[0], parts[1], payload))
             else:
                 raise cloudkit_staff_shares.fail("invalid_request", "Use an exact field-edit endpoint.", 400)
             self.write_json(result)

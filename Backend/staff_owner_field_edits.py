@@ -11,10 +11,11 @@ import re
 from datetime import datetime
 
 try:
-    from Backend import staff_workspace_commands as commands, staff_workspace_source as source
+    from Backend import staff_workspace_commands as commands, staff_workspace_source as source, staff_owner_field_resolutions as resolutions
 except ModuleNotFoundError:
     import staff_workspace_commands as commands
     import staff_workspace_source as source
+    import staff_owner_field_resolutions as resolutions
 
 contract, sharing = commands.contract, commands.sharing
 SCHEMA = "staff-owner-field-edit-v1"
@@ -30,6 +31,7 @@ def instant(value):
 
 
 def initialize_schema(connection):
+    resolutions.initialize_schema(connection)
     connection.execute("""CREATE TABLE IF NOT EXISTS staff_owner_field_edit_applications (
         command_id TEXT PRIMARY KEY, operation_id TEXT NOT NULL UNIQUE,
         owner_email TEXT NOT NULL, owner_store_id TEXT NOT NULL, state TEXT NOT NULL,
@@ -37,7 +39,13 @@ def initialize_schema(connection):
     )""")
 
 
-class StaffOwnerFieldEdits(commands.StaffWorkspaceCommands):
+class StaffOwnerFieldEdits(resolutions.StaffOwnerFieldResolutions, commands.StaffWorkspaceCommands):
+    valid_instant = staticmethod(instant)
+
+    @staticmethod
+    def valid_owner_email(email):
+        if type(email) is not str or email != email.strip().lower() or re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email) is None:
+            raise ValueError()
     def command(self, connection, scope, command_id):
         row = connection.execute("""SELECT c.* FROM staff_workspace_commands c
             JOIN staff_workspace_selections s ON s.id=c.selection_id AND s.share_id=c.share_id
@@ -94,12 +102,13 @@ class StaffOwnerFieldEdits(commands.StaffWorkspaceCommands):
             if type(receipt["reviewedConflict"]) is not bool:
                 raise ValueError()
             email = receipt["ownerEmail"]
-            if type(email) is not str or email != email.strip().lower() or re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email) is None:
-                raise ValueError()
+            self.valid_owner_email(email)
             prepared_at = instant(receipt["preparedAt"])
             if receipt["publishedAt"] is not None and instant(receipt["publishedAt"]) < prepared_at:
                 raise ValueError()
             _, original = self.command(connection, tuple(saved["request"][key] for key in ("companyID", "environment", "replicaID")), command_id)
+            if prepared_at < instant(original["receipt"]["createdAt"]):
+                raise ValueError()
             commands.validate_value(original["request"]["recordKind"], original["request"]["fieldName"], receipt["expectedValue"])
             if (receipt["schema"] != SCHEMA or receipt["commandID"] != command_id or
                     receipt["operationID"] != row["operation_id"] or receipt["ownerStoreID"] != row["owner_store_id"] or
@@ -158,9 +167,13 @@ class StaffOwnerFieldEdits(commands.StaffWorkspaceCommands):
         application = self.application(connection, command_id)
         if application and any(application["request"][k] != request[k] for k in ("companyID", "environment", "replicaID", "commandID")):
             raise self.source.unavailable()
-        return dict(schema=SCHEMA, shareID=row["share_id"], request=request, receipt=saved["receipt"],
+        result = dict(schema=SCHEMA, shareID=row["share_id"], request=request, receipt=saved["receipt"],
                     baseValue=saved["baseValue"], current=current, eligible=eligible,
                     sourceSequence=self.source.sequence(connection, scope), application=application["receipt"] if application else None)
+        resolution = self.resolution(connection, scope, command_id)
+        if resolution:
+            result.update(resolution=resolution["receipt"], eligible=False)
+        return result
 
     def read(self, session_id, command_id, query):
         contract.exact(query, SCOPE if command_id is not None else SCOPE + (" after" if "after" in query else ""))
@@ -183,7 +196,8 @@ class StaffOwnerFieldEdits(commands.StaffWorkspaceCommands):
             ids = []
             for row in rows[:50]:
                 application = self.application(connection, row["command_id"])
-                if not application or application["receipt"]["state"] != "published":
+                resolution = self.resolution(connection, scope, row["command_id"])
+                if not resolution and (not application or application["receipt"]["state"] != "published"):
                     ids.append(row["command_id"])
             return dict(schema=SCHEMA, companyID=scope[0], environment=scope[1], replicaID=scope[2],
                         commandIDs=ids, nextCursor=rows[49]["command_id"] if len(rows) > 50 else None)
@@ -200,6 +214,8 @@ class StaffOwnerFieldEdits(commands.StaffWorkspaceCommands):
             connection.execute("BEGIN IMMEDIATE")
             initialize_schema(connection)
             actor, scope = self.source.scope(connection, session_id, payload)
+            if self.resolution(connection, scope, command_id):
+                raise sharing.fail("edit_resolved", "This field edit was explicitly retained without replacing office data. Keep its original audit history.", 409)
             entry = self.detail(connection, session_id, scope, command_id, payload)
             existing = self.application(connection, command_id)
             if existing:

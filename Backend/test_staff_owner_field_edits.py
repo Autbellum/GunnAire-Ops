@@ -158,7 +158,7 @@ class OwnerFieldEditHTTPTests(unittest.TestCase):
         with backend.db() as connection:
             original = json.loads(backend.decrypt_catalog_payload(connection.execute(
                 "SELECT ciphertext FROM staff_owner_field_edit_applications WHERE command_id=?", (self.id,)).fetchone()[0]))
-        for key, value in (("preparedAt", "bad"), ("publishedAt", "bad"), ("reviewedConflict", 1),
+        for key, value in (("preparedAt", "bad"), ("preparedAt", "1970-01-01T00:00:00Z"), ("publishedAt", "bad"), ("reviewedConflict", 1),
                            ("expectedRevision", True), ("expectedValue", {"flag": {"_0": True}})):
             changed = json.loads(json.dumps(original))
             changed["receipt"].update(state="published", publishedAt="2026-09-10T23:59:59Z")
