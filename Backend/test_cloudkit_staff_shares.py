@@ -26,7 +26,14 @@ class CloudKitStaffSharingTests(unittest.TestCase):
             patcher = mock.patch.object(backend, name, side_effect=function)
             patcher.start()
             self.addCleanup(patcher.stop)
-    tearDown = fixture.WorkspaceIdentityTests.tearDown
+    def tearDown(self):
+        try:
+            fixture.WorkspaceIdentityTests.tearDown(self)
+        finally:
+            # This fixture is also composed by manually calling setUp/tearDown.
+            # Those callers do not run unittest's later cleanup phase. Restore
+            # the encryption boundary here; a runner's second cleanup is empty.
+            self.doCleanups()
     request = fixture.WorkspaceIdentityTests.request
     workspace = fixture.WorkspaceIdentityTests.workspace
     binding_payload = fixture.WorkspaceIdentityTests.binding_payload

@@ -6,6 +6,8 @@ the current session and document first. No symlink or special file is served.
 from __future__ import annotations
 
 import errno
+import hashlib
+import hmac
 import os
 from pathlib import Path
 import re
@@ -16,6 +18,7 @@ _MIME = re.compile(r"[A-Za-z0-9!#$%&'*+.^_`|~-]+/[A-Za-z0-9!#$%&'*+.^_`|~-]+", r
 FINANCIAL_KINDS = frozenset(("invoice", "estimate", "payment", "receipt", "bill", "financial",
                              "credit", "statement", "transaction", "maintenance_agreement"))
 BILLING_ROLES = frozenset(("Admin", "Accounting", "Field Technician"))
+PROOF_SCHEMA = "company-document-content-v1"
 
 
 class DocumentReadError(Exception):
@@ -38,10 +41,24 @@ def financial_document(row):
                 or str(row["kind"] or "").strip().lower() in FINANCIAL_KINDS)
 
 
-def read_document(storage_root: Path, stored_path, *, expected_bytes=None, maximum=MAX_BYTES):
+def content_proof(row):
+    size, digest = row["file_size_bytes"], row["file_sha256"]
+    if size is None and digest is None:
+        raise DocumentReadError(409, "Original upload proof is missing. Keep this record and import the retained original as a new document.")
+    if (type(size) is not int or not 1 <= size <= MAX_BYTES or type(digest) is not str
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            or not header_text(row["filename"], 255) or not content_type(row["content_type"])):
+        raise DocumentReadError(503, "Original document proof is unavailable. The saved record was retained.")
+    return dict(schema=PROOF_SCHEMA, id=row["id"], filename=row["filename"], contentType=row["content_type"],
+                fileSizeBytes=size, fileSHA256=digest, createdAt=row["created_at"])
+
+
+def read_document(storage_root: Path, stored_path, *, expected_bytes=None, expected_sha256=None, maximum=MAX_BYTES):
     if (type(maximum) is not int or not 1 <= maximum <= MAX_BYTES
             or expected_bytes is not None and (type(expected_bytes) is not int or not 1 <= expected_bytes <= maximum)):
         raise DocumentReadError(409, "Document size is outside the supported limit.")
+    if expected_sha256 is not None and (type(expected_sha256) is not str or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None):
+        raise DocumentReadError(503, "Original document proof is invalid.")
     descriptors = []
     try:
         # Resolve only the configured root; resolving the file before opening
@@ -81,7 +98,10 @@ def read_document(storage_root: Path, stored_path, *, expected_bytes=None, maxim
         fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
         if total != before.st_size or any(getattr(before, name) != getattr(after, name) for name in fields):
             raise DocumentReadError(409, "Document changed during the download. Refresh and retry.")
-        return b"".join(chunks)
+        data = b"".join(chunks)
+        if expected_sha256 is not None and not hmac.compare_digest(hashlib.sha256(data).hexdigest(), expected_sha256):
+            raise DocumentReadError(409, "Document bytes do not match the original upload. Keep the original for review.")
+        return data
     except DocumentReadError:
         raise
     except (ValueError, TypeError):

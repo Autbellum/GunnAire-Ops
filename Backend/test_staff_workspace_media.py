@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import unittest
 import urllib.parse
 import uuid
@@ -36,7 +37,7 @@ class StaffWorkspaceMediaHTTPTests(unittest.TestCase):
         path = self.media_path(bytes_path=bytes_path) + "?" + urllib.parse.urlencode(values)
         return self.request(token=self.tokens[role], path=path)
 
-    def install_document(self, document_id, payload=b"%PDF-fixture-media-1234567890"):
+    def install_document(self, document_id, payload=b"%PDF-fixture-media-1234567890", verified=True):
         storage = Path(backend.STORAGE_ROOT)
         storage.mkdir(parents=True, exist_ok=True)
         path = storage / f"{document_id}.pdf"
@@ -46,10 +47,11 @@ class StaffWorkspaceMediaHTTPTests(unittest.TestCase):
                 """INSERT INTO documents
                    (id, filename, content_type, kind, service_call_id, invoice_id, estimate_id,
                     maintenance_contract_id, customer_equipment_id, equipment_name, customer_name,
-                    stored_path, created_at)
-                   VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)""",
+                    stored_path, created_at, file_size_bytes, file_sha256)
+                   VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?)""",
                 (document_id, "Original.pdf", "application/pdf", "service_report",
-                 str(path), backend.utc_now()),
+                 str(path), backend.utc_now(), len(payload) if verified else None,
+                 hashlib.sha256(payload).hexdigest() if verified else None),
             )
         return payload
 

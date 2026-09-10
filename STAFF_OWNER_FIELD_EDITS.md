@@ -64,8 +64,9 @@ convergence, a QuickBooks update, or a successful payment.
 - Separate-account physical CloudKit acceptance, production schema/signing,
   parallel navigation qualification, and live QBO/Google/payment acceptance are
   still required. This slice does not enable arbitrary model or accounting edits.
-- Documents still need immutable upload-digest verification for same-size
-  pre-read file replacement; the previous bounded reader does not prove that.
+- [Document-content integrity](COMPANY_DOCUMENT_CONTENT_INTEGRITY.md) now binds
+  shared-company and staff downloads to new-upload digests. Legacy records still
+  require retained-original review and relinking before production promotion.
 
 ## Verification
 

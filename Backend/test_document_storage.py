@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import hashlib
 import tempfile
 import unittest
 from unittest import mock
@@ -97,3 +98,20 @@ class DocumentStorageTests(unittest.TestCase):
             self.assertFalse(storage.content_type(value))
         for value in ("x\n.pdf", "x\r.pdf", "x\x00.pdf", "x\x7f.pdf", "x" * 256):
             self.assertFalse(storage.header_text(value, 255))
+
+    def test_same_size_replacement_before_first_read_rejected_by_upload_digest(self):
+        digest = hashlib.sha256(b"original-file").hexdigest()
+        self.path.write_bytes(b"modified-file")
+        self.assertEqual(len(b"original-file"), len(b"modified-file"))
+        self.rejected(409, lambda: self.read(expected_bytes=13, expected_sha256=digest))
+        self.assertEqual(self.path.read_bytes(), b"modified-file", "Retain the evidence; do not repair or rewrite it")
+
+    def test_digest_matches_exact_upload_bytes_with_short_reads(self):
+        digest = hashlib.sha256(b"original-file").hexdigest()
+        original = os.read
+        with mock.patch.object(os, "read", side_effect=lambda fd, count: original(fd, min(count, 2))):
+            self.assertEqual(self.read(expected_bytes=13, expected_sha256=digest), b"original-file")
+        for invalid in (True, "a" * 63, "A" * 64, "g" * 64, ""):
+            with mock.patch.object(os, "read") as reader:
+                self.rejected(503, lambda: self.read(expected_sha256=invalid))
+                reader.assert_not_called()

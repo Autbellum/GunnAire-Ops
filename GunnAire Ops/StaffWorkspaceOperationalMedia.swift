@@ -18,7 +18,7 @@ struct StaffWorkspaceOperationalMediaCandidate: Equatable {
 }
 
 struct StaffWorkspaceOperationalMediaGrant: Codable, Equatable {
-    static let schema = "staff-workspace-operational-media-v1"
+    static let schema = "staff-workspace-operational-media-v2"
     let schema: String
     let scope: CloudKitStaffSetupScope
     let planID: UUID
@@ -33,10 +33,11 @@ struct StaffWorkspaceOperationalMediaGrant: Codable, Equatable {
     let kindRaw: String
     let state: String
     let operationalWorkspaceReady: Bool
+    let fileSHA256: String
 
     init(scope: CloudKitStaffSetupScope, planID: UUID, selectionID: String, sourceSequence: Int,
          contentSHA256: String, attachmentID: String, backendDocumentID: String, contentType: String,
-         fileSizeBytes: Int, displayName: String, kindRaw: String) throws {
+         fileSizeBytes: Int, displayName: String, kindRaw: String, fileSHA256: String) throws {
         guard CloudKitStaffSetupPolicy.canonicalID(selectionID),
               CloudKitStaffSetupPolicy.canonicalID(attachmentID),
               (1...2_147_483_647).contains(sourceSequence),
@@ -45,7 +46,7 @@ struct StaffWorkspaceOperationalMediaGrant: Codable, Equatable {
               Self.validContentType(contentType),
               (1...64 * 1024 * 1024).contains(fileSizeBytes),
               Self.validDisplayName(displayName),
-              Self.validKindRaw(kindRaw) else {
+              Self.validKindRaw(kindRaw), JobBillingAssignmentSnapshot.validConnectionRevision(fileSHA256) else {
             throw StaffReplicaDeliveryError.invalid
         }
         schema = Self.schema
@@ -62,10 +63,21 @@ struct StaffWorkspaceOperationalMediaGrant: Codable, Equatable {
         self.kindRaw = kindRaw
         state = "authorized"
         operationalWorkspaceReady = false
+        self.fileSHA256 = fileSHA256
+    }
+
+    func validateProof() throws {
+        guard schema == Self.schema, state == "authorized", !operationalWorkspaceReady,
+              CloudKitStaffSetupPolicy.canonicalID(selectionID), CloudKitStaffSetupPolicy.canonicalID(attachmentID),
+              (1..<2_147_483_647).contains(sourceSequence), JobBillingAssignmentSnapshot.validConnectionRevision(contentSHA256),
+              Self.validDocumentID(backendDocumentID), Self.validContentType(contentType), Self.validDisplayName(displayName),
+              Self.validKindRaw(kindRaw), (1...CompanyDocumentContentProof.maximum).contains(fileSizeBytes),
+              JobBillingAssignmentSnapshot.validConnectionRevision(fileSHA256) else { throw StaffReplicaDeliveryError.invalid }
     }
 
     func validate(scope: CloudKitStaffSetupScope, plan: UUID, acceptance: StaffWorkspaceOperationalAcceptance,
                   candidate: StaffWorkspaceOperationalMediaCandidate) throws {
+        try validateProof()
         guard schema == Self.schema, state == "authorized", !operationalWorkspaceReady,
               self.scope == scope, planID == plan,
               selectionID == acceptance.selectionID, sourceSequence == acceptance.sourceSequence,
@@ -117,6 +129,7 @@ struct StaffWorkspaceOperationalMediaHTTPGrant: Codable, Equatable {
     let displayName: String
     let kindRaw: String
     let operationalWorkspaceReady: Bool
+    let fileSHA256: String
 
     func validate(against candidate: StaffWorkspaceOperationalMediaCandidate,
                   acceptance: StaffWorkspaceOperationalAcceptance) throws {
@@ -127,7 +140,8 @@ struct StaffWorkspaceOperationalMediaHTTPGrant: Codable, Equatable {
               backendDocumentID == candidate.backendDocumentID,
               contentType == candidate.contentType, fileSizeBytes == candidate.fileSizeBytes,
               displayName == candidate.displayName, kindRaw == candidate.kindRaw,
-              StaffWorkspaceOperationalMediaGrant.validDocumentID(backendDocumentID) else {
+              StaffWorkspaceOperationalMediaGrant.validDocumentID(backendDocumentID),
+              JobBillingAssignmentSnapshot.validConnectionRevision(fileSHA256) else {
             throw StaffReplicaDeliveryError.invalid
         }
     }
@@ -135,7 +149,7 @@ struct StaffWorkspaceOperationalMediaHTTPGrant: Codable, Equatable {
 
 enum StaffWorkspaceOperationalMediaStore {
     static func key(_ scope: CloudKitStaffSetupScope, _ plan: UUID, attachmentID: String) -> String {
-        "full-staff-content-media-v1\n" + scope.key + "\n" + plan.uuidString.lowercased()
+        "full-staff-content-media-v2\n" + scope.key + "\n" + plan.uuidString.lowercased()
             + "\n" + attachmentID.lowercased()
     }
 
@@ -185,6 +199,7 @@ enum StaffWorkspaceOperationalMediaStore {
             guard bytes.count <= 8192 else { throw StaffReplicaDeliveryError.storage }
             let grant = try StaffWorkspacePublicationContract.decode(StaffWorkspaceOperationalMediaGrant.self,
                                                                      from: bytes, maximum: 8192)
+            try grant.validateProof()
             guard grant.schema == StaffWorkspaceOperationalMediaGrant.schema, grant.state == "authorized",
                   !grant.operationalWorkspaceReady, grant.scope == scope, grant.planID == plan,
                   grant.attachmentID == attachmentID else {
@@ -227,16 +242,15 @@ enum StaffWorkspaceOperationalMediaStore {
             // Explicit: selection/index IDs grant no media access by themselves.
             throw StaffReplicaDeliveryError.pending
         }
-        if let httpGrant {
-            try httpGrant.validate(against: candidate, acceptance: acceptance)
-        }
+        guard let httpGrant else { throw StaffReplicaDeliveryError.pending }
+        try httpGrant.validate(against: candidate, acceptance: acceptance)
         try check()
         let next = try StaffWorkspaceOperationalMediaGrant(
             scope: scope, planID: plan, selectionID: acceptance.selectionID,
             sourceSequence: acceptance.sourceSequence, contentSHA256: acceptance.contentSHA256,
             attachmentID: candidate.attachmentID, backendDocumentID: documentID,
             contentType: candidate.contentType, fileSizeBytes: candidate.fileSizeBytes,
-            displayName: candidate.displayName, kindRaw: candidate.kindRaw)
+            displayName: candidate.displayName, kindRaw: candidate.kindRaw, fileSHA256: httpGrant.fileSHA256)
         if let existing = try load(store: store, scope: scope, plan: plan, attachmentID: attachmentID) {
             if existing == next {
                 try existing.validate(scope: scope, plan: plan, acceptance: acceptance, candidate: candidate)
@@ -256,35 +270,36 @@ enum StaffWorkspaceOperationalMediaStore {
         return confirmed
     }
 
-    /// Write authorized bytes into a fresh sandbox URL. Size must match the grant;
+    /// Open a content-addressed sandbox original. Size and digest match the grant;
     /// never reuses owner localFilePath or provider URLs.
     static func openSandbox(grant: StaffWorkspaceOperationalMediaGrant, bytes: Data,
                             directory: URL, check: () throws -> Void = {}) throws -> URL {
         try check()
-        guard grant.state == "authorized", !grant.operationalWorkspaceReady,
-              bytes.count == grant.fileSizeBytes,
-              bytes.count <= 64 * 1024 * 1024 else {
-            throw StaffReplicaDeliveryError.changed
-        }
-        let folder = directory.appendingPathComponent("StaffOperationalMedia-v1", isDirectory: true)
+        try grant.validateProof()
+        do { try CompanyDocumentContentProof.verify(bytes, size: grant.fileSizeBytes, sha256: grant.fileSHA256) }
+        catch { throw StaffReplicaDeliveryError.changed }
+        let folder = directory.appendingPathComponent("StaffOperationalMedia-v2", isDirectory: true)
             .appendingPathComponent(grant.planID.uuidString.lowercased(), isDirectory: true)
             .appendingPathComponent(grant.attachmentID.lowercased(), isDirectory: true)
+            .appendingPathComponent(grant.fileSHA256, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
         let destination = folder.appendingPathComponent(grant.displayName, isDirectory: false)
         if FileManager.default.fileExists(atPath: destination.path) {
-            try FileManager.default.removeItem(at: destination)
+            do { try CompanyDocumentContentProof.verifyFile(destination, size: grant.fileSizeBytes, sha256: grant.fileSHA256) }
+            catch { throw StaffReplicaDeliveryError.storage }
+            try check()
+            return destination // Reopening does not duplicate or overwrite a preview.
         }
-        try bytes.write(to: destination, options: [.atomic])
+        try bytes.write(to: destination, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         try check()
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
         var mutable = destination
         try mutable.setResourceValues(values)
-        guard FileManager.default.fileExists(atPath: destination.path),
-              let confirmed = try? Data(contentsOf: destination), confirmed.count == grant.fileSizeBytes else {
-            throw StaffReplicaDeliveryError.storage
-        }
+        do { try CompanyDocumentContentProof.verifyFile(destination, size: grant.fileSizeBytes, sha256: grant.fileSHA256) }
+        catch { throw StaffReplicaDeliveryError.storage }
+        try check()
         return destination
     }
 

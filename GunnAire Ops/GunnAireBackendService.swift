@@ -1820,8 +1820,28 @@ enum GunnAireBackendService {
     }
 
     static func downloadDocument(id: String) async throws -> Data {
-        let encodedID = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
-        return try await send(path: "/api/documents/\(encodedID)/download", method: "GET")
+        guard let identity = CompanyWorkspaceSession.current else { throw CompanyDocumentContentError.access }
+        let controller = CompanyWorkspaceAccessController.shared, generation = controller.generation
+        func check() throws {
+            guard CompanyWorkspaceSession.current == identity, controller.generation == generation,
+                  controller.authorizedContainer != nil else { throw CompanyDocumentContentError.access }
+        }
+        return try await CompanyDocumentContentClient(request: { path, maximum in
+            try check()
+            guard CompanyDocumentContentClient.allows(path, maximum: maximum) else { throw CompanyDocumentContentError.invalid }
+            var request = try makeRequest(path: path, method: "GET", body: nil)
+            let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+            guard bearer.hasPrefix("Bearer "), CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == identity.tokenFingerprint,
+                  request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil else { throw CompanyDocumentContentError.access }
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            do {
+                let (bytes, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: maximum)
+                try check(); return bytes
+            } catch {
+                try check()
+                throw CompanyDocumentContentError.transportFailure(error)
+            }
+        }, check: check).download(id: id)
     }
 
     @discardableResult

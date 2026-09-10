@@ -109,6 +109,13 @@ final class StaffWorkspaceOperationalMediaTests: XCTestCase {
         let candidate = try XCTUnwrap(try StaffWorkspaceOperationalMediaStore.candidates(from: view).first)
         XCTAssertEqual(candidate.backendDocumentID, preparedID)
         XCTAssertEqual(candidate.fileSizeBytes, bytes.count)
+        let legacyKey = StaffWorkspaceOperationalMediaStore.key(scope, plan.id, attachmentID: candidate.attachmentID)
+            .replacingOccurrences(of: "full-staff-content-media-v2", with: "full-staff-content-media-v1")
+        memory.saved[legacyKey] = Data("retained legacy grant".utf8)
+
+        XCTAssertThrowsError(try StaffWorkspaceOperationalMediaStore.authorize(
+            store: memory.store, scope: scope, plan: plan.id, attachmentID: candidate.attachmentID),
+            "A local document ID and size cannot invent upload-time proof")
 
         let httpGrant = StaffWorkspaceOperationalMediaHTTPGrant(
             schema: StaffWorkspaceOperationalMediaGrant.schema, selectionID: receipt.selectionID,
@@ -116,7 +123,7 @@ final class StaffWorkspaceOperationalMediaTests: XCTestCase {
             attachmentID: candidate.attachmentID, backendDocumentID: preparedID,
             contentType: candidate.contentType, fileSizeBytes: candidate.fileSizeBytes,
             displayName: candidate.displayName, kindRaw: candidate.kindRaw,
-            operationalWorkspaceReady: false)
+            operationalWorkspaceReady: false, fileSHA256: QBODocumentFileInfo.hash(bytes))
         let grant = try StaffWorkspaceOperationalMediaStore.authorize(
             store: memory.store, scope: scope, plan: plan.id, attachmentID: candidate.attachmentID,
             httpGrant: httpGrant)
@@ -127,6 +134,7 @@ final class StaffWorkspaceOperationalMediaTests: XCTestCase {
             store: memory.store, scope: scope, plan: plan.id, attachmentID: candidate.attachmentID,
             httpGrant: httpGrant)
         XCTAssertEqual(again, grant)
+        XCTAssertEqual(memory.saved[legacyKey], Data("retained legacy grant".utf8))
 
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("StaffMediaTests-\(UUID().uuidString)", isDirectory: true)
@@ -135,6 +143,25 @@ final class StaffWorkspaceOperationalMediaTests: XCTestCase {
         XCTAssertEqual(url.lastPathComponent, grant.displayName)
         XCTAssertThrowsError(try StaffWorkspaceOperationalMediaStore.openSandbox(
             grant: grant, bytes: Data(bytes.dropLast()), directory: directory))
+        XCTAssertThrowsError(try StaffWorkspaceOperationalMediaStore.openSandbox(
+            grant: grant, bytes: Data(repeating: 0, count: bytes.count), directory: directory))
+        let second = try StaffWorkspaceOperationalMediaStore.openSandbox(grant: grant, bytes: bytes, directory: directory)
+        XCTAssertEqual(second, url)
+        XCTAssertEqual(try Data(contentsOf: url), bytes, "A later preview must not replace an already-open original")
+        var checks = 0
+        XCTAssertThrowsError(try StaffWorkspaceOperationalMediaStore.openSandbox(grant: grant, bytes: bytes,
+            directory: directory.appendingPathComponent("write-verification")) {
+            checks += 1
+            if checks == 2 {
+                let files = try XCTUnwrap(FileManager.default.enumerator(at: directory, includingPropertiesForKeys: nil))
+                for case let path as URL in files where path.lastPathComponent == grant.displayName && path != url && path != second {
+                    try Data(repeating: 0, count: bytes.count).write(to: path)
+                }
+            }
+        })
+        try Data(repeating: 0, count: bytes.count).write(to: url)
+        XCTAssertThrowsError(try StaffWorkspaceOperationalMediaStore.openSandbox(grant: grant, bytes: bytes, directory: directory))
+        XCTAssertEqual(try Data(contentsOf: url), Data(repeating: 0, count: bytes.count), "Keep a corrupt original for review rather than silently replacing it")
     }
 
     @MainActor
@@ -155,7 +182,7 @@ final class StaffWorkspaceOperationalMediaTests: XCTestCase {
             attachmentID: candidate.attachmentID, backendDocumentID: preparedID,
             contentType: candidate.contentType, fileSizeBytes: candidate.fileSizeBytes,
             displayName: candidate.displayName, kindRaw: candidate.kindRaw,
-            operationalWorkspaceReady: true)
+            operationalWorkspaceReady: true, fileSHA256: QBODocumentFileInfo.hash(bytes))
         XCTAssertThrowsError(try StaffWorkspaceOperationalMediaStore.authorize(
             store: memory.store, scope: scope, plan: plan.id, attachmentID: candidate.attachmentID,
             httpGrant: forged))
@@ -166,7 +193,7 @@ final class StaffWorkspaceOperationalMediaTests: XCTestCase {
             attachmentID: candidate.attachmentID, backendDocumentID: preparedID,
             contentType: candidate.contentType, fileSizeBytes: candidate.fileSizeBytes,
             displayName: candidate.displayName, kindRaw: candidate.kindRaw,
-            operationalWorkspaceReady: false)
+            operationalWorkspaceReady: false, fileSHA256: QBODocumentFileInfo.hash(bytes))
         XCTAssertThrowsError(try StaffWorkspaceOperationalMediaStore.authorize(
             store: memory.store, scope: scope, plan: plan.id, attachmentID: candidate.attachmentID,
             httpGrant: forged))

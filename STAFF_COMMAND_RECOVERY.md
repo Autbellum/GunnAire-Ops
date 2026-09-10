@@ -47,9 +47,10 @@ read. Shared attachment IDs do not bypass billing-document role restrictions.
 Response metadata rejects embedded header controls and invalid MIME types;
 ordinary downloads now also use private-cache and no-sniff response headers.
 
-This is not cryptographic proof that a same-sized file was never replaced before
-the first read. An immutable upload digest and corresponding native verification
-are still required for that guarantee; legacy document rows lack this evidence.
+The later [document-content integrity slice](COMPANY_DOCUMENT_CONTENT_INTEGRITY.md)
+adds upload-time hashes and native verification to reject same-size replacements
+before the first read. Legacy rows remain explicitly unverified; no download or
+migration backfills historical evidence from today's file.
 
 ## Next application boundary
 

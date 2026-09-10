@@ -75,7 +75,7 @@ except ModuleNotFoundError:
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.10.58"
+SERVICE_VERSION = "2026.09.10.59"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -2480,6 +2480,14 @@ def initialize_database() -> None:
         ensure_column(connection, "documents", "maintenance_contract_id", "TEXT")
         ensure_column(connection, "documents", "customer_equipment_id", "TEXT")
         ensure_column(connection, "documents", "equipment_name", "TEXT")
+        # Existing rows stay explicitly unverified. Never hash today's disk file
+        # to invent historical upload evidence during a migration or download.
+        ensure_column(connection, "documents", "file_size_bytes", "INTEGER")
+        ensure_column(connection, "documents", "file_sha256", "TEXT")
+        connection.execute("""CREATE TRIGGER IF NOT EXISTS documents_upload_proof_immutable_v1
+            BEFORE UPDATE OF file_size_bytes,file_sha256 ON documents
+            WHEN NEW.file_size_bytes IS NOT OLD.file_size_bytes OR NEW.file_sha256 IS NOT OLD.file_sha256
+            BEGIN SELECT RAISE(ABORT, 'Document upload proof is immutable'); END""")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS payment_collections (
@@ -3329,6 +3337,8 @@ def document_record(row: sqlite3.Row) -> dict[str, object]:
         "equipmentName": row["equipment_name"],
         "customerName": row["customer_name"],
         "createdAt": row["created_at"],
+        "fileSizeBytes": row["file_size_bytes"],
+        "fileSHA256": row["file_sha256"],
     }
 
 
@@ -3792,9 +3802,13 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 ).fetchall()
             self.write_json({"serviceRequests": [public_service_request_record(row) for row in rows]})
             return
-        if parsed.path.startswith("/api/documents/") and parsed.path.endswith("/download"):
-            document_id = unquote(parsed.path.removeprefix("/api/documents/").removesuffix("/download")).strip()
-            self.download_document(document_id)
+        if parsed.path.startswith("/api/documents/"):
+            parts = parsed.path.removeprefix("/api/documents/").split("/")
+            if (parsed.query or len(parts) != 2 or parts[1] not in ("download", "manifest")
+                    or re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", parts[0]) is None):
+                self.write_json({"error": "Use an exact document endpoint"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            self.download_document(parts[0], manifest_only=parts[1] == "manifest")
             return
         self.write_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
 
@@ -5942,6 +5956,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
 
         filename = safe_filename(str(payload.get("filename") or "upload.bin"))
         content_type = str(payload.get("contentType") or "application/octet-stream")
+        if not document_storage.header_text(filename, 255) or filename.startswith(".") or not document_storage.content_type(content_type):
+            self.write_json({"error": "Use a safe filename and content type"}, status=HTTPStatus.BAD_REQUEST)
+            return
         kind = safe_filename(str(payload.get("kind") or "document")).lower()
         data_base64 = payload.get("dataBase64")
         if not isinstance(data_base64, str) or not data_base64:
@@ -6006,6 +6023,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             self.write_json({"error": "Document metadata is too long"}, status=HTTPStatus.BAD_REQUEST)
             return
         # Do not create a file until every request field has been accepted.
+        original_principal = self.principal()
         document_id = str(uuid.uuid4())
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         destination_dir = STORAGE_ROOT / kind / today
@@ -6013,8 +6031,15 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         destination = destination_dir / f"{document_id}-{filename}"
         try:
             destination.write_bytes(data)
-        except OSError:
+            document_storage.read_document(STORAGE_ROOT, destination, expected_bytes=len(data),
+                                           expected_sha256=hashlib.sha256(data).hexdigest())
+        except (OSError, document_storage.DocumentReadError):
             self.write_json({"error": "Company document storage is unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        self._principal = None
+        self._principal_checked = False
+        if self.principal() is None or self.principal() != original_principal:
+            self.write_json({"error": "Document access changed during upload"}, status=HTTPStatus.FORBIDDEN)
             return
         created_at = utc_now()
         with db() as connection:
@@ -6023,8 +6048,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 INSERT INTO documents(
                     id, filename, content_type, kind, service_call_id, invoice_id, estimate_id,
                     maintenance_contract_id, customer_equipment_id, equipment_name, customer_name,
-                    stored_path, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    stored_path, created_at, file_size_bytes, file_sha256
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     document_id,
@@ -6040,6 +6065,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                     customer_name,
                     str(destination),
                     created_at,
+                    len(data),
+                    hashlib.sha256(data).hexdigest(),
                 ),
             )
 
@@ -6051,6 +6078,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 "id": document_id,
                 "filename": filename,
                 "createdAt": created_at,
+                "fileSizeBytes": len(data),
+                "fileSHA256": hashlib.sha256(data).hexdigest(),
             },
             status=HTTPStatus.CREATED,
         )
@@ -7085,7 +7114,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def download_document(self, document_id: str) -> None:
+    def download_document(self, document_id: str, *, manifest_only=False) -> None:
         if not document_id:
             self.write_json({"error": "Missing document id"}, status=HTTPStatus.BAD_REQUEST)
             return
@@ -7101,10 +7130,29 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             self.write_json({"error": "Financial access required"}, status=HTTPStatus.FORBIDDEN)
             return
 
+        principal = self.principal()
         try:
-            data = document_storage.read_document(STORAGE_ROOT, row["stored_path"])
+            proof = document_storage.content_proof(row)
+            if manifest_only:
+                self.write_json(proof)
+                return
+            data = document_storage.read_document(STORAGE_ROOT, row["stored_path"],
+                expected_bytes=proof["fileSizeBytes"], expected_sha256=proof["fileSHA256"])
         except document_storage.DocumentReadError as error:
             self.write_json({"error": str(error)}, status=error.status)
+            return
+        # The first principal is request-cached. A slow disk read must not
+        # outlive logout, revocation, role change, or a changed document binding.
+        self._principal = None
+        self._principal_checked = False
+        current_principal = self.principal()
+        if current_principal is None or current_principal != principal:
+            self.write_json({"error": "Document access changed during download"}, status=HTTPStatus.FORBIDDEN)
+            return
+        with db() as connection:
+            current = connection.execute("SELECT * FROM documents WHERE id=?", (document_id,)).fetchone()
+        if current is None or dict(current) != dict(row):
+            self.write_json({"error": "Document binding changed during download"}, status=HTTPStatus.CONFLICT)
             return
         self.write_media_bytes(data, row["content_type"], row["filename"])
 

@@ -21,7 +21,7 @@ except ModuleNotFoundError:
     import document_storage
 
 contract, sharing = delivery.contract, delivery.sharing
-SCHEMA = "staff-workspace-operational-media-v1"
+SCHEMA = "staff-workspace-operational-media-v2"
 QUERY_FIELDS = delivery.SCOPE_FIELDS + " attachmentID"
 
 
@@ -115,6 +115,12 @@ class StaffWorkspaceMedia(delivery.StaffWorkspaceDelivery):
             raise sharing.fail("media_unavailable", "Attachment media is not prepared for authorized delivery.", 404)
         if document_storage.financial_document(document) and actor["role"] not in document_storage.BILLING_ROLES:
             raise sharing.fail("media_forbidden", "Financial document access is required for this attachment.", 403)
+        try:
+            proof = document_storage.content_proof(document)
+            if proof["fileSizeBytes"] != file_size or proof["contentType"] != content_type:
+                raise document_storage.DocumentReadError(409, "Attachment metadata does not match the original upload.")
+        except document_storage.DocumentReadError as error:
+            raise sharing.fail("media_unavailable", str(error), error.status) from None
         return actor, dict(
             schema=SCHEMA,
             selectionID=operation,
@@ -124,6 +130,7 @@ class StaffWorkspaceMedia(delivery.StaffWorkspaceDelivery):
             backendDocumentID=backend_document_id,
             contentType=content_type,
             fileSizeBytes=file_size,
+            fileSHA256=proof["fileSHA256"],
             displayName=display_name,
             kindRaw=kind_raw,
             operationalWorkspaceReady=False,
@@ -144,7 +151,8 @@ class StaffWorkspaceMedia(delivery.StaffWorkspaceDelivery):
             actor, grant = self._resolve(connection, session_id, share_id, operation, query)
             row = grant["document"]
         try:
-            data = document_storage.read_document(storage_root, row["stored_path"], expected_bytes=grant["fileSizeBytes"])
+            data = document_storage.read_document(storage_root, row["stored_path"], expected_bytes=grant["fileSizeBytes"],
+                                                  expected_sha256=grant["fileSHA256"])
         except document_storage.DocumentReadError as error:
             raise sharing.fail("media_unavailable", str(error), error.status) from None
         # A slower filesystem read must not outlive source/share revocation or
