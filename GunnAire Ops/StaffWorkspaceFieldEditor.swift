@@ -1,7 +1,7 @@
 import Foundation
 
 /// Frozen display binding. Saving may not silently adopt a newer mounted head.
-struct StaffWorkspaceFieldEditorSnapshot: Equatable {
+struct StaffWorkspaceFieldEditorSnapshot: Codable, Equatable {
     let scope: CloudKitStaffSetupScope
     let planID: UUID
     let selectionID: String

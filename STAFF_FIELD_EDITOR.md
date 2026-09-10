@@ -18,9 +18,13 @@ References retain up to 128 original submissions per field in discovery order; o
 
 Reopening shows saved submissions instead of silently generating another command ID. Creating a subsequent update is explicit and is disabled while a local original remains pending. Repeating the same value does not create a duplicate. Office conflict review remains separate from field capture.
 
-## Unsaved input and acceptance limits
+## Drafts and acceptance limits
 
-Unsaved input is retained after a failed local save and dismissal requires confirmation; saved work survives dismissal/restart. Text before the user presses Save is not yet a durable draft and is cleared on account loss. Automatic pre-save draft persistence, historical ordering refinement, removed-record/superseded-intent disposition and cross-device claim recovery remain separate work. This slice must not be described as full offline application completion.
+Unfinished input is automatically persisted in an encrypted, author/company/iCloud-account/share-scoped draft, separately from the immutable command queue. Typing does not submit a command. Reopening restores the original snapshot, stable intended operation ID and raw input, including incomplete numeric text. Every control uses the same persistence boundary; lifecycle changes retry unverified saves. A failed save retains visible input and requires confirmation before closing without its latest changes. Account loss clears private display but retains the encrypted draft for the original authorized account.
+
+Draft writes use serialized compare-and-swap. Another window cannot replace newer text or resurrect a discarded draft. Submission checks the exact persisted draft before creating a new command. Once an original is queued, its draft is no longer editable and reopening shows the saved submission instead. A discarded draft leaves a terminal marker, not a resurrectable empty record. An advanced office snapshot restores the old draft for review; explicit adoption creates a new intended operation bound to the verified current field without sending it. Original submitted commands are never rebased or overwritten by this workflow.
+
+See `STAFF_FIELD_DRAFTS.md` for recovery and acceptance boundaries. Historical ordering refinement, removed-record/superseded-intent disposition, cross-device draft sharing and claim recovery remain separate work. This must not be described as full offline application completion.
 
 Tests cover mounted-data editing, exact snapshot binding, typed validation, every queue write interruption, background recovery, original-ID preservation, corrupt references, bounded discovery, repeated values, access changes and late replies. Physical iPad/independent-account CloudKit acceptance, live provider/payment tests and parallel UI qualification remain required. No screen capture, visible app launch, signing, production mutations, push or deployment is part of local qualification.
 

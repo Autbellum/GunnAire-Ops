@@ -5,7 +5,7 @@ import XCTest
 @MainActor final class StaffWorkspaceFieldEditorTests: XCTestCase {
     @MainActor final class Fixture {
         let f: StaffWorkspaceCommandRecoveryTests.Fixture
-        let view: StaffWorkspaceOperationalView
+        var view: StaffWorkspaceOperationalView
         var offline = false
         var afterSend: (() -> Void)?
         var requests: [StaffWorkspaceOperationalCommandRequest] = []
@@ -43,12 +43,16 @@ import XCTest
         func history(_ snapshot: StaffWorkspaceFieldEditorSnapshot) throws -> [StaffWorkspaceOperationalCommandJournal] {
             try engine.fieldEditorHistory(snapshot, plan: plan, context: context)
         }
-        func controller() -> StaffWorkspaceFieldEditorController {
+        func controller(field: String = "notes") -> StaffWorkspaceFieldEditorController {
             .init(dependencies: .init(authority: { [unowned self] in
                 guard f.allowed else { throw StaffReplicaDeliveryError.access }
                 return (context, plan)
-            }, snapshot: { [unowned self] _, _ in try snapshot() },
+            }, snapshot: { [unowned self] _, _ in try snapshot(field: field) },
             history: { [unowned self] snapshot, _, _ in try history(snapshot) },
+            draft: { [unowned self] snapshot, _, _ in try engine.fieldEditorDraft(snapshot, plan: plan, context: context) },
+            persist: { [unowned self] next, expected, reviewing, _, _ in
+                try engine.saveFieldEditorDraft(next, expected: expected, reviewing: reviewing, plan: plan, context: context)
+            },
             queue: { [unowned self] snapshot, _, _, id, value in try queue(snapshot, id: id, value: value) },
             send: { [unowned self] original, _, _ in try await engine.sendFieldEditorUpdate(original, plan: plan, context: context) },
             operation: { [unowned self] in operations += 1; return UUID() }))

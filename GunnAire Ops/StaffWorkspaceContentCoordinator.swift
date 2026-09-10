@@ -724,8 +724,8 @@ struct StaffWorkspaceContentSummary {
                      contentSHA256: contentSHA256, candidate: candidate)
     }
 
-    func fieldEditorHistory(_ snapshot: StaffWorkspaceFieldEditorSnapshot, plan: CloudKitStaffSharePlan,
-                            context: CloudKitStaffSetupController.Context) throws -> [StaffWorkspaceOperationalCommandJournal] {
+    private func fieldEditorAccess(_ snapshot: StaffWorkspaceFieldEditorSnapshot, plan: CloudKitStaffSharePlan,
+                                   context: CloudKitStaffSetupController.Context) throws {
         try staffCheck(context, plan)
         guard snapshot.scope == context.scope, snapshot.planID == plan.id,
               [AppUserRole.admin.rawValue, AppUserRole.dispatcher.rawValue, AppUserRole.fieldTechnician.rawValue].contains(context.member.role),
@@ -733,11 +733,68 @@ struct StaffWorkspaceContentSummary {
               StaffWorkspaceOperationalCommandPolicy.isOperationsField(kind: snapshot.candidate.recordKind, field: snapshot.candidate.fieldName) else {
             throw StaffReplicaDeliveryError.access
         }
+    }
+
+    func fieldEditorHistory(_ snapshot: StaffWorkspaceFieldEditorSnapshot, plan: CloudKitStaffSharePlan,
+                            context: CloudKitStaffSetupController.Context) throws -> [StaffWorkspaceOperationalCommandJournal] {
+        try fieldEditorAccess(snapshot, plan: plan, context: context)
         let c = snapshot.candidate
         let history = try StaffWorkspaceFieldEditorStore.history(store: dependencies.store, scope: context.scope,
             plan: plan, kind: c.recordKind, recordID: c.recordID, field: c.fieldName)
         try staffCheck(context, plan)
         return history
+    }
+
+    func fieldEditorDraft(_ snapshot: StaffWorkspaceFieldEditorSnapshot, plan: CloudKitStaffSharePlan,
+                          context: CloudKitStaffSetupController.Context) throws -> StaffWorkspaceFieldDraft? {
+        try fieldEditorAccess(snapshot, plan: plan, context: context)
+        let draft = try StaffWorkspaceFieldDraftStore.load(store: dependencies.store, snapshot: snapshot, plan: plan)
+        try staffCheck(context, plan)
+        return draft
+    }
+
+    /// Serialized compare-and-swap protects two editor windows and late saves.
+    /// Existing drafts may retain an old head; only an explicit review adopts a new one.
+    func saveFieldEditorDraft(_ next: StaffWorkspaceFieldDraft, expected: StaffWorkspaceFieldDraft?,
+                              reviewing: Bool, plan: CloudKitStaffSharePlan,
+                              context: CloudKitStaffSetupController.Context) throws -> StaffWorkspaceFieldDraft {
+        try staffCheck(context, plan); try next.validate(plan: plan)
+        let key = "full-staff-content-command-v1\n" + context.scope.key + "\n" + plan.id.uuidString.lowercased()
+        let lock = try SharedTimeMutationGate.begin(key)
+        defer { SharedTimeMutationGate.finish(key, id: lock) }
+        let previous = try fieldEditorDraft(next.snapshot, plan: plan, context: context)
+        if previous == next { try staffCheck(context, plan); return next }
+        guard previous == expected else { throw StaffReplicaDeliveryError.changed }
+        if let previous, previous.commandID == next.commandID {
+            guard previous.input != nil, previous.snapshot == next.snapshot, previous.initial == next.initial else {
+                throw StaffReplicaDeliveryError.changed
+            }
+            if next.input != nil {
+                // Keystrokes need only the original-ID lock, not every historical
+                // receipt for this field. Keep the interrupted write-ahead fallback.
+                let id = next.commandID.uuidString.lowercased()
+                let original = try StaffWorkspaceOperationalCommandStore.load(store: dependencies.store,
+                    scope: context.scope, plan: plan.id, commandID: id) ??
+                    StaffWorkspaceOperationalCommandStore.listPending(store: dependencies.store, scope: context.scope, plan: plan.id)
+                        .first(where: { $0.request.commandID == id })
+                guard original == nil else { throw StaffReplicaDeliveryError.changed }
+            }
+        } else {
+            let history = try fieldEditorHistory(next.snapshot, plan: plan, context: context)
+            guard next.input != nil, !history.contains(where: { $0.state == "pending" }) else { throw StaffReplicaDeliveryError.changed }
+            if let previous, previous.input != nil,
+               !history.contains(where: { $0.request.commandID == previous.commandID.uuidString.lowercased() }) {
+                guard reviewing, next.input == previous.input else { throw StaffReplicaDeliveryError.changed }
+            }
+            let s = next.snapshot, c = s.candidate
+            let current = try fieldEditorSnapshot(plan: plan, context: context, selectionID: s.selectionID,
+                sourceSequence: s.sourceSequence, contentSHA256: s.contentSHA256, kind: c.recordKind,
+                recordID: c.recordID, revision: c.revision, field: c.fieldName)
+            guard current == s else { throw StaffReplicaDeliveryError.changed }
+        }
+        try StaffWorkspaceFieldDraftStore.write(store: dependencies.store, next: next, expected: expected,
+            plan: plan, check: { try self.staffCheck(context, plan) })
+        return next
     }
 
     /// Commit locally before any network await. A stale editor must be reviewed,
@@ -757,6 +814,11 @@ struct StaffWorkspaceContentSummary {
             try StaffWorkspaceFieldEditorStore.remember(store: dependencies.store, scope: context.scope, plan: plan,
                 original: original, check: { try self.staffCheck(context, plan) })
             return original
+        }
+        if let draft = try fieldEditorDraft(snapshot, plan: plan, context: context) {
+            guard draft.commandID == commandID, draft.snapshot == snapshot, let input = draft.input,
+                  let schema = StaffWorkspaceModelCatalog.all.first(where: { $0.kind == request.recordKind })?.fieldSchema[request.fieldName],
+                  try input.value(schema: schema) == value else { throw StaffReplicaDeliveryError.changed }
         }
         guard !history.contains(where: { $0.state == "pending" }), !snapshot.alreadySubmitted(value, history: history), value != snapshot.candidate.currentValue else {
             throw StaffReplicaDeliveryError.changed

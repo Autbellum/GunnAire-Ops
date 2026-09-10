@@ -4,7 +4,7 @@ import Foundation
 ///
 /// Journals command intent + server receipt only. Never mutates mounted content
 /// bytes, never flips `operationalWorkspaceReady`, and is not ModelContext import.
-struct StaffWorkspaceOperationalCommandCandidate: Equatable {
+struct StaffWorkspaceOperationalCommandCandidate: Codable, Equatable {
     let recordKind: String
     let recordID: String
     let revision: Int

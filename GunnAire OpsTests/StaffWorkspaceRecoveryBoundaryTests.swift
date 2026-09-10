@@ -7,9 +7,10 @@ import XCTest
     final class Memory {
         var saved: [String: Data] = [:]
         var writes = 0
+        var onRead: ((String) -> Void)?
         var failBefore: Int?, failAfter: Int?
         var store: SharedTimeLocalStore {
-            .init(read: { self.saved[$0] }, write: { key, value in
+            .init(read: { self.onRead?($0); return self.saved[$0] }, write: { key, value in
                 self.writes += 1
                 if self.failBefore == self.writes { throw StaffReplicaDeliveryError.storage }
                 self.saved[key] = value
