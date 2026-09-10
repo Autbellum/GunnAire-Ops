@@ -92,15 +92,15 @@ struct StaffReplicaReceiveDependencies {
         await setup.refresh()
         guard !Task.isCancelled, self.generation == generation else { return }
         if let error = setup.error {
-            received = nil; message = StaffReplicaDeliveryPolicy.safe(error).localizedDescription; return
+            clearDisplay(); message = StaffReplicaDeliveryPolicy.safe(error).localizedDescription; return
         }
         guard !setup.needsRecovery, let context = setup.context, !context.ownerAdministrator else {
-            received = nil; message = "Verify the original staff setup before receiving business data."; return
+            clearDisplay(); message = "Verify the original staff setup before receiving business data."; return
         }
         let plans = setup.plans.filter { context.owns($0) && $0.state == "accepted" && $0.businessAccessEligible && !$0.reviewRequired && !$0.cloudKitRevocationRequired }
         guard plans.count == 1, let plan = plans.first,
               let url = setup.journal?.invitationURLs[plan.id.uuidString.lowercased()] else {
-            received = nil; message = "Verify one original accepted invitation before receiving business data."; return
+            clearDisplay(); message = "Verify one original accepted invitation before receiving business data."; return
         }
         await refresh(context: context, plan: plan, invitation: url)
     }
@@ -152,6 +152,7 @@ struct StaffReplicaReceiveDependencies {
                             } catch is CancellationError {
                                 throw CancellationError()
                             } catch {
+                                try check(context, plan, generation)
                                 // Keep mounted/accepted message; ready flip can retry later.
                             }
                         }
@@ -172,6 +173,7 @@ struct StaffReplicaReceiveDependencies {
                                 } catch is CancellationError {
                                     throw CancellationError()
                                 } catch {
+                                    try check(context, plan, generation)
                                     // Keep ready/accepted message; host attach can retry later.
                                 }
                             }
@@ -199,6 +201,7 @@ struct StaffReplicaReceiveDependencies {
                                     } catch is CancellationError {
                                         throw CancellationError()
                                     } catch {
+                                        try check(context, plan, generation)
                                         // Keep hosted message; identity bind can retry later.
                                     }
                                 }
@@ -207,11 +210,16 @@ struct StaffReplicaReceiveDependencies {
                     } else {
                         message = "Core records received. Full workspace cloud data mounted for staff lease."
                     }
+                    if cloud.commandRecovery.pending > 0 {
+                        message += " \(cloud.commandRecovery.pending) saved field edits still need sync or review."
+                    }
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch StaffReplicaDeliveryError.pending {
+                    try check(context, plan, generation)
                     message = "Core records received. Full workspace data is still required before opening."
                 } catch {
+                    try check(context, plan, generation)
                     // Core stage remains valid; cloud lease can retry on the next pass.
                     message = "Core records received. Full workspace cloud receive needs another pass."
                 }
@@ -219,9 +227,15 @@ struct StaffReplicaReceiveDependencies {
                 message = "Core records received. Full workspace data is still required before opening."
             }
         } catch is CancellationError {
-            if self.generation == generation { message = "Staff sync paused. Saved work is retained." }
+            if self.generation == generation {
+                clearDisplay()
+                message = "Staff sync paused. Saved work is retained."
+            }
         } catch {
-            if self.generation == generation { message = StaffReplicaDeliveryPolicy.safe(error).localizedDescription }
+            if self.generation == generation {
+                clearDisplay()
+                message = StaffReplicaDeliveryPolicy.safe(error).localizedDescription
+            }
         }
         return true
     }

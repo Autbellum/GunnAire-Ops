@@ -14,9 +14,11 @@ from pathlib import Path
 try:
     from Backend import staff_workspace_delivery as delivery
     from Backend import qbo_change_capture
+    from Backend import document_storage
 except ModuleNotFoundError:
     import staff_workspace_delivery as delivery
     import qbo_change_capture
+    import document_storage
 
 contract, sharing = delivery.contract, delivery.sharing
 SCHEMA = "staff-workspace-operational-media-v1"
@@ -24,7 +26,7 @@ QUERY_FIELDS = delivery.SCOPE_FIELDS + " attachmentID"
 
 
 def document_id(value):
-    if type(value) is not str or not (1 <= len(value) <= 128) or value != value.strip():
+    if not document_storage.header_text(value, 128):
         raise ValueError()
     if "/" in value or "\\" in value or ".." in value:
         raise ValueError()
@@ -40,7 +42,7 @@ def field_text(fields, name, *, required=True):
     if type(value) is not dict or set(value) != {"text"} or type(value["text"]) is not dict or set(value["text"]) != {"_0"}:
         raise ValueError()
     text = value["text"]["_0"]
-    if type(text) is not str or not text or text != text.strip():
+    if not document_storage.header_text(text, 4096):
         raise ValueError()
     return text
 
@@ -100,9 +102,9 @@ class StaffWorkspaceMedia(delivery.StaffWorkspaceDelivery):
             display_name = field_text(fields, "displayName")
             kind_raw = field_text(fields, "kindRaw")
             file_size = field_integer(fields, "fileSizeBytes")
-            if "/" in display_name or "\\" in display_name or display_name.startswith("."):
+            if not document_storage.header_text(display_name, 255) or "/" in display_name or "\\" in display_name or display_name.startswith("."):
                 raise ValueError()
-            if "/" not in content_type:
+            if not document_storage.content_type(content_type) or not document_storage.header_text(kind_raw, 64):
                 raise ValueError()
         except sharing.AttemptError:
             raise
@@ -111,6 +113,8 @@ class StaffWorkspaceMedia(delivery.StaffWorkspaceDelivery):
         document = connection.execute("SELECT * FROM documents WHERE id=?", (backend_document_id,)).fetchone()
         if document is None:
             raise sharing.fail("media_unavailable", "Attachment media is not prepared for authorized delivery.", 404)
+        if document_storage.financial_document(document) and actor["role"] not in document_storage.BILLING_ROLES:
+            raise sharing.fail("media_forbidden", "Financial document access is required for this attachment.", 403)
         return actor, dict(
             schema=SCHEMA,
             selectionID=operation,
@@ -139,20 +143,20 @@ class StaffWorkspaceMedia(delivery.StaffWorkspaceDelivery):
             connection.execute("BEGIN IMMEDIATE")
             actor, grant = self._resolve(connection, session_id, share_id, operation, query)
             row = grant["document"]
+        try:
+            data = document_storage.read_document(storage_root, row["stored_path"], expected_bytes=grant["fileSizeBytes"])
+        except document_storage.DocumentReadError as error:
+            raise sharing.fail("media_unavailable", str(error), error.status) from None
+        # A slower filesystem read must not outlive source/share revocation or
+        # a changed document binding. Check again before releasing any bytes.
+        with self.shares.database() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            current_actor, current = self._resolve(connection, session_id, share_id, operation, query)
+            if ({key: value for key, value in current.items() if key != "document"}
+                    != {key: value for key, value in grant.items() if key != "document"}
+                    or dict(current["document"]) != dict(row) or current_actor["email"] != actor["email"]):
+                raise sharing.fail("media_unavailable", "Attachment authority changed during download.", 409)
             self.shares.audit(actor["email"], "download-full-media", "staff-workspace-selection", operation,
                               connection=connection)
-        stored_path = Path(row["stored_path"]).expanduser()
-        try:
-            resolved_storage = storage_root.resolve()
-            resolved_file = stored_path.resolve()
-        except OSError as error:
-            raise sharing.fail("media_unavailable", "Attachment media path is invalid.", 404) from error
-        if resolved_storage not in resolved_file.parents:
-            raise sharing.fail("media_unavailable", "Attachment media path is outside storage.", 403)
-        if not resolved_file.is_file():
-            raise sharing.fail("media_unavailable", "Attachment media file is missing.", 404)
-        data = resolved_file.read_bytes()
-        if len(data) != grant["fileSizeBytes"]:
-            raise sharing.fail("media_unavailable", "Attachment media size no longer matches the prepared content.", 409)
         return dict(filename=grant["displayName"], contentType=grant["contentType"], data=data,
                     grant={key: value for key, value in grant.items() if key != "document"})

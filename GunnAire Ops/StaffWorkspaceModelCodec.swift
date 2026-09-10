@@ -21,6 +21,24 @@ struct StaffWorkspaceFieldSchema: Codable, Equatable {
     let nullable: Bool
     let reference: String?
     let enumeration: [String]?
+
+    func validateScalar(_ value: StaffWorkspaceValue) throws {
+        guard reference == nil else { throw StaffWorkspaceModelError.relationships }
+        if value == .null {
+            guard nullable else { throw StaffWorkspaceModelError.invalid }
+            return
+        }
+        switch type {
+        case .text:
+            let text = try String.fromStaffValue(value)
+            guard enumeration?.contains(text) ?? true else { throw StaffWorkspaceModelError.invalid }
+        case .number: _ = try Double.fromStaffValue(value)
+        case .integer: _ = try Int.fromStaffValue(value)
+        case .flag: _ = try Bool.fromStaffValue(value)
+        case .date: _ = try Date.fromStaffValue(value)
+        case .identifier: _ = try UUID.fromStaffValue(value)
+        }
+    }
 }
 
 struct StaffWorkspaceModelRecord: Codable, Equatable {

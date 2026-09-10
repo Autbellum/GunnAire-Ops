@@ -110,6 +110,37 @@ class StaffWorkspaceCommandsHTTPTests(unittest.TestCase):
         self.assertEqual(status, 409, result)
         self.assertEqual(result["code"], "revision_conflict")
 
+    def test_lost_receipt_recovers_original_after_unrelated_source_advance(self):
+        self.seed_content()
+        body = self.command_body()
+        status, original = self.submit(body=body)
+        self.assertEqual(status, 200, original)
+        equipment = content_http.fixtures.row(self.records, "equipment")
+        content_http.fixtures.set_value(equipment, "notes", "New office equipment note")
+        self.write_source([equipment], 1, 1)
+        backend.initialize_database()
+        self.assertEqual(self.submit(body=body), (200, original))
+        status, result = self.submit(body=self.command_body())
+        self.assertEqual((status, result["code"]), (409, "source_changed"))
+        changed = dict(body, value={"text": {"_0": "replacement intent"}})
+        status, result = self.submit(body=changed)
+        self.assertEqual((status, result["code"]), (409, "command_conflict"))
+        self.assertEqual(self.submit(role="Admin", body=body)[0], 403)
+
+    def test_source_advance_never_bypasses_current_actor_authority(self):
+        self.seed_content()
+        body = self.command_body()
+        status, original = self.submit(body=body)
+        self.assertEqual(status, 200, original)
+        equipment = content_http.fixtures.row(self.records, "equipment")
+        content_http.fixtures.set_value(equipment, "notes", "New office equipment note")
+        self.write_source([equipment], 1, 1)
+        with backend.db() as connection:
+            connection.execute("UPDATE users SET is_active=0 WHERE email=?", (original["actorEmail"],))
+        self.assertIn(self.submit(body=body)[0], (401, 403))
+        with backend.db() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM staff_workspace_commands").fetchone()[0], 1)
+
     def test_command_values_are_encrypted_and_restart_recovers_exact_receipt(self):
         self.seed_content()
         body = self.command_body(value={"text": {"_0": "PRIVATE-FIELD-FINDING-417"}})

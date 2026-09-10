@@ -57,6 +57,22 @@ struct StaffWorkspaceOperationalCommandRequest: Codable, Equatable {
         expectedRevision = candidate.revision
         fieldName = candidate.fieldName
         self.value = value
+        try validate()
+    }
+
+    func validate() throws {
+        guard schema == Self.schema, CloudKitStaffSetupPolicy.canonicalID(companyID),
+              CloudKitStaffSetupPolicy.canonicalID(replicaID), CloudKitStaffSetupPolicy.canonicalID(commandID),
+              CloudKitStaffSetupPolicy.canonicalID(selectionID), CloudKitStaffSetupPolicy.canonicalID(recordID),
+              ["development", "production"].contains(environment),
+              (1...2_147_483_647).contains(sourceSequence), (1..<2_147_483_647).contains(expectedRevision),
+              JobBillingAssignmentSnapshot.validConnectionRevision(contentSHA256),
+              StaffWorkspaceOperationalCommandPolicy.isOperationsField(kind: recordKind, field: fieldName),
+              !fieldName.hasSuffix("JSON"),
+              let field = StaffWorkspaceModelCatalog.all.first(where: { $0.kind == recordKind })?.fieldSchema[fieldName]
+        else { throw StaffReplicaDeliveryError.invalid }
+        try field.validateScalar(value)
+        guard try StaffWorkspacePublicationContract.encode(self).count <= 8192 else { throw StaffReplicaDeliveryError.invalid }
     }
 }
 
@@ -77,6 +93,11 @@ struct StaffWorkspaceOperationalCommandReceipt: Codable, Equatable {
     let operationalWorkspaceReady: Bool
 
     func validate(against request: StaffWorkspaceOperationalCommandRequest) throws {
+        try request.validate()
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        var instant = formatter.date(from: createdAt)
+        if instant == nil { formatter.formatOptions = [.withInternetDateTime]; instant = formatter.date(from: createdAt) }
         guard schema == StaffWorkspaceOperationalCommandRequest.schema,
               state == "recorded",
               !operationalWorkspaceReady,
@@ -89,8 +110,8 @@ struct StaffWorkspaceOperationalCommandReceipt: Codable, Equatable {
               expectedRevision == request.expectedRevision,
               fieldName == request.fieldName,
               value == request.value,
-              !actorEmail.isEmpty, actorEmail.utf8.count <= 320,
-              !createdAt.isEmpty, createdAt.utf8.count <= 64 else {
+              SharedTimeError.validEmail(actorEmail), actorEmail == actorEmail.lowercased(),
+              instant != nil, createdAt.utf8.count <= 64 else {
             throw StaffReplicaDeliveryError.invalid
         }
     }
@@ -108,6 +129,7 @@ struct StaffWorkspaceOperationalCommandJournal: Codable, Equatable {
 
     init(scope: CloudKitStaffSetupScope, planID: UUID, request: StaffWorkspaceOperationalCommandRequest,
          receipt: StaffWorkspaceOperationalCommandReceipt? = nil) throws {
+        try request.validate()
         guard request.schema == Self.schema,
               request.environment == scope.environment,
               request.companyID == scope.company.uuidString.lowercased() else {
@@ -115,6 +137,7 @@ struct StaffWorkspaceOperationalCommandJournal: Codable, Equatable {
         }
         if let receipt {
             try receipt.validate(against: request)
+            guard receipt.actorEmail == scope.email else { throw StaffReplicaDeliveryError.invalid }
         }
         schema = Self.schema
         self.scope = scope
@@ -126,13 +149,16 @@ struct StaffWorkspaceOperationalCommandJournal: Codable, Equatable {
     }
 
     func validate(scope: CloudKitStaffSetupScope, plan: UUID) throws {
+        try request.validate()
         guard schema == Self.schema, self.scope == scope, planID == plan,
+              request.companyID == scope.company.uuidString.lowercased(), request.environment == scope.environment,
               !operationalWorkspaceReady,
               (state == "pending" && receipt == nil) || (state == "recorded" && receipt != nil) else {
             throw StaffReplicaDeliveryError.storage
         }
         if let receipt {
             try receipt.validate(against: request)
+            guard receipt.actorEmail == scope.email else { throw StaffReplicaDeliveryError.storage }
         }
     }
 }
@@ -170,6 +196,9 @@ enum StaffWorkspaceOperationalCommandPolicy {
 }
 
 enum StaffWorkspaceOperationalCommandStore {
+    // A recorded journal includes both the original request and its receipt;
+    // an HTTP-valid finding must still fit after that duplication.
+    static let maximumJournalBytes = 32 * 1024
     static func key(_ scope: CloudKitStaffSetupScope, _ plan: UUID, commandID: String) -> String {
         "full-staff-content-command-v1\n" + scope.key + "\n" + plan.uuidString.lowercased()
             + "\n" + commandID.lowercased()
@@ -204,9 +233,9 @@ enum StaffWorkspaceOperationalCommandStore {
                      commandID: String) throws -> StaffWorkspaceOperationalCommandJournal? {
         do {
             guard let bytes = try store.read(key(scope, plan, commandID: commandID)) else { return nil }
-            guard bytes.count <= 8192 else { throw StaffReplicaDeliveryError.storage }
+            guard bytes.count <= maximumJournalBytes else { throw StaffReplicaDeliveryError.storage }
             let journal = try StaffWorkspacePublicationContract.decode(
-                StaffWorkspaceOperationalCommandJournal.self, from: bytes, maximum: 8192)
+                StaffWorkspaceOperationalCommandJournal.self, from: bytes, maximum: maximumJournalBytes)
             try journal.validate(scope: scope, plan: plan)
             guard journal.request.commandID == commandID.lowercased() ||
                     journal.request.commandID == commandID else {
@@ -264,7 +293,7 @@ enum StaffWorkspaceOperationalCommandStore {
         }
         try check()
         let encoded = try StaffWorkspacePublicationContract.encode(next)
-        guard encoded.count <= 8192 else { throw StaffReplicaDeliveryError.storage }
+        guard encoded.count <= maximumJournalBytes else { throw StaffReplicaDeliveryError.storage }
         var pending = try listPending(store: store, scope: scope, plan: plan)
         if let original = pending.first(where: { $0.request.commandID == request.commandID }) {
             guard original.request == request else { throw StaffReplicaDeliveryError.changed }
@@ -304,7 +333,7 @@ enum StaffWorkspaceOperationalCommandStore {
         }
         try check()
         let encoded = try StaffWorkspacePublicationContract.encode(next)
-        guard encoded.count <= 8192 else { throw StaffReplicaDeliveryError.storage }
+        guard encoded.count <= maximumJournalBytes else { throw StaffReplicaDeliveryError.storage }
         try store.write(key(scope, plan, commandID: request.commandID), encoded)
         // Drop from pending index once recorded.
         let remaining = try listPending(store: store, scope: scope, plan: plan)

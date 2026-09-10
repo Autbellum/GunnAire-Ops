@@ -134,8 +134,6 @@ class StaffWorkspaceCommands(delivery.StaffWorkspaceDelivery):
             snapshot = self.selection.shared_original(row, scope, share)
             sequence = self.source.sequence(connection, scope)
             self.selection.receipt(snapshot, sequence)
-            if sequence != snapshot["sourceSequence"]:
-                raise sharing.fail("source_changed", "Refresh full company data before submitting a field command.", 409)
             if payload["sourceSequence"] != snapshot["sourceSequence"]:
                 raise sharing.fail("source_changed", "Command sourceSequence must match the accepted selection.", 409)
             raw = self.original(connection, operation, snapshot)
@@ -203,6 +201,11 @@ class StaffWorkspaceCommands(delivery.StaffWorkspaceDelivery):
                     raise self.source.unavailable()
                 self.shares.audit(actor["email"], "recover-operational-command", "staff-workspace-selection", operation, connection=connection)
                 return receipt
+            # An exact original receipt is recoverable after unrelated source
+            # progress. It is not a new mutation or permission to rebase the
+            # technician's intent. Fresh actor/share/content checks still ran.
+            if sequence != snapshot["sourceSequence"]:
+                raise sharing.fail("source_changed", "Refresh full company data before submitting a field command.", 409)
             created_at = self.shares.now().isoformat()
             receipt = self.recorded_receipt(request_body, actor["email"], created_at)
             stored = dict(request=request_body, receipt=receipt)

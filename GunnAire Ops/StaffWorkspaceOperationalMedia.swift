@@ -79,22 +79,27 @@ struct StaffWorkspaceOperationalMediaGrant: Codable, Equatable {
     }
 
     static func validDocumentID(_ value: String) -> Bool {
-        !value.isEmpty && value.utf8.count <= 128 && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
+        validHeaderText(value, maximum: 128)
             && !value.contains("/") && !value.contains("\\") && !value.contains("..")
     }
 
     static func validContentType(_ value: String) -> Bool {
-        !value.isEmpty && value.utf8.count <= 128 && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
-            && value.contains("/")
+        validHeaderText(value, maximum: 128)
+            && value.range(of: "^[A-Za-z0-9!#$%&'*+.^_`|~-]+/[A-Za-z0-9!#$%&'*+.^_`|~-]+$", options: .regularExpression) != nil
     }
 
     static func validDisplayName(_ value: String) -> Bool {
-        !value.isEmpty && value.utf8.count <= 255 && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
+        validHeaderText(value, maximum: 255)
             && !value.contains("/") && !value.contains("\\") && !value.hasPrefix(".")
     }
 
     static func validKindRaw(_ value: String) -> Bool {
-        !value.isEmpty && value.utf8.count <= 64 && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
+        validHeaderText(value, maximum: 64)
+    }
+
+    private static func validHeaderText(_ value: String, maximum: Int) -> Bool {
+        !value.isEmpty && value.utf8.count <= maximum && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
+            && value.unicodeScalars.allSatisfy { $0.value >= 32 && $0.value != 127 }
     }
 }
 

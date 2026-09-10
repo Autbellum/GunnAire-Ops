@@ -35,6 +35,7 @@ try:
     from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications, billing_native, qbo_link_adoption, field_payment_review
     from Backend.billing_provider import BillingQBOProvider
     from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads
+    from Backend import document_storage
     from Backend.qbo_document_provider import DocumentQBOProvider
     from Backend import time_worker_mappings, time_publications, cloudkit_staff_shares, staff_replica, staff_workspace_source, staff_workspace_selections, staff_billing_delivery, staff_workspace_delivery, staff_workspace_cloud, staff_workspace_media, staff_workspace_commands
     from Backend.time_worker_provider import TimeWorkerQBOProvider
@@ -49,6 +50,7 @@ except ModuleNotFoundError:
     import qbo_link_adoption
     from billing_provider import BillingQBOProvider
     import google_connections
+    import document_storage
     import google_mail
     import qbo_change_capture
     import qbo_document_uploads
@@ -3334,15 +3336,7 @@ def document_contains_financial_data(row: sqlite3.Row) -> bool:
     and the billing references protects older uploads whose kind predates the
     current document taxonomy.
     """
-    financial_kinds = {
-        "invoice", "estimate", "payment", "receipt", "bill", "financial",
-        "credit", "statement", "transaction", "maintenance_agreement",
-    }
-    kind = str(row["kind"] or "").strip().lower()
-    return bool(
-        row["invoice_id"] or row["estimate_id"] or
-        row["maintenance_contract_id"] or kind in financial_kinds
-    )
+    return document_storage.financial_document(row)
 
 
 def document_is_maintenance_agreement(row: sqlite3.Row) -> bool:
@@ -4739,9 +4733,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
 
     def has_billing_document_access(self) -> bool:
         principal = self.principal()
-        return principal is not None and principal.get("role") in {
-            "Admin", "Accounting", "Field Technician",
-        }
+        return principal is not None and principal.get("role") in document_storage.BILLING_ROLES
 
     def has_maintenance_agreement_document_access(self) -> bool:
         principal = self.principal()
@@ -7017,7 +7009,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         safe_name = safe_filename(filename)
         self.send_response(HTTPStatus.OK)
         self.send_cors_headers()
-        self.send_header("Content-Type", content_type or "application/octet-stream")
+        self.send_header("Content-Type", content_type if document_storage.content_type(content_type) else "application/octet-stream")
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Content-Disposition", f'attachment; filename="{safe_name}"')
         self.send_header("Cache-Control", "no-store")
@@ -7041,30 +7033,12 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             self.write_json({"error": "Financial access required"}, status=HTTPStatus.FORBIDDEN)
             return
 
-        stored_path = Path(row["stored_path"]).expanduser()
         try:
-            resolved_storage = STORAGE_ROOT.resolve()
-            resolved_file = stored_path.resolve()
-        except OSError:
-            self.write_json({"error": "Document path is invalid"}, status=HTTPStatus.NOT_FOUND)
+            data = document_storage.read_document(STORAGE_ROOT, row["stored_path"])
+        except document_storage.DocumentReadError as error:
+            self.write_json({"error": str(error)}, status=error.status)
             return
-
-        if resolved_storage not in resolved_file.parents:
-            self.write_json({"error": "Document path is outside storage"}, status=HTTPStatus.FORBIDDEN)
-            return
-        if not resolved_file.is_file():
-            self.write_json({"error": "Document file is missing"}, status=HTTPStatus.NOT_FOUND)
-            return
-
-        data = resolved_file.read_bytes()
-        filename = safe_filename(row["filename"])
-        self.send_response(HTTPStatus.OK)
-        self.send_cors_headers()
-        self.send_header("Content-Type", row["content_type"] or "application/octet-stream")
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
-        self.end_headers()
-        self.wfile.write(data)
+        self.write_media_bytes(data, row["content_type"], row["filename"])
 
     def write_json(self, payload: dict[str, object], status: HTTPStatus = HTTPStatus.OK, require_auth: bool = True) -> None:
         data = json.dumps(payload, separators=(",", ":")).encode("utf-8")

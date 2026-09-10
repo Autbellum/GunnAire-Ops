@@ -4,6 +4,7 @@ import json
 import unittest
 import urllib.parse
 import uuid
+from unittest import mock
 from pathlib import Path
 
 from Backend import gunnaire_backend as backend
@@ -144,6 +145,80 @@ class StaffWorkspaceMediaHTTPTests(unittest.TestCase):
         status, result = self.media()
         self.assertEqual(status, 404, result)
         self.assertEqual(result["code"], "media_unavailable")
+
+    def test_symlink_in_storage_is_not_media_authority(self):
+        self.seed_with_media()
+        target = Path(backend.STORAGE_ROOT) / f"{self.document_id}.pdf"
+        link = target.with_suffix(".link")
+        link.symlink_to(target)
+        with backend.db() as connection:
+            connection.execute("UPDATE documents SET stored_path=? WHERE id=?", (str(link), self.document_id))
+        self.assertEqual(self.media(bytes_path=True)[0], 403)
+
+    def test_mismatched_size_is_rejected_without_unbounded_read(self):
+        self.seed_with_media()
+        target = Path(backend.STORAGE_ROOT) / f"{self.document_id}.pdf"
+        target.write_bytes(self.payload_bytes + b"unexpected newer bytes")
+        with mock.patch.object(Path, "read_bytes", wraps=Path.read_bytes) as unbounded:
+            self.assertEqual(self.media(bytes_path=True)[0], 409)
+            unbounded.assert_not_called()
+
+    def test_dispatcher_cannot_use_shared_attachment_to_read_financial_document(self):
+        self.seed_with_media(role="Dispatcher")
+        with backend.db() as connection:
+            connection.execute("UPDATE documents SET invoice_id=? WHERE id=?", (str(uuid.uuid4()), self.document_id))
+        self.assertEqual(self.media(role="Dispatcher")[0], 403)
+        self.assertEqual(self.media(role="Dispatcher", bytes_path=True)[0], 403)
+
+    def test_header_metadata_rejects_embedded_controls(self):
+        for value in ("application/pdf\r\nX-Injected: yes", "Original\x00.pdf", "Original\n.pdf"):
+            with self.subTest(value=repr(value)):
+                with self.assertRaises(ValueError):
+                    media.field_text({"field": {"text": {"_0": value}}}, "field")
+
+    def test_deactivation_during_read_cannot_release_authorized_bytes(self):
+        self.seed_with_media()
+        original_read = media.document_storage.read_document
+        def read(*args, **kwargs):
+            data = original_read(*args, **kwargs)
+            with backend.db() as connection:
+                connection.execute("UPDATE users SET is_active=0 WHERE role='Field Technician'")
+            return data
+        with mock.patch.object(media.document_storage, "read_document", side_effect=read):
+            self.assertIn(self.media(bytes_path=True)[0], (401, 403))
+
+    def test_document_binding_change_during_read_cannot_release_old_bytes(self):
+        self.seed_with_media()
+        original_read = media.document_storage.read_document
+        def read(*args, **kwargs):
+            data = original_read(*args, **kwargs)
+            with backend.db() as connection:
+                connection.execute("UPDATE documents SET filename='Changed.pdf' WHERE id=?", (self.document_id,))
+            return data
+        with mock.patch.object(media.document_storage, "read_document", side_effect=read):
+            self.assertEqual(self.media(bytes_path=True)[0], 409)
+
+    def test_general_document_download_uses_the_same_bounded_reader(self):
+        self.seed_with_media()
+        target = Path(backend.STORAGE_ROOT) / f"{self.document_id}.pdf"
+        with target.open("r+b") as file:
+            file.truncate(media.document_storage.MAX_BYTES + 1)
+        with mock.patch.object(media.document_storage.os, "read") as read:
+            status, _ = self.request(token=self.tokens["Field Technician"],
+                                     path=f"/api/documents/{self.document_id}/download")
+            self.assertEqual(status, 409)
+            read.assert_not_called()
+
+    def test_general_document_download_keeps_exact_bytes_and_private_headers(self):
+        self.seed_with_media()
+        import urllib.request
+        request = urllib.request.Request(self.base_url + f"/api/documents/{self.document_id}/download",
+            headers={"Authorization": "Bearer " + self.tokens["Field Technician"]})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            self.assertEqual(response.read(), self.payload_bytes)
+            self.assertEqual(response.headers.get("Content-Type"), "application/pdf")
+            self.assertEqual(response.headers.get("Cache-Control"), "no-store")
+            self.assertEqual(response.headers.get("X-Content-Type-Options"), "nosniff")
 
 
 if __name__ == "__main__":

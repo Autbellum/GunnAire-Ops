@@ -21,6 +21,9 @@ struct StaffWorkspaceContentDependencies {
     var staffMediaRequest: ((String, Int) async throws -> Data)? = nil
     /// Staff-capable POST for `/content/commands` journal receipt.
     var staffCommandRequest: ((String, Data) async throws -> Data)? = nil
+    /// Recheck the live account/session fence around every staff await/write.
+    /// Test fixtures inject their own fence; live code never trusts context alone.
+    var checkStaffSession: (Context) throws -> Void = { _ in }
     var now: () -> Date = Date.init
     var operation: () -> UUID = UUID.init
     static var live: Self {
@@ -35,7 +38,10 @@ struct StaffWorkspaceContentDependencies {
               },
               staffRequest: { try await GunnAireBackendService.staffWorkspaceCloudKeyRequest(path: $0) },
               staffMediaRequest: { try await GunnAireBackendService.staffWorkspaceMediaRequest(path: $0, maximum: $1) },
-              staffCommandRequest: { try await GunnAireBackendService.staffWorkspaceCommandRequest(path: $0, body: $1) })
+              staffCommandRequest: { try await GunnAireBackendService.staffWorkspaceCommandRequest(path: $0, body: $1) },
+              checkStaffSession: { context in
+                  guard CloudKitStaffSetupStamp.current == context.stamp else { throw StaffReplicaDeliveryError.access }
+              })
     }
 }
 
@@ -92,6 +98,7 @@ struct StaffWorkspaceCloudReceiveResult: Equatable {
     /// acceptance journal was written. Opaque or non-v1 mounts stay false; never
     /// flips `operationalWorkspaceReady`.
     let operationalAccepted: Bool
+    var commandRecovery = StaffWorkspaceCommandRecoverySummary(recorded: 0, pending: 0)
 }
 struct StaffWorkspaceContentArchive: Codable, Equatable {
     let pending: StaffWorkspaceContentPending
@@ -434,6 +441,7 @@ struct StaffWorkspaceContentSummary {
 
     private func staffCheck(_ context: CloudKitStaffSetupController.Context, _ plan: CloudKitStaffSharePlan) throws {
         try Task.checkCancellation()
+        try dependencies.checkStaffSession(context)
         guard !context.ownerAdministrator, context.owns(plan), context.member.isActive,
               context.member.email == context.stamp.session.email, context.member.role == plan.memberRole,
               context.account.environment == plan.environment,
@@ -492,6 +500,8 @@ struct StaffWorkspaceContentSummary {
                          invitation: URL? = nil) async throws -> StaffWorkspaceCloudReceiveResult {
         guard let participantCloudIO = dependencies.participantCloudIO else { throw StaffReplicaDeliveryError.unavailable }
         try staffCheck(context, plan)
+        let commandRecovery = try await recoverOperationalCommands(plan: plan, context: context)
+        try staffCheck(context, plan)
         let resolved = invitation ?? dependencies.invitationURL?(plan, context)
         guard let resolved, CloudKitStaffSetupPolicy.invitationURL(resolved) else { throw StaffReplicaDeliveryError.access }
         let key = Self.receiveKey(context.scope, plan.id)
@@ -527,7 +537,7 @@ struct StaffWorkspaceContentSummary {
                     store: dependencies.store, scope: context.scope, plan: plan.id,
                     selectionID: head.selectionID, check: { try self.staffCheck(context, plan) })
                 return .init(selectionID: head.selectionID, alreadyLeased: true,
-                             operationalMounted: true, operationalAccepted: accepted)
+                             operationalMounted: true, operationalAccepted: accepted, commandRecovery: commandRecovery)
             }
             // Equal-sequence identity mismatch is rejected later by install().
         } else if journal.cloudReceivedOperation == head.selectionID {
@@ -556,7 +566,7 @@ struct StaffWorkspaceContentSummary {
             store: dependencies.store, scope: context.scope, plan: plan.id,
             selectionID: head.selectionID, check: { try self.staffCheck(context, plan) })
         return .init(selectionID: head.selectionID, alreadyLeased: false,
-                     operationalMounted: true, operationalAccepted: accepted)
+                     operationalMounted: true, operationalAccepted: accepted, commandRecovery: commandRecovery)
     }
 
     /// Best-effort semantic acceptance after a durable mount. Peek schema only;
@@ -659,9 +669,6 @@ struct StaffWorkspaceContentSummary {
                                   value: StaffWorkspaceValue, commandID: UUID? = nil) async throws
     -> StaffWorkspaceOperationalCommandJournal {
         try staffCheck(context, plan)
-        guard let staffCommandRequest = dependencies.staffCommandRequest else {
-            throw StaffReplicaDeliveryError.unavailable
-        }
         guard CloudKitStaffSetupPolicy.canonicalID(recordID),
               StaffWorkspaceOperationalCommandPolicy.isOperationsField(kind: recordKind, field: fieldName) else {
             throw StaffReplicaDeliveryError.invalid
@@ -669,6 +676,15 @@ struct StaffWorkspaceContentSummary {
         let commandKeyPrefix = "full-staff-content-command-v1\n" + context.scope.key + "\n" + plan.id.uuidString.lowercased()
         let lock = try SharedTimeMutationGate.begin(commandKeyPrefix)
         defer { SharedTimeMutationGate.finish(commandKeyPrefix, id: lock) }
+        if let commandID {
+            let originals = try StaffWorkspaceOperationalCommandStore.listPending(store: dependencies.store, scope: context.scope, plan: plan.id)
+            if let original = try StaffWorkspaceOperationalCommandStore.load(store: dependencies.store, scope: context.scope,
+                    plan: plan.id, commandID: commandID.uuidString.lowercased()) ?? originals.first(where: { $0.request.commandID == commandID.uuidString.lowercased() }) {
+                guard original.request.recordKind == recordKind, original.request.recordID == recordID,
+                      original.request.fieldName == fieldName, original.request.value == value else { throw StaffReplicaDeliveryError.changed }
+                return try await sendOriginalOperationalCommand(original.request, plan: plan, context: context)
+            }
+        }
         let view = try StaffWorkspaceOperationalAcceptanceStore.accept(
             store: dependencies.store, scope: context.scope, plan: plan.id,
             check: { try self.staffCheck(context, plan) })
@@ -681,14 +697,23 @@ struct StaffWorkspaceContentSummary {
             companyID: view.companyID, environment: view.environment, replicaID: view.replicaID,
             commandID: id, selectionID: view.selectionID, sourceSequence: view.sourceSequence,
             contentSHA256: view.contentSHA256, candidate: candidate, value: value)
-        _ = try StaffWorkspaceOperationalCommandStore.enqueue(
+        return try await sendOriginalOperationalCommand(request, plan: plan, context: context)
+    }
+
+    /// Retries the saved request, never reconstructing it from a newer mount.
+    private func sendOriginalOperationalCommand(_ request: StaffWorkspaceOperationalCommandRequest,
+        plan: CloudKitStaffSharePlan, context: CloudKitStaffSetupController.Context) async throws -> StaffWorkspaceOperationalCommandJournal {
+        try staffCheck(context, plan)
+        try request.validate()
+        guard request.replicaID == plan.replicaID.uuidString.lowercased(),
+              [AppUserRole.admin.rawValue, AppUserRole.dispatcher.rawValue, AppUserRole.fieldTechnician.rawValue].contains(context.member.role)
+        else { throw StaffReplicaDeliveryError.access }
+        let pending = try StaffWorkspaceOperationalCommandStore.enqueue(
             store: dependencies.store, scope: context.scope, plan: plan.id, request: request,
             check: { try self.staffCheck(context, plan) })
-        guard let selectionUUID = UUID(uuidString: view.selectionID) else { throw StaffReplicaDeliveryError.invalid }
-        let selection = StaffWorkspaceSelectionRequest(plan: plan, sequence: view.sourceSequence,
-                                                       operation: selectionUUID)
-        try selection.validate(plan)
-        let path = StaffWorkspaceContentHTTPPolicy.root(plan) + "/" + selection.operationID + "/content/commands"
+        if pending.state == "recorded" { return pending }
+        guard let staffCommandRequest = dependencies.staffCommandRequest else { throw StaffReplicaDeliveryError.unavailable }
+        let path = StaffWorkspaceContentHTTPPolicy.root(plan) + "/" + request.selectionID + "/content/commands"
         let body = try StaffWorkspacePublicationContract.encode(request)
         guard StaffWorkspaceContentHTTPPolicy.allows(path: path, method: "POST", body: body),
               body.count <= 8192 else {
@@ -707,6 +732,49 @@ struct StaffWorkspaceContentSummary {
             throw StaffReplicaDeliveryError.storage
         }
         return journal
+    }
+
+    /// One bounded pass; a rejected or offline original remains discoverable
+    /// and does not starve unrelated lost-receipt recoveries behind it.
+    @discardableResult
+    func recoverOperationalCommands(plan: CloudKitStaffSharePlan, context: CloudKitStaffSetupController.Context,
+                                    maximum: Int = 16) async throws -> StaffWorkspaceCommandRecoverySummary {
+        try staffCheck(context, plan)
+        guard (1...128).contains(maximum) else { throw StaffReplicaDeliveryError.invalid }
+        let key = "full-staff-content-command-v1\n" + context.scope.key + "\n" + plan.id.uuidString.lowercased()
+        let lock = try SharedTimeMutationGate.begin(key)
+        defer { SharedTimeMutationGate.finish(key, id: lock) }
+        let originals = try StaffWorkspaceOperationalCommandStore.listPending(store: dependencies.store, scope: context.scope, plan: plan.id)
+        let cursorKey = key + "\nrecovery-cursor-v1"
+        var ordered = originals
+        if originals.count > maximum, let bytes = try dependencies.store.read(cursorKey) {
+            let cursor = try StaffWorkspacePublicationContract.decode(StaffWorkspaceCommandRecoveryCursor.self, from: bytes, maximum: 8192)
+            guard cursor.version == 1, cursor.scope == context.scope, cursor.planID == plan.id,
+                  CloudKitStaffSetupPolicy.canonicalID(cursor.lastAttemptedID) else { throw StaffReplicaDeliveryError.storage }
+            ordered = originals.filter { $0.request.commandID > cursor.lastAttemptedID }
+                + originals.filter { $0.request.commandID <= cursor.lastAttemptedID }
+        }
+        let batch = Array(ordered.prefix(maximum))
+        var recovered = 0
+        for original in batch {
+            do {
+                _ = try await sendOriginalOperationalCommand(original.request, plan: plan, context: context)
+                recovered += 1
+            } catch {
+                // Never hide sign-out/account changes or send another request
+                // after them. Other failures retain this exact intent.
+                try staffCheck(context, plan)
+            }
+        }
+        try staffCheck(context, plan)
+        if originals.count > maximum, let last = batch.last {
+            let cursor = StaffWorkspaceCommandRecoveryCursor(version: 1, scope: context.scope, planID: plan.id,
+                                                             lastAttemptedID: last.request.commandID)
+            try dependencies.store.write(cursorKey, StaffWorkspacePublicationContract.encode(cursor))
+            try staffCheck(context, plan)
+        }
+        let remaining = try StaffWorkspaceOperationalCommandStore.listPending(store: dependencies.store, scope: context.scope, plan: plan.id).count
+        return .init(recorded: recovered, pending: remaining)
     }
 
     /// Staff-scoped ModelContext import adapters from an accepted operational view.
