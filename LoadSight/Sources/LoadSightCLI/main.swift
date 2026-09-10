@@ -3,13 +3,18 @@ import LoadSightKit
 
 do {
     let args = Array(CommandLine.arguments.dropFirst())
-    guard let command = args.first, (["review", "csv", "validate", "ingest", "air-review", "envelope-review", "room-review", "change-review", "ops-review", "catalog-review"].contains(command) && args.count == 2) || (["apply", "rfi-docx", "co-docx"].contains(command) && args.count == 4) || (["draft-pdf", "xlsx", "catalog-compare"].contains(command) && args.count == 3) else {
-        throw LoadSightError.invalid("Usage: loadsight catalog-compare project.json supplied-catalog.json; loadsight review|csv|validate|air-review|envelope-review|room-review|change-review|ops-review|catalog-review project.json; loadsight ingest drawing.pdf; loadsight xlsx|draft-pdf project.json new-output-file; loadsight rfi-docx|co-docx project.json record-id new-output.docx; loadsight apply project.json request.json new-project.json")
+    guard let command = args.first, (["review", "csv", "validate", "ingest", "air-review", "envelope-review", "room-review", "change-review", "ops-review", "catalog-review", "extract-text", "extract-review", "schedule-map-review"].contains(command) && args.count == 2) || (["apply", "rfi-docx", "co-docx"].contains(command) && args.count == 4) || (["draft-pdf", "xlsx", "catalog-compare", "schedule-review", "schedule-text", "schedule-saved"].contains(command) && args.count == 3) else {
+        throw LoadSightError.invalid("Usage: loadsight schedule-map-review project.json; loadsight schedule-saved project.json map-uuid; loadsight schedule-review project.json mapping.json; loadsight schedule-text drawing.pdf mapping.json; loadsight extract-text drawing.pdf; loadsight extract-review project.json; loadsight catalog-compare project.json supplied-catalog.json; loadsight review|csv|validate|air-review|envelope-review|room-review|change-review|ops-review|catalog-review project.json; loadsight ingest drawing.pdf; loadsight xlsx|draft-pdf project.json new-output-file; loadsight rfi-docx|co-docx project.json record-id new-output.docx; loadsight apply project.json request.json new-project.json")
     }
-    if command == "ingest" {
+    if command == "ingest" || command == "extract-text" || command == "schedule-text" {
         let archive = try await DrawingIngestor().ingest(url: URL(fileURLWithPath: args[1]))
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        print(String(decoding: try encoder.encode(archive.records), as: UTF8.self))
+        if command == "schedule-text" {
+            let request = try EquipmentScheduleRequest.decode(Data(contentsOf: URL(fileURLWithPath: args[2])))
+            print(String(decoding: try encoder.encode(EquipmentScheduleExtractor.extract(archive, request: request)), as: UTF8.self))
+        } else if command == "extract-text" {
+            print(String(decoding: try encoder.encode(MechanicalTextExtractor.extract(archive)), as: UTF8.self))
+        } else { print(String(decoding: try encoder.encode(archive.records), as: UTF8.self)) }
         exit(0)
     }
     let project = try ProjectDocument(data: Data(contentsOf: URL(fileURLWithPath: args[1])))
@@ -21,6 +26,24 @@ do {
     case "rfi-docx":
         try RFIWordDocument.docx(project, rfiID: args[2]).write(to: URL(fileURLWithPath: args[3]), options: .withoutOverwriting)
         print("RFI Word copy saved: \(args[3])")
+    case "schedule-map-review":
+        let value = JSONValue.object(["maps": project.root["scheduleMaps"], "history": project.root["scheduleMapHistory"], "editFingerprint": .string(try project.scheduleMapEditFingerprint()), "scope": .string("Saved column mappings and local history; no approved equipment associations or quantities")])
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        print(String(decoding: try encoder.encode(value), as: UTF8.self))
+    case "schedule-saved":
+        guard let id = UUID(uuidString: args[2]), let map = try project.scheduleMaps().first(where: { $0.id == id }) else { throw LoadSightError.invalid("Saved schedule map not found.") }
+        let archive = try DrawingArchive(projectJSON: project.root["nativeDrawings"])
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        print(String(decoding: try encoder.encode(EquipmentScheduleExtractor.extract(archive, request: map.columnMap())), as: UTF8.self))
+    case "schedule-review":
+        let archive = try DrawingArchive(projectJSON: project.root["nativeDrawings"])
+        let request = try EquipmentScheduleRequest.decode(Data(contentsOf: URL(fileURLWithPath: args[2])))
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        print(String(decoding: try encoder.encode(EquipmentScheduleExtractor.extract(archive, request: request)), as: UTF8.self))
+    case "extract-review":
+        let archive = try DrawingArchive(projectJSON: project.root["nativeDrawings"])
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        print(String(decoding: try encoder.encode(MechanicalTextExtractor.extract(archive)), as: UTF8.self))
     case "catalog-compare":
         let available = try CatalogComparisonInput.decode(Data(contentsOf: URL(fileURLWithPath: args[2])))
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

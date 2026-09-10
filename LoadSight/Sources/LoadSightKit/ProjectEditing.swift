@@ -3,6 +3,7 @@ import Foundation
 public extension ProjectDocument {
     func validateDrawingEvidence(in drawings: DrawingArchive) throws {
         try validate(); _ = try airNetwork(); _ = try envelopeAssemblies(); _ = try roomTransmissions(); try drawings.validate(); try validateMarkupQuantities()
+        try validateScheduleMaps(in: drawings)
         let ledger = try markupLedger()
         let pages = Dictionary(uniqueKeysWithValues: drawings.records.flatMap(\.pages).map { ($0.id, $0) })
         func check(_ point: PagePoint, pageID: String) throws {
@@ -43,6 +44,9 @@ public enum ProjectEditing {
         let operation = try text("operation"), author = try text("author")
         let payloadKeys: [String]
         switch operation {
+        case "schedule.map.save": payloadKeys = ["id", "name", "request", "expectedFingerprint", "reason"]
+        case "schedule.map.remove": payloadKeys = ["id", "expectedFingerprint", "reason"]
+        case "text.rfi.create": payloadKeys = ["candidateID", "question", "impact"]
         case "catalog.material.update": payloadKeys = ["id", "mapping", "expectedFingerprint", "reason"]
         case "ops.context.update": payloadKeys = ["context", "expectedFingerprint", "reason"]
         case "changeorder.create": payloadKeys = ["draft"]
@@ -68,6 +72,24 @@ public enum ProjectEditing {
         var copy = project
         var recordID: String?
         switch operation {
+        case "schedule.map.save":
+            guard let rawID = fields["id"], rawID == .null || rawID.string.flatMap(UUID.init(uuidString:)) != nil else { throw LoadSightError.invalid("Supply id as null for a new map, or an existing map UUID.") }
+            guard let raw = fields["request"] else { throw LoadSightError.invalid("Supply the complete schedule request.") }
+            let map = try EquipmentScheduleRequest.decode(JSONEncoder().encode(raw))
+            let archive = try DrawingArchive(projectJSON: copy.root["nativeDrawings"])
+            recordID = try copy.saveScheduleMap(id: rawID.string.flatMap(UUID.init(uuidString:)), name: text("name"), request: map, drawings: archive, expectedFingerprint: text("expectedFingerprint"), author: author, reason: text("reason")).uuidString
+        case "schedule.map.remove":
+            guard let id = UUID(uuidString: try text("id")) else { throw LoadSightError.invalid("Supply a saved map UUID.") }
+            let archive = try DrawingArchive(projectJSON: copy.root["nativeDrawings"])
+            try copy.removeScheduleMap(id: id, drawings: archive, expectedFingerprint: text("expectedFingerprint"), author: author, reason: text("reason"))
+            recordID = id.uuidString
+        case "text.rfi.create":
+            let archive = try DrawingArchive(projectJSON: copy.root["nativeDrawings"])
+            let candidateID = try text("candidateID")
+            guard let candidate = try MechanicalTextExtractor.extract(archive).candidates.first(where: { $0.id == candidateID }) else {
+                throw LoadSightError.invalid("Text candidate is missing or changed. Review the project's current drawing extraction again.")
+            }
+            recordID = try copy.createRFI(from: candidate, drawings: archive, question: text("question"), impact: text("impact"), author: author)
         case "catalog.material.update":
             guard let raw = fields["mapping"] else { throw LoadSightError.invalid("Supply mapping explicitly, or null to remove a catalog link.") }
             var mapping: CatalogMaterialMapping?

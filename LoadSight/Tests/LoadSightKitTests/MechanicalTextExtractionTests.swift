@@ -18,7 +18,8 @@ import LoadSightKit
     }
     func testOriginalPDFAirflowRetainsExactSourceAndNoMutation() async throws {
         let archive = try await fixture(), original = archive
-        let result = try await LocalLoadSightService().extractMechanicalText(archive)
+        let service: any LoadSightServicing = LocalLoadSightService()
+        let result = try await service.extractMechanicalText(archive, progress: { _ in })
         XCTAssertEqual(result.pageCount, 3)
         XCTAssertTrue(result.candidates.contains { $0.kind == .airflow })
         for candidate in result.candidates { try candidate.validate(in: archive) }

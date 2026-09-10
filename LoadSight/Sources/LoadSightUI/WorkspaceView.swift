@@ -16,7 +16,7 @@ public struct LoadSightWorkspaceView: View {
     @State private var editing: ItemSelection?
     @State private var reviewing: ItemSelection?
     @State private var errorMessage: String?
-    private let sections = ["Overview", "Drawings", "Extraction", "Takeoff", "Estimate", "QA", "Requirements", "RFIs", "Change orders", "Attachments", "Sources", "Calculations"]
+    private let sections = ["Overview", "Drawings", "Extraction", "Schedules", "Takeoff", "Estimate", "QA", "Requirements", "RFIs", "Change orders", "Attachments", "Sources", "Calculations"]
     public init(document: Binding<LoadSightDocument>, opsContexts: [OpsProjectContext] = [], catalogMaterials: [OpsMaterialCatalogSnapshot] = []) { _document = document; self.opsContexts = opsContexts; self.catalogMaterials = catalogMaterials }
     public var body: some View {
         let workbookReceiptID = workbookPreparation.readyID
@@ -30,6 +30,7 @@ public struct LoadSightWorkspaceView: View {
                 switch section {
                 case "Drawings": DrawingsWorkspaceView(document: $document)
                 case "Extraction": MechanicalTextWorkspace(document: $document)
+                case "Schedules": EquipmentScheduleWorkspace(document: $document)
                 case "Takeoff": takeoff
                 case "Estimate": CommercialWorkspaceView(document: $document)
                 case "QA": QAWorkspaceView(document: $document)
