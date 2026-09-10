@@ -51,7 +51,12 @@ enum StaffWorkspaceContentVerification {
                 let branch = try object(body, keys: ["billing"])
                 let box = try object(branch["billing"]!, keys: ["_0"])
                 let document = try decode(StaffWorkspaceBillingProjection.Document.self, box["_0"]!)
-                guard document.kind == entry.kind, document.id.uuidString.lowercased() == entry.id else { throw StaffReplicaDeliveryError.invalid }
+                guard document.kind == entry.kind, document.id.uuidString.lowercased() == entry.id,
+                      Set(document.fields.keys).isDisjoint(with: Set(document.unavailableFields.keys)),
+                      document.unavailableFields.values.allSatisfy({ $0 == .roleRestricted || $0 == .serviceOnly }) else {
+                    throw StaffReplicaDeliveryError.invalid
+                }
+                // Restricted markers stay unavailable — never invent null/0/"" owner scalars here.
                 billing.append(document)
             } else {
                 let branch = try object(body, keys: ["operational"])

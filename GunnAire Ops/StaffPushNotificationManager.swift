@@ -120,6 +120,8 @@ final class StaffPushNotificationManager: NSObject, ObservableObject {
     var isDenied: Bool { state == .denied }
     var hasPendingServerDeactivation: Bool { preference.pendingServerDeactivation }
     var isEnabledForDisplay: Bool { state == .ready || preference.isOptedIn }
+    /// Stable installation UUID for device fingerprints — read-only, no side effects.
+    var installationID: UUID { preference.installationID }
 
     func configureAtLaunch() {
         notificationCenter.delegate = self

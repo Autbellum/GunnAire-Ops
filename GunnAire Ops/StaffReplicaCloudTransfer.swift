@@ -22,7 +22,7 @@ enum StaffReplicaCloudRecords {
               record.parent?.recordID == CKRecord.ID(recordName: plan.rootRecordName, zoneID: zone), record.parent?.action == CKRecord.ReferenceAction.none,
               record.share == nil || record.share?.recordID == CKRecord.ID(recordName: plan.shareRecordName, zoneID: zone),
               let bytes = record["manifest"] as? Data, bytes.count <= 8192 else { throw StaffReplicaDeliveryError.invalid }
-        let manifest = try JSONDecoder().decode(StaffReplicaManifest.self, from: bytes)
+        let manifest = try StaffWorkspacePublicationContract.decode(StaffReplicaManifest.self, from: bytes, maximum: 8192)
         try manifest.validate(plan: plan, workspace: workspace, now: now)
         guard record.recordID.recordName == (payload ? payloadName(manifest.operationID) : headName) else { throw StaffReplicaDeliveryError.changed }
         return manifest
@@ -133,7 +133,8 @@ struct StaffReplicaCloudIO {
             let manifest = try StaffReplicaCloudRecords.manifest(head, plan: plan, workspace: workspace, zone: io.zone, payload: false, now: now())
             if manifest == original.manifest {
                 guard existing != nil else { throw StaffReplicaDeliveryError.invalid }
-                return // Exact original upload is confirmed, including a lost reply.
+                try await verifyOwnerPublication(original, plan: plan, workspace: workspace, io: io, now: now())
+                return // Original asset and current head are independently rechecked.
             }
             guard manifest.sourceSequence < original.manifest.sourceSequence,
                   manifest.authorizationSequence <= original.manifest.authorizationSequence else { throw StaffReplicaDeliveryError.superseded }

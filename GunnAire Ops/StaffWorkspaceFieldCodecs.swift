@@ -3,6 +3,8 @@ import SwiftData
 
 /// Explicit owner-side values. These mappings are not staff role projections,
 /// authorization, content delivery, or permission to activate a staff store.
+/// `make` closures may invent empty SwiftData defaults for owner import only —
+/// staff operational acceptance must never call them for restricted fields.
 extension StaffWorkspaceModelCodecs {
     static var attachment: StaffWorkspaceModelCodec<ServiceDocumentAttachment> {
         .init(kind: "attachment", id: \.id, fields: [

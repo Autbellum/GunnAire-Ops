@@ -33,6 +33,16 @@ def initialize_schema(connection):
     connection.execute("""CREATE TABLE IF NOT EXISTS staff_workspace_projections (
         selection_id TEXT PRIMARY KEY, content_sha256 TEXT NOT NULL, ciphertext TEXT NOT NULL
     )""")
+    if "seal_sha256" not in {row[1] for row in connection.execute("PRAGMA table_info(staff_workspace_projections)")}:
+        connection.execute("ALTER TABLE staff_workspace_projections ADD COLUMN seal_sha256 TEXT")
+    connection.execute("""CREATE TABLE IF NOT EXISTS staff_workspace_cloud_seals (
+        selection_id TEXT PRIMARY KEY, ciphertext TEXT NOT NULL
+    )""")
+    try:
+        from Backend import staff_workspace_commands as commands
+    except ModuleNotFoundError:
+        import staff_workspace_commands as commands
+    commands.initialize_schema(connection)
 
 
 def header(snapshot):
@@ -122,7 +132,8 @@ class StaffWorkspaceDelivery(billing_delivery.StaffBillingDelivery):
                 raw = contract.wire(view).encode("utf-8")
                 encrypted = self.source.encode(dict(selectionSHA256=self.selection.digest(snapshot),
                                                     payloadBase64=base64.b64encode(raw).decode("ascii")))
-                connection.execute("INSERT INTO staff_workspace_projections VALUES (?,?,?)", (operation, digest(raw), encrypted))
+                connection.execute("INSERT INTO staff_workspace_projections (selection_id,content_sha256,ciphertext) VALUES (?,?,?)",
+                                   (operation, digest(raw), encrypted))
                 self.shares.audit(actor["email"], "prepare-staff-workspace", "staff-workspace-projection", operation, connection=connection)
             return self.receipt(raw, snapshot, sequence)
 

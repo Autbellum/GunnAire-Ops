@@ -1,4 +1,23 @@
-Native full32 synchronization candidate, 2026-09-10:
+Full32 CloudKit integration and recovery candidate, 2026-09-10:
+STAFF_CLOUD_INTEGRATION.md records the frozen parallel integration, owner seal
+publication, participant key/receive paths and concrete failure-pattern corrections.
+Fresh server checks now cover cached remount/convergence/readiness and owner cloud
+operations. Full/core retries recheck heads; manifests reject duplicate JSON keys;
+seal receipts require exact freshness/coverage/schema identity. Successor mounts
+retain old bytes and recover every disk-write boundary. Command indexes retain
+complete original requests before secondary writes; server command bodies are
+encrypted and replay verifies original actor, request, row and receipt identities.
+Native full regression passes 2,022 tests with zero failures/skips and nine verified
+selectors; Tools passes75. Final backend passes1,011 on each Python3.9.6/3.12.14.
+Unsigned Mac Catalyst arm64+x86_64 and iOS arm64 Release builds pass; warnings
+remaining in QBO and parallel operational adapters are documented, not suppressed.
+All qualification handles are closed. Later parallel UI/handoff changes are excluded from this
+snapshot's claims. No physical independent-account acceptance, complete command
+application, navigation acceptance, provider acceptance or release completion is
+claimed. The application goal remains ACTIVE; no screen access, browser/desktop
+changes, foreground UI testing, live provider writes, push or deployment occurs.
+
+Historical native full32 synchronization candidate, 2026-09-10:
 STAFF_NATIVE_CONTENT_SYNC.md records the live owner synchronization connection
 to the full32 selection/content endpoints, exact durable request replay,
 encrypted per-chunk recovery, original index/scalar/billing verification and

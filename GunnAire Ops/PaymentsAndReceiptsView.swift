@@ -239,7 +239,9 @@ struct PaymentsAndReceiptsView: View {
                                     .accessibilityElement(children: .combine)
                                     .accessibilityIdentifier("ActiveFieldPaymentHandoffStatus")
 
-                                Text("Open GunnAire Ops from Handoff within 30 minutes. This invoice's contactless collection guide opens automatically.")
+                                Text(FieldPaymentHandoff.activeHandoffStatusCaption(
+                                    invoiceQuickBooksID: invoices.first(where: { $0.id == fieldPaymentHandoff.activeInvoiceID })?.quickBooksID
+                                ))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
 
@@ -405,9 +407,10 @@ struct PaymentsAndReceiptsView: View {
                                                     amount: entry.balanceDue
                                                 )
                                                 isShowingFieldHandoffHelp = false
-                                                fieldHandoffMessage = didStart
-                                                    ? ""
-                                                    : "Payment handoff could not start on this device."
+                                                fieldHandoffMessage = FieldPaymentHandoff.originStartMessage(
+                                                    didStart: didStart,
+                                                    invoiceQuickBooksID: entry.invoice.quickBooksID
+                                                )
                                             }
                                             .buttonStyle(.bordered)
                                             .accessibilityHint(FieldPaymentHandoff.requirementsDetail)
@@ -867,7 +870,9 @@ struct PaymentsAndReceiptsView: View {
                                 Button("Open Collection") {
                                     GunnAireAppIntentRouter.storePaymentCollectionRoute(
                                         invoiceID,
-                                        prefersContactlessGuide: true
+                                        prefersContactlessGuide: FieldPaymentHandoff.prefersContactlessGuide(
+                                            forFieldCollectionIntent: true
+                                        )
                                     )
                                 }
                                 .buttonStyle(.bordered)

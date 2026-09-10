@@ -171,20 +171,22 @@ enum StaffWorkspaceContentHTTPPolicy {
         CloudKitStaffSetupPolicy.base + "/" + plan.id.uuidString.lowercased() + "/full-selections"
     }
     static func path(_ plan: CloudKitStaffSharePlan, request: StaffWorkspaceSelectionRequest,
-                     suffix: String = "", after: String? = nil, offset: Int? = nil) -> String {
+                     suffix: String = "", after: String? = nil, offset: Int? = nil,
+                     attachmentID: String? = nil) -> String {
         var url = URLComponents()
         url.path = root(plan) + "/" + request.operationID + suffix
         url.queryItems = [URLQueryItem(name: "companyID", value: request.companyID),
             .init(name: "environment", value: request.environment), .init(name: "replicaID", value: request.replicaID)]
         if let after { url.queryItems?.append(.init(name: "after", value: after)) }
         if let offset { url.queryItems?.append(.init(name: "offset", value: String(offset))) }
+        if let attachmentID { url.queryItems?.append(.init(name: "attachmentID", value: attachmentID)) }
         return url.string ?? ""
     }
     static func allows(path: String, method: String, body: Data?) -> Bool {
         guard let url = URLComponents(string: path), url.scheme == nil, url.host == nil, url.fragment == nil,
               url.path == url.percentEncodedPath else { return false }
         let parts = url.path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
-        guard (6...9).contains(parts.count), Array(parts.prefix(4)) == ["", "api", "workspace", "staff-shares"],
+        guard (6...10).contains(parts.count), Array(parts.prefix(4)) == ["", "api", "workspace", "staff-shares"],
               CloudKitStaffSetupPolicy.canonicalID(parts[4]), parts[5] == "full-selections",
               parts.count == 6 || CloudKitStaffSetupPolicy.canonicalID(parts[6]) else { return false }
         if method == "POST" {
@@ -197,6 +199,24 @@ enum StaffWorkspaceContentHTTPPolicy {
             if parts.count == 8, parts[7] == "content", let value = try? StaffWorkspacePublicationContract.decode(StaffWorkspaceContentRequest.self, from: body) {
                 return scope(value.companyID, value.environment, value.replicaID) && value.contentSchema == "staff-workspace-content-v1"
             }
+            if parts.count == 9, parts[7] == "content", parts[8] == "cloud-seal",
+               let value = try? StaffWorkspacePublicationContract.decode(StaffWorkspaceContentRequest.self, from: body) {
+                return scope(value.companyID, value.environment, value.replicaID) && value.contentSchema == "staff-workspace-content-v1"
+            }
+            if parts.count == 9, parts[7] == "content", parts[8] == "commands",
+               let value = try? StaffWorkspacePublicationContract.decode(StaffWorkspaceOperationalCommandRequest.self, from: body),
+               body.count <= 8192 {
+                return scope(value.companyID, value.environment, value.replicaID)
+                    && value.schema == StaffWorkspaceOperationalCommandRequest.schema
+                    && CloudKitStaffSetupPolicy.canonicalID(value.commandID)
+                    && CloudKitStaffSetupPolicy.canonicalID(value.selectionID)
+                    && value.selectionID == parts[6]
+                    && (1...2_147_483_647).contains(value.sourceSequence)
+                    && (1..<2_147_483_647).contains(value.expectedRevision)
+                    && JobBillingAssignmentSnapshot.validConnectionRevision(value.contentSHA256)
+                    && CloudKitStaffSetupPolicy.canonicalID(value.recordID)
+                    && StaffWorkspaceOperationalCommandPolicy.isOperationsField(kind: value.recordKind, field: value.fieldName)
+            }
             return false
         }
         guard method == "GET", body == nil, let items = url.queryItems,
@@ -205,6 +225,18 @@ enum StaffWorkspaceContentHTTPPolicy {
         guard scope(query["companyID"], query["environment"], query["replicaID"]) else { return false }
         let names: Set<String> = ["companyID", "environment", "replicaID"]
         if parts.count == 7 || parts.count == 8 && parts[7] == "content" { return Set(query.keys) == names }
+        if parts.count == 9, parts[7] == "content", parts[8] == "cloud-seal" { return Set(query.keys) == names }
+        if parts.count == 9, parts[7] == "content", parts[8] == "cloud-key" { return Set(query.keys) == names }
+        if parts.count == 9, parts[7] == "content", parts[8] == "media",
+           Set(query.keys) == names.union(["attachmentID"]),
+           CloudKitStaffSetupPolicy.canonicalID(query["attachmentID"]!) {
+            return true
+        }
+        if parts.count == 10, parts[7] == "content", parts[8] == "media", parts[9] == "bytes",
+           Set(query.keys) == names.union(["attachmentID"]),
+           CloudKitStaffSetupPolicy.canonicalID(query["attachmentID"]!) {
+            return true
+        }
         if parts.count == 8, parts[7] == "records" {
             return Set(query.keys) == names || Set(query.keys) == names.union(["after"]) && StaffWorkspacePublicationContract.validKey(query["after"]!)
         }

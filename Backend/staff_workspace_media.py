@@ -1,0 +1,158 @@
+"""Authenticated staff media grants for selected operational attachments.
+
+Attachment IDs, unavailable links, and Drive/QBO fields are never capability.
+Staff (and Admin) GET `.../content/media` only when the attachment is in the
+current selection, full content is prepared, `backendDocumentID` is a non-null
+text field, and the company document row still exists. Bytes are served only
+via `.../content/media/bytes` after the same checks. Never flips
+operationalWorkspaceReady and never invents document defaults.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+try:
+    from Backend import staff_workspace_delivery as delivery
+    from Backend import qbo_change_capture
+except ModuleNotFoundError:
+    import staff_workspace_delivery as delivery
+    import qbo_change_capture
+
+contract, sharing = delivery.contract, delivery.sharing
+SCHEMA = "staff-workspace-operational-media-v1"
+QUERY_FIELDS = delivery.SCOPE_FIELDS + " attachmentID"
+
+
+def document_id(value):
+    if type(value) is not str or not (1 <= len(value) <= 128) or value != value.strip():
+        raise ValueError()
+    if "/" in value or "\\" in value or ".." in value:
+        raise ValueError()
+    return value
+
+
+def field_text(fields, name, *, required=True):
+    value = fields.get(name)
+    if value == {"null": {}} or value is None:
+        if required:
+            raise ValueError()
+        return None
+    if type(value) is not dict or set(value) != {"text"} or type(value["text"]) is not dict or set(value["text"]) != {"_0"}:
+        raise ValueError()
+    text = value["text"]["_0"]
+    if type(text) is not str or not text or text != text.strip():
+        raise ValueError()
+    return text
+
+
+def field_integer(fields, name):
+    value = fields.get(name)
+    if type(value) is not dict or set(value) != {"integer"} or type(value["integer"]) is not dict or set(value["integer"]) != {"_0"}:
+        raise ValueError()
+    number = value["integer"]["_0"]
+    if type(number) is not int or not (1 <= number <= 64 * 1024 * 1024):
+        raise ValueError()
+    return number
+
+
+class StaffWorkspaceMedia(delivery.StaffWorkspaceDelivery):
+    def _resolve(self, connection, session_id, share_id, operation, query):
+        contract.exact(query, QUERY_FIELDS)
+        attachment_id = sharing.identifier(query["attachmentID"])
+        actor, scope, share = self.selection.member_authority(connection, session_id, share_id, query)
+        row = connection.execute(
+            "SELECT * FROM staff_workspace_selections WHERE id=? AND share_id=?",
+            (operation, share_id)).fetchone()
+        snapshot = self.selection.shared_original(row, scope, share)
+        sequence = self.source.sequence(connection, scope)
+        self.selection.receipt(snapshot, sequence)
+        if sequence != snapshot["sourceSequence"]:
+            raise sharing.fail("source_changed", "Refresh full company data before authorizing attachment media.", 409)
+        if not any(record["kind"] == "attachment" and record["id"] == attachment_id for record in snapshot["records"]):
+            raise sharing.fail("media_not_selected", "This attachment is not part of the current staff selection.", 404)
+        raw = self.original(connection, operation, snapshot)
+        if raw is None:
+            raise sharing.fail("content_not_prepared", "Prepare the original full content before authorizing media.", 404)
+        view = qbo_change_capture.strict_json(raw.decode("utf-8"))
+        record = next((item for item in view["records"]
+                       if item["kind"] == "attachment" and item["id"] == attachment_id), None)
+        if record is None:
+            raise sharing.fail("media_not_selected", "This attachment is not part of the prepared operational content.", 404)
+        contract.exact(record["body"], "operational")
+        contract.exact(record["body"]["operational"], "_0")
+        partition = record["body"]["operational"]["_0"]
+        contract.exact(partition, "fields unavailableFields structuredFields")
+        fields = partition["fields"]
+        if type(fields) is not dict:
+            raise sharing.fail("media_unavailable", "Attachment media metadata is invalid.", 503)
+        # Provider / device paths are never media capability even if present.
+        for forbidden in ("googleDriveWebViewLink", "googleDriveFileID", "quickBooksAttachableID", "localFilePath"):
+            if forbidden in fields and fields[forbidden] != {"null": {}}:
+                raise sharing.fail("media_unavailable", "Provider links are not staff media authority.", 403)
+        try:
+            backend_document_id = field_text(fields, "backendDocumentID", required=False)
+            if backend_document_id is None:
+                raise sharing.fail(
+                    "media_unavailable",
+                    "Attachment media is not prepared for authorized delivery.", 404)
+            backend_document_id = document_id(backend_document_id)
+            content_type = field_text(fields, "contentType")
+            display_name = field_text(fields, "displayName")
+            kind_raw = field_text(fields, "kindRaw")
+            file_size = field_integer(fields, "fileSizeBytes")
+            if "/" in display_name or "\\" in display_name or display_name.startswith("."):
+                raise ValueError()
+            if "/" not in content_type:
+                raise ValueError()
+        except sharing.AttemptError:
+            raise
+        except (ValueError, TypeError, KeyError):
+            raise sharing.fail("media_unavailable", "Attachment media metadata is invalid.", 503) from None
+        document = connection.execute("SELECT * FROM documents WHERE id=?", (backend_document_id,)).fetchone()
+        if document is None:
+            raise sharing.fail("media_unavailable", "Attachment media is not prepared for authorized delivery.", 404)
+        return actor, dict(
+            schema=SCHEMA,
+            selectionID=operation,
+            sourceSequence=snapshot["sourceSequence"],
+            contentSHA256=delivery.digest(raw),
+            attachmentID=attachment_id,
+            backendDocumentID=backend_document_id,
+            contentType=content_type,
+            fileSizeBytes=file_size,
+            displayName=display_name,
+            kindRaw=kind_raw,
+            operationalWorkspaceReady=False,
+            document=document,
+        )
+
+    def authorize(self, session_id, share_id, operation, query):
+        with self.shares.database() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            actor, grant = self._resolve(connection, session_id, share_id, operation, query)
+            self.shares.audit(actor["email"], "authorize-full-media", "staff-workspace-selection", operation,
+                              connection=connection)
+            return {key: value for key, value in grant.items() if key != "document"}
+
+    def download(self, session_id, share_id, operation, query, *, storage_root: Path):
+        with self.shares.database() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            actor, grant = self._resolve(connection, session_id, share_id, operation, query)
+            row = grant["document"]
+            self.shares.audit(actor["email"], "download-full-media", "staff-workspace-selection", operation,
+                              connection=connection)
+        stored_path = Path(row["stored_path"]).expanduser()
+        try:
+            resolved_storage = storage_root.resolve()
+            resolved_file = stored_path.resolve()
+        except OSError as error:
+            raise sharing.fail("media_unavailable", "Attachment media path is invalid.", 404) from error
+        if resolved_storage not in resolved_file.parents:
+            raise sharing.fail("media_unavailable", "Attachment media path is outside storage.", 403)
+        if not resolved_file.is_file():
+            raise sharing.fail("media_unavailable", "Attachment media file is missing.", 404)
+        data = resolved_file.read_bytes()
+        if len(data) != grant["fileSizeBytes"]:
+            raise sharing.fail("media_unavailable", "Attachment media size no longer matches the prepared content.", 409)
+        return dict(filename=grant["displayName"], contentType=grant["contentType"], data=data,
+                    grant={key: value for key, value in grant.items() if key != "document"})

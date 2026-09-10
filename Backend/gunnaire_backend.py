@@ -36,7 +36,7 @@ try:
     from Backend.billing_provider import BillingQBOProvider
     from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads
     from Backend.qbo_document_provider import DocumentQBOProvider
-    from Backend import time_worker_mappings, time_publications, cloudkit_staff_shares, staff_replica, staff_workspace_source, staff_workspace_selections, staff_billing_delivery, staff_workspace_delivery
+    from Backend import time_worker_mappings, time_publications, cloudkit_staff_shares, staff_replica, staff_workspace_source, staff_workspace_selections, staff_billing_delivery, staff_workspace_delivery, staff_workspace_cloud, staff_workspace_media, staff_workspace_commands
     from Backend.time_worker_provider import TimeWorkerQBOProvider
     from Backend.time_publication_provider import TimeQBOProvider
 except ModuleNotFoundError:
@@ -61,12 +61,15 @@ except ModuleNotFoundError:
     import staff_workspace_selections
     import staff_billing_delivery
     import staff_workspace_delivery
+    import staff_workspace_cloud
+    import staff_workspace_media
+    import staff_workspace_commands
     from time_worker_provider import TimeWorkerQBOProvider
     from time_publication_provider import TimeQBOProvider
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.09.53"
+SERVICE_VERSION = "2026.09.10.57"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -2534,6 +2537,7 @@ def initialize_database() -> None:
         staff_workspace_selections.initialize_schema(connection)
         staff_billing_delivery.initialize_schema(connection)
         staff_workspace_delivery.initialize_schema(connection)
+        staff_workspace_commands.initialize_schema(connection)
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS customer_communications (
@@ -4287,9 +4291,49 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         try:
             if len(parts) >= 4 and parts[3] == "content":
                 delivery = staff_workspace_delivery.StaffWorkspaceDelivery(shares)
-                if method == "POST" and len(parts) == 4 and not parsed.query:
+                if len(parts) == 5 and parts[4] == "cloud-key" and method == "GET":
+                    cloud = staff_workspace_cloud.StaffWorkspaceCloud(shares)
+                    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                    if any(len(value) != 1 for value in query.values()):
+                        raise cloudkit_staff_shares.fail("invalid_query", "Use one value per seal-key query field.", 400)
+                    payload = {key: value[0] for key, value in query.items()}
+                    result = cloud.release_key(self._application_session_id, parts[0], parts[2], payload)
+                elif len(parts) == 5 and parts[4] == "cloud-seal" and method in ("GET", "POST"):
+                    cloud = staff_workspace_cloud.StaffWorkspaceCloud(shares)
+                    if method == "POST" and not parsed.query:
+                        payload = qbo_change_capture.strict_json(self.read_limited_body(8192).decode("utf-8"))
+                    elif method == "GET":
+                        query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                        if any(len(value) != 1 for value in query.values()):
+                            raise cloudkit_staff_shares.fail("invalid_query", "Use one value per seal query field.", 400)
+                        payload = {key: value[0] for key, value in query.items()}
+                    else:
+                        raise cloudkit_staff_shares.fail("invalid_query", "Seal preparation cannot contain query fields.", 400)
+                    result = cloud.seal(self._application_session_id, parts[0], parts[2], payload, prepare=method == "POST")
+                elif method == "POST" and len(parts) == 4 and not parsed.query:
                     payload = qbo_change_capture.strict_json(self.read_limited_body(8192).decode("utf-8"))
                     result = delivery.prepare(self._application_session_id, parts[0], parts[2], payload)
+                elif method == "POST" and len(parts) == 5 and parts[4] == "commands" and not parsed.query:
+                    commands = staff_workspace_commands.StaffWorkspaceCommands(shares)
+                    payload = qbo_change_capture.strict_json(self.read_limited_body(8192).decode("utf-8"))
+                    result = commands.submit(self._application_session_id, parts[0], parts[2], payload)
+                elif method == "GET" and len(parts) == 5 and parts[4] == "media":
+                    media = staff_workspace_media.StaffWorkspaceMedia(shares)
+                    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                    if any(len(value) != 1 for value in query.values()):
+                        raise cloudkit_staff_shares.fail("invalid_query", "Use one value per media query field.", 400)
+                    result = media.authorize(self._application_session_id, parts[0], parts[2],
+                                             {key: value[0] for key, value in query.items()})
+                elif method == "GET" and len(parts) == 6 and parts[4] == "media" and parts[5] == "bytes":
+                    media = staff_workspace_media.StaffWorkspaceMedia(shares)
+                    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                    if any(len(value) != 1 for value in query.values()):
+                        raise cloudkit_staff_shares.fail("invalid_query", "Use one value per media-bytes query field.", 400)
+                    payload = media.download(self._application_session_id, parts[0], parts[2],
+                                             {key: value[0] for key, value in query.items()},
+                                             storage_root=STORAGE_ROOT)
+                    self.write_media_bytes(payload["data"], payload["contentType"], payload["filename"])
+                    return
                 elif method == "GET" and (len(parts) == 4 or len(parts) == 5 and parts[4] == "chunks"):
                     query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
                     if any(len(value) != 1 for value in query.values()):
@@ -6968,6 +7012,18 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             row = connection.execute("SELECT * FROM customer_communications WHERE id = ?", (record_id,)).fetchone()
         record_audit_event(actor_email, "create", "customer-communication", record_id)
         self.write_json(communication_record(row), status=HTTPStatus.CREATED)
+
+    def write_media_bytes(self, data: bytes, content_type: str, filename: str) -> None:
+        safe_name = safe_filename(filename)
+        self.send_response(HTTPStatus.OK)
+        self.send_cors_headers()
+        self.send_header("Content-Type", content_type or "application/octet-stream")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition", f'attachment; filename="{safe_name}"')
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(data)
 
     def download_document(self, document_id: str) -> None:
         if not document_id:

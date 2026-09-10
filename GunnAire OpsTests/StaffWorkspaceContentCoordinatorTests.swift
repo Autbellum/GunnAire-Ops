@@ -284,13 +284,19 @@ final class StaffWorkspaceContentCoordinatorTests: XCTestCase {
         let request = f.row.selectionRequest, root = StaffWorkspaceContentHTTPPolicy.root(f.plan)
         let body = try StaffWorkspacePublicationContract.encode(request)
         XCTAssertTrue(StaffWorkspaceContentHTTPPolicy.allows(path: root, method: "POST", body: body))
-        for suffix in ["", "/records", "/content", "/content/chunks"] {
+        for suffix in ["", "/records", "/content", "/content/chunks", "/content/cloud-seal", "/content/cloud-key"] {
             let path = StaffWorkspaceContentHTTPPolicy.path(f.plan, request: request, suffix: suffix, offset: suffix.hasSuffix("chunks") ? 0 : nil)
             XCTAssertTrue(StaffWorkspaceContentHTTPPolicy.allows(path: path, method: "GET", body: nil))
             XCTAssertFalse(StaffWorkspaceContentHTTPPolicy.allows(path: "https://foreign.invalid" + path, method: "GET", body: nil))
             XCTAssertFalse(StaffWorkspaceContentHTTPPolicy.allows(path: path + "&companyID=" + request.companyID, method: "GET", body: nil))
             XCTAssertFalse(StaffWorkspaceContentHTTPPolicy.allows(path: path, method: "DELETE", body: nil))
         }
+        let sealBody = try StaffWorkspacePublicationContract.encode(StaffWorkspaceContentRequest(request))
+        let sealPost = root + "/" + request.operationID + "/content/cloud-seal"
+        XCTAssertTrue(StaffWorkspaceContentHTTPPolicy.allows(path: sealPost, method: "POST", body: sealBody))
+        let keyGet = StaffWorkspaceContentHTTPPolicy.path(f.plan, request: request, suffix: "/content/cloud-key")
+        XCTAssertTrue(StaffWorkspaceContentHTTPPolicy.allows(path: keyGet, method: "GET", body: nil))
+        XCTAssertFalse(StaffWorkspaceContentHTTPPolicy.allows(path: keyGet, method: "POST", body: sealBody))
         XCTAssertFalse(StaffWorkspaceContentHTTPPolicy.allows(path: root + "?x=1", method: "POST", body: body))
         XCTAssertFalse(try StaffWorkspaceContentHTTPPolicy.allows(path: root, method: "POST", body: f.modified(request, ["role": "Admin"])))
         let chunk = StaffWorkspaceContentHTTPPolicy.path(f.plan, request: request, suffix: "/content/chunks", offset: 1)

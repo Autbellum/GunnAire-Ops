@@ -55,6 +55,7 @@ enum CompanyCloudKitRuntimeAccount {
 
 struct CompanyWorkspaceHost: View {
     @ObservedObject private var access = CompanyWorkspaceAccessController.shared
+    @ObservedObject private var receive = StaffReplicaReceiveController.shared
     @Binding var hasAuthenticatedUser: Bool
     @State private var confirmsOwnership = false
     @State private var showingStaffSetup = false
@@ -65,6 +66,17 @@ struct CompanyWorkspaceHost: View {
             if let container = access.authorizedContainer {
                 ContentView().modifier(JobBillingRecoveryModifier()).modifier(StaffReplicaSourceRecoveryModifier()).modelContainer(container)
                     .id(access.generation)
+            } else if let hosted = receive.hostedStore {
+                // Staff projection UI/nav presents via HostedStore ModelContainer —
+                // never the owner private store. Prefer bound identity gate when present.
+                StaffWorkspaceOperationalHostedWorkspaceView(
+                    hosted: hosted,
+                    identity: receive.operationalIdentity,
+                    account: receive.presentationAccount,
+                    deviceFingerprint: receive.presentationDeviceFingerprint
+                )
+                    .id(hosted.journal.contentSHA256 + ":\(hosted.journal.sourceSequence):\(receive.operationalIdentity?.deviceFingerprint ?? "unbound")")
+                    .accessibilityIdentifier("StaffOperationalHostedWorkspace")
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {

@@ -978,6 +978,109 @@ enum GunnAireBackendService {
         }
     }
 
+    /// Staff (and Admin) GET of an authenticated operational media grant or bytes.
+    /// Requires `/content/media` or `/content/media/bytes`; never uses owner-only helpers.
+    static func staffWorkspaceMediaRequest(path: String, maximum: Int = 8192) async throws -> Data {
+        guard StaffWorkspaceContentHTTPPolicy.allows(path: path, method: "GET", body: nil),
+              let components = URLComponents(string: path),
+              components.path.hasSuffix("/content/media") || components.path.hasSuffix("/content/media/bytes"),
+              Config.Backend.usesBusinessIdentity,
+              let stamp = CloudKitStaffSetupStamp.current else { throw StaffReplicaDeliveryError.access }
+        let candidates = [AppleAuthManager.shared.sessionToken, GoogleAuthManager.shared.applicationSessionToken].compactMap { $0 }
+        guard let token = candidates.first(where: { !$0.isEmpty && CompanyWorkspaceSession.digest($0) == stamp.session.tokenFingerprint }) else {
+            throw StaffReplicaDeliveryError.access
+        }
+        func check() throws {
+            try Task.checkCancellation()
+            guard CloudKitStaffSetupStamp.current == stamp, Date() < stamp.session.expiresAt else {
+                throw StaffReplicaDeliveryError.access
+            }
+        }
+        try check()
+        var request = try baseRequest(path: path, method: "GET", body: nil)
+        request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
+        do {
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: maximum)
+            try check(); return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let code) = error {
+                throw GunnAireBackendError.server(statusCode: code, message: "The original staff media grant was not confirmed.")
+            }
+            throw StaffReplicaDeliveryPolicy.safe(error)
+        }
+    }
+
+    /// Staff (and Admin) POST of an operational field command against prepared content.
+    /// Requires `/content/commands` with a decoded command body; never uses owner-only helpers.
+    static func staffWorkspaceCommandRequest(path: String, body: Data) async throws -> Data {
+        guard StaffWorkspaceContentHTTPPolicy.allows(path: path, method: "POST", body: body),
+              let components = URLComponents(string: path),
+              components.path.hasSuffix("/content/commands"),
+              components.query == nil,
+              body.count <= 8192,
+              Config.Backend.usesBusinessIdentity,
+              let stamp = CloudKitStaffSetupStamp.current else { throw StaffReplicaDeliveryError.access }
+        let candidates = [AppleAuthManager.shared.sessionToken, GoogleAuthManager.shared.applicationSessionToken].compactMap { $0 }
+        guard let token = candidates.first(where: { !$0.isEmpty && CompanyWorkspaceSession.digest($0) == stamp.session.tokenFingerprint }) else {
+            throw StaffReplicaDeliveryError.access
+        }
+        func check() throws {
+            try Task.checkCancellation()
+            guard CloudKitStaffSetupStamp.current == stamp, Date() < stamp.session.expiresAt else {
+                throw StaffReplicaDeliveryError.access
+            }
+        }
+        try check()
+        var request = try baseRequest(path: path, method: "POST", body: body)
+        request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
+        do {
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: 8192)
+            try check(); return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let code) = error {
+                throw GunnAireBackendError.server(statusCode: code, message: "The original staff operational command was not confirmed.")
+            }
+            throw StaffReplicaDeliveryPolicy.safe(error)
+        }
+    }
+
+    /// Staff (and Admin) GET of an already-prepared full-workspace cloud-key.
+    /// Never returns sealed content bytes; never uses the Admin-only owner source helper.
+    static func staffWorkspaceCloudKeyRequest(path: String) async throws -> Data {
+        guard StaffWorkspaceContentHTTPPolicy.allows(path: path, method: "GET", body: nil),
+              URLComponents(string: path)?.path.hasSuffix("/content/cloud-key") == true,
+              Config.Backend.usesBusinessIdentity,
+              let stamp = CloudKitStaffSetupStamp.current else { throw StaffReplicaDeliveryError.access }
+        let candidates = [AppleAuthManager.shared.sessionToken, GoogleAuthManager.shared.applicationSessionToken].compactMap { $0 }
+        guard let token = candidates.first(where: { !$0.isEmpty && CompanyWorkspaceSession.digest($0) == stamp.session.tokenFingerprint }) else {
+            throw StaffReplicaDeliveryError.access
+        }
+        func check() throws {
+            try Task.checkCancellation()
+            guard CloudKitStaffSetupStamp.current == stamp, Date() < stamp.session.expiresAt else {
+                throw StaffReplicaDeliveryError.access
+            }
+        }
+        try check()
+        var request = try baseRequest(path: path, method: "GET", body: nil)
+        request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
+        do {
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: 8192)
+            try check(); return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let code) = error {
+                throw GunnAireBackendError.server(statusCode: code, message: "The original full-workspace cloud key was not confirmed.")
+            }
+            throw StaffReplicaDeliveryPolicy.safe(error)
+        }
+    }
+
     /// Owner source reads and mutations never use the staff metadata exception.
     static func staffReplicaSourceRequest(path: String, method: String, body: Data?) async throws -> Data {
         guard (StaffReplicaSourceTransportPolicy.allows(path: path, method: method, body: body)

@@ -67,6 +67,68 @@ class StaffWorkspaceSelections:
             "recordCount": len(snapshot["records"]), "snapshotSHA256": self.digest(snapshot),
             "currentSourceSequence": sequence, "sourceCurrent": snapshot["sourceSequence"] == sequence}
 
+    def member_authority(self, connection, session_id, share_id, payload):
+        """Staff-capable share authority. Never uses Admin-only owner source.scope."""
+        company, environment = sharing.scope(payload)
+        expected_replica = sharing.identifier(payload.get("replicaID"))
+        actor = self.shares.actor(connection, session_id)
+        binding = self.shares.binding(connection, company, environment)
+        if binding["replica_id"] != expected_replica:
+            raise sharing.fail("replica_changed", "Verify the original approved owner workspace before recovering this request.", 409)
+        sharing.identifier(share_id)
+        row = connection.execute("SELECT * FROM cloudkit_staff_shares WHERE id=?", (share_id,)).fetchone()
+        self.shares.authorize_row(connection, actor, row, company, environment)
+        if row["projection_policy"] != sharing.POLICIES.get(row["member_role"]):
+            raise sharing.fail("sharing_changed", "The saved projection policy does not match the current staff role. Review the original invitation.", 403)
+        current = self.shares.public(connection, row)
+        if not current["businessAccessEligible"] or current["reviewRequired"] or current["cloudKitRevocationRequired"]:
+            raise sharing.fail("sharing_changed", "Current staff sharing authority is required before preparing company data.", 403)
+        return actor, (company, environment, expected_replica, contract.SCHEMA_VERSION), row
+
+    def shared_original(self, row, scope, share):
+        """Decode a selection bound to the share without requiring preparer identity."""
+        if row is None or tuple(row[key] for key in ("company_id", "environment", "replica_id", "share_id")) != (
+                *scope[:3], share["id"]):
+            raise sharing.fail("selection_not_found", "This original selection is not available for the current staff share.", 404)
+        saved = self.source.decode(row["ciphertext"])
+        try:
+            contract.exact(saved, "requestHash actorEmail snapshot")
+            if saved["requestHash"] != row["request_hash"] or saved["actorEmail"] != row["actor_email"]:
+                raise ValueError()
+            snapshot = saved["snapshot"]
+            expected = self.metadata(scope, share)
+            contract.exact(snapshot, " ".join(expected) + " operationID sourceSequence records")
+            if any(snapshot[key] != value or type(snapshot[key]) is not type(value) for key, value in expected.items()):
+                raise sharing.fail("sharing_changed", "The original membership or projection policy changed. Keep its original operation for review.", 403)
+            if snapshot["operationID"] != row["id"]:
+                raise ValueError()
+            contract.integer(snapshot["sourceSequence"], 1)
+            if type(snapshot["records"]) is not list or len(snapshot["records"]) > 20_000:
+                raise ValueError()
+            keys = []
+            rules = selection.rules()
+            for record in snapshot["records"]:
+                contract.exact(record, "kind id revision unavailableLinks")
+                if record["kind"] not in rules:
+                    raise ValueError()
+                sharing.identifier(record["id"])
+                contract.integer(record["revision"], 1)
+                names = record["unavailableLinks"]
+                if type(names) is not list or any(type(name) is not str for name in names) or names != sorted(set(names)):
+                    raise ValueError()
+                if not set(names) <= set(rules[record["kind"]]) | set(selection.LISTS.get(record["kind"], {})):
+                    raise ValueError()
+                keys.append(record["kind"] + ":" + record["id"])
+            if keys != sorted(set(keys)) or len(contract.wire(snapshot).encode()) > MAX_SNAPSHOT_BYTES:
+                raise ValueError()
+            return snapshot
+        except sharing.AttemptError as error:
+            if error.code == "sharing_changed":
+                raise
+            raise self.source.unavailable() from None
+        except (KeyError, ValueError, TypeError):
+            raise self.source.unavailable() from None
+
     def original(self, row, scope, share, actor):
         if row is None or tuple(row[key] for key in ("company_id", "environment", "replica_id", "share_id", "actor_email")) != (
                 *scope[:3], share["id"], actor["email"]):
