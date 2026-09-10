@@ -401,6 +401,12 @@ enum GunnAireAppIntentRouter {
         return id
     }
 
+    /// Explicit field collection intent. Ordinary accounting/invoice links keep
+    /// the general route's default instead of unexpectedly opening the guide.
+    nonisolated static func storeFieldPaymentCollectionRoute(_ id: UUID) {
+        storePaymentCollectionRoute(id, prefersContactlessGuide: true)
+    }
+
     nonisolated static func storePaymentCollectionRoute(
         _ id: UUID,
         prefersContactlessGuide: Bool = false,
@@ -1279,7 +1285,7 @@ struct CollectInvoicePaymentIntent: AppIntent {
         guard try await GunnAireIntentStore.canOpenInvoice(invoice.id) else {
             return .result(dialog: "That invoice is not available to the signed-in business account.")
         }
-        GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
+        GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(invoice.id)
         return .result(dialog: "Opening payment collection for \(invoice.customerName).")
     }
 }
@@ -1313,7 +1319,7 @@ struct CollectNextOutstandingInvoiceIntent: AppIntent {
         guard let invoice = try await GunnAireIntentStore.nextCollectibleInvoice() else {
             return .result(dialog: "There are no collectible invoices right now.")
         }
-        GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
+        GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(invoice.id)
         return .result(dialog: "Opening payment collection for \(invoice.customer.name).")
     }
 }
@@ -1330,7 +1336,7 @@ struct CollectNextOverdueInvoiceIntent: AppIntent {
         guard let invoice = try await GunnAireIntentStore.nextOverdueInvoice() else {
             return .result(dialog: "There are no overdue invoices right now.")
         }
-        GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
+        GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(invoice.id)
         return .result(dialog: "Opening overdue collection for \(invoice.customer.name).")
     }
 }

@@ -3563,7 +3563,7 @@ GunnAire
                         VStack(spacing: 10) {
                             Button {
                                 if let linkedInvoiceID = linkedInvoice?.id {
-                                    GunnAireAppIntentRouter.storePaymentCollectionRoute(linkedInvoiceID)
+                                    GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(linkedInvoiceID)
                                 } else {
                                     GunnAireAppIntentRouter.storeDocumentationRoute(call.id)
                                 }

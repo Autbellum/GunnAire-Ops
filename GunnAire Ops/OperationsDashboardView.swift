@@ -936,7 +936,7 @@ struct OperationsDashboardView: View {
         case .buildInvoice(let id):
             GunnAireAppIntentRouter.storeDocumentationRoute(id)
         case .collectInvoice(let id):
-            GunnAireAppIntentRouter.storePaymentCollectionRoute(id)
+            GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(id)
         case .schedule:
             GunnAireAppIntentRouter.store(.schedule)
         case .quickBooksSales:
@@ -1580,7 +1580,7 @@ struct OperationsDashboardView: View {
                 if let invoice = invoice(for: call),
                    outstandingBalance(for: invoice) > 0 {
                     Button {
-                        GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
+                        GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(invoice.id)
                     } label: {
                         Label("Collect", systemImage: "creditcard")
                     }
@@ -2140,7 +2140,7 @@ struct OperationsDashboardView: View {
     private func perform(_ action: CustomerIntelligenceAction) {
         switch action {
         case .collectPayment(let invoiceID):
-            GunnAireAppIntentRouter.storePaymentCollectionRoute(invoiceID)
+            GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(invoiceID)
         case .openDocumentation(let serviceCallID):
             GunnAireAppIntentRouter.storeDocumentationRoute(serviceCallID)
         case .openSchedule(let serviceCallID):
@@ -2171,7 +2171,7 @@ struct OperationsDashboardView: View {
                 GunnAireAppIntentRouter.store(.documentation)
             }
         case .collectPayment(let invoiceID):
-            GunnAireAppIntentRouter.storePaymentCollectionRoute(invoiceID)
+            GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(invoiceID)
         case .customer(let customerID):
             GunnAireAppIntentRouter.storeCustomerRoute(customerID)
         case .customers:

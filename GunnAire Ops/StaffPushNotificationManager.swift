@@ -416,7 +416,7 @@ extension StaffPushNotificationManager: UNUserNotificationCenterDelegate {
         if let invoiceID = StaffPushNotificationRouteParser.paymentCollectionInvoiceID(
             from: response.notification.request.content.userInfo
         ) {
-            GunnAireAppIntentRouter.storePaymentCollectionRoute(invoiceID)
+            GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(invoiceID)
         }
         completionHandler()
     }

@@ -437,7 +437,7 @@ struct CustomersView: View {
 
                                             if canViewFinancials, let openInvoice = nextOpenInvoice(for: customer) {
                                                 Button("Collect Payment") {
-                                                    GunnAireAppIntentRouter.storePaymentCollectionRoute(openInvoice.id)
+                                                    GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(openInvoice.id)
                                                 }
                                                 .buttonStyle(.borderedProminent)
                                                 .tint(.green)
@@ -1753,7 +1753,7 @@ struct SyncIntegrationsView: View {
                 GunnAireAppIntentRouter.store(.documentation)
             }
         case .collectPayment(let invoiceID):
-            GunnAireAppIntentRouter.storePaymentCollectionRoute(invoiceID)
+            GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(invoiceID)
         case .customer(let customerID):
             GunnAireAppIntentRouter.storeCustomerRoute(customerID)
         case .customers:
@@ -2127,7 +2127,7 @@ struct OnsiteDocumentationView: View {
 
                                             if invoice.isReadyForPaymentCollection && invoiceBalanceDue(for: invoice) > 0.009 {
                                                 Button("Collect Payment") {
-                                                    GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
+                                                    GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(invoice.id)
                                                 }
                                                 .buttonStyle(.borderedProminent)
                                                 .tint(.green)
@@ -2279,7 +2279,7 @@ struct OnsiteDocumentationView: View {
                             } else if let invoice = invoice(for: call), invoice.isReadyForPaymentCollection,
                                       invoiceBalanceDue(for: invoice) > 0.009 {
                                 Button("Collect Payment") {
-                                    GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
+                                    GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(invoice.id)
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .tint(.green)
@@ -4852,7 +4852,7 @@ private struct CustomerEditorView: View {
                 .lineLimit(2)
             HStack {
                 Button("Collect Payment") {
-                    GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
+                    GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(invoice.id)
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)
@@ -5740,7 +5740,7 @@ private struct CustomerEditorView: View {
     private func perform(_ action: CustomerIntelligenceAction) {
         switch action {
         case .collectPayment(let invoiceID):
-            GunnAireAppIntentRouter.storePaymentCollectionRoute(invoiceID)
+            GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(invoiceID)
             dismiss()
         case .openDocumentation(let serviceCallID):
             GunnAireAppIntentRouter.storeDocumentationRoute(serviceCallID)
