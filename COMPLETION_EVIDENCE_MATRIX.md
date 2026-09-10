@@ -1,3 +1,18 @@
+Role-safe staff billing preparation candidate, 2026-09-09:
+STAFF_BILLING_DISCLOSURE.md records the separate typed billing view, explicit
+restricted/not-recorded/zero cost states, nested sold-line/assembly/bundle
+disclosure, exact source/share scope, and role/assignment selection from the
+complete original owner graph. Final focused validation passes 69 cases and
+all five suite selectors; full iPad unit validation passes 1,915 cases and all
+six target/suite selectors, with zero failures/skips. Unsigned arm64+x86_64 Mac
+Catalyst and arm64 iOS release builds and architecture checks pass. This is an owner-side preparation component, not a
+deployed full32 staff projection or staff-store activation. Server enforcement,
+the other 30 model projections, native staff adapters/commands/media, a staff
+lease, independent-account CloudKit convergence and full app acceptance remain
+incomplete. Work is background-only: no screen capture/inspection/recording,
+browser changes, foreground Mac app or UI tests. See the report for evidence
+and the unchanged production and GitHub permission gates.
+
 Full owner native publication candidate, 2026-09-09:
 STAFF_FULL_WORKSPACE_PUBLICATION.md records the missing native upload path,
 durable original-wire replay, typed full-model contract, bounded/fenced paging,
