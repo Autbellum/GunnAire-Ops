@@ -10,8 +10,7 @@ public struct EquipmentScheduleWorkspace: View {
     @State private var importing = false
     @State private var importSession: DrawingReviewSession?
     @State private var failure: String?
-    @State private var selected: DrawingReviewSelection<EquipmentScheduleRow>?
-    @State private var request: EquipmentScheduleRequest?
+    @State private var review = EquipmentScheduleReviewState()
     @State private var editor: ScheduleMapEditSession?
     public init(document: Binding<LoadSightDocument>, initialRequest: EquipmentScheduleRequest? = nil) {
         _document = document; self.initialRequest = initialRequest
@@ -40,7 +39,7 @@ public struct EquipmentScheduleWorkspace: View {
             if preparation.matches(drawings: document.drawings, documentSessionID: document.editSessionID), let result = preparation.result {
                 Section("\(result.rows.count) unreviewed row candidates") {
                     ForEach(result.rows) { row in
-                        Button { selected = .init(document: document, value: row) } label: {
+                        Button { review.selected = .init(document: document, value: row) } label: {
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(row.tag).font(.headline)
                                 Text("\(row.filename) · page \(row.pageNumber)").font(.caption)
@@ -56,7 +55,7 @@ public struct EquipmentScheduleWorkspace: View {
         .toolbar {
             Button("New column map") { openEditor() }.disabled(document.drawings.records.isEmpty).accessibilityIdentifier("NewScheduleMap")
             Button("Import column map") { importSession = .init(document: document); importing = true }.disabled(preparation.isScanning || document.drawings.records.isEmpty).accessibilityIdentifier("ImportScheduleMap")
-            if let request {
+            if let request = review.request {
                 Menu("Current map") {
                     Button("Read schedule again") { start(request) }.disabled(preparation.isScanning)
                     Button("Save as a map") { openEditor(request: request) }
@@ -76,12 +75,12 @@ public struct EquipmentScheduleWorkspace: View {
             } catch { failure = error.localizedDescription }
         }
         .sheet(item: $editor) { session in ScheduleMapEditor(document: $document, session: session) }
-        .sheet(item: $selected) { selection in EquipmentScheduleRowReview(document: $document, row: selection.value, session: selection.session) }
+        .sheet(item: $review.selected) { selection in EquipmentScheduleRowReview(document: $document, row: selection.value, session: selection.session) }
         .onChange(of: document.project.root["scheduleMaps"]) { _, _ in reset() }
         .onChange(of: document.drawings) { _, _ in reset() }
         .onChange(of: document.editSessionID) { _, _ in reset() }
         .onDisappear { preparation.cancel() }
-        .task { if let initialRequest, request == nil { start(initialRequest) } }
+        .task { if let initialRequest, review.request == nil { start(initialRequest) } }
     }
     private func openEditor(map: StoredScheduleMap? = nil, request: EquipmentScheduleRequest? = nil) {
         do { editor = try .init(document: document, mapID: map?.id, request: request) }
@@ -91,10 +90,10 @@ public struct EquipmentScheduleWorkspace: View {
         do { start(try map.columnMap()) } catch { failure = error.localizedDescription }
     }
     private func start(_ value: EquipmentScheduleRequest) {
-        failure = nil; request = value
+        failure = nil; review.request = value
         preparation.start(drawings: document.drawings, documentSessionID: document.editSessionID, request: value)
     }
-    private func reset() { preparation.cancel(); request = nil; selected = nil; failure = nil }
+    private func reset() { preparation.cancel(); review.invalidateResults(); failure = nil }
 }
 
 private struct EquipmentScheduleRowReview: View {
@@ -112,12 +111,16 @@ private struct EquipmentScheduleRowReview: View {
                     Button("View schedule source") { preview = true }.accessibilityIdentifier("ViewScheduleSource")
                     Text("Column mapping: \(row.region.recordedBy)")
                     Text(row.region.mappingBasis).font(.caption)
+                    if !session.matches(document) {
+                        Text("The project or drawings changed. This is the original source snapshot; close it and review the current drawing before creating another RFI.")
+                            .foregroundStyle(.orange).accessibilityIdentifier("ScheduleSourceChanged")
+                    }
                 }
                 Section("Consistency review") {
                     ForEach(row.consistencyReview.checks) { check in
                         DisclosureGroup {
                             Text(check.detail).font(.caption)
-                            Button("Draft RFI for finding") { rfiFinding = check }.accessibilityIdentifier("DraftScheduleRFI-" + check.id)
+                            Button("Draft RFI for finding") { rfiFinding = check }.disabled(!session.matches(document)).accessibilityIdentifier("DraftScheduleRFI-" + check.id)
                             ForEach(check.values, id: \.field) { value in
                                 if let number = value.value, let unit = value.unit {
                                     Text("\(value.field.title): \(number.formatted(.number.precision(.significantDigits(1...8)))) \(unit)").font(.caption)
@@ -136,6 +139,7 @@ private struct EquipmentScheduleRowReview: View {
                     Section(cell.field.title) {
                         Text(cell.text ?? "Unknown — no recognized cell text").textSelection(.enabled)
                         if let unit = cell.unitText { Text("Header units: \(unit)").font(.caption) }
+                        if let definition = cell.unitDefinition { Text("Source convention: " + definition.convention.title + ". " + definition.source).font(.caption) }
                         if let dimensions = cell.dimensionInterpretation { ScheduleDimensionReviewView(interpretation: dimensions) }
                         let numeric = cell.numericInterpretation
                         if numeric.status != .notNumeric {

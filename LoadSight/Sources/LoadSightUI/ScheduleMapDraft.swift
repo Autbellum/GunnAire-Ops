@@ -5,10 +5,13 @@ struct ScheduleColumnDraft: Identifiable, Equatable {
     let id = UUID()
     var field: EquipmentScheduleField = .tag
     var minX = "", maxX = "", header = "", unit = ""
+    var convention: ScheduleUnitConvention?
+    var conventionSource = ""
     init(field: EquipmentScheduleField) { self.field = field }
     init(_ column: EquipmentScheduleColumn) {
         field = column.field; minX = String(column.minX); maxX = String(column.maxX)
         header = column.headerText; unit = column.unitText ?? ""
+        convention = column.unitDefinition?.convention; conventionSource = column.unitDefinition?.source ?? ""
     }
 }
 struct ScheduleRegionDraft: Identifiable, Equatable {
@@ -44,7 +47,7 @@ struct ScheduleRegionDraft: Identifiable, Equatable {
         let mapped = try columns.map { column in
             EquipmentScheduleColumn(field: column.field, minX: try coordinate(column.minX), maxX: try coordinate(column.maxX),
                                     unitText: column.unit.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : column.unit,
-                                    headerText: column.header)
+                                    headerText: column.header, unitDefinition: column.convention.map { .init(convention: $0, source: column.conventionSource) })
         }
         return .init(sourceID: sourceID, pageID: pageID, bodyBounds: body, columns: mapped, textMode: textMode, recordedBy: author, mappingBasis: basis)
     }

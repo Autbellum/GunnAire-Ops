@@ -151,6 +151,7 @@ private struct ScheduleRegionFields: View {
                 }
                 LabeledContent("Exact header text") { TextField("Exact header text", text: columnBinding(column, \.header)).multilineTextAlignment(.trailing).accessibilityIdentifier("ScheduleColumnHeader-\(index)") }
                 LabeledContent("Header units, if recorded") { TextField("Header units, if recorded", text: columnBinding(column, \.unit)).multilineTextAlignment(.trailing).accessibilityIdentifier("ScheduleColumnUnit-\(index)") }
+                ScheduleUnitDefinitionEditor(field: column.field, unitText: column.unit, convention: columnBinding(column, \.convention), source: columnBinding(column, \.conventionSource))
                 LabeledContent("Left column edge") { TextField("Left column edge", text: columnBinding(column, \.minX)).multilineTextAlignment(.trailing).accessibilityIdentifier("ScheduleColumnLeft-\(index)") }
                 LabeledContent("Right column edge") { TextField("Right column edge", text: columnBinding(column, \.maxX)).multilineTextAlignment(.trailing).accessibilityIdentifier("ScheduleColumnRight-\(index)") }
                 HStack {
@@ -232,6 +233,7 @@ struct ScheduleMapHistorySection: View {
                 Text("Body: x \(region.bodyBounds.x), y \(region.bodyBounds.y), width \(region.bodyBounds.width), height \(region.bodyBounds.height)").font(.caption)
                 ForEach(region.columns, id: \.field) { column in
                     Text("\(column.field.title): \(column.headerText), \(column.minX) to \(column.maxX), units: \(column.unitText ?? "not recorded")").font(.caption)
+                    if let definition = column.unitDefinition { Text("\(definition.convention.title): \(definition.source)").font(.caption) }
                 }
             }
         } else { Text("No saved map") }

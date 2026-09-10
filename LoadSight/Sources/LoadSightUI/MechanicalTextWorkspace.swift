@@ -52,14 +52,10 @@ private struct MechanicalTextReview: View {
     let candidate: MechanicalTextCandidate
     let session: DrawingReviewSession
     @Environment(\.dismiss) private var dismiss
-    @State private var question = ""
-    @State private var impact = ""
-    @State private var author = ""
+    @State private var draft = SourceRFIDraft()
     @State private var failure: String?
-    @State private var savedID: String?
     @State private var discard = false
     @State private var preview = false
-    private var dirty: Bool { savedID == nil && [question, impact, author].contains { !$0.isEmpty } }
     var body: some View {
         NavigationStack {
             Form {
@@ -77,16 +73,16 @@ private struct MechanicalTextReview: View {
                     }
                 }
                 Section("Create a local RFI draft") {
-                    TextField("Question requiring clarification", text: $question, axis: .vertical).accessibilityIdentifier("CandidateRFIQuestion")
-                    TextField("Known impact or what remains unknown", text: $impact, axis: .vertical).accessibilityIdentifier("CandidateRFIImpact")
-                    TextField("Recorded by", text: $author).accessibilityIdentifier("CandidateRFIAuthor")
-                    Button("Save RFI draft") { save() }.disabled(savedID != nil).accessibilityIdentifier("SaveCandidateRFI")
-                    if let savedID { Text("Saved \(savedID). The RFI remains unanswered; no quantity, equipment association or approval was created.").accessibilityIdentifier("CandidateRFISaved") }
+                    TextField("Question requiring clarification", text: $draft.question, axis: .vertical).disabled(!draft.canEdit).accessibilityIdentifier("CandidateRFIQuestion")
+                    TextField("Known impact or what remains unknown", text: $draft.impact, axis: .vertical).disabled(!draft.canEdit).accessibilityIdentifier("CandidateRFIImpact")
+                    TextField("Recorded by", text: $draft.author).disabled(!draft.canEdit).accessibilityIdentifier("CandidateRFIAuthor")
+                    Button("Save RFI draft") { save() }.disabled(!draft.canSave(session: session, in: document)).accessibilityIdentifier("SaveCandidateRFI")
+                    if let savedID = draft.savedID { Text("Saved \(savedID). The RFI remains unanswered; no quantity, equipment association or approval was created.").accessibilityIdentifier("CandidateRFISaved") }
                     if let failure { Text(failure).foregroundStyle(.red) }
                 }
             }.navigationTitle("Review source text")
-            .toolbar { Button("Done") { if dirty { discard = true } else { dismiss() } } }
-            .interactiveDismissDisabled(dirty)
+            .toolbar { Button("Done") { if draft.isDirty { discard = true } else { dismiss() } } }
+            .interactiveDismissDisabled(draft.isDirty)
             .alert("Discard RFI draft?", isPresented: $discard) {
                 Button("Discard edits", role: .destructive) { dismiss() }
                 Button("Keep editing", role: .cancel) {}
@@ -106,7 +102,10 @@ private struct MechanicalTextReview: View {
     }
     private func save() {
         do {
-            savedID = try session.createRFI(from: candidate, question: question, impact: impact, author: author, in: &document)
+            try draft.save(session: session, in: &document) { copy, content in
+                try copy.project.createRFI(from: candidate, drawings: copy.drawings, question: content.question,
+                                          impact: content.impact, author: content.author)
+            }
         } catch { failure = error.localizedDescription }
     }
 }

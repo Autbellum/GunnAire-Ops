@@ -19,14 +19,14 @@ public struct ScheduleRowNumericReview: Codable, Equatable, Sendable {
 }
 
 public enum ScheduleNumericInterpreter {
-    public static let method = "Explicit scalar schedule units v1"
+    public static let method = "Explicit scalar schedule units v2"
     public static let reference = "https://www.nist.gov/pml/special-publication-811/nist-guide-si-appendix-b-conversion-factors/nist-guide-si-appendix-b8"
     private struct Conversion {
         let unit: String
         let factor: Double
         var offset: Double = 0
     }
-    public static func interpret(field: EquipmentScheduleField, text: String?, unitText: String?) -> ScheduleNumericInterpretation {
+    public static func interpret(field: EquipmentScheduleField, text: String?, unitText: String?, definition: ScheduleUnitDefinition? = nil) -> ScheduleNumericInterpretation {
         func result(_ status: ScheduleNumericInterpretation.Status, _ explanation: String, value: Double? = nil, conversion: Conversion? = nil) -> ScheduleNumericInterpretation {
             .init(field: field, status: status, value: value, unit: conversion?.unit, factor: conversion?.factor, offset: conversion?.offset, explanation: explanation, method: method)
         }
@@ -43,7 +43,11 @@ public enum ScheduleNumericInterpreter {
         guard let rawUnit = unitText?.trimmingCharacters(in: .whitespacesAndNewlines), !rawUnit.isEmpty else {
             return result(.unresolved, "Unit not recorded. No unit inferred from the field name or number.")
         }
-        let unit = rawUnit.replacingOccurrences(of: " ", with: "")
+        if let definition {
+            do { try definition.validate(field: field, unitText: rawUnit) }
+            catch { return result(.unresolved, error.localizedDescription) }
+        }
+        let unit = definition?.convention.canonicalInputUnit ?? rawUnit.replacingOccurrences(of: " ", with: "")
         let conversion: Conversion?
         switch field {
         case .airflow, .outdoorAir, .waterFlow:
@@ -52,6 +56,7 @@ public enum ScheduleNumericInterpreter {
             case "L/s", "l/s": conversion = .init(unit: "m³/s", factor: 0.001)
             case "m3/s", "m³/s": conversion = .init(unit: "m³/s", factor: 1)
             case "m3/h", "m³/h": conversion = .init(unit: "m³/s", factor: 1 / 3600)
+            case "ImperialGPM": conversion = .init(unit: "m³/s", factor: 0.00454609 / 60)
             case "USGPM", "USgal/min": conversion = .init(unit: "m³/s", factor: 0.003785411784 / 60)
             default: conversion = nil
             }
@@ -60,6 +65,7 @@ public enum ScheduleNumericInterpreter {
             case "W": conversion = .init(unit: "W", factor: 1)
             case "kW": conversion = .init(unit: "W", factor: 1000)
             case "MW": conversion = .init(unit: "W", factor: 1_000_000)
+            case "kBtu_IT/h": conversion = .init(unit: "W", factor: 1000 * 1055.05585262 / 3600)
             case "Btu_IT/h", "BTU_IT/HR": conversion = .init(unit: "W", factor: 1055.05585262 / 3600)
             case "tonofrefrigeration", "tonR": conversion = .init(unit: "W", factor: 12000 * 1055.05585262 / 3600)
             default: conversion = nil
@@ -104,7 +110,8 @@ public enum ScheduleNumericInterpreter {
             guard integralLiteral, number.rounded() == number, number <= 9_007_199_254_740_991,
                   field != .phase || [1, 3].contains(number) else { return result(.unresolved, "Count must be an exactly representable nonnegative integer; supported phase values are 1 and 3.") }
         }
-        return result(.interpreted, "Unreviewed arithmetic: source value × factor + offset. Verify number format, unit, mapping, recognition and row boundaries before use. No equipment count or engineering approval inferred.", value: value, conversion: conversion)
+        let conventionNote = definition.map { " Source convention: \($0.convention.title). Evidence: \($0.source)." } ?? ""
+        return result(.interpreted, "Unreviewed arithmetic: source value × factor + offset. Verify number format, unit, mapping, recognition and row boundaries before use. No equipment count or engineering approval inferred." + conventionNote, value: value, conversion: conversion)
     }
 
     /// Compare already-validated ASCII decimals without rounding an out-of-domain
@@ -128,6 +135,6 @@ public enum ScheduleNumericInterpreter {
 
 extension EquipmentScheduleCell {
     public var numericInterpretation: ScheduleNumericInterpretation {
-        ScheduleNumericInterpreter.interpret(field: field, text: text, unitText: unitText)
+        ScheduleNumericInterpreter.interpret(field: field, text: text, unitText: unitText, definition: unitDefinition)
     }
 }

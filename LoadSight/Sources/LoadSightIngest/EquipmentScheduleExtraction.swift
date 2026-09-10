@@ -17,8 +17,9 @@ public struct EquipmentScheduleColumn: Codable, Equatable, Sendable {
     /// Exact header/unit transcription. Nil means not recorded, not dimensionless or a default unit.
     public var unitText: String?
     public var headerText: String
-    public init(field: EquipmentScheduleField, minX: Double, maxX: Double, unitText: String? = nil, headerText: String) {
-        self.field = field; self.minX = minX; self.maxX = maxX; self.unitText = unitText; self.headerText = headerText
+    public var unitDefinition: ScheduleUnitDefinition?
+    public init(field: EquipmentScheduleField, minX: Double, maxX: Double, unitText: String? = nil, headerText: String, unitDefinition: ScheduleUnitDefinition? = nil) {
+        self.field = field; self.minX = minX; self.maxX = maxX; self.unitText = unitText; self.headerText = headerText; self.unitDefinition = unitDefinition
     }
 }
 public struct EquipmentScheduleRegion: Codable, Equatable, Sendable {
@@ -53,7 +54,8 @@ public struct EquipmentScheduleRequest: Codable, Sendable {
             try keys(region["bodyBounds"], allowed: ["x", "y", "width", "height"], required: ["x", "y", "width", "height"])
             guard let columns = region["columns"].array else { throw LoadSightError.invalid("Schedule columns must be an array.") }
             for column in columns {
-                try keys(column, allowed: ["field", "minX", "maxX", "unitText", "headerText"], required: ["field", "minX", "maxX", "headerText"])
+                try keys(column, allowed: ["field", "minX", "maxX", "unitText", "headerText", "unitDefinition"], required: ["field", "minX", "maxX", "headerText"])
+                if column["unitDefinition"] != .null { try keys(column["unitDefinition"], allowed: ["convention", "source"], required: ["convention", "source"]) }
             }
         }
         return try JSONDecoder().decode(Self.self, from: data)
@@ -62,6 +64,7 @@ public struct EquipmentScheduleRequest: Codable, Sendable {
 public struct EquipmentScheduleCell: Codable, Equatable, Sendable {
     public let field: EquipmentScheduleField
     public let unitText: String?
+    public let unitDefinition: ScheduleUnitDefinition?
     public let text: String?
     public let evidence: [DrawingText]
 }
@@ -199,7 +202,7 @@ public enum EquipmentScheduleExtractor {
                 let rowRect = rowRects[rowIndex]
                 let cells = columns.map { column in
                     let evidence = (buckets[rowIndex][column.field] ?? []).sorted(by: order)
-                    return EquipmentScheduleCell(field: column.field, unitText: column.unitText, text: evidence.isEmpty ? nil : evidence.map(\.text).joined(separator: " "), evidence: evidence)
+                    return EquipmentScheduleCell(field: column.field, unitText: column.unitText, unitDefinition: column.unitDefinition, text: evidence.isEmpty ? nil : evidence.map(\.text).joined(separator: " "), evidence: evidence)
                 }
                 guard let tag = cells.first(where: { $0.field == .tag })?.text else { continue }
                 assigned.formUnion(cells.flatMap(\.evidence).map(\.id))
@@ -249,6 +252,7 @@ public enum EquipmentScheduleExtractor {
         for (index, column) in columns.enumerated() {
             try require(column.minX.isFinite && column.maxX.isFinite && column.minX < column.maxX && column.minX >= region.bodyBounds.rect.minX && column.maxX <= region.bodyBounds.rect.maxX, "Invalid schedule column bounds.")
             try require(!column.headerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "Transcribe the source header for each mapped column.")
+            try column.unitDefinition?.validate(field: column.field, unitText: column.unitText)
             if index > 0 { try require(columns[index - 1].maxX <= column.minX, "Schedule columns overlap.") }
         }
     }

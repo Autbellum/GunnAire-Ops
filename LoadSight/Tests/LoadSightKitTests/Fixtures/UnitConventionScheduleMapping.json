@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "regions": [
+    {
+      "sourceID": "a1be5db6063669e56d2fa940f1ae846fb41aa7b0aa650039de874902dbc89ca5",
+      "pageID": "a1be5db6063669e56d2fa940f1ae846fb41aa7b0aa650039de874902dbc89ca5:1",
+      "bodyBounds": {
+        "x": 40,
+        "y": 520,
+        "width": 480,
+        "height": 160
+      },
+      "columns": [
+        {
+          "field": "tag",
+          "minX": 40,
+          "maxX": 160,
+          "headerText": "TAG"
+        },
+        {
+          "field": "coolingTotal",
+          "minX": 160,
+          "maxX": 320,
+          "headerText": "COOL MBH",
+          "unitText": "MBH"
+        },
+        {
+          "field": "airflow",
+          "minX": 320,
+          "maxX": 430,
+          "headerText": "CFM",
+          "unitText": "CFM"
+        },
+        {
+          "field": "minimumCircuitAmpacity",
+          "minX": 430,
+          "maxX": 520,
+          "headerText": "MCA"
+        }
+      ],
+      "textMode": "nativePDFWords",
+      "recordedBy": "Synthetic fixture author",
+      "mappingBasis": "Controlled fixture header positions; not customer or engineering evidence."
+    }
+  ]
+}
