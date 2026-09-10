@@ -978,6 +978,36 @@ enum GunnAireBackendService {
         }
     }
 
+    /// Only the author can read this bounded, read-only submission history.
+    static func staffWorkspaceFieldUpdatesRequest(path: String) async throws -> Data {
+        guard StaffWorkspaceFieldUpdatesHTTPPolicy.allows(path: path, method: "GET", body: nil),
+              Config.Backend.usesBusinessIdentity, let stamp = CloudKitStaffSetupStamp.current else {
+            throw StaffReplicaDeliveryError.access
+        }
+        let candidates = [AppleAuthManager.shared.sessionToken, GoogleAuthManager.shared.applicationSessionToken].compactMap { $0 }
+        guard let token = candidates.first(where: { !$0.isEmpty && CompanyWorkspaceSession.digest($0) == stamp.session.tokenFingerprint }) else {
+            throw StaffReplicaDeliveryError.access
+        }
+        func check() throws {
+            try Task.checkCancellation()
+            guard CloudKitStaffSetupStamp.current == stamp, Date() < stamp.session.expiresAt else { throw StaffReplicaDeliveryError.access }
+        }
+        try check()
+        var request = try baseRequest(path: path, method: "GET", body: nil)
+        request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 30; request.cachePolicy = .reloadIgnoringLocalCacheData
+        do {
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: StaffWorkspaceFieldUpdatesPage.maximumBytes)
+            try check(); return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let code) = error {
+                throw GunnAireBackendError.server(statusCode: code, message: "Field updates could not be verified. Your original submissions are retained.")
+            }
+            throw StaffReplicaDeliveryPolicy.safe(error)
+        }
+    }
+
     /// Staff (and Admin) GET of an authenticated operational media grant or bytes.
     /// Requires `/content/media` or `/content/media/bytes`; never uses owner-only helpers.
     static func staffWorkspaceMediaRequest(path: String, maximum: Int = 8192) async throws -> Data {

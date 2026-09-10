@@ -193,6 +193,7 @@ struct StaffWorkspaceOperationalHostedWorkspaceView: View {
     @State private var destinations: [StaffWorkspaceOperationalNavDestination] = [.overview]
     @State private var loadError: String?
     @State private var boundIdentity: StaffWorkspaceOperationalIdentityJournal?
+    @State private var showingFieldUpdates = false
 
     var body: some View {
         Group {
@@ -212,6 +213,14 @@ struct StaffWorkspaceOperationalHostedWorkspaceView: View {
                     }
                     .navigationTitle("Staff Workspace")
                     .accessibilityIdentifier("StaffOperationalHostedSidebar")
+                    .toolbar {
+                        if [AppUserRole.admin.rawValue, AppUserRole.dispatcher.rawValue, AppUserRole.fieldTechnician.rawValue].contains(hosted.plan.memberRole) {
+                            ToolbarItem(placement: .primaryAction) {
+                                Button("Submitted Updates", systemImage: "checkmark.message") { showingFieldUpdates = true }
+                                    .accessibilityIdentifier("StaffSubmittedUpdatesButton")
+                            }
+                        }
+                    }
                 } detail: {
                     NavigationStack {
                         StaffWorkspaceOperationalHostedDetailView(
@@ -226,6 +235,7 @@ struct StaffWorkspaceOperationalHostedWorkspaceView: View {
             }
         }
         .modelContainer(hosted.container)
+        .sheet(isPresented: $showingFieldUpdates) { StaffWorkspaceFieldUpdatesView(hosted: hosted) }
         .task(id: taskIdentity) {
             do {
                 if let identity, let account, let deviceFingerprint {

@@ -21,6 +21,8 @@ struct StaffWorkspaceContentDependencies {
     var staffMediaRequest: ((String, Int) async throws -> Data)? = nil
     /// Staff-capable POST for `/content/commands` journal receipt.
     var staffCommandRequest: ((String, Data) async throws -> Data)? = nil
+    /// Staff-author-only GET of historical office outcomes, never owner details.
+    var staffFieldUpdatesRequest: ((String) async throws -> Data)? = nil
     /// Recheck the live account/session fence around every staff await/write.
     /// Test fixtures inject their own fence; live code never trusts context alone.
     var checkStaffSession: (Context) throws -> Void = { _ in }
@@ -39,6 +41,7 @@ struct StaffWorkspaceContentDependencies {
               staffRequest: { try await GunnAireBackendService.staffWorkspaceCloudKeyRequest(path: $0) },
               staffMediaRequest: { try await GunnAireBackendService.staffWorkspaceMediaRequest(path: $0, maximum: $1) },
               staffCommandRequest: { try await GunnAireBackendService.staffWorkspaceCommandRequest(path: $0, body: $1) },
+              staffFieldUpdatesRequest: { try await GunnAireBackendService.staffWorkspaceFieldUpdatesRequest(path: $0) },
               checkStaffSession: { context in
                   guard CloudKitStaffSetupStamp.current == context.stamp else { throw StaffReplicaDeliveryError.access }
               })
@@ -803,6 +806,32 @@ struct StaffWorkspaceContentSummary {
         return try StaffWorkspaceOperationalImportStore.loadPlan(
             store: dependencies.store, scope: context.scope, plan: plan.id,
             check: { try self.staffCheck(context, plan) })
+    }
+
+    /// Discover original submissions across selections, including legacy recorded
+    /// originals no longer present in the local pending index. Never rewrites them.
+    func readFieldUpdates(plan: CloudKitStaffSharePlan, context: CloudKitStaffSetupController.Context,
+                          after: String? = nil, commandID: String? = nil) async throws -> StaffWorkspaceFieldUpdatesPage {
+        try staffCheck(context, plan)
+        guard [AppUserRole.admin.rawValue, AppUserRole.dispatcher.rawValue, AppUserRole.fieldTechnician.rawValue].contains(context.member.role),
+              let read = dependencies.staffFieldUpdatesRequest else { throw StaffReplicaDeliveryError.access }
+        let path = StaffWorkspaceFieldUpdatesHTTPPolicy.path(plan: plan, scope: context.scope, after: after, commandID: commandID)
+        guard StaffWorkspaceFieldUpdatesHTTPPolicy.allows(path: path, method: "GET", body: nil) else { throw StaffReplicaDeliveryError.invalid }
+        let bytes = try await read(path)
+        try staffCheck(context, plan)
+        let page = try StaffWorkspacePublicationContract.decode(StaffWorkspaceFieldUpdatesPage.self, from: bytes,
+            maximum: StaffWorkspaceFieldUpdatesPage.maximumBytes)
+        try page.validate(scope: context.scope, plan: plan, after: after, commandID: commandID)
+        for entry in page.entries {
+            if let original = try StaffWorkspaceOperationalCommandStore.load(store: dependencies.store,
+                scope: context.scope, plan: plan.id, commandID: entry.id) {
+                guard original.request == entry.request, original.receipt == nil || original.receipt == entry.receipt else {
+                    throw StaffReplicaDeliveryError.changed
+                }
+            }
+        }
+        try staffCheck(context, plan)
+        return page
     }
 
     /// OPERATIONS-policy write against an imported plan: records command intent only

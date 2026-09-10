@@ -37,6 +37,7 @@ try:
     from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads
     from Backend import document_storage
     from Backend import staff_owner_field_edits
+    from Backend import staff_workspace_field_updates
     from Backend.qbo_document_provider import DocumentQBOProvider
     from Backend import time_worker_mappings, time_publications, cloudkit_staff_shares, staff_replica, staff_workspace_source, staff_workspace_selections, staff_billing_delivery, staff_workspace_delivery, staff_workspace_cloud, staff_workspace_media, staff_workspace_commands
     from Backend.time_worker_provider import TimeWorkerQBOProvider
@@ -53,6 +54,7 @@ except ModuleNotFoundError:
     import google_connections
     import document_storage
     import staff_owner_field_edits
+    import staff_workspace_field_updates
     import google_mail
     import qbo_change_capture
     import qbo_document_uploads
@@ -4243,6 +4245,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
 
     def handle_cloudkit_staff_share(self, parsed, *, method):
         parts = parsed.path.removeprefix("/api/workspace/staff-shares/").split("/")
+        if len(parts) >= 2 and parts[1] == "field-updates":
+            self.handle_staff_field_updates(parsed, method=method, parts=parts)
+            return
         if len(parts) >= 2 and parts[1] == "full-selections":
             self.handle_staff_workspace_selection(parsed, method=method, parts=parts)
             return
@@ -4284,6 +4289,29 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         except (sqlite3.Error, RuntimeError):
             self.write_json({"error": "Sharing storage is unavailable. Keep the original request for recovery.",
                              "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+
+    def handle_staff_field_updates(self, parsed, *, method, parts):
+        if not self.require_application_session():
+            return
+        shares = cloudkit_staff_shares.StaffShares(db, record_audit_event,
+            encrypt=encrypt_catalog_payload, decrypt=decrypt_catalog_payload)
+        try:
+            if method != "GET" or len(parts) not in (2, 3):
+                raise cloudkit_staff_shares.fail("not_found", "Field update action not found.", 404)
+            query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+            if any(len(value) != 1 for value in query.values()):
+                raise cloudkit_staff_shares.fail("invalid_query", "Use one value per query field.", 400)
+            result = staff_workspace_field_updates.StaffWorkspaceFieldUpdates(shares).read_updates(
+                self._application_session_id, parts[0], parts[2] if len(parts) == 3 else None,
+                {key: value[0] for key, value in query.items()})
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError, RecursionError):
+            self.write_json({"error": "Invalid field update query", "code": "invalid_request"}, status=400)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Field updates are unavailable. Original submissions are retained.",
+                             "code": "storage_unavailable"}, status=503)
 
     def handle_staff_workspace_selection(self, parsed, *, method, parts):
         if not self.require_application_session():

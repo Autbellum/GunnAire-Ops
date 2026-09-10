@@ -46,6 +46,8 @@ def initialize_schema(connection):
         payload TEXT NOT NULL,
         created_at TEXT NOT NULL
     )""")
+    connection.execute("""CREATE INDEX IF NOT EXISTS staff_workspace_commands_author
+        ON staff_workspace_commands(share_id, actor_email, command_id)""")
 
 
 def validate_value(kind, field_name, value):
