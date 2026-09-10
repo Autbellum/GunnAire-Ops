@@ -297,35 +297,29 @@ struct StaffWorkspaceOperationalHostedDetailView: View {
         List {
             if destination == .overview, let identity {
                 Section {
-                    LabeledContent("Environment", value: identity.environment)
-                    LabeledContent("Account", value: StaffWorkspaceOperationalDetail.shortRecordID(
-                        identity.participantAccountHash))
-                    LabeledContent("Device", value: "This device")
+                    LabeledContent("Workspace", value: identity.environment == "production" ? "Live business" : "Test workspace")
+                    Label("Company account verified", systemImage: "person.crop.circle.badge.checkmark")
                 } header: {
-                    Text("Signed identity")
+                    Text("Company access")
                 }
                 .accessibilityIdentifier("StaffOperationalIdentityBound")
             }
 
             Section {
-                LabeledContent(
-                    "Selection",
-                    value: StaffWorkspaceOperationalDetail.shortRecordID(hosted.journal.selectionID))
-                LabeledContent("Records", value: "\(hosted.journal.recordCount)")
-                LabeledContent("Sequence", value: "\(hosted.journal.sourceSequence)")
+                Text("\(filtered.count) shared records available")
             } header: {
                 Text(destination.title)
             }
 
-            Section("Projection") {
+            Section("Records") {
                 if filtered.isEmpty {
-                    Text("No \(destination.title.lowercased()) records in this staff projection.")
+                    Text("No \(destination.title.lowercased()) records in this shared workspace.")
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(filtered, id: \.recordID) { row in
                         let summary = StaffWorkspaceOperationalDetail.summary(for: row)
                         NavigationLink {
-                            StaffWorkspaceOperationalRecordDetailView(row: row)
+                            StaffWorkspaceOperationalRecordDetailView(row: row, hosted: hosted)
                         } label: {
                             StaffWorkspaceOperationalProjectionRowLabel(summary: summary)
                         }
@@ -373,6 +367,8 @@ struct StaffWorkspaceOperationalProjectionRowLabel: View {
 /// Does not decode or display `structuredFieldsJSON` owner extras as scalars.
 struct StaffWorkspaceOperationalRecordDetailView: View {
     let row: StaffWorkspaceOperationalProjectionRecord
+    var hosted: StaffWorkspaceOperationalHostedStore? = nil
+    @State private var editingField: String?
 
     private var detail: StaffWorkspaceOperationalDetail.RecordDetail {
         StaffWorkspaceOperationalDetail.detail(for: row)
@@ -383,11 +379,6 @@ struct StaffWorkspaceOperationalRecordDetailView: View {
         List {
             Section {
                 LabeledContent("Kind", value: detail.summary.kindBadge)
-                LabeledContent(
-                    "Record ID",
-                    value: StaffWorkspaceOperationalDetail.shortRecordID(detail.recordID))
-                LabeledContent("Revision", value: "\(detail.revision)")
-                LabeledContent("Body", value: detail.bodyKind)
             } header: {
                 Text(detail.summary.title)
             }
@@ -398,20 +389,42 @@ struct StaffWorkspaceOperationalRecordDetailView: View {
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(detail.fields) { field in
-                        LabeledContent(field.label) {
-                            Text(field.displayValue)
-                                .foregroundStyle(field.isRestricted ? .orange : .primary)
-                                .multilineTextAlignment(.trailing)
+                        if canEdit(field) {
+                            Button { editingField = field.key } label: {
+                                LabeledContent(field.label) {
+                                    HStack {
+                                        Text(field.displayValue).multilineTextAlignment(.trailing)
+                                        Image(systemName: "pencil").accessibilityHidden(true)
+                                    }
+                                }
+                            }
+                            .accessibilityLabel("Edit " + field.label)
+                            .accessibilityIdentifier("StaffOperationalEdit." + field.key)
+                        } else {
+                            LabeledContent(field.label) {
+                                Text(field.displayValue)
+                                    .foregroundStyle(field.isRestricted ? .orange : .primary)
+                                    .multilineTextAlignment(.trailing)
+                            }
+                            .accessibilityIdentifier("StaffOperationalRecordDetail.field.\(field.key)")
                         }
-                        .accessibilityIdentifier(
-                            "StaffOperationalRecordDetail.field.\(field.key)")
                     }
                 }
             }
         }
         .navigationTitle(detail.summary.title)
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: Binding(get: { editingField != nil }, set: { if !$0 { editingField = nil } })) {
+            if let hosted, let field = editingField { StaffWorkspaceFieldEditorView(hosted: hosted, row: row, field: field) }
+        }
         .accessibilityIdentifier(
             "StaffOperationalRecordDetail.\(detail.kind).\(detail.recordID)")
+    }
+    private func canEdit(_ field: StaffWorkspaceOperationalDetail.FieldRow) -> Bool {
+        guard let hosted, !field.isRestricted,
+              [AppUserRole.admin.rawValue, AppUserRole.dispatcher.rawValue, AppUserRole.fieldTechnician.rawValue].contains(hosted.plan.memberRole),
+              StaffWorkspaceOperationalCommandPolicy.isOperationsField(kind: row.kind, field: field.key),
+              let schema = StaffWorkspaceModelCatalog.all.first(where: { $0.kind == row.kind })?.fieldSchema[field.key] else { return false }
+        return schema.reference == nil && schema.type != .identifier
     }
 }

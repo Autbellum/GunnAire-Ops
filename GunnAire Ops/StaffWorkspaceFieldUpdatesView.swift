@@ -23,6 +23,8 @@ struct StaffWorkspaceFieldUpdatesDependencies {
     private var generation = UUID()
     private var displayStamp: CloudKitStaffSetupStamp?
     init(dependencies: StaffWorkspaceFieldUpdatesDependencies? = nil) { self.dependencies = dependencies ?? .live }
+    // This UI controller has no actor-bound teardown work.
+    nonisolated deinit {}
 
     func clear() {
         generation = UUID(); entries = []; nextCursor = ""; checkedAt = nil; displayStamp = nil; isRunning = false

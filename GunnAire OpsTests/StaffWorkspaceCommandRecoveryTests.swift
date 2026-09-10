@@ -153,16 +153,21 @@ import XCTest
         try f.enqueue()
         let pending = f.memory.saved
         var lostReply = true, calls = 0
+        var beforeFailure: [String: Data]?
         f.transport = { _, bytes in
             calls += 1
             XCTAssertEqual(bytes, try StaffWorkspacePublicationContract.encode(f.request))
-            if lostReply { throw StaffReplicaDeliveryError.unavailable }
+            if lostReply { beforeFailure = f.memory.saved; throw StaffReplicaDeliveryError.unavailable }
             return try StaffWorkspacePublicationContract.encode(f.receipt())
         }
         let failed = try await f.recover()
         XCTAssertEqual(failed, .init(recorded: 0, pending: 1))
-        XCTAssertEqual(f.memory.saved, pending)
+        XCTAssertEqual(f.memory.saved, try XCTUnwrap(beforeFailure), "No writes after the failed response")
+        for (key, value) in pending { XCTAssertEqual(f.memory.saved[key], value) }
+        XCTAssertEqual(try StaffWorkspaceFieldEditorStore.reference(store: f.memory.store, scope: f.context.scope,
+            plan: f.plan.id, kind: f.request.recordKind, recordID: f.request.recordID, field: f.request.fieldName)?.requests, [f.request])
         lostReply = false
+        f.memory.saved = pending
         f.memory.writes = 0
         _ = try await f.recover()
         let boundaries = f.memory.writes
@@ -188,12 +193,15 @@ import XCTest
         let f = try Fixture(); defer { f.cleanup() }
         try f.enqueue()
         let pending = f.memory.saved
+        var beforeRevocation: [String: Data]?
         f.transport = { _, _ in
+            beforeRevocation = f.memory.saved
             f.allowed = false
             return try StaffWorkspacePublicationContract.encode(f.receipt())
         }
         do { _ = try await f.recover(); XCTFail("Account change must escape fail-soft recovery") } catch {}
-        XCTAssertEqual(f.memory.saved, pending)
+        XCTAssertEqual(f.memory.saved, try XCTUnwrap(beforeRevocation), "No receipt or reference writes after account loss")
+        for (key, value) in pending { XCTAssertEqual(f.memory.saved[key], value) }
         XCTAssertEqual(try StaffWorkspaceOperationalCommandStore.listPending(store: f.memory.store,
             scope: f.context.scope, plan: f.plan.id).count, 1)
     }

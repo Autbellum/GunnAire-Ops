@@ -76,12 +76,26 @@ struct StaffReplicaReceiveDependencies {
     /// Account + device fingerprint used with the published identity for requireBound.
     @Published private(set) var presentationAccount: CompanyCloudKitAccount?
     @Published private(set) var presentationDeviceFingerprint: String?
+    private var editingContext: Context?
+    private var editingPlan: CloudKitStaffSharePlan?
     private var generation = UUID()
     init(dependencies: StaffReplicaReceiveDependencies? = nil) { self.dependencies = dependencies ?? .live }
+    // No cleanup callbacks or actor-state changes are needed when releasing it.
+    nonisolated deinit {}
     func clearDisplay() {
         generation = UUID(); received = nil; hostedStore = nil
         operationalIdentity = nil; presentationAccount = nil; presentationDeviceFingerprint = nil
+        editingContext = nil; editingPlan = nil
         message = "Waiting for shared business data."
+    }
+    /// Reuse only this still-authorized, hosted session for offline local capture.
+    /// Never grants the owner store or revives a previous account's cached context.
+    func fieldEditingAuthority(for hosted: StaffWorkspaceOperationalHostedStore) throws -> (Context, CloudKitStaffSharePlan) {
+        guard hostedStore === hosted, let context = editingContext, let plan = editingPlan,
+              hosted.journal.scope == context.scope, hosted.journal.planID == plan.id else { throw StaffReplicaDeliveryError.access }
+        try check(context, plan, generation)
+        if isRunning { throw StaffReplicaDeliveryError.pending }
+        return (context, plan)
     }
     /// Fresh setup reads recover the original accepted invitation while the
     /// authenticated staff device is waiting at the company gate.
@@ -179,6 +193,7 @@ struct StaffReplicaReceiveDependencies {
                             }
                             if let hosted = publishedHost {
                                 hostedStore = hosted
+                                editingContext = context; editingPlan = plan
                                 message = "Core records received. Operational workspace hosted for staff projection."
                                 // Fail-soft identity-v1: host remains valid if bind is pending.
                                 if let loadIdentity = dependencies.loadOperationalIdentity,

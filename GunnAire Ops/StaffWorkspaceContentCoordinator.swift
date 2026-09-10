@@ -138,6 +138,10 @@ struct StaffWorkspaceContentSummary {
     let dependencies: StaffWorkspaceContentDependencies
     private var running = false
     init(dependencies: StaffWorkspaceContentDependencies) { self.dependencies = dependencies }
+    // No actor-bound cleanup: only release stored values/closures. A synthesized
+    // executor hop aborts during synchronous disposal on the iOS 26.2 runtime.
+    // Operational methods and mutable state remain MainActor-isolated.
+    nonisolated deinit {}
     static func key(_ source: StaffReplicaSourceScope, _ plan: UUID) -> String {
         "full-staff-content-v1\n" + source.key + "\n" + plan.uuidString.lowercased()
     }
@@ -703,6 +707,88 @@ struct StaffWorkspaceContentSummary {
         return try await sendOriginalOperationalCommand(request, plan: plan, context: context)
     }
 
+    func fieldEditorSnapshot(plan: CloudKitStaffSharePlan, context: CloudKitStaffSetupController.Context,
+                             selectionID: String, sourceSequence: Int, contentSHA256: String,
+                             kind: String, recordID: String, revision: Int, field: String) throws -> StaffWorkspaceFieldEditorSnapshot {
+        try staffCheck(context, plan)
+        guard [AppUserRole.admin.rawValue, AppUserRole.dispatcher.rawValue, AppUserRole.fieldTechnician.rawValue].contains(context.member.role) else {
+            throw StaffReplicaDeliveryError.access
+        }
+        let view = try acceptMountedOperationalView(plan: plan, context: context)
+        guard view.selectionID == selectionID, view.sourceSequence == sourceSequence, view.contentSHA256 == contentSHA256,
+              view.replicaID == plan.replicaID.uuidString.lowercased(),
+              let candidate = try StaffWorkspaceOperationalCommandStore.candidates(from: view).first(where: {
+                  $0.recordKind == kind && $0.recordID == recordID && $0.fieldName == field && $0.revision == revision
+              }) else { throw StaffReplicaDeliveryError.changed }
+        return .init(scope: context.scope, planID: plan.id, selectionID: selectionID, sourceSequence: sourceSequence,
+                     contentSHA256: contentSHA256, candidate: candidate)
+    }
+
+    func fieldEditorHistory(_ snapshot: StaffWorkspaceFieldEditorSnapshot, plan: CloudKitStaffSharePlan,
+                            context: CloudKitStaffSetupController.Context) throws -> [StaffWorkspaceOperationalCommandJournal] {
+        try staffCheck(context, plan)
+        guard snapshot.scope == context.scope, snapshot.planID == plan.id,
+              [AppUserRole.admin.rawValue, AppUserRole.dispatcher.rawValue, AppUserRole.fieldTechnician.rawValue].contains(context.member.role),
+              CloudKitStaffSetupPolicy.canonicalID(snapshot.candidate.recordID),
+              StaffWorkspaceOperationalCommandPolicy.isOperationsField(kind: snapshot.candidate.recordKind, field: snapshot.candidate.fieldName) else {
+            throw StaffReplicaDeliveryError.access
+        }
+        let c = snapshot.candidate
+        let history = try StaffWorkspaceFieldEditorStore.history(store: dependencies.store, scope: context.scope,
+            plan: plan, kind: c.recordKind, recordID: c.recordID, field: c.fieldName)
+        try staffCheck(context, plan)
+        return history
+    }
+
+    /// Commit locally before any network await. A stale editor must be reviewed,
+    /// not rebased. An interrupted queue write is recovered through the original index.
+    func queueFieldEditorUpdate(_ snapshot: StaffWorkspaceFieldEditorSnapshot, plan: CloudKitStaffSharePlan,
+                                context: CloudKitStaffSetupController.Context, commandID: UUID,
+                                value: StaffWorkspaceValue) throws -> StaffWorkspaceOperationalCommandJournal {
+        try staffCheck(context, plan)
+        guard snapshot.scope == context.scope, snapshot.planID == plan.id else { throw StaffReplicaDeliveryError.access }
+        let key = "full-staff-content-command-v1\n" + context.scope.key + "\n" + plan.id.uuidString.lowercased()
+        let lock = try SharedTimeMutationGate.begin(key)
+        defer { SharedTimeMutationGate.finish(key, id: lock) }
+        let request = try snapshot.request(plan: plan, commandID: commandID, value: value)
+        let history = try fieldEditorHistory(snapshot, plan: plan, context: context)
+        if let original = history.first(where: { $0.request.commandID == request.commandID }) {
+            guard original.request == request else { throw StaffReplicaDeliveryError.changed }
+            try StaffWorkspaceFieldEditorStore.remember(store: dependencies.store, scope: context.scope, plan: plan,
+                original: original, check: { try self.staffCheck(context, plan) })
+            return original
+        }
+        guard !history.contains(where: { $0.state == "pending" }), !snapshot.alreadySubmitted(value, history: history), value != snapshot.candidate.currentValue else {
+            throw StaffReplicaDeliveryError.changed
+        }
+        let c = snapshot.candidate
+        let current = try fieldEditorSnapshot(plan: plan, context: context, selectionID: snapshot.selectionID,
+            sourceSequence: snapshot.sourceSequence, contentSHA256: snapshot.contentSHA256, kind: c.recordKind,
+            recordID: c.recordID, revision: c.revision, field: c.fieldName)
+        guard current == snapshot else { throw StaffReplicaDeliveryError.changed }
+        let original = try StaffWorkspaceOperationalCommandStore.enqueue(store: dependencies.store, scope: context.scope,
+            plan: plan.id, request: request, check: { try self.staffCheck(context, plan) })
+        try StaffWorkspaceFieldEditorStore.remember(store: dependencies.store, scope: context.scope, plan: plan,
+            original: original, check: { try self.staffCheck(context, plan) })
+        return original
+    }
+
+    /// Only an already durable original may use this retry, even if its mounted
+    /// selection has advanced. It cannot create a new command from UI parameters.
+    func sendFieldEditorUpdate(_ original: StaffWorkspaceOperationalCommandJournal, plan: CloudKitStaffSharePlan,
+                               context: CloudKitStaffSetupController.Context) async throws -> StaffWorkspaceOperationalCommandJournal {
+        try staffCheck(context, plan); try original.validate(scope: context.scope, plan: plan.id)
+        guard [AppUserRole.admin.rawValue, AppUserRole.dispatcher.rawValue, AppUserRole.fieldTechnician.rawValue].contains(context.member.role) else {
+            throw StaffReplicaDeliveryError.access
+        }
+        let key = "full-staff-content-command-v1\n" + context.scope.key + "\n" + plan.id.uuidString.lowercased()
+        let lock = try SharedTimeMutationGate.begin(key)
+        defer { SharedTimeMutationGate.finish(key, id: lock) }
+        try StaffWorkspaceFieldEditorStore.remember(store: dependencies.store, scope: context.scope, plan: plan,
+            original: original, check: { try self.staffCheck(context, plan) })
+        return try await sendOriginalOperationalCommand(original.request, plan: plan, context: context)
+    }
+
     /// Retries the saved request, never reconstructing it from a newer mount.
     private func sendOriginalOperationalCommand(_ request: StaffWorkspaceOperationalCommandRequest,
         plan: CloudKitStaffSharePlan, context: CloudKitStaffSetupController.Context) async throws -> StaffWorkspaceOperationalCommandJournal {
@@ -715,6 +801,10 @@ struct StaffWorkspaceContentSummary {
             store: dependencies.store, scope: context.scope, plan: plan.id, request: request,
             check: { try self.staffCheck(context, plan) })
         if pending.state == "recorded" { return pending }
+        // Recover the field's discoverability pointer before receipt recovery can
+        // remove its original from the global pending index (including background retries).
+        try StaffWorkspaceFieldEditorStore.remember(store: dependencies.store, scope: context.scope, plan: plan,
+            original: pending, check: { try self.staffCheck(context, plan) })
         guard let staffCommandRequest = dependencies.staffCommandRequest else { throw StaffReplicaDeliveryError.unavailable }
         let path = StaffWorkspaceContentHTTPPolicy.root(plan) + "/" + request.selectionID + "/content/commands"
         let body = try StaffWorkspacePublicationContract.encode(request)

@@ -379,8 +379,9 @@ final class StaffWorkspaceOperationalHostTests: XCTestCase {
         XCTAssertTrue(failSoft.message.contains("Operational workspace ready for staff projection"))
         XCTAssertFalse(failSoft.message.contains("hosted for staff projection"))
 
+        var editingAllowed = true
         let success = StaffReplicaReceiveController(dependencies: .init(
-            check: { _ in },
+            check: { _ in if !editingAllowed { throw StaffReplicaDeliveryError.access } },
             download: { _, _, _ in manifest },
             receiveFullWorkspace: { _, _, _ in
                 .init(selectionID: ready.selectionID, alreadyLeased: false,
@@ -397,5 +398,17 @@ final class StaffWorkspaceOperationalHostTests: XCTestCase {
             now: { base.now }))
         _ = await success.refresh(context: context, plan: plan, invitation: invitation)
         XCTAssertTrue(success.message.contains("Operational workspace hosted for staff projection"))
+        let hosted = try XCTUnwrap(success.hostedStore)
+        XCTAssertEqual(try success.fieldEditingAuthority(for: hosted).0.stamp, context.stamp)
+        XCTAssertEqual(try success.fieldEditingAuthority(for: hosted).1, plan)
+        XCTAssertThrowsError(try failSoft.fieldEditingAuthority(for: hosted))
+        let otherHandle = StaffWorkspaceOperationalHostedStore(journal: hosted.journal, activated: hosted.activated)
+        HostTestRetain.hosted.append(otherHandle)
+        XCTAssertThrowsError(try success.fieldEditingAuthority(for: otherHandle))
+        editingAllowed = false
+        XCTAssertThrowsError(try success.fieldEditingAuthority(for: hosted))
+        editingAllowed = true
+        success.clearDisplay()
+        XCTAssertThrowsError(try success.fieldEditingAuthority(for: hosted))
     }
 }
