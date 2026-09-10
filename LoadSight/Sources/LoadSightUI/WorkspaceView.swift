@@ -12,12 +12,14 @@ public struct LoadSightWorkspaceView: View {
     @State private var mappingMaterial: ItemSelection?
     @State private var exportingWorkbook = false
     @State private var workbook: WorkbookExportDocument?
+    @StateObject private var workbookPreparation = WorkbookPreparation()
     @State private var editing: ItemSelection?
     @State private var reviewing: ItemSelection?
     @State private var errorMessage: String?
-    private let sections = ["Overview", "Drawings", "Takeoff", "Estimate", "QA", "Requirements", "RFIs", "Change orders", "Attachments", "Sources", "Calculations"]
+    private let sections = ["Overview", "Drawings", "Extraction", "Takeoff", "Estimate", "QA", "Requirements", "RFIs", "Change orders", "Attachments", "Sources", "Calculations"]
     public init(document: Binding<LoadSightDocument>, opsContexts: [OpsProjectContext] = [], catalogMaterials: [OpsMaterialCatalogSnapshot] = []) { _document = document; self.opsContexts = opsContexts; self.catalogMaterials = catalogMaterials }
     public var body: some View {
+        let workbookReceiptID = workbookPreparation.readyID
         NavigationSplitView {
             List(sections, id: \.self, selection: $section) { title in
                 Label(title, systemImage: symbol(title)).tag(title)
@@ -27,6 +29,7 @@ public struct LoadSightWorkspaceView: View {
             Group {
                 switch section {
                 case "Drawings": DrawingsWorkspaceView(document: $document)
+                case "Extraction": MechanicalTextWorkspace(document: $document)
                 case "Takeoff": takeoff
                 case "Estimate": CommercialWorkspaceView(document: $document)
                 case "QA": QAWorkspaceView(document: $document)
@@ -50,9 +53,25 @@ public struct LoadSightWorkspaceView: View {
                 }
             }
         }
-        .fileExporter(isPresented: $exportingWorkbook, document: workbook, contentType: WorkbookExportDocument.contentType, defaultFilename: "LoadSight-Takeoff") { result in
+        .fileExporter(isPresented: $exportingWorkbook, document: workbook, contentTypes: [WorkbookExportDocument.contentType], defaultFilename: "LoadSight-Takeoff") { result in
+            guard workbookPreparation.finish(receiptID: workbookReceiptID, currentDocumentSessionID: document.editSessionID) else { return }
             if case .failure(let error) = result { errorMessage = error.localizedDescription }
+            workbook = nil
+        } onCancellation: {
+            if workbookPreparation.finish(receiptID: workbookReceiptID, currentDocumentSessionID: document.editSessionID) { workbook = nil }
         }
+        .onChange(of: workbookPreparation.readyID) { _, id in
+            guard id != nil, workbookPreparation.documentSessionID == document.editSessionID,
+                  let data = workbookPreparation.data else { return }
+            workbook = WorkbookExportDocument(data: data); exportingWorkbook = true
+        }
+        .onChange(of: workbookPreparation.failure) { _, message in
+            if let message { errorMessage = message }
+        }
+        .onChange(of: document.editSessionID) { _, _ in
+            workbookPreparation.cancel(); exportingWorkbook = false; workbook = nil
+        }
+        .onDisappear { workbookPreparation.cancel() }
         .sheet(item: $mappingMaterial) { selected in CatalogMaterialEditor(document: $document, itemID: selected.id, choices: catalogMaterials) }
         .sheet(item: $reviewing) { selected in ItemReviewEditor(document: $document, id: selected.id) }
         .alert("Unable to save change", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
@@ -129,10 +148,25 @@ public struct LoadSightWorkspaceView: View {
                 }
             }
         }.searchable(text: $search, prompt: "Find an item, source, or RFI")
-        .toolbar { Button("Export XLSX") {
-            do { workbook = WorkbookExportDocument(data: try TakeoffWorkbook.xlsx(document.project, drawings: document.drawings)); exportingWorkbook = true }
-            catch { errorMessage = error.localizedDescription }
-        } }
+        .toolbar {
+            if workbookPreparation.isPreparing {
+                ProgressView().accessibilityLabel("Preparing workbook")
+                Button("Cancel export") { workbookPreparation.cancel() }.accessibilityIdentifier("CancelWorkbookPreparation")
+            } else {
+                Button("Export XLSX") {
+                    workbookPreparation.start(project: document.project, drawings: document.drawings, documentSessionID: document.editSessionID)
+                }.disabled(exportingWorkbook || workbookPreparation.readyID != nil).accessibilityIdentifier("PrepareWorkbookExport")
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if workbookPreparation.isPreparing {
+                VStack(alignment: .leading) {
+                    Text(workbookPreparation.stage)
+                    Text("The workbook uses the project snapshot captured when preparation started.").font(.caption)
+                }.padding().frame(maxWidth: .infinity, alignment: .leading).background(.regularMaterial)
+                .accessibilityIdentifier("WorkbookPreparationStatus")
+            }
+        }
         .overlay { if document.project.items.isEmpty { ContentUnavailableView("No takeoff items", systemImage: "list.bullet.rectangle", description: Text("Open a workbench project to review its takeoff.")) } }
     }
     private func register(_ key: String, title: String, primary: String, secondary: String) -> some View {

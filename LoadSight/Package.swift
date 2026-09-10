@@ -17,6 +17,7 @@ let package = Package(
         .executableTarget(name: "LoadSightCLI", dependencies: ["LoadSightKit"]),
         .target(name: "LoadSightUI", dependencies: ["LoadSightKit"]),
         .executableTarget(name: "LoadSightApp", dependencies: ["LoadSightUI"]),
+        .target(name: "LoadSightSDKExample", dependencies: ["LoadSightKit"], path: "Examples/SDKClient", exclude: ["README.md"]),
         .testTarget(name: "LoadSightKitTests", dependencies: ["LoadSightKit", "LoadSightUI"], resources: [.copy("Fixtures")])
     ]
 )

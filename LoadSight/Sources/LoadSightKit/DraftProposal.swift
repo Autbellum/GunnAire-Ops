@@ -5,8 +5,9 @@ import CoreText
 /// Draft-only document output. Final release and authenticated approval are separate workflows.
 public enum DraftProposal {
     public static func pdf(_ project: ProjectDocument, generatedAt: Date = Date()) throws -> Data {
+        try require(generatedAt.timeIntervalSince1970.isFinite, "Proposal generation time must be finite.")
         try project.validate(); try project.validateMarkupQuantities()
-        let review = try EstimatePricing.review(project)
+        let review = try EstimatePricing.review(project, asOf: generatedAt)
         let text = NSMutableAttributedString(string: "")
         let ink = CGColor(gray: 0.12, alpha: 1)
         var pendingGroup: String?

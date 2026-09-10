@@ -3,6 +3,7 @@ import Foundation
 /// Editable review copy. Exporting neither transmits nor resolves the request.
 public enum RFIWordDocument {
     public static func docx(_ project: ProjectDocument, rfiID: String, generatedAt: Date = Date()) throws -> Data {
+        try require(generatedAt.timeIntervalSince1970.isFinite, "RFI generation time must be finite.")
         try project.validatePortableProject()
         let matches = (project.root["rfis"].array ?? []).filter { $0["id"].string == rfiID }
         try require(matches.count == 1, "Select one existing RFI to export.")
@@ -80,4 +81,3 @@ public enum RFIWordDocument {
         return try WordPackage.encode(paragraphs)
     }
 }
-

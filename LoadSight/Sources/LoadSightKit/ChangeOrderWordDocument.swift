@@ -2,6 +2,7 @@ import Foundation
 
 public enum ChangeOrderWordDocument {
     public static func docx(_ project: ProjectDocument, changeOrderID: String, generatedAt: Date = Date()) throws -> Data {
+        try require(generatedAt.timeIntervalSince1970.isFinite, "Change-order generation time must be finite.")
         try project.validatePortableProject()
         guard let record = try project.changeOrders().first(where: { $0.id == changeOrderID }) else { throw LoadSightError.invalid("Select an existing change order to export.") }
         let draft = record.draft, review = try draft.review()
