@@ -3,13 +3,30 @@ import UniformTypeIdentifiers
 import LoadSightKit
 
 public struct LoadSightDocument: FileDocument {
+    /// Memory-only identity: copies retain it, opening/restoring starts a new
+    /// session even if the project bytes are identical.
+    private(set) var editSessionID = UUID()
+    /// Close/discard revokes pending results before the view disappears.
+    mutating func invalidatePendingEdits() { editSessionID = UUID() }
     public static let projectType = UTType(exportedAs: "com.gunnaire.loadsight.project", conformingTo: .package)
     public static let readableContentTypes: [UTType] = [projectType, .json]
     public var project: ProjectDocument
     public private(set) var drawings = DrawingArchive()
+    mutating func applyEdit(for expectedSessionID: UUID, _ edit: (inout LoadSightDocument) throws -> Void) throws {
+        guard editSessionID == expectedSessionID else {
+            throw LoadSightError.invalid("The project changed while this operation was running. Its result was not added to the replacement project.")
+        }
+        var candidate = self
+        try edit(&candidate)
+        self = candidate
+    }
     public init(project: ProjectDocument) throws {
         self.project = project
         drawings = try DrawingArchive(projectJSON: project.root["nativeDrawings"])
+        try validateMarkup()
+    }
+    public init(recoveryDraft: WorkspaceRecoveryDraft) throws {
+        project = try recoveryDraft.restoredProject(); drawings = recoveryDraft.drawings
         try validateMarkup()
     }
     public init() {

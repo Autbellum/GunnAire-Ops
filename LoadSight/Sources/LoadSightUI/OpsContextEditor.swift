@@ -5,6 +5,7 @@ struct OpsContextEditor: View {
     @Binding var document: LoadSightDocument
     let choices: [OpsProjectContext]
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.loadSightDocumentStorage) private var documentStorage
     @State private var selection = ""
     @State private var author = ""
     @State private var reason = ""
@@ -34,7 +35,7 @@ struct OpsContextEditor: View {
                         .accessibilityIdentifier("OpsContextSelection")
                         if let selected { OpsContextSummary(context: selected) }
                     }
-                    Text("Changing or removing the link preserves its history and reopens project QA. Export the project to retain the link.").font(.caption).foregroundStyle(.secondary)
+                    Text("Changing or removing the link preserves its history and reopens project QA. " + documentStorage.linkRetentionGuidance).font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Link evidence") {
                     TextField("Recorded by", text: $author).accessibilityIdentifier("OpsContextAuthor")

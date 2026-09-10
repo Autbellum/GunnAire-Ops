@@ -5,6 +5,8 @@ import LoadSightKit
 struct AttachmentsWorkspaceView: View {
     @Binding var document: LoadSightDocument
     @State private var importing = false
+    @State private var importDestinationID: UUID?
+    @State private var worker: Task<Void, Never>?
     @State private var busy = false
     @State private var author = ""
     @State private var source = ""
@@ -23,7 +25,9 @@ struct AttachmentsWorkspaceView: View {
                     Text("Project-wide attachment").tag("")
                     ForEach(document.project.root["rfis"].array ?? [], id: \.attachmentReferenceID) { rfi in Text(rfi["id"].string ?? "").tag(rfi["id"].string ?? "") }
                 }
-                Button("Choose attachment") { importing = true }.disabled(busy || author.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("Choose attachment") {
+                    importDestinationID = document.editSessionID; importing = true
+                }.disabled(busy || author.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 Text("Original bytes are retained in this project. Attachments are limited to 64 MB each. Importing evidence reopens QA and does not resolve an RFI.").font(.caption).foregroundStyle(.secondary)
                 if busy { ProgressView("Reading attachment…") }
                 if let message { Text(message).font(.caption) }
@@ -46,9 +50,11 @@ struct AttachmentsWorkspaceView: View {
             switch result {
             case .failure(let error): failure = error.localizedDescription
             case .success(let url):
+                guard let destinationID = importDestinationID, destinationID == document.editSessionID else { return }
                 let recorder = author, purpose = source, linkedRFI = rfiID
                 busy = true; failure = nil; message = nil
-                Task {
+                worker = Task {
+                    defer { busy = false; worker = nil }
                     do {
                         let bytes = try await Task.detached(priority: .userInitiated) {
                             let granted = url.startAccessingSecurityScopedResource()
@@ -58,16 +64,20 @@ struct AttachmentsWorkspaceView: View {
                             try require((values.fileSize ?? Int.max) <= ProjectAttachment.maximumBytes, "Attachments are limited to 64 MB each.")
                             return try Data(contentsOf: url)
                         }.value
-                        try document.project.addAttachment(data: bytes, filename: url.lastPathComponent, author: recorder, source: purpose, rfiID: linkedRFI.isEmpty ? nil : linkedRFI)
+                        try Task.checkCancellation()
+                        try document.applyEdit(for: destinationID) {
+                            try $0.project.addAttachment(data: bytes, filename: url.lastPathComponent, author: recorder, source: purpose, rfiID: linkedRFI.isEmpty ? nil : linkedRFI)
+                        }
                         message = "Attachment retained: \(url.lastPathComponent)"
-                    } catch { failure = error.localizedDescription }
-                    busy = false
+                    } catch is CancellationError { /* Leaving cancels the pending import. */ }
+                    catch { failure = error.localizedDescription }
                 }
             }
         }
         .fileExporter(isPresented: $exporting, document: exportFile, contentType: .data, defaultFilename: exportName) { result in
             if case .failure(let error) = result { failure = error.localizedDescription }
         }
+        .onDisappear { worker?.cancel() }
     }
 }
 private extension JSONValue { var attachmentReferenceID: String { self["id"].string ?? "" } }

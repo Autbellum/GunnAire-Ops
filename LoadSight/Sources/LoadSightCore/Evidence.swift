@@ -94,6 +94,7 @@ public struct ProjectDocument: Sendable {
         _ = try changeOrders()
         _ = try changeOrderHistory()
         _ = try opsContextHistory()
+        _ = try catalogMaterialHistory()
         _ = try attachments()
         for item in items {
             for key in ["quantity", "materialUnit", "laborHoursUnit", "subcontractUnit", "otherUnit", "wastePct"] {

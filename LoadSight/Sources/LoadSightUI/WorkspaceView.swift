@@ -8,13 +8,15 @@ public struct LoadSightWorkspaceView: View {
     @State private var search = ""
     @State private var showingOpsContext = false
     private let opsContexts: [OpsProjectContext]
+    private let catalogMaterials: [OpsMaterialCatalogSnapshot]
+    @State private var mappingMaterial: ItemSelection?
     @State private var exportingWorkbook = false
     @State private var workbook: WorkbookExportDocument?
     @State private var editing: ItemSelection?
     @State private var reviewing: ItemSelection?
     @State private var errorMessage: String?
     private let sections = ["Overview", "Drawings", "Takeoff", "Estimate", "QA", "Requirements", "RFIs", "Change orders", "Attachments", "Sources", "Calculations"]
-    public init(document: Binding<LoadSightDocument>, opsContexts: [OpsProjectContext] = []) { _document = document; self.opsContexts = opsContexts }
+    public init(document: Binding<LoadSightDocument>, opsContexts: [OpsProjectContext] = [], catalogMaterials: [OpsMaterialCatalogSnapshot] = []) { _document = document; self.opsContexts = opsContexts; self.catalogMaterials = catalogMaterials }
     public var body: some View {
         NavigationSplitView {
             List(sections, id: \.self, selection: $section) { title in
@@ -51,6 +53,7 @@ public struct LoadSightWorkspaceView: View {
         .fileExporter(isPresented: $exportingWorkbook, document: workbook, contentType: WorkbookExportDocument.contentType, defaultFilename: "LoadSight-Takeoff") { result in
             if case .failure(let error) = result { errorMessage = error.localizedDescription }
         }
+        .sheet(item: $mappingMaterial) { selected in CatalogMaterialEditor(document: $document, itemID: selected.id, choices: catalogMaterials) }
         .sheet(item: $reviewing) { selected in ItemReviewEditor(document: $document, id: selected.id) }
         .alert("Unable to save change", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK") { errorMessage = nil }
@@ -119,7 +122,10 @@ public struct LoadSightWorkspaceView: View {
                         Text(row["source"]?.string ?? "No source reference").font(.caption).foregroundStyle(.secondary)
                     }.padding(.vertical, 6)
                 }.buttonStyle(.plain)
-                Button("Review") { reviewing = .init(id: entry.id) }.buttonStyle(.bordered)
+                VStack {
+                    Button("Review") { reviewing = .init(id: entry.id) }.buttonStyle(.bordered)
+                    Button("Catalog cost") { mappingMaterial = .init(id: entry.id) }.buttonStyle(.bordered).accessibilityIdentifier("CatalogCost-" + entry.id)
+                }
                 }
             }
         }.searchable(text: $search, prompt: "Find an item, source, or RFI")

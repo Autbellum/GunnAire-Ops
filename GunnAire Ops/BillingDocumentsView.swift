@@ -236,6 +236,30 @@ struct BillingDocumentsView: View {
         }
     }
 
+    private var loadSightRecoveryScope: String? {
+        guard canViewFinancials, let email = currentUserEmail?.trimmingCharacters(in: .whitespacesAndNewlines), !email.isEmpty else { return nil }
+        #if DEBUG
+        if let isolatedStore = GunnAireCloudKit.isolatedUITestStoreName(arguments: ProcessInfo.processInfo.arguments) {
+            return "Ops-LoadSight-test/" + isolatedStore
+        }
+        #endif
+        return ["Ops-LoadSight-v1", GunnAireCloudKit.containerIdentifier, email.lowercased(),
+                String(describing: Config.QuickBooks.environment), liveAPI.realmID ?? "local-account"].joined(separator: "\n")
+    }
+
+    /// Approved material records only. Unit and currency confirmation belong to the estimator.
+    private var loadSightCatalogMaterials: [OpsMaterialCatalogSnapshot] {
+        let counts = Dictionary(grouping: items, by: \.id).mapValues(\.count)
+        let source = ["GunnAire Ops local catalog", GunnAireCloudKit.containerIdentifier,
+                      String(describing: Config.QuickBooks.environment), liveAPI.realmID ?? "local-account"].joined(separator: " / ")
+        return items.filter { counts[$0.id] == 1 && $0.itemType.isMaterial && $0.pricebookReviewStatus == .approved && $0.quickBooksSyncStatus != "archived" }.compactMap { item in
+            let snapshot = OpsMaterialCatalogSnapshot(id: item.id, source: source, name: item.name, sku: item.sku ?? "",
+                supplier: item.preferredVendorName ?? "", supplierPartNumber: item.vendorPartNumber ?? "",
+                purchaseCost: item.purchaseCost, updatedAt: item.timestamp.ISO8601Format())
+            return (try? snapshot.validate()) != nil ? snapshot : nil
+        }
+    }
+
     /// Ignore ambiguous IDs and unresolved relationships instead of guessing a link.
     private var loadSightContextChoices: [OpsProjectContext] {
         let customerCounts = Dictionary(grouping: customers, by: \.id).mapValues(\.count)
@@ -2020,7 +2044,8 @@ GunnAire
                         Button("Open LoadSight workspace") { showingLoadSightWorkspace = true }
                             .accessibilityIdentifier("OpenLoadSightWorkspace")
                             .fullScreenCover(isPresented: $showingLoadSightWorkspace) {
-                                LoadSightFileWorkspaceView(opsContexts: loadSightContextChoices)
+                                LoadSightFileWorkspaceView(opsContexts: loadSightContextChoices, recoveryScope: loadSightRecoveryScope, catalogMaterials: loadSightCatalogMaterials)
+                                    .id(loadSightRecoveryScope)
                             }
                         Text("Review mechanical takeoff, calculations, RFIs and change orders. Export the project to retain edits; billing uses the existing Ops review and approval workflow.")
                             .font(.caption).foregroundStyle(.secondary)

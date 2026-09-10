@@ -60,6 +60,11 @@ public enum EstimatePricing {
         }
         if !stale.isEmpty { blockers.append("\(stale.count) QA reviews refer to an earlier project state.") }
         if included.count != lines.count { blockers.append("\(included.count - lines.count) included rows lack deliberate quantity or cost inputs.") }
+        for item in included {
+            if let mapping = try project.catalogMaterialMapping(itemID: item["id"]!.string!), !mapping.matches(item) {
+                blockers.append("Catalog material mapping for \(item["id"]!.string!) is stale; review the changed item or cost.")
+            }
+        }
         let accepted = ["Verified", "Field-verified", "Cross-checked", "Scope-defined", "Approved allowance"]
         let uncertain = included.filter { !accepted.contains($0["quantityStatus"]?.string ?? "") || !hasText($0["source"] ?? .null) || !hasText($0["unit"] ?? .null) }
         if !uncertain.isEmpty { blockers.append("\(uncertain.count) included rows lack an approved quantity basis, unit or source.") }

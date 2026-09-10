@@ -8,6 +8,7 @@ struct DrawingsWorkspaceView: View {
     @State private var selected: String?
     @State private var pageNumber = 1
     @State private var importing = false
+    @State private var importDestinationID: UUID?
     @State private var progress: DrawingImportProgress?
     @State private var worker: Task<Void, Never>?
     @State private var errorMessage: String?
@@ -33,7 +34,9 @@ struct DrawingsWorkspaceView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Button("Import drawings", systemImage: "plus") { importing = true }.disabled(worker != nil)
+                Button("Import drawings", systemImage: "plus") {
+                    importDestinationID = document.editSessionID; importing = true
+                }.disabled(worker != nil)
                     .accessibilityIdentifier("ImportDrawings")
                 Toggle("OCR every PDF page", isOn: $fullOCR).toggleStyle(.checkboxIfMac).disabled(worker != nil)
                 Spacer()
@@ -200,7 +203,8 @@ struct DrawingsWorkspaceView: View {
         } catch { errorMessage = error.localizedDescription }
     }
     private func startImport(_ urls: [URL]) {
-        guard worker == nil, !urls.isEmpty else { return }
+        guard worker == nil, !urls.isEmpty, let destinationID = importDestinationID,
+              destinationID == document.editSessionID else { return }
         let mode: DrawingOCRMode = fullOCR ? .everyPage : .whenNoText
         worker = Task {
             defer { worker = nil; progress = nil }
@@ -215,7 +219,7 @@ struct DrawingsWorkspaceView: View {
                     for source in archive.records { try batch.insert(record: source, data: archive.files[source.id]!) }
                 }
                 try Task.checkCancellation()
-                try document.addDrawings(batch)
+                try document.applyEdit(for: destinationID) { try $0.addDrawings(batch) }
                 selected = batch.records.first?.id; pageNumber = 1
             } catch is CancellationError { /* Batch is not committed on cancellation. */ }
             catch { errorMessage = error.localizedDescription }
