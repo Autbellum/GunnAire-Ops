@@ -42,6 +42,7 @@ class NativeWorkflowShardTests(unittest.TestCase):
             "testStaffCloudKitRequestRecoversAfterRelaunchWithoutOpeningAnotherWorkspace",
             "testStaffCloudKitAdministratorReviewReturnsToSettingsAndRetainsOriginalInvitation",
             "testReceiptRejectsAnotherJobsScheduledEstimateAndRecoversOriginalTarget",
+            "testCatalogEditingControlsStayInsideTheSheetAcrossRotation",
         ):
             self.assertIn(name, declared)
         self.assertEqual(len(declared), len(set(declared)))
@@ -77,6 +78,25 @@ class NativeWorkflowShardTests(unittest.TestCase):
                 result = self.selectors("iPad", shard, check=False)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(result.stdout, "")
+
+    def test_largest_text_check_retains_both_catalog_journeys_and_restores_device(self):
+        text = WORKFLOW.read_text()
+        section = text.split('      - name: Verify largest-text catalog editing\n', 1)[1].split(
+            '      - name: Build universal Mac Release\n', 1)[0]
+        self.assertIn("if: matrix.platform == 'iPad' && matrix.shard == 1", section)
+        script = textwrap.dedent(section.split('        run: |\n', 1)[1])
+        subprocess.run(['/bin/bash', '-n'], input=script, text=True, check=True)
+        for name in (
+            'testAdministratorCreatesInventoryOfflineAndReopensExactSetup',
+            'testCatalogEditingControlsStayInsideTheSheetAcrossRotation',
+        ):
+            self.assertIn('-only-testing:GunnAire OpsUITests/GunnAire_OpsUITests/' + name, script)
+        self.assertIn('content_size accessibility-extra-extra-extra-large', script)
+        self.assertIn('trap \'xcrun simctl ui "$CI_IPAD_UDID" content_size "$original_size"\' EXIT', script)
+        self.assertIn('original_size=$(xcrun simctl ui "$CI_IPAD_UDID" content_size)', script)
+        self.assertIn('catalog-large-text', script)
+        self.assertIn('python3 Tools/verify_native_test_execution.py', script)
+        self.assertIn('-parallel-testing-enabled NO', script)
 
     def test_ipad_requires_the_prepared_exact_device(self):
         for udid in ("", "not-a-device", "12345678-1234-1234-1234-123456789ABC\nX=1"):

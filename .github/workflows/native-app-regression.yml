@@ -140,7 +140,8 @@ jobs:
               testPricebookReviewCorrectsFieldItemBeforeApprovalWithoutLosingDocumentPriority \
               testScheduleDeletionRetainsTheConfirmedTargetAndProtectsBilledJobs \
               testUnreconciledStatementExplainsReviewAndHandsOffToInvoices \
-              testReceiptRejectsAnotherJobsScheduledEstimateAndRecoversOriginalTarget; do
+              testReceiptRejectsAnotherJobsScheduledEstimateAndRecoversOriginalTarget \
+              testCatalogEditingControlsStayInsideTheSheetAcrossRotation; do
               if (( index % 2 == CI_SHARD )); then
                 selectors+=("-only-testing:GunnAire OpsUITests/GunnAire_OpsUITests/$test")
               fi
@@ -175,6 +176,36 @@ jobs:
             --summary "$RUNNER_TEMP/native-results/summary.json" \
             --tests "$RUNNER_TEMP/native-results/tests.json" \
             -- "${selectors[@]}"
+
+      - name: Verify largest-text catalog editing
+        if: matrix.platform == 'iPad' && matrix.shard == 1
+        run: |
+          if [[ ! "${CI_IPAD_UDID:-}" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]]; then
+            exit 64
+          fi
+          original_size=$(xcrun simctl ui "$CI_IPAD_UDID" content_size)
+          case "$original_size" in
+            extra-small|small|medium|large|extra-large|extra-extra-large|extra-extra-extra-large|accessibility-medium|accessibility-large|accessibility-extra-large|accessibility-extra-extra-large|accessibility-extra-extra-extra-large) ;;
+            *) exit 70 ;;
+          esac
+          trap 'xcrun simctl ui "$CI_IPAD_UDID" content_size "$original_size"' EXIT
+          xcrun simctl ui "$CI_IPAD_UDID" content_size accessibility-extra-extra-extra-large
+          evidence="$RUNNER_TEMP/native-results/catalog-large-text"
+          mkdir -p "$evidence"
+          xcrun simctl ui "$CI_IPAD_UDID" content_size | tee "$evidence/content-size.txt"
+          selectors=(
+            '-only-testing:GunnAire OpsUITests/GunnAire_OpsUITests/testAdministratorCreatesInventoryOfflineAndReopensExactSetup'
+            '-only-testing:GunnAire OpsUITests/GunnAire_OpsUITests/testCatalogEditingControlsStayInsideTheSheetAcrossRotation'
+          )
+          xcodebuild -project "GunnAire Ops.xcodeproj" -scheme "GunnAire Ops" -configuration Debug \
+            -destination "platform=iOS Simulator,id=$CI_IPAD_UDID" -destination-timeout 120 \
+            -derivedDataPath "$RUNNER_TEMP/native-derived" -resultBundlePath "$evidence/iPad.xcresult" \
+            -parallel-testing-enabled NO "${selectors[@]}" CODE_SIGNING_ALLOWED=NO test 2>&1 |
+            tee "$evidence/test.log"
+          xcrun xcresulttool get test-results summary --path "$evidence/iPad.xcresult" > "$evidence/summary.json"
+          xcrun xcresulttool get test-results tests --path "$evidence/iPad.xcresult" > "$evidence/tests.json"
+          python3 Tools/verify_native_test_execution.py --summary "$evidence/summary.json" \
+            --tests "$evidence/tests.json" -- "${selectors[@]}"
 
       - name: Build universal Mac Release
         if: matrix.platform == 'Mac'

@@ -8226,11 +8226,23 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(waitForHittable(edit)); edit.tap()
         XCTAssertTrue(app.navigationBars["Edit Catalog Item"].waitForExistence(timeout: 3))
         XCTAssertEqual(app.textFields["CatalogEditSalesPrice"].value as? String, "125.375")
-        for label in ["Item name", "SKU", "Sales price", "Purchase cost"] {
-            XCTAssertTrue(app.staticTexts[label].exists, "Entered catalog values need persistent labels.")
-        }
         let editForm = app.collectionViews["CatalogItemEditForm"]
         XCTAssertTrue(editForm.exists)
+        for label in ["Item name", "SKU", "Sales price", "Purchase cost"] {
+            let fieldLabel = editForm.staticTexts[label].firstMatch
+            func labelIsVisible() -> Bool {
+                guard fieldLabel.exists else { return false }
+                let frame = fieldLabel.frame
+                let viewport = editForm.frame.intersection(app.frame)
+                return !frame.isEmpty && !frame.isInfinite && viewport.contains(frame)
+                    && frame.minY >= app.navigationBars["Edit Catalog Item"].frame.maxY
+            }
+            // A passive label need not be a separate hit target: its labeled
+            // field handles row activation. Require the actual text on-screen.
+            for _ in 0..<8 where !labelIsVisible() { editForm.swipeUp() }
+            XCTAssertTrue(fieldLabel.exists, "Entered catalog values need persistent labels.")
+            XCTAssertTrue(labelIsVisible(), "The complete field label must be visible in the form.")
+        }
         let savedQuantity = app.textFields["InventoryOpeningQuantity"]
         for _ in 0..<8 where !savedQuantity.isHittable { editForm.swipeUp() }
         XCTAssertTrue(waitForHittable(savedQuantity))
@@ -8283,6 +8295,95 @@ final class GunnAire_OpsUITests: XCTestCase {
         let savedDecimal = XCTAttachment(screenshot: app.screenshot())
         savedDecimal.name = "Saved fractional inventory with labeled catalog values"
         savedDecimal.lifetime = .keepAlways; add(savedDecimal)
+        app.buttons["Cancel"].tap()
+    }
+
+    @MainActor
+    func testCatalogEditingControlsStayInsideTheSheetAcrossRotation() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin", "-GunnAirePendingAppRoute", "quickBooksManagement"]
+        app.launch()
+        defer { XCUIDevice.shared.orientation = .portrait }
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
+        app.segmentedControls["QuickBooksWorkspacePicker"].buttons["Sales"].tap()
+        let addItem = app.buttons["Add Catalog Item"]
+        for _ in 0..<14 where !addItem.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(addItem)); addItem.tap()
+        let navigation = app.navigationBars["Add Catalog Item"]
+        XCTAssertTrue(navigation.waitForExistence(timeout: 3))
+        let controls = app.otherElements["CatalogEditingControls"].firstMatch
+        let done = controls.buttons["DoneEditingCatalogItem"]
+        XCTAssertFalse(controls.exists, "An idle form should not show extra editing controls.")
+
+        func requireContextualControl(_ evidenceName: String) {
+            if !waitForHittable(done) { retainNavigationFailure(app, name: evidenceName) }
+            XCTAssertTrue(waitForHittable(done))
+            XCTAssertEqual(app.buttons.matching(identifier: "DoneEditingCatalogItem").count, 1)
+            XCTAssertEqual(done.label, "Done Editing Catalog Item")
+            // The sheet's navigation bar establishes its horizontal bounds.
+            // A global keyboard accessory outside the sheet must not pass.
+            let actionFrame = done.frame
+            let sheetTop = navigation.frame
+            XCTAssertGreaterThanOrEqual(actionFrame.width, 44)
+            XCTAssertGreaterThanOrEqual(actionFrame.height, 44)
+            XCTAssertGreaterThanOrEqual(actionFrame.minX, sheetTop.minX)
+            XCTAssertLessThanOrEqual(actionFrame.maxX, sheetTop.maxX)
+            XCTAssertGreaterThanOrEqual(actionFrame.minY, sheetTop.maxY)
+            if app.keyboards.firstMatch.exists {
+                XCTAssertFalse(actionFrame.intersects(app.keyboards.firstMatch.frame))
+            }
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = evidenceName; attachment.lifetime = .keepAlways; add(attachment)
+        }
+        func requireEditingEnded() {
+            let ended = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: controls)
+            XCTAssertEqual(XCTWaiter.wait(for: [ended], timeout: 5), .completed)
+            XCTAssertTrue(navigation.exists, "Ending field editing must not save or dismiss the item.")
+        }
+        func rotateDevice(to orientation: UIDeviceOrientation) {
+            XCUIDevice.shared.orientation = orientation
+            let expectsLandscape = orientation == .landscapeLeft
+            let rotated = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                (app.frame.width > app.frame.height) == expectsLandscape
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [rotated], timeout: 5), .completed,
+                           "The app must adopt the requested orientation before checking its controls.")
+        }
+
+        let name = app.textFields["QuickBooksCatalogItemName"]
+        let price = app.textFields["QuickBooksCatalogItemPrice"]
+        replaceText(in: name, with: "Scoped Draft Inventory Capacitor")
+        replaceText(in: price, with: "125.375")
+        requireContextualControl("Item editing action inside portrait sheet")
+        rotateDevice(to: .landscapeLeft)
+        requireContextualControl("Item editing action inside landscape sheet")
+        XCTAssertEqual(price.value as? String, "125.375")
+        done.tap(); requireEditingEnded()
+        XCTAssertEqual(price.value as? String, "125.375")
+        let create = app.buttons["CreateQuickBooksCatalogItem"]
+        XCTAssertTrue(create.isEnabled)
+
+        app.segmentedControls["QuickBooksCatalogItemType"].buttons["Inventory"].tap()
+        let form = app.collectionViews["CatalogItemComposeForm"]
+        let quantity = app.textFields["InventoryOpeningQuantity"]
+        for _ in 0..<8 where !quantity.isHittable { form.swipeUp() }
+        XCTAssertTrue(waitForHittable(quantity)); replaceText(in: quantity, with: "4.25")
+        quantity.typeKey("a", modifierFlags: .command)
+        for key in "6.5" { quantity.typeKey(String(key), modifierFlags: []) }
+        XCTAssertEqual(quantity.value as? String, "6.5")
+        requireContextualControl("Inventory action after hardware-style input")
+        rotateDevice(to: .portrait)
+        requireContextualControl("Inventory action after returning to portrait")
+        done.tap(); requireEditingEnded()
+        XCTAssertEqual(quantity.value as? String, "6.5")
+        XCTAssertTrue(waitForHittable(app.buttons["Cancel"])); app.buttons["Cancel"].tap()
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 3))
+        XCTAssertTrue(waitForHittable(addItem)); addItem.tap()
+        XCTAssertTrue(navigation.waitForExistence(timeout: 3))
+        XCTAssertFalse(controls.exists)
+        XCTAssertEqual(name.value as? String, "Name", "Cancel must not leave an unsaved item in the next composer.")
+        XCTAssertFalse(create.isEnabled)
         app.buttons["Cancel"].tap()
     }
 

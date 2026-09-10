@@ -14,6 +14,44 @@ extension View {
     func catalogNumericKeyboard() -> some View {
         keyboardType(UIDevice.current.userInterfaceIdiom == .pad ? .numbersAndPunctuation : .decimalPad)
     }
+
+    /// LabeledContent stacks at accessibility sizes. Its accessible field can
+    /// include the label's bounds, so tapping that area must also focus input.
+    /// A simultaneous tap preserves the text field's native selection gestures.
+    func catalogInputRow(focusedField: FocusState<QuickBooksCatalogInputField?>.Binding,
+                         field: QuickBooksCatalogInputField) -> some View {
+        contentShape(Rectangle())
+            .simultaneousGesture(TapGesture().onEnded { focusedField.wrappedValue = field })
+    }
+
+    /// Keep the editing action inside the presented item sheet. A keyboard
+    /// accessory was visibly detached from this sheet during a hosted test
+    /// that could not reach it. Avoid depending on that separate presentation.
+    /// This control only ends field editing; it never saves, publishes or
+    /// changes the draft, and remains available with a hardware keyboard.
+    func catalogEditingControls(focusedField: FocusState<QuickBooksCatalogInputField?>.Binding) -> some View {
+        safeAreaInset(edge: .bottom, spacing: 0) {
+            if focusedField.wrappedValue != nil {
+                HStack {
+                    Spacer(minLength: 0)
+                    Button("Done Editing", systemImage: "keyboard.chevron.compact.down") {
+                        focusedField.wrappedValue = nil
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.primary)
+                    .controlSize(.large)
+                    .accessibilityLabel("Done Editing Catalog Item")
+                    .accessibilityHint("Closes field editing without saving or discarding the item.")
+                    .accessibilityIdentifier("DoneEditingCatalogItem")
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .background(.bar)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("CatalogEditingControls")
+            }
+        }
+    }
 }
 
 /// Appears only for inventory. Field-created items can wait for an admin's
@@ -38,6 +76,7 @@ struct QuickBooksInventorySetupSection: View {
                     .accessibilityLabel("Opening quantity")
                     .accessibilityIdentifier("InventoryOpeningQuantity")
             }
+            .catalogInputRow(focusedField: focusedField, field: .openingQuantity)
             if !quantityDraft.isValid {
                 Text("Enter an opening quantity from 0 to 99,999,999,999, or leave it blank to finish setup later.")
                     .font(.caption).foregroundStyle(.orange)
@@ -56,6 +95,7 @@ struct QuickBooksInventorySetupSection: View {
                     .accessibilityHint("Enter the date as year, month, and day: YYYY-MM-DD.")
                     .accessibilityIdentifier("InventoryOpeningDate")
             }
+            .catalogInputRow(focusedField: focusedField, field: .openingDate)
             if let prior = setup.scope, prior != scope {
                 Text("These accounting choices belong to another QuickBooks connection. The draft is retained; choose the current business only after reviewing the item.")
                     .font(.caption).foregroundStyle(.orange)

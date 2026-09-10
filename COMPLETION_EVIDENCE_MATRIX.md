@@ -1,3 +1,22 @@
+Contextual inventory editing candidate, 2026-09-09:
+INVENTORY_EDITING_ACCEPTANCE.md records the hosted unreachable Done accessory,
+unchanged local reproduction and an in-sheet editing action for catalog creation
+and editing. Candidate1 passes the original complete inventory journey with
+exact price/date/quantity, invalid input, Cancel and active-keyboard Save intact.
+Both complete catalog journeys now pass at the largest accessibility text size
+after correcting full-row focus and verifying passive-label visibility without
+treating labels as independent controls. Actual app orientation, in-sheet
+accessible controls, minimum touch bounds and keyboard non-overlap are checked.
+Final MacFull5 verifies 1,877 passes; IPadFull1 verifies 1,883, including six
+invoice/Mail/catalog UI journeys, all without failures/skips. Tools2 passes 75
+tests. Dark-mode interaction
+and arm64 iOS plus universal arm64/x86_64 unsigned Release builds pass. Existing
+QBO/linker warnings remain. OriginalCopyBack5 verifies seven byte-equal files,
+417 unrelated changes and the original owner branch/HEAD/index preserved.
+Exact-final-head hosted verification remains pending. CI retains normal-size coverage and adds
+both catalog journeys at the largest accessibility text size.
+No claim of full app completion, live QBO writes or CloudKit convergence is made.
+
 Full owner HTTP source candidate, 2026-09-09:
 STAFF_FULL_WORKSPACE_SOURCE.md records the authenticated 404 reproduction and
 new owner-workspace-v1 endpoint, generated from all 32 native model kinds and
