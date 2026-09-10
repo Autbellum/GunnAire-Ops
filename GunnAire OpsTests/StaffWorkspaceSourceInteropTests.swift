@@ -38,6 +38,24 @@ final class StaffWorkspaceSourceInteropTests: XCTestCase {
         return try JSONDecoder().decode(Vector.self, from: Data(contentsOf: url))
     }
 
+    @MainActor func testPublicationDecoderAcceptsTheActualBackendPageWithoutDroppingAnyField() throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "StaffWorkspaceSourceInterop", withExtension: "json"))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let data = try JSONSerialization.data(withJSONObject: XCTUnwrap(object["page"]))
+        let page = try StaffWorkspacePublicationContract.decode(StaffWorkspacePublicationPage.self, from: data)
+        let binding = CompanyCloudKitBinding(companyID: try XCTUnwrap(UUID(uuidString: page.companyID)),
+            containerID: GunnAireCloudKit.containerIdentifier, environment: page.environment,
+            replicaID: try XCTUnwrap(UUID(uuidString: page.replicaID)), cloudAccountHash: String(repeating: "a", count: 64),
+            approvedAt: "2026-09-09T00:00:00Z")
+        let scope = StaffReplicaSourceScope(backendOrigin: "https://fixture.example.invalid", actorEmail: "owner@example.invalid",
+            binding: binding, storeUUID: UUID().uuidString)
+        try StaffWorkspacePublicationContract.validateCatalog()
+        try page.validate(scope, sequence: 1, after: nil)
+        XCTAssertEqual(page.records.count, 32)
+        XCTAssertEqual(page.records.reduce(0) { $0 + $1.fields.count }, 561)
+        XCTAssertEqual(page.records.compactMap(\.live).sorted { $0.kind < $1.kind }, try vector().original.sorted { $0.kind < $1.kind })
+    }
+
     @MainActor func testCurrentNativeFieldSchemaMatchesTheVersionedBackendDigest() throws {
         let vector = try vector()
         try StaffWorkspaceModelCatalog.validateSchema(GunnAireModelSchema.schema)

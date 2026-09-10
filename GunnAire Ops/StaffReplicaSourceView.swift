@@ -51,6 +51,21 @@ struct StaffReplicaSourceReviewView: View {
                 Text("Saved customer, property, equipment, crew, job and catalog records are shared with accepted staff accounts. Sharing does not confirm receipt on their devices or change QuickBooks.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
+            if source.dependencies.fullWorkspace != nil {
+                Section("Company workspace") {
+                    NavigationLink {
+                        StaffWorkspacePublicationReviewView(source: source)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label("Review Company Workspace", systemImage: "doc.on.doc")
+                            if !source.workspaceConflicts.isEmpty {
+                                Text("\(source.workspaceConflicts.count) saved versions need review")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }.accessibilityIdentifier("OpenOwnerWorkspaceReview")
+                }
+            }
             ForEach(source.conflicts) { conflict in
                 Section(conflict.title) {
                     if conflict.deletion {

@@ -18,8 +18,9 @@ struct StaffReplicaSourceDependencies {
     var now: () -> Date = Date.init
     var deliver: ((StaffReplicaSourceContext, Int) async throws -> StaffReplicaAutomaticSummary)? = nil
     var prepareFullWorkspace: ((StaffReplicaSourceContext) throws -> Void)? = nil
+    var fullWorkspace: StaffWorkspacePublicationCoordinator? = nil
 
-    private static func verify(_ context: StaffReplicaSourceContext) throws {
+    static func verify(_ context: StaffReplicaSourceContext) throws {
         try Task.checkCancellation()
         let access = CompanyWorkspaceAccessController.shared
         guard !GunnAireCloudKit.usesTestDatabase, access.operationStamp == context.stamp, access.verifiedRole == .admin,
@@ -51,12 +52,7 @@ struct StaffReplicaSourceDependencies {
             return try StaffReplicaSourceHistory.capture(container: container, after: token, storeUUID: context.scope.storeUUID)
         }, request: { try await GunnAireBackendService.staffReplicaSourceRequest(path: $0, method: $1, body: $2) }, store: StaffReplicaSourceStorage.device,
               deliver: { try await StaffReplicaAutomaticDelivery().deliver(source: $0, sequence: $1) },
-              prepareFullWorkspace: { context in
-                  try verify(context)
-                  guard let container = CompanyWorkspaceAccessController.shared.authorizedContainer else { throw StaffReplicaSourceSyncError.access }
-                  try StaffWorkspaceSourceStaging.prepare(container: container, scope: context.scope,
-                      store: StaffWorkspaceSourceStaging.device, check: { try verify(context) })
-              })
+              fullWorkspace: .shared)
     }
 }
 
@@ -86,12 +82,14 @@ enum StaffReplicaSourceStorage {
     @Published private(set) var conflicts: [StaffReplicaSourceConflict] = []
     @Published private(set) var lastConfirmedAt: Date?
     @Published private(set) var hasMore = false
+    @Published private(set) var workspaceConflicts: [StaffWorkspacePublicationConflict] = []
     private var displayScope: StaffReplicaSourceScope?
     let dependencies: StaffReplicaSourceDependencies
     init(dependencies: StaffReplicaSourceDependencies? = nil) { self.dependencies = dependencies ?? .live }
 
     func clearDisplay() {
         conflicts = []; lastConfirmedAt = nil; displayScope = nil; hasMore = false
+        workspaceConflicts = []; dependencies.fullWorkspace?.clearCache()
         message = "Verify the approved owner workspace to prepare staff data."
     }
     private func load(_ context: StaffReplicaSourceContext) throws -> StaffReplicaSourceJournal {
@@ -195,7 +193,21 @@ enum StaffReplicaSourceStorage {
             // schema before publishing newer core facts. Never alter recovery
             // of an already submitted six-kind operation or send raw HR/billing
             // records through the existing role-projected core endpoint.
-            try dependencies.prepareFullWorkspace?(context)
+            if let publisher = dependencies.fullWorkspace {
+                let summary = try await publisher.synchronize(context)
+                try dependencies.check(context)
+                workspaceConflicts = summary.conflicts
+                if summary.hasMore || !summary.conflicts.isEmpty || summary.waitingForCloudKit > 0 {
+                    message = summary.message; hasMore = summary.hasMore; lastConfirmedAt = summary.lastConfirmedAt
+                    return
+                }
+                guard try publisher.matchesCurrent(summary.preparedStage, context: context) else {
+                    hasMore = true; message = "Checking newer saved work before sharing…"
+                    return
+                }
+                // No suspension between this owner-history fence and the core
+                // capture below: both use the same verified owner workspace.
+            } else { try dependencies.prepareFullWorkspace?(context) }
             try dependencies.check(context)
             let capture = try dependencies.capture(context, journal.token)
             try dependencies.check(context)
@@ -256,5 +268,18 @@ enum StaffReplicaSourceStorage {
             try save(journal, context)
             await sync() // New capture and server read must still match the approved values.
         } catch { message = StaffReplicaSourceSyncError.unavailable.localizedDescription }
+    }
+
+    func approveWorkspace(_ conflict: StaffWorkspacePublicationConflict) async {
+        guard !isRunning, workspaceConflicts.contains(conflict), let publisher = dependencies.fullWorkspace else { return }
+        do {
+            let context = try await dependencies.context()
+            guard context.scope == displayScope else { throw StaffReplicaSourceSyncError.access }
+            try publisher.approve(conflict, context: context)
+            await sync()
+        } catch {
+            if case StaffReplicaSourceSyncError.access = error { clearDisplay() }
+            message = (error as? StaffReplicaSourceSyncError)?.localizedDescription ?? StaffReplicaSourceSyncError.unavailable.localizedDescription
+        }
     }
 }

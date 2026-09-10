@@ -980,7 +980,8 @@ enum GunnAireBackendService {
 
     /// Owner source reads and mutations never use the staff metadata exception.
     static func staffReplicaSourceRequest(path: String, method: String, body: Data?) async throws -> Data {
-        guard StaffReplicaSourceTransportPolicy.allows(path: path, method: method, body: body),
+        guard (StaffReplicaSourceTransportPolicy.allows(path: path, method: method, body: body)
+               || StaffWorkspacePublicationTransportPolicy.allows(path: path, method: method, body: body)),
               let stamp = CompanyWorkspaceAccessController.shared.operationStamp,
               CompanyWorkspaceAccessController.shared.verifiedRole == .admin else { throw StaffReplicaSourceSyncError.access }
         var request = try makeRequest(path: path, method: method, body: body)

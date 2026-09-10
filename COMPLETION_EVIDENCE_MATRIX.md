@@ -1,3 +1,34 @@
+Full owner native publication candidate, 2026-09-09:
+STAFF_FULL_WORKSPACE_PUBLICATION.md records the missing native upload path,
+durable original-wire replay, typed full-model contract, bounded/fenced paging,
+exact-version reconciliation and the secondary owner-review handoff. The
+existing core pending operation still recovers first. All 29 full-source backend
+tests and 75 Tools tests pass. IPadFocused2 verifies 51 cases and all four suite
+selectors; IPadFull1 verifies 1,895 unit cases and all five target/suite selectors,
+with zero failures/skips. Both first unsigned Release builds pass. The 805-record
+test revealed repeated reconstruction of immutable validator metadata; reusing
+that metadata reduces the unchanged fixture from 14.339 to 1.199 seconds.
+IPadFocused3 now verifies 52 passes including encrypted on-disk recovery.
+IPadFull2 verifies 1,896 passes. Both second Release builds pass. A further
+unchanged timing regression then exposes a real owner-edit-during-read handoff
+gap (52 passing cases / 1 failure). Synchronous owner-history verification before
+core capture fixes it; IPadFocused4 verifies 53 passes with all original
+assertions intact. Final IPadFull3 verifies 1,897 unit cases with zero
+failures/skips. MacRelease3 and DeviceRelease3 pass their unsigned builds and
+architecture checks: universal arm64/x86_64 Mac and arm64 iOS. Existing QBO and
+linker warnings remain. OriginalCopyBack1 verifies 11 byte-equal files, 419
+unrelated changes preserved, and the original branch/HEAD/index unchanged,
+using OriginalPreflight3. Only the isolated review checkout is committed.
+Work is now background-only with no screen capture or inspection,
+browser switching or foreground app tests, as explicitly requested. Interactive
+and visual owner-review acceptance remains open. The new server copy is not a
+staff projection, company CloudKit import, financial command or permission grant.
+Full suite, signed independent-account CloudKit, complete domain/role validation,
+staff activation/leases/commands/media and production acceptance remain required.
+The prior published e8545c2 backend and native workflows all passed. Publishing
+cf551b3 is blocked by the saved GitHub PAT's missing workflow scope; no permission
+expansion or publication bypass has been attempted.
+
 Contextual inventory editing candidate, 2026-09-09:
 INVENTORY_EDITING_ACCEPTANCE.md records the hosted unreachable Done accessory,
 unchanged local reproduction and an in-sheet editing action for catalog creation
