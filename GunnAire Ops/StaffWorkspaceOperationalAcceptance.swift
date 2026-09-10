@@ -109,7 +109,11 @@ enum StaffWorkspaceOperationalAcceptanceStore {
             let journal = try StaffWorkspacePublicationContract.decode(StaffWorkspaceOperationalAcceptance.self,
                                                                        from: bytes, maximum: 8192)
             guard journal.schema == StaffWorkspaceOperationalAcceptance.schema, journal.state == "accepted",
-                  journal.scope == scope, journal.planID == plan else {
+                  journal.scope == scope, journal.planID == plan,
+                  CloudKitStaffSetupPolicy.canonicalID(journal.selectionID),
+                  (1...2_147_483_647).contains(journal.sourceSequence),
+                  JobBillingAssignmentSnapshot.validConnectionRevision(journal.contentSHA256),
+                  (0...20_000).contains(journal.recordCount) else {
                 throw StaffReplicaDeliveryError.storage
             }
             return journal

@@ -7,6 +7,7 @@ import XCTest
         let f: StaffWorkspaceCommandRecoveryTests.Fixture
         var view: StaffWorkspaceOperationalView
         var offline = false
+        var refreshing = false
         var afterSend: (() -> Void)?
         var requests: [StaffWorkspaceOperationalCommandRequest] = []
         var operations = 0
@@ -46,8 +47,10 @@ import XCTest
         func controller(field: String = "notes") -> StaffWorkspaceFieldEditorController {
             .init(dependencies: .init(authority: { [unowned self] in
                 guard f.allowed else { throw StaffReplicaDeliveryError.access }
+                if refreshing { throw StaffReplicaDeliveryError.pending }
                 return (context, plan)
             }, snapshot: { [unowned self] _, _ in try snapshot(field: field) },
+            head: { [unowned self] snapshot, _, _ in try engine.fieldEditorHead(snapshot, plan: plan, context: context) },
             history: { [unowned self] snapshot, _, _ in try history(snapshot) },
             draft: { [unowned self] snapshot, _, _ in try engine.fieldEditorDraft(snapshot, plan: plan, context: context) },
             persist: { [unowned self] next, expected, reviewing, _, _ in

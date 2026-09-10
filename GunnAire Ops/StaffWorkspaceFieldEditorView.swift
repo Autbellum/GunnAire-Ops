@@ -50,6 +50,8 @@ struct StaffWorkspaceFieldEditorView: View {
                     }.disabled(!editor.available || editor.isRunning)
                     if editor.needsReview {
                         Section("Review changed record") {
+                            Button("Refresh Shared Record") { editor.checkLifetime(forceRefresh: true) }
+                                .disabled(!editor.available || editor.isRunning)
                             if let previous = editor.snapshot, let current = editor.currentSnapshot {
                                 LabeledContent("Original field", value: StaffWorkspacePublicationReview.value(previous.candidate.currentValue, field: field))
                                 LabeledContent("Current field", value: StaffWorkspacePublicationReview.value(current.candidate.currentValue, field: field))
@@ -114,7 +116,7 @@ struct StaffWorkspaceFieldEditorView: View {
         .task { editor.open() }
         .onReceive(timer) { _ in editor.checkLifetime() }
         .onChange(of: CloudKitStaffSetupStamp.current) { _, _ in editor.checkLifetime() }
-        .onChange(of: scenePhase) { _, phase in if phase == .active { editor.checkLifetime() } else { editor.persistDraft() } }
+        .onChange(of: scenePhase) { _, phase in if phase == .active { editor.checkLifetime(forceRefresh: true) } else { editor.persistDraft() } }
         .onDisappear { editor.invalidate() }
         .accessibilityIdentifier("StaffFieldEditor")
     }

@@ -745,6 +745,23 @@ struct StaffWorkspaceContentSummary {
         return history
     }
 
+    /// Three bounded metadata reads for display freshness only. Opening, review,
+    /// submission and content consumers retain full payload validation.
+    func fieldEditorHead(_ snapshot: StaffWorkspaceFieldEditorSnapshot, plan: CloudKitStaffSharePlan,
+                         context: CloudKitStaffSetupController.Context) throws -> StaffWorkspaceFieldEditorHead {
+        try fieldEditorAccess(snapshot, plan: plan, context: context)
+        guard let mount = try StaffWorkspaceOperationalMountStore.peekMetadata(store: dependencies.store, scope: context.scope, plan: plan.id),
+              let accepted = try StaffWorkspaceOperationalAcceptanceStore.load(store: dependencies.store, scope: context.scope, plan: plan.id) else {
+            throw StaffReplicaDeliveryError.pending
+        }
+        try accepted.validate(scope: context.scope, plan: plan.id, mount: mount)
+        guard try StaffWorkspaceOperationalMountStore.peekMetadata(store: dependencies.store, scope: context.scope, plan: plan.id) == mount else {
+            throw StaffReplicaDeliveryError.changed
+        }
+        try staffCheck(context, plan)
+        return .init(mount: mount)
+    }
+
     func fieldEditorDraft(_ snapshot: StaffWorkspaceFieldEditorSnapshot, plan: CloudKitStaffSharePlan,
                           context: CloudKitStaffSetupController.Context) throws -> StaffWorkspaceFieldDraft? {
         try fieldEditorAccess(snapshot, plan: plan, context: context)

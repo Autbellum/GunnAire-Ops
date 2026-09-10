@@ -73,18 +73,30 @@ enum StaffWorkspaceOperationalMountStore {
         // and must not invent SwiftData defaults from this transport envelope.
     }
 
+    /// A bounded freshness hint, never proof that payload bytes still exist or
+    /// are valid. All content consumers must continue through full `load`.
+    static func peekMetadata(store: SharedTimeLocalStore, scope: CloudKitStaffSetupScope,
+                             plan: UUID) throws -> StaffWorkspaceOperationalMount? {
+        guard let bytes = try store.read(metaKey(scope, plan)) else { return nil }
+        let metadata = try StaffWorkspacePublicationContract.decode(StaffWorkspaceOperationalMount.self, from: bytes, maximum: 8192)
+        guard metadata.schema == StaffWorkspaceOperationalMount.schema, metadata.state == "mounted",
+              metadata.scope == scope, metadata.planID == plan,
+              CloudKitStaffSetupPolicy.canonicalID(metadata.selectionID),
+              (1...2_147_483_647).contains(metadata.sourceSequence),
+              JobBillingAssignmentSnapshot.validConnectionRevision(metadata.contentSHA256),
+              JobBillingAssignmentSnapshot.validConnectionRevision(metadata.sealedSHA256),
+              (1...StaffWorkspaceContentReceipt.maximumBytes).contains(metadata.contentBytes),
+              metadata.storageSelectionID == nil || metadata.storageSelectionID == metadata.selectionID else {
+            throw StaffReplicaDeliveryError.storage
+        }
+        return metadata
+    }
+
     static func load(store: SharedTimeLocalStore, scope: CloudKitStaffSetupScope, plan: UUID) throws -> (StaffWorkspaceOperationalMount, Data)? {
         do {
-            let metaBytes = try store.read(metaKey(scope, plan))
-            let storageID: String?
-            if let metaBytes {
-                let metadata = try StaffWorkspacePublicationContract.decode(StaffWorkspaceOperationalMount.self, from: metaBytes, maximum: 8192)
-                guard metadata.storageSelectionID == nil || metadata.storageSelectionID == metadata.selectionID &&
-                    CloudKitStaffSetupPolicy.canonicalID(metadata.selectionID) else { throw StaffReplicaDeliveryError.storage }
-                storageID = metadata.storageSelectionID
-            } else { storageID = nil }
-            let payload = try store.read(payloadKey(scope, plan, selection: storageID))
-            switch (metaBytes, payload) {
+            let metadata = try peekMetadata(store: store, scope: scope, plan: plan)
+            let payload = try store.read(payloadKey(scope, plan, selection: metadata?.storageSelectionID))
+            switch (metadata, payload) {
             case (nil, nil):
                 return nil
             case (nil, .some):
@@ -92,13 +104,8 @@ enum StaffWorkspaceOperationalMountStore {
                 return nil
             case (.some, nil):
                 throw StaffReplicaDeliveryError.storage
-            case let (.some(metaBytes), .some(payload)):
-                guard metaBytes.count <= 8192 else { throw StaffReplicaDeliveryError.storage }
-                let mount = try StaffWorkspacePublicationContract.decode(StaffWorkspaceOperationalMount.self,
-                                                                         from: metaBytes, maximum: 8192)
-                guard mount.schema == StaffWorkspaceOperationalMount.schema, mount.state == "mounted",
-                      mount.scope == scope, mount.planID == plan,
-                      payload.count == mount.contentBytes,
+            case let (.some(mount), .some(payload)):
+                guard payload.count == mount.contentBytes,
                       StaffReplicaManifest.hash(payload) == mount.contentSHA256 else {
                     throw StaffReplicaDeliveryError.storage
                 }

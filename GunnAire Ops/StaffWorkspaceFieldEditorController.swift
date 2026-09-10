@@ -43,6 +43,7 @@ struct StaffWorkspaceFieldEditorDependencies {
     typealias Context = CloudKitStaffSetupController.Context
     let authority: () throws -> (Context, CloudKitStaffSharePlan)
     let snapshot: (Context, CloudKitStaffSharePlan) throws -> StaffWorkspaceFieldEditorSnapshot
+    let head: (StaffWorkspaceFieldEditorSnapshot, Context, CloudKitStaffSharePlan) throws -> StaffWorkspaceFieldEditorHead
     let history: (StaffWorkspaceFieldEditorSnapshot, Context, CloudKitStaffSharePlan) throws -> [StaffWorkspaceOperationalCommandJournal]
     let draft: (StaffWorkspaceFieldEditorSnapshot, Context, CloudKitStaffSharePlan) throws -> StaffWorkspaceFieldDraft?
     let persist: (StaffWorkspaceFieldDraft, StaffWorkspaceFieldDraft?, Bool, Context, CloudKitStaffSharePlan) throws -> StaffWorkspaceFieldDraft
@@ -57,7 +58,8 @@ struct StaffWorkspaceFieldEditorDependencies {
                 try engine.fieldEditorSnapshot(plan: plan, context: context, selectionID: hosted.journal.selectionID,
                     sourceSequence: hosted.journal.sourceSequence, contentSHA256: hosted.journal.contentSHA256,
                     kind: kind, recordID: recordID, revision: revision, field: field)
-            }, history: { try engine.fieldEditorHistory($0, plan: $2, context: $1) },
+            }, head: { try engine.fieldEditorHead($0, plan: $2, context: $1) },
+            history: { try engine.fieldEditorHistory($0, plan: $2, context: $1) },
             draft: { try engine.fieldEditorDraft($0, plan: $2, context: $1) },
             persist: { try engine.saveFieldEditorDraft($0, expected: $1, reviewing: $2, plan: $4, context: $3) },
             queue: { try engine.queueFieldEditorUpdate($0, plan: $2, context: $1, commandID: $3, value: $4) },
@@ -82,6 +84,7 @@ struct StaffWorkspaceFieldEditorDependencies {
     private var commandID: UUID?
     private var initial = StaffWorkspaceFieldEditorInput(.text(""))
     private var generation = UUID()
+    private var observedHead: StaffWorkspaceFieldEditorHead?
     init(dependencies: StaffWorkspaceFieldEditorDependencies) { self.dependencies = dependencies }
     // Release-only teardown; never run UI, storage or authorization work here.
     nonisolated deinit {}
@@ -122,6 +125,7 @@ struct StaffWorkspaceFieldEditorDependencies {
             let (context, plan) = try authority()
             let current = try dependencies.snapshot(context, plan)
             snapshot = current; currentSnapshot = current; stamp = context.stamp
+            observedHead = .init(snapshot: current)
             saved = try dependencies.history(current, context, plan)
             draft = try dependencies.draft(current, context, plan)
             available = true
@@ -147,6 +151,7 @@ struct StaffWorkspaceFieldEditorDependencies {
             let (context, plan) = try authority()
             let current = try dependencies.snapshot(context, plan)
             snapshot = current; currentSnapshot = current; saved = try dependencies.history(current, context, plan)
+            observedHead = .init(snapshot: current)
             draft = try dependencies.draft(current, context, plan)
             if let draft, draft.input != nil,
                !saved.contains(where: { $0.request.commandID == draft.commandID.uuidString.lowercased() }) {
@@ -157,13 +162,32 @@ struct StaffWorkspaceFieldEditorDependencies {
             beginEditing(saved.last?.request.value ?? current.candidate.currentValue)
         } catch { checkLifetime(); message = "Refresh the shared record before creating another update. Saved originals are retained." }
     }
-    func checkLifetime() {
+    func checkLifetime(forceRefresh: Bool = false) {
+        let wasAvailable = available, wasReviewing = needsReview
         do {
             let (context, plan) = try authority(); available = true
-            if isEditing {
-                if let current = try? dependencies.snapshot(context, plan) {
-                    currentSnapshot = current; needsReview = current != snapshot
-                } else { needsReview = true }
+            if isEditing, let snapshot {
+                do {
+                    let head = try dependencies.head(snapshot, context, plan)
+                    _ = try authority()
+                    if forceRefresh || head != observedHead {
+                        // At most one full read per changed head. A failed read
+                        // waits for another head or an explicit refresh, not a timer loop.
+                        observedHead = head; currentSnapshot = nil
+                        if let current = try? dependencies.snapshot(context, plan), StaffWorkspaceFieldEditorHead(snapshot: current) == head {
+                            currentSnapshot = current
+                        }
+                        _ = try authority()
+                    }
+                    needsReview = currentSnapshot == nil || currentSnapshot != snapshot
+                    if currentSnapshot == nil { message = "Refresh the shared record before submitting. Your draft is retained." }
+                    else if needsReview { message = "The shared record changed. Review your draft against the current field before submitting." }
+                    else if wasReviewing || !wasAvailable { message = "Staff access verified. Continue your draft." }
+                } catch {
+                    observedHead = nil; currentSnapshot = nil; needsReview = true
+                    message = "The shared record is not ready for review. Your draft is retained; refresh when ready."
+                    _ = try authority() // A freshness failure must not mask revoked access.
+                }
                 if hasUnprotectedChanges { persistDraft() }
             }
         }
@@ -173,7 +197,7 @@ struct StaffWorkspaceFieldEditorDependencies {
     func invalidate() {
         generation = UUID(); input = .init(.text("")); initial = input; snapshot = nil
         saved = []; stamp = nil; commandID = nil; isEditing = false; available = false; isRunning = false
-        draft = nil; currentSnapshot = nil; needsReview = false; draftMessage = ""
+        draft = nil; currentSnapshot = nil; observedHead = nil; needsReview = false; draftMessage = ""
     }
 
     @discardableResult func persistDraft() -> Bool {
@@ -214,6 +238,7 @@ struct StaffWorkspaceFieldEditorDependencies {
                 revision: draft.revision + 1, initial: .init(current.candidate.currentValue), input: input)
             guard persist(next, reviewing: true) else { return }
             snapshot = current; currentSnapshot = current; commandID = next.commandID; initial = next.initial; needsReview = false
+            observedHead = .init(snapshot: current)
             message = "Draft reviewed against this shared record. Submit when you are ready."
         } catch { message = "Refresh the workspace before reviewing this draft. The original is retained." }
     }
