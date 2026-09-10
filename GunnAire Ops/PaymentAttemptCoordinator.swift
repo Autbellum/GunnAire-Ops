@@ -66,7 +66,7 @@ struct PaymentAttemptRecord: Decodable, Identifiable {
     }
 
     static func isReference(_ value: String) -> Bool {
-        ![".", ".."].contains(value) && value.range(of: #"^[A-Za-z0-9._:-]{1,128}$"#, options: .regularExpression) != nil
+        QuickBooksProviderReference.isValid(value)
     }
 }
 

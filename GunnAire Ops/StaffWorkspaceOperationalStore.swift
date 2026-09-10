@@ -111,7 +111,8 @@ nonisolated final class StaffWorkspaceOperationalActivatedStore: @unchecked Send
         self.storageDirectory = storageDirectory
     }
 
-    func fetch(kind: String? = nil, id: String? = nil) throws -> [StaffWorkspaceOperationalImportRecord] {
+    /// The handle may outlive its actor, but ModelContext and shared codecs may not.
+    @MainActor func fetch(kind: String? = nil, id: String? = nil) throws -> [StaffWorkspaceOperationalImportRecord] {
         guard journal.schema == StaffWorkspaceOperationalStoreJournal.schema,
               journal.state == "activated",
               !journal.operationalWorkspaceReady,

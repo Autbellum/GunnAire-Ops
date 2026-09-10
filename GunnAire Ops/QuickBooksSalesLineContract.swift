@@ -98,7 +98,7 @@ enum QuickBooksSalesLineContract {
     }
 
     static func validReference(_ value: String) -> Bool {
-        value != "." && value != ".." && value.range(of: "^[A-Za-z0-9._:-]{1,128}$", options: .regularExpression) != nil
+        QuickBooksProviderReference.isValid(value)
     }
 
     static func unitPriceLabel(_ value: Double) -> String {

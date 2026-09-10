@@ -27,8 +27,8 @@ struct QBODocumentScope: Codable, Equatable {
     func validate() throws {
         guard Self.reference(realmID), ["sandbox", "production"].contains(environment) else { throw QBODocumentError.access }
     }
-    static func reference(_ value: String) -> Bool {
-        ![".", ".."].contains(value) && value.range(of: #"^[A-Za-z0-9._:-]{1,128}$"#, options: .regularExpression) != nil
+    nonisolated static func reference(_ value: String) -> Bool {
+        QuickBooksProviderReference.isValid(value)
     }
     var query: [URLQueryItem] {
         [.init(name: "companyID", value: companyID.uuidString.lowercased()), .init(name: "realmID", value: realmID),

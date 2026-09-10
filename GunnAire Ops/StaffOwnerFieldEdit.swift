@@ -103,7 +103,7 @@ struct StaffOwnerFieldEditApplication: Codable, Equatable {
     let reviewedConflict: Bool
     let state: String
     let publishedAt: String?
-    static func instant(_ text: String) -> Date? {
+    nonisolated static func instant(_ text: String) -> Date? {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let value = formatter.date(from: text) { return value }

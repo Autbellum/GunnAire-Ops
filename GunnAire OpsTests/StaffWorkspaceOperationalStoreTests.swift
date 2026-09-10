@@ -65,6 +65,21 @@ final class StaffWorkspaceOperationalStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testDetachedCallerReadsActivatedStoreThroughItsActor() async throws {
+        let vector = try vector(), raw = Data(vector.payloadUtf8.utf8)
+        let (scope, plan, _) = try scopeAndPlan()
+        let memory = MemoryStore()
+        let view = try installAccepted(raw: raw, receipt: vector.receipt, scope: scope, plan: plan.id, memory: memory)
+        let imported = try importReady(memory: memory, scope: scope, plan: plan.id, selectionID: view.selectionID)
+        let activated = try StaffWorkspaceOperationalStoreActivator.activate(plan: imported, store: memory.store, scope: scope, planID: plan.id)
+        let before = memory.saved
+        let count = try await Task.detached { try await activated.fetch().count }.value
+        XCTAssertEqual(count, imported.recordCount)
+        XCTAssertEqual(memory.saved, before)
+        XCTAssertFalse(activated.journal.operationalWorkspaceReady)
+    }
+
+    @MainActor
     func testActivatePreservesUnavailablePartitionsReadyFalseMountUnchanged() throws {
         let vector = try vector()
         let raw = Data(vector.payloadUtf8.utf8)

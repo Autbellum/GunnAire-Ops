@@ -93,7 +93,8 @@ nonisolated final class StaffWorkspaceOperationalHostedStore: @unchecked Sendabl
     var container: ModelContainer { activated.container }
     var plan: StaffWorkspaceOperationalImportPlan { activated.plan }
 
-    func fetch(kind: String? = nil, id: String? = nil) throws -> [StaffWorkspaceOperationalImportRecord] {
+    /// Preserve nonisolated teardown without exposing SwiftData reads off actor.
+    @MainActor func fetch(kind: String? = nil, id: String? = nil) throws -> [StaffWorkspaceOperationalImportRecord] {
         guard journal.schema == StaffWorkspaceOperationalHostJournal.schema,
               journal.state == "hosted",
               journal.operationalWorkspaceReady,

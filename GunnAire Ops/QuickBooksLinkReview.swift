@@ -30,7 +30,7 @@ struct QuickBooksExistingLink: Codable, Equatable, Identifiable {
     var serviceCallID: UUID?
     var id: String { kind.rawValue + ":" + localID.uuidString }
     func validate() throws {
-        guard providerID.range(of: #"^[A-Za-z0-9._:-]{1,128}$"#, options: .regularExpression) != nil,
+        guard QuickBooksProviderReference.isValid(providerID),
               !localName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, localName.count <= 500,
               !localName.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 }),
               kind.document ? localCustomerID != nil : (localCustomerID == nil && serviceCallID == nil) else {

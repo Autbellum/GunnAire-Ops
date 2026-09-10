@@ -21,6 +21,37 @@ import Testing
         #expect(app.requests.isEmpty)
     }
 
+    @Test func defaultDocumentAccessStillRejectsAnUnmountedContext() throws {
+        let app = try QuickBooksBillingWorkflowTests.Fixture(linkedInvoice: true)
+        #expect(throws: QBODocumentError.access) {
+            try QBODocumentNativeWorkflow.access(context: app.context)
+        }
+        #expect(app.requests.isEmpty)
+    }
+
+    @Test func injectedAPIStaysOnMainActorAcrossUploadAndEnqueue() async throws {
+        let app = try QuickBooksBillingWorkflowTests.Fixture(linkedInvoice: true)
+        let files = try QuickBooksDocumentWorkflowFixture(); defer { files.cleanup() }
+        let attachment = try app.addAttachment()
+        defer { try? FileManager.default.removeItem(at: attachment.localFileURL) }
+        let base = files.dependencies()
+        var checks = 0
+        let dependencies = QBODocumentNativeWorkflow.Dependencies(owner: base.owner, access: { context, api in
+            MainActor.preconditionIsolated()
+            #expect(api === app.api)
+            checks += 1
+            return try base.access(context, api)
+        }, store: base.store, transport: base.transport)
+        _ = try await QBODocumentNativeWorkflow.upload(attachment, references: references, context: app.context,
+            api: app.api, dependencies: dependencies)
+        let queued = try #require(QBODocumentNativeWorkflow.enqueue(attachment, references: references,
+            context: app.context, api: app.api, dependencies: dependencies))
+        await queued.value
+        #expect(checks == 3)
+        #expect(files.sends == 1)
+        #expect(attachment.quickBooksAttachableID == "A1")
+    }
+
     @Test func repeatedManualCaptureKeepsOneOriginalJobFileAndPhotoCount() throws {
         let app = try QuickBooksBillingWorkflowTests.Fixture(linkedInvoice: true)
         let files = try QuickBooksDocumentWorkflowFixture(); defer { files.cleanup() }

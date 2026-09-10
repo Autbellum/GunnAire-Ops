@@ -2,7 +2,7 @@ import Foundation
 
 /// Transport integrity only. These bytes are not owner models, an accepted
 /// staff store, a lease, a financial command, or proof of CloudKit receipt.
-struct StaffWorkspaceContentReceipt: Codable, Equatable {
+nonisolated struct StaffWorkspaceContentReceipt: Codable, Equatable, Sendable {
     static let maximumBytes = 64 * 1024 * 1024
     static let chunkSize = 1024 * 1024
     let schema: String
@@ -35,7 +35,8 @@ struct StaffWorkspaceContentReceipt: Codable, Equatable {
     let fieldProjectionRequired: Bool
     let localCloudKitProofRequired: Bool
 
-    func validate(plan: CloudKitStaffSharePlan, workspace: CompanyWorkspaceIdentity,
+    // Decoding is value-only. Live plan/workspace authorization stays on its actor.
+    @MainActor func validate(plan: CloudKitStaffSharePlan, workspace: CompanyWorkspaceIdentity,
                   selection: String, selectionDigest: String, sequence: Int, now: Date, requireCurrent: Bool = true) throws {
         try plan.validate(workspace: workspace, now: now)
         guard plan.state == "accepted", plan.businessAccessEligible, !plan.reviewRequired, !plan.cloudKitRevocationRequired,
@@ -61,7 +62,7 @@ struct StaffWorkspaceContentReceipt: Codable, Equatable {
     }
 }
 
-struct StaffWorkspaceContentChunk: Codable, Equatable {
+nonisolated struct StaffWorkspaceContentChunk: Codable, Equatable, Sendable {
     let receipt: StaffWorkspaceContentReceipt
     let offset: Int
     let nextOffset: Int?
@@ -88,7 +89,7 @@ struct StaffWorkspaceContentChunk: Codable, Equatable {
         try fields.encode(offset, forKey: .offset); try fields.encode(nextOffset, forKey: .nextOffset)
         try fields.encode(chunkSHA256, forKey: .chunkSHA256); try fields.encode(payloadBase64, forKey: .payloadBase64)
     }
-    static func decode(_ bytes: Data) throws -> Self {
+    @MainActor static func decode(_ bytes: Data) throws -> Self {
         try StaffWorkspacePublicationContract.decode(Self.self, from: bytes, maximum: 2 * 1024 * 1024)
     }
 }

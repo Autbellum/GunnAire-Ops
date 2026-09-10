@@ -70,8 +70,7 @@ struct QuickBooksChangeHistoryScope: Codable, Equatable {
     }
 
     nonisolated static func validReference(_ value: String) -> Bool {
-        ![".", ".."].contains(value) &&
-        value.range(of: #"\A[A-Za-z0-9._:-]{1,128}\z"#, options: .regularExpression) != nil
+        QuickBooksProviderReference.isValid(value)
     }
 
     nonisolated static func validDigest(_ value: String) -> Bool {

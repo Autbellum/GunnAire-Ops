@@ -70,6 +70,23 @@ final class StaffWorkspaceOperationalHostTests: XCTestCase {
     }
 
     @MainActor
+    func testDetachedCallerReadsHostedStoreWithoutRewritingJournals() async throws {
+        let vector = try vector(), raw = Data(vector.payloadUtf8.utf8)
+        let (context, plan, _) = try scopeContextAndPlan()
+        let memory = MemoryStore()
+        let (_, activated, _) = try installAcceptedImportActivateConvergeMarkReady(
+            raw: raw, receipt: vector.receipt, sealedSHA256: String(repeating: "b", count: 64),
+            scope: context.scope, plan: plan, participantAccountHash: context.account.accountHash, memory: memory)
+        let hosted = try StaffWorkspaceOperationalHostStore.open(plan: plan, store: memory.store, scope: context.scope, planID: plan.id)
+        let before = memory.saved
+        let count = try await Task.detached { try await hosted.fetch().count }.value
+        XCTAssertEqual(count, activated.plan.recordCount)
+        XCTAssertEqual(memory.saved, before)
+        XCTAssertTrue(hosted.journal.operationalWorkspaceReady)
+        XCTAssertFalse(activated.journal.operationalWorkspaceReady)
+    }
+
+    @MainActor
     func testOpenHostHappyPathPriorReadyFalseJournalsStayMountUnchanged() throws {
         let vector = try vector()
         let raw = Data(vector.payloadUtf8.utf8)

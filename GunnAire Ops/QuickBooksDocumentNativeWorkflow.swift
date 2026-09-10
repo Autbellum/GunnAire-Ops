@@ -17,13 +17,15 @@ import UniformTypeIdentifiers
         let store: QBODocumentCaptureStore
         let transport: QBODocumentUploadClient.Transport
         static var live: Self {
-            .init(owner: QBODocumentOwner.capture, access: QBODocumentNativeWorkflow.access, store: .device,
+            .init(owner: QBODocumentOwner.capture, access: { try QBODocumentNativeWorkflow.access(context: $0, api: $1) }, store: .device,
                   transport: GunnAireBackendService.documentUploadRequest)
         }
     }
 
-    static func access(context: ModelContext, api: QuickBooksDataAPI = .shared) throws -> Access {
+    static func access(context: ModelContext, api: QuickBooksDataAPI? = nil) throws -> Access {
         let owner = try QBODocumentOwner.capture(context: context)
+        // Resolve live dependencies inside this actor, never in a caller's default argument.
+        let api = api ?? .shared
         let workflow = try api.captureWorkspaceWorkflow()
         guard workflow.companyID == owner.companyID, let realm = workflow.realmID else { throw QBODocumentError.access }
         let scope = QBODocumentScope(companyID: owner.companyID, realmID: realm, environment: workflow.environment)
@@ -155,10 +157,11 @@ import UniformTypeIdentifiers
     /// relabel another local file; failed saves retain the server-owned original
     /// so the next review can apply it without uploading another copy.
     static func upload(_ attachment: ServiceDocumentAttachment, references: [QuickBooksAttachableReference], context: ModelContext,
-                       api: QuickBooksDataAPI = .shared, validate: @escaping () throws -> Void = {},
+                       api: QuickBooksDataAPI? = nil, validate: @escaping () throws -> Void = {},
                        dependencies: Dependencies? = nil,
                        save: (ModelContext) throws -> Void = { try $0.save() }) async throws -> String {
         try validate()
+        let api = api ?? .shared
         let dependencies = dependencies ?? .live
         let access = try dependencies.access(context, api)
         let targets = try QBODocumentTarget.normalized(references.map { .init(type: $0.EntityRef.type, id: $0.EntityRef.value) })
@@ -338,8 +341,9 @@ import UniformTypeIdentifiers
 
     @discardableResult
     static func enqueue(_ attachment: ServiceDocumentAttachment, references: [QuickBooksAttachableReference],
-                        context: ModelContext, api: QuickBooksDataAPI = .shared,
+                        context: ModelContext, api: QuickBooksDataAPI? = nil,
                         dependencies: Dependencies? = nil) -> Task<Void, Never>? {
+        let api = api ?? .shared
         let dependencies = dependencies ?? .live
         guard let access = try? dependencies.access(context, api) else { return nil }
         let identifier = attachment.id, path = attachment.localFilePath
