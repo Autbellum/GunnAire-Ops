@@ -61,7 +61,7 @@ public enum EstimatePricing {
         if !stale.isEmpty { blockers.append("\(stale.count) QA reviews refer to an earlier project state.") }
         if included.count != lines.count { blockers.append("\(included.count - lines.count) included rows lack deliberate quantity or cost inputs.") }
         for item in included {
-            if let mapping = try project.catalogMaterialMapping(itemID: item["id"]!.string!), !mapping.matches(item) {
+            if let mapping = try CatalogMaterialMapping.recorded(in: item), !mapping.matches(item) {
                 blockers.append("Catalog material mapping for \(item["id"]!.string!) is stale; review the changed item or cost.")
             }
         }

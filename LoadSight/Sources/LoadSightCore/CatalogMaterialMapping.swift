@@ -15,6 +15,14 @@ public struct OpsMaterialCatalogSnapshot: Codable, Equatable, Sendable, Identifi
         self.id = id; self.source = source; self.name = name; self.sku = sku; self.supplier = supplier
         self.supplierPartNumber = supplierPartNumber; self.purchaseCost = purchaseCost; self.updatedAt = updatedAt
     }
+    private enum CodingKeys: String, CodingKey { case id, source, name, sku, supplier, supplierPartNumber, purchaseCost, updatedAt }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id); try c.encode(source, forKey: .source); try c.encode(name, forKey: .name)
+        try c.encode(sku, forKey: .sku); try c.encode(supplier, forKey: .supplier)
+        try c.encode(supplierPartNumber, forKey: .supplierPartNumber); try c.encode(purchaseCost, forKey: .purchaseCost)
+        try c.encode(updatedAt, forKey: .updatedAt)
+    }
     public func validate() throws {
         try require(!source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "Catalog source and name are required.")
         try require(ISO8601DateFormatter().date(from: updatedAt) != nil, "Invalid catalog snapshot date.")
@@ -52,6 +60,11 @@ public struct CatalogMaterialMapping: Codable, Equatable, Sendable {
         (item["unit"]?.string ?? "") == takeoffUnit && (item["description"]?.string ?? "") == itemDescription &&
         (item["lifecycle"]?.string ?? "") == lifecycle
     }
+    /// Decode the saved basis on this exact row without searching the project again.
+    /// This validates the mapping, not project history or account authorization.
+    public static func recorded(in item: [String: JSONValue]) throws -> CatalogMaterialMapping? {
+        try mappingDecode(item["catalogMaterialMapping"] ?? .null)
+    }
 }
 public struct CatalogMaterialRevision: Codable, Identifiable, Sendable {
     public let id: UUID
@@ -70,10 +83,30 @@ private func mappingDecode(_ raw: JSONValue) throws -> CatalogMaterialMapping? {
     try value.validate(); return value
 }
 private func mappingJSON<T: Encodable>(_ value: T) throws -> JSONValue { try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(value)) }
+private func mappingFingerprint(item: [String: JSONValue], lastRevisionID: UUID?) throws -> String {
+    let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+    return SHA256.hash(data: try encoder.encode(JSONValue.object([
+        "item": .object(item), "lastRevision": lastRevisionID.map { .string($0.uuidString) } ?? .null
+    ]))).map { String(format: "%02x", $0) }.joined()
+}
+
+/// An immutable local read, rebuilt from the current document rather than cached across edits.
+public struct CatalogMaterialReadSnapshot: Sendable {
+    public struct Entry: Sendable {
+        public let itemID: String
+        public let item: [String: JSONValue]
+        public let mapping: CatalogMaterialMapping?
+        public let editFingerprint: String
+        public let history: [JSONValue]
+    }
+    public let entries: [Entry]
+    public let removedItemHistory: [JSONValue]
+}
+
 public extension ProjectDocument {
     func catalogMaterialMapping(itemID: String) throws -> CatalogMaterialMapping? {
         guard let item = items.first(where: { $0["id"]?.string == itemID }) else { throw LoadSightError.invalid("Takeoff item not found.") }
-        return try mappingDecode(item["catalogMaterialMapping"] ?? .null)
+        return try CatalogMaterialMapping.recorded(in: item)
     }
     func catalogMaterialHistory() throws -> [CatalogMaterialRevision] {
         let raw = root["catalogMaterialHistory"]
@@ -105,8 +138,28 @@ public extension ProjectDocument {
     func catalogMaterialEditFingerprint(itemID: String) throws -> String {
         guard let item = items.first(where: { $0["id"]?.string == itemID }) else { throw LoadSightError.invalid("Takeoff item not found.") }
         let last = try catalogMaterialHistory().last { $0.itemID == itemID }
-        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-        return SHA256.hash(data: try encoder.encode(JSONValue.object(["item": .object(item), "lastRevision": last.map { .string($0.id.uuidString) } ?? .null]))).map { String(format: "%02x", $0) }.joined()
+        return try mappingFingerprint(item: item, lastRevisionID: last?.id)
+    }
+    func catalogMaterialReadSnapshot() throws -> CatalogMaterialReadSnapshot {
+        let history = try catalogMaterialHistory()
+        let rawHistory = root["catalogMaterialHistory"].array ?? []
+        var grouped: [String: [JSONValue]] = [:], lastIDs: [String: UUID] = [:]
+        // Keep raw validated events so newer optional evidence is not lost by typed re-encoding.
+        for (event, raw) in zip(history, rawHistory) {
+            grouped[event.itemID, default: []].append(raw)
+            lastIDs[event.itemID] = event.id
+        }
+        let currentItems = items
+        let currentIDs = Set(currentItems.compactMap { $0["id"]?.string })
+        let entries = try currentItems.map { item -> CatalogMaterialReadSnapshot.Entry in
+            let id = item["id"]!.string!
+            return .init(itemID: id, item: item, mapping: try CatalogMaterialMapping.recorded(in: item),
+                         editFingerprint: try mappingFingerprint(item: item, lastRevisionID: lastIDs[id]),
+                         history: grouped[id] ?? [])
+        }
+        return .init(entries: entries, removedItemHistory: zip(history, rawHistory).compactMap { event, raw in
+            currentIDs.contains(event.itemID) ? nil : raw
+        })
     }
     /// Records an estimator-selected cost basis; never edits a catalog, selling price, quantity, or labor assumption.
     mutating func updateCatalogMaterialMapping(itemID: String, mapping: CatalogMaterialMapping?, expectedFingerprint: String, author: String, reason: String) throws {

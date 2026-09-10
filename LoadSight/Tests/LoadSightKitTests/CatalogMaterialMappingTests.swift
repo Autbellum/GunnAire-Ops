@@ -96,3 +96,55 @@ final class CatalogMaterialMappingTests: XCTestCase {
         XCTAssertEqual(p.root["extension"], .string("retained"))
     }
 }
+
+final class CatalogMaterialPluginTests: XCTestCase {
+    private func request(_ project: ProjectDocument, cost: Double? = 50) throws -> JSONValue {
+        let snapshot = OpsMaterialCatalogSnapshot(id: UUID(), source: "Synthetic source", name: "Synthetic duct", purchaseCost: cost, updatedAt: "2026-09-10T12:00:00Z")
+        let mapping = CatalogMaterialMapping(catalog: snapshot, currency: "USD", purchaseUnit: "5-foot length", catalogUnitsPerTakeoffUnit: 0.2, takeoffUnit: "LF", itemDescription: "Duct", lifecycle: "", basis: "Synthetic conversion evidence")
+        return .object(["operation": .string("catalog.material.update"), "id": .string("D1"), "author": .string("Plugin recorder"), "reason": .string("Reviewed source snapshot"), "expectedFingerprint": .string(try project.catalogMaterialEditFingerprint(itemID: "D1")), "mapping": try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(mapping))])
+    }
+    func testStrictRequestAndReviewExposeSameNativeCostHistoryAndFingerprint() throws {
+        let p = try LoadSightTests().readyProject(), r = try request(p)
+        let result = try ProjectEditing.apply(r, to: p)
+        XCTAssertEqual(result.recordID, "D1"); XCTAssertEqual(result.project.items[0]["materialUnit"], .number(10))
+        let review = try result.project.catalogMaterialReview()["items"].array![0]
+        XCTAssertEqual(review["mappingCurrent"], .bool(true)); XCTAssertEqual(review["history"].array?.count, 1)
+        XCTAssertEqual(review["editFingerprint"].string, try result.project.catalogMaterialEditFingerprint(itemID: "D1"))
+        XCTAssertEqual(p.items[0]["materialUnit"], .number(20))
+        XCTAssertThrowsError(try ProjectEditing.apply(r, to: result.project))
+    }
+    func testExplicitNullCostRoundTripsAndRemovalRetainsUnknown() throws {
+        let p = try LoadSightTests().readyProject(), r = try request(p, cost: nil)
+        XCTAssertNotNil(r["mapping"]["catalog"].object?["purchaseCost"])
+        let mapped = try ProjectEditing.apply(r, to: p).project
+        XCTAssertEqual(mapped.items[0]["materialUnit"], .null)
+        var removal = r.object!; removal["mapping"] = .null; removal["expectedFingerprint"] = .string(try mapped.catalogMaterialEditFingerprint(itemID: "D1"))
+        let removed = try ProjectEditing.apply(.object(removal), to: mapped).project
+        XCTAssertNil(try removed.catalogMaterialMapping(itemID: "D1")); XCTAssertEqual(removed.items[0]["materialUnit"], .null)
+        XCTAssertEqual(try removed.catalogMaterialReview()["items"].array![0]["mappingCurrent"], .null)
+    }
+    func testMissingAndUnknownNestedFieldsCannotSilentlyChangeRequestMeaning() throws {
+        let p = try LoadSightTests().readyProject(), request = try request(p)
+        for path in [[], ["mapping"], ["mapping", "catalog"]] as [[String]] {
+            func changed(_ raw: JSONValue, depth: Int) -> JSONValue {
+                var object = raw.object!
+                if depth == path.count { object["unexpected"] = .bool(true) }
+                else { object[path[depth]] = changed(object[path[depth]]!, depth: depth + 1) }
+                return .object(object)
+            }
+            XCTAssertThrowsError(try ProjectEditing.apply(changed(request, depth: 0), to: p))
+        }
+        var top = request.object!; top.removeValue(forKey: "mapping")
+        XCTAssertThrowsError(try ProjectEditing.apply(.object(top), to: p))
+        top = request.object!; var mapping = top["mapping"]!.object!, catalog = mapping["catalog"]!.object!
+        catalog.removeValue(forKey: "purchaseCost"); mapping["catalog"] = .object(catalog); top["mapping"] = .object(mapping)
+        XCTAssertThrowsError(try ProjectEditing.apply(.object(top), to: p))
+    }
+    func testReviewReportsStaleManualCostWithoutMaskingTheCurrentNumber() throws {
+        let p = try LoadSightTests().readyProject(); var mapped = try ProjectEditing.apply(request(p), to: p).project
+        try mapped.updateItem(id: "D1", fields: ["materialUnit": .number(99)])
+        let row = try mapped.catalogMaterialReview()["items"].array![0]
+        XCTAssertEqual(row["mappingCurrent"], .bool(false)); XCTAssertEqual(row["item"]["materialUnit"], .number(99))
+        XCTAssertEqual(row["mapping"]["catalog"]["purchaseCost"], .number(50))
+    }
+}

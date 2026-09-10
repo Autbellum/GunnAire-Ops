@@ -43,6 +43,7 @@ public enum ProjectEditing {
         let operation = try text("operation"), author = try text("author")
         let payloadKeys: [String]
         switch operation {
+        case "catalog.material.update": payloadKeys = ["id", "mapping", "expectedFingerprint", "reason"]
         case "ops.context.update": payloadKeys = ["context", "expectedFingerprint", "reason"]
         case "changeorder.create": payloadKeys = ["draft"]
         case "changeorder.revise": payloadKeys = ["id", "expectedFingerprint", "reason", "draft"]
@@ -67,6 +68,20 @@ public enum ProjectEditing {
         var copy = project
         var recordID: String?
         switch operation {
+        case "catalog.material.update":
+            guard let raw = fields["mapping"] else { throw LoadSightError.invalid("Supply mapping explicitly, or null to remove a catalog link.") }
+            var mapping: CatalogMaterialMapping?
+            if raw != .null {
+                func exact(_ value: JSONValue, _ keys: [String]) throws {
+                    try require(value.object.map { Set($0.keys) == Set(keys) } == true, "Catalog mapping objects must contain exactly their documented fields.")
+                }
+                try exact(raw, ["version", "catalog", "currency", "purchaseUnit", "catalogUnitsPerTakeoffUnit", "takeoffUnit", "itemDescription", "lifecycle", "basis"])
+                try exact(raw["catalog"], ["id", "source", "name", "sku", "supplier", "supplierPartNumber", "purchaseCost", "updatedAt"])
+                mapping = try JSONDecoder().decode(CatalogMaterialMapping.self, from: JSONEncoder().encode(raw))
+            }
+            let id = try text("id")
+            try copy.updateCatalogMaterialMapping(itemID: id, mapping: mapping, expectedFingerprint: text("expectedFingerprint"), author: author, reason: text("reason"))
+            recordID = id
         case "ops.context.update":
             guard let raw = fields["context"] else { throw LoadSightError.invalid("Supply context explicitly, or null to remove a link.") }
             var context: OpsProjectContext?

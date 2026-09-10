@@ -3,8 +3,8 @@ import LoadSightKit
 
 do {
     let args = Array(CommandLine.arguments.dropFirst())
-    guard let command = args.first, (["review", "csv", "validate", "ingest", "air-review", "envelope-review", "room-review", "change-review", "ops-review"].contains(command) && args.count == 2) || (["apply", "rfi-docx", "co-docx"].contains(command) && args.count == 4) || (["draft-pdf", "xlsx"].contains(command) && args.count == 3) else {
-        throw LoadSightError.invalid("Usage: loadsight review|csv|validate|air-review|envelope-review|room-review|change-review|ops-review project.json; loadsight ingest drawing.pdf; loadsight xlsx|draft-pdf project.json new-output-file; loadsight rfi-docx|co-docx project.json record-id new-output.docx; loadsight apply project.json request.json new-project.json")
+    guard let command = args.first, (["review", "csv", "validate", "ingest", "air-review", "envelope-review", "room-review", "change-review", "ops-review", "catalog-review"].contains(command) && args.count == 2) || (["apply", "rfi-docx", "co-docx"].contains(command) && args.count == 4) || (["draft-pdf", "xlsx"].contains(command) && args.count == 3) else {
+        throw LoadSightError.invalid("Usage: loadsight review|csv|validate|air-review|envelope-review|room-review|change-review|ops-review|catalog-review project.json; loadsight ingest drawing.pdf; loadsight xlsx|draft-pdf project.json new-output-file; loadsight rfi-docx|co-docx project.json record-id new-output.docx; loadsight apply project.json request.json new-project.json")
     }
     if command == "ingest" {
         let archive = try await DrawingIngestor().ingest(url: URL(fileURLWithPath: args[1]))
@@ -21,6 +21,9 @@ do {
     case "rfi-docx":
         try RFIWordDocument.docx(project, rfiID: args[2]).write(to: URL(fileURLWithPath: args[3]), options: .withoutOverwriting)
         print("RFI Word copy saved: \(args[3])")
+    case "catalog-review":
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        print(String(decoding: try encoder.encode(project.catalogMaterialReview()), as: UTF8.self))
     case "ops-review":
         let value = JSONValue.object(["context": project.root["opsContext"], "history": project.root["opsContextHistory"], "editFingerprint": .string(try project.opsContextEditFingerprint()), "authority": .string("Recorded local snapshot; not authenticated approval or billing publication")])
         print(String(decoding: try JSONEncoder().encode(value), as: UTF8.self))
