@@ -19,6 +19,7 @@ import SwiftData
     let readSavedRecords: (ModelContext) throws -> [StaffWorkspaceModelRecord]
     let deletedID: (any HistoryDelete) throws -> UUID?
     let decode: (StaffWorkspaceModelRecord, inout StaffWorkspaceModelResolver) throws -> any PersistentModel
+    let scalarTarget: (ModelContext, UUID, String) throws -> StaffOwnerFieldEditTarget
 
     init<M>(_ codec: StaffWorkspaceModelCodec<M>) {
         kind = codec.kind
@@ -52,6 +53,28 @@ import SwiftData
             return id
         }
         decode = { try codec.decodeDetached($0, resolver: &$1) }
+        scalarTarget = { context, id, name in
+            guard let field = codec.fields.first(where: { $0.name == name }), field.referenceKind == nil else {
+                throw StaffWorkspaceModelError.unsupported
+            }
+            var descriptor = FetchDescriptor<M>(); descriptor.fetchLimit = 20_001
+            let models = try context.fetch(descriptor)
+            guard models.count <= 20_000 else { throw StaffWorkspaceModelError.invalid }
+            let matches = models.filter { $0[keyPath: codec.id] == id }
+            guard matches.count == 1, let model = matches.first else { throw StaffOwnerFieldEditError.missing }
+            let original = try codec.encode(model)
+            return .init(title: StaffOwnerFieldEditModels.title(model, record: original), value: { field.read(model) }, write: { value in
+                try field.validate(value)
+                try field.write(model, value, StaffWorkspaceModelResolver())
+            }, ownsPendingWrite: { value in
+                guard codec.excludedAttributes.isEmpty,
+                      context.insertedModelsArray.isEmpty, context.deletedModelsArray.isEmpty,
+                      context.changedModelsArray.allSatisfy({ $0.persistentModelID == model.persistentModelID }),
+                      let changed = try? codec.encode(model) else { return false }
+                var expected = original.fields; expected[name] = value
+                return changed.fields == expected
+            })
+        }
     }
 }
 

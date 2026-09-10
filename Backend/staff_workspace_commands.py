@@ -186,7 +186,9 @@ class StaffWorkspaceCommands(delivery.StaffWorkspaceDelivery):
                     raise sharing.fail("command_actor_changed", "Recover this command using its original business account.", 403)
                 saved = self.source.decode(existing["payload"])
                 try:
-                    contract.exact(saved, "request receipt")
+                    contract.exact(saved, "request receipt baseValue" if "baseValue" in saved else "request receipt")
+                    if "baseValue" in saved and contract.canonical(saved["baseValue"]) != contract.canonical(fields[field_name]):
+                        raise ValueError()
                 except (sharing.AttemptError, ValueError, TypeError):
                     raise self.source.unavailable() from None
                 if contract.canonical(saved["request"]) != canonical_request:
@@ -208,7 +210,7 @@ class StaffWorkspaceCommands(delivery.StaffWorkspaceDelivery):
                 raise sharing.fail("source_changed", "Refresh full company data before submitting a field command.", 409)
             created_at = self.shares.now().isoformat()
             receipt = self.recorded_receipt(request_body, actor["email"], created_at)
-            stored = dict(request=request_body, receipt=receipt)
+            stored = dict(request=request_body, receipt=receipt, baseValue=copy.deepcopy(fields[field_name]))
             encrypted = self.source.encode(stored)
             connection.execute(
                 """INSERT INTO staff_workspace_commands

@@ -36,6 +36,7 @@ try:
     from Backend.billing_provider import BillingQBOProvider
     from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads
     from Backend import document_storage
+    from Backend import staff_owner_field_edits
     from Backend.qbo_document_provider import DocumentQBOProvider
     from Backend import time_worker_mappings, time_publications, cloudkit_staff_shares, staff_replica, staff_workspace_source, staff_workspace_selections, staff_billing_delivery, staff_workspace_delivery, staff_workspace_cloud, staff_workspace_media, staff_workspace_commands
     from Backend.time_worker_provider import TimeWorkerQBOProvider
@@ -51,6 +52,7 @@ except ModuleNotFoundError:
     from billing_provider import BillingQBOProvider
     import google_connections
     import document_storage
+    import staff_owner_field_edits
     import google_mail
     import qbo_change_capture
     import qbo_document_uploads
@@ -2540,6 +2542,7 @@ def initialize_database() -> None:
         staff_billing_delivery.initialize_schema(connection)
         staff_workspace_delivery.initialize_schema(connection)
         staff_workspace_commands.initialize_schema(connection)
+        staff_owner_field_edits.initialize_schema(connection)
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS customer_communications (
@@ -3639,6 +3642,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/workspace/full-records":
             self.handle_staff_workspace_source(parsed, method="GET")
             return
+        if parsed.path == "/api/workspace/field-edits" or parsed.path.startswith("/api/workspace/field-edits/"):
+            self.handle_staff_owner_field_edits(parsed, method="GET")
+            return
         if parsed.path == "/api/customer-financing":
             self.write_json(customer_financing_readiness())
             return
@@ -3865,6 +3871,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/workspace/full-records":
             self.handle_staff_workspace_source(parsed, method="POST")
+            return
+        if parsed.path.startswith("/api/workspace/field-edits/"):
+            self.handle_staff_owner_field_edits(parsed, method="POST")
             return
         if parsed.path == "/api/push-devices":
             if not self.require_application_session():
@@ -4367,6 +4376,35 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             self.write_json({"error": "Invalid full workspace selection request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
         except (sqlite3.Error, RuntimeError):
             self.write_json({"error": "Selection storage is unavailable. Retain the original operation for recovery.",
+                             "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+
+    def handle_staff_owner_field_edits(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        shares = cloudkit_staff_shares.StaffShares(db, record_audit_event,
+            encrypt=encrypt_catalog_payload, decrypt=decrypt_catalog_payload)
+        service = staff_owner_field_edits.StaffOwnerFieldEdits(shares)
+        try:
+            suffix = parsed.path.removeprefix("/api/workspace/field-edits")
+            parts = suffix.removeprefix("/").split("/") if suffix else []
+            if method == "GET" and len(parts) <= 1:
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                if any(len(value) != 1 for value in query.values()):
+                    raise cloudkit_staff_shares.fail("invalid_query", "Use one value per field-edit query.", 400)
+                result = service.read(self._application_session_id, parts[0] if parts else None,
+                    {key: value[0] for key, value in query.items()})
+            elif method == "POST" and len(parts) == 2 and parts[1] in ("prepare", "confirm") and not parsed.query:
+                payload = qbo_change_capture.strict_json(self.read_limited_body(7 * 1024 * 1024).decode("utf-8"))
+                result = service.change(self._application_session_id, parts[0], parts[1], payload)
+            else:
+                raise cloudkit_staff_shares.fail("invalid_request", "Use an exact field-edit endpoint.", 400)
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError, RecursionError):
+            self.write_json({"error": "Invalid field-edit request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
+        except (sqlite3.Error, RuntimeError, KeyError):
+            self.write_json({"error": "Field-edit recovery storage is unavailable. Retain saved work.",
                              "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
 
     def handle_staff_workspace_source(self, parsed, *, method):
@@ -7071,6 +7109,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         message = re.sub(r"/api/workspace/staff-shares(?:[/?][^\s\"]*)?", "/api/workspace/staff-shares/[redacted]", message)
         message = re.sub(r"/api/workspace/replica-records(?:[/?][^\s\"]*)?", "/api/workspace/replica-records/[redacted]", message)
         message = re.sub(r"/api/workspace/full-records(?:[/?][^\s\"]*)?", "/api/workspace/full-records/[redacted]", message)
+        message = re.sub(r"/api/workspace/field-edits(?:[/?][^\s\"]*)?", "/api/workspace/field-edits/[redacted]", message)
         message = re.sub(r"/api/time-publications(?:[/?][^\s\"]*)?", "/api/time-publications/[redacted]", message)
         print(f"{timestamp} {self.address_string()} {message}")
 

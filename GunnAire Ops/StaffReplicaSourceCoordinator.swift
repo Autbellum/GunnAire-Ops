@@ -20,6 +20,7 @@ struct StaffReplicaSourceDependencies {
     var prepareFullWorkspace: ((StaffReplicaSourceContext) throws -> Void)? = nil
     var fullWorkspace: StaffWorkspacePublicationCoordinator? = nil
     var fullContent: StaffWorkspaceContentCoordinator? = nil
+    var ownerFieldEdits: StaffOwnerFieldEditCoordinator? = nil
 
     static func verify(_ context: StaffReplicaSourceContext) throws {
         try Task.checkCancellation()
@@ -53,7 +54,7 @@ struct StaffReplicaSourceDependencies {
             return try StaffReplicaSourceHistory.capture(container: container, after: token, storeUUID: context.scope.storeUUID)
         }, request: { try await GunnAireBackendService.staffReplicaSourceRequest(path: $0, method: $1, body: $2) }, store: StaffReplicaSourceStorage.device,
               deliver: { try await StaffReplicaAutomaticDelivery().deliver(source: $0, sequence: $1) },
-              fullWorkspace: .shared, fullContent: .shared)
+              fullWorkspace: .shared, fullContent: .shared, ownerFieldEdits: .shared)
     }
 }
 
@@ -86,11 +87,13 @@ enum StaffReplicaSourceStorage {
     @Published private(set) var workspaceConflicts: [StaffWorkspacePublicationConflict] = []
     private var displayScope: StaffReplicaSourceScope?
     let dependencies: StaffReplicaSourceDependencies
+    var ownerFieldEdits: StaffOwnerFieldEditCoordinator? { dependencies.ownerFieldEdits }
     init(dependencies: StaffReplicaSourceDependencies? = nil) { self.dependencies = dependencies ?? .live }
 
     func clearDisplay() {
         conflicts = []; lastConfirmedAt = nil; displayScope = nil; hasMore = false
         workspaceConflicts = []; dependencies.fullWorkspace?.clearCache()
+        dependencies.ownerFieldEdits?.clearDisplay()
         message = "Verify the approved owner workspace to prepare staff data."
     }
     private func load(_ context: StaffReplicaSourceContext) throws -> StaffReplicaSourceJournal {
@@ -178,6 +181,22 @@ enum StaffReplicaSourceStorage {
         return try encoder.encode(batch)
     }
 
+    func applyFieldReview(_ review: StaffOwnerFieldEditReview) async {
+        guard !isRunning, let edits = dependencies.ownerFieldEdits else { return }
+        isRunning = true
+        do {
+            let context = try await dependencies.context()
+            try dependencies.check(context)
+            guard displayScope == context.scope else { throw StaffReplicaSourceSyncError.access }
+            try await edits.applyReviewed(review, context: context)
+            isRunning = false
+            await sync()
+        } catch {
+            isRunning = false
+            message = (error as? StaffOwnerFieldEditError)?.localizedDescription ?? "The reviewed field edit changed or could not be saved. Check again; the original was retained."
+        }
+    }
+
     func sync() async {
         guard !isRunning else { return }
         isRunning = true; hasMore = false
@@ -190,6 +209,8 @@ enum StaffReplicaSourceStorage {
             // Original in-flight requests are recovered before capturing newer
             // edits, including after process death or a lost acknowledgement.
             try await recover(&journal, context: context)
+            try await dependencies.ownerFieldEdits?.synchronize(context)
+            try dependencies.check(context)
             // Prepare all 32 owner model kinds durably under a separate local
             // schema before publishing newer core facts. Never alter recovery
             // of an already submitted six-kind operation or send raw HR/billing
@@ -202,6 +223,8 @@ enum StaffReplicaSourceStorage {
                     message = summary.message; hasMore = summary.hasMore; lastConfirmedAt = summary.lastConfirmedAt
                     return
                 }
+                try await dependencies.ownerFieldEdits?.confirmPublished(context)
+                try dependencies.check(context)
                 if let content = dependencies.fullContent {
                     let prepared = try await content.synchronize(context, published: summary)
                     try dependencies.check(context)

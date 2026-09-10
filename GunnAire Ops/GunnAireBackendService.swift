@@ -1037,7 +1037,7 @@ enum GunnAireBackendService {
         request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
         do {
-            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: 8192)
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: 32 * 1024)
             try check(); return data
         } catch {
             try check()
@@ -1085,6 +1085,7 @@ enum GunnAireBackendService {
     static func staffReplicaSourceRequest(path: String, method: String, body: Data?) async throws -> Data {
         guard (StaffReplicaSourceTransportPolicy.allows(path: path, method: method, body: body)
                || StaffWorkspacePublicationTransportPolicy.allows(path: path, method: method, body: body)
+               || StaffOwnerFieldEditTransport.allows(path: path, method: method, body: body)
                || StaffWorkspaceContentHTTPPolicy.allows(path: path, method: method, body: body)),
               let stamp = CompanyWorkspaceAccessController.shared.operationStamp,
               CompanyWorkspaceAccessController.shared.verifiedRole == .admin else { throw StaffReplicaSourceSyncError.access }
@@ -1102,12 +1103,14 @@ enum GunnAireBackendService {
         try check()
         request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
         do {
-            let (data, response) = try await GmailServerHTTPTransfer.data(for: request, maximum: 8 * 1024 * 1024, acceptedStatusCodes: [200, 409])
+            let maximum = StaffOwnerFieldEditTransport.allows(path: path, method: method, body: body)
+                ? StaffOwnerFieldEditTransport.maximumResponseBytes : 8 * 1024 * 1024
+            let (data, response) = try await GmailServerHTTPTransfer.data(for: request, maximum: maximum, acceptedStatusCodes: [200, 409])
             try check()
             if response.statusCode == 409 {
                 struct Rejection: Decodable { let code: String }
                 guard data.count <= 8192, let value = try? JSONDecoder().decode(Rejection.self, from: data),
-                      ["source_changed", "record_changed", "deletion_changed"].contains(value.code) else { throw StaffReplicaSourceSyncError.invalid }
+                      ["source_changed", "record_changed", "deletion_changed", "field_changed", "edit_claimed", "edit_changed", "edit_not_prepared", "edit_not_published"].contains(value.code) else { throw StaffReplicaSourceSyncError.invalid }
                 if method == "POST" { throw StaffReplicaSourceRejected(code: value.code) }
                 throw StaffReplicaSourceSyncError.sourceChanged
             }

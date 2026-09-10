@@ -723,7 +723,7 @@ struct StaffWorkspaceContentSummary {
         let receiptBytes = try await staffCommandRequest(path, body)
         try staffCheck(context, plan)
         let receipt = try StaffWorkspacePublicationContract.decode(
-            StaffWorkspaceOperationalCommandReceipt.self, from: receiptBytes, maximum: 8192)
+            StaffWorkspaceOperationalCommandReceipt.self, from: receiptBytes, maximum: 32 * 1024)
         let journal = try StaffWorkspaceOperationalCommandStore.attachReceipt(
             store: dependencies.store, scope: context.scope, plan: plan.id,
             request: request, receipt: receipt,

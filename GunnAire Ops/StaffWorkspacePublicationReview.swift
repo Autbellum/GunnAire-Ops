@@ -51,6 +51,9 @@ struct StaffWorkspacePublicationReviewView: View {
                 Text("No owner-version conflicts are currently listed. Check Again to refresh the review.")
                     .foregroundStyle(.secondary)
             }
+            if let edits = source.ownerFieldEdits {
+                StaffOwnerFieldEditsReview(edits: edits, source: source)
+            }
             ForEach(source.workspaceConflicts) { conflict in
                 Section {
                     VStack(alignment: .leading, spacing: 6) {

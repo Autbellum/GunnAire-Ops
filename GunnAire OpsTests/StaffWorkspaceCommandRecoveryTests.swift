@@ -58,6 +58,23 @@ import XCTest
         }
     }
 
+    func testEscapedUnicodeReceiptRecoversOriginalCommand() async throws {
+        let f = try Fixture(); defer { f.cleanup() }
+        let bytes = try f.base.modified(f.request, ["value": ["text": ["_0": String(repeating: "é", count: 3000)]]])
+        let original = try JSONDecoder().decode(StaffWorkspaceOperationalCommandRequest.self, from: bytes)
+        XCTAssertLessThan(bytes.count, 8192)
+        try f.enqueue(original)
+        f.transport = { _, sent in
+            XCTAssertEqual(try JSONDecoder().decode(StaffWorkspaceOperationalCommandRequest.self, from: sent), original)
+            let receipt = try StaffWorkspacePublicationContract.encode(f.receipt(for: original))
+            let escaped = Data(String(decoding: receipt, as: UTF8.self).replacingOccurrences(of: "é", with: "\\u00e9").utf8)
+            XCTAssertGreaterThan(escaped.count, 8192)
+            return escaped
+        }
+        let result = try await f.recover()
+        XCTAssertEqual(result.recorded, 1)
+    }
+
     func testMalformedDecodedRequestsCannotEnterDurableQueue() throws {
         let f = try Fixture(); defer { f.cleanup() }
         for (key, value) in [("commandID", "../foreign" as Any), ("sourceSequence", 0), ("expectedRevision", 0),

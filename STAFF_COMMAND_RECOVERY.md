@@ -7,6 +7,10 @@ process restart, interrupted local receipt write, and newer company snapshots.
 It does **not** apply that finding to an office SwiftData record or an invoice.
 `recorded` means retained by the server, not applied or synchronized to QuickBooks.
 
+The subsequent [owner field-edit slice](STAFF_OWNER_FIELD_EDITS.md) adds actual
+saved-model application and company-source confirmation. The original recovery
+receipt and the remaining physical CloudKit/provider release gates are unchanged.
+
 The full business-suite goal remains active. Independent-account CloudKit/device
 acceptance, owner-record command application, parallel navigation changes, and
 live Google/QBO/payment acceptance remain separate release requirements.
