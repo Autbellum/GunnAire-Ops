@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "loopback_only": true,
+  "deterministic_test_results_are_authoritative": true,
+  "production_credentials_allowed_in_prompts": false,
+  "automatic_code_application": false,
+  "automatic_deployment": false,
+  "forbidden_model_authorities": [
+    "merge", "push", "deploy", "sign", "notarize", "charge_customer",
+    "mark_invoice_paid", "change_firewall", "open_port", "install_firmware",
+    "delete_backup", "rotate_production_secret"
+  ],
+  "human_approval_domains": [
+    "authentication", "authorization", "payments", "accounting", "cloudkit",
+    "firewall", "vpn", "signing", "deployment", "data_recovery"
+  ]
+}
