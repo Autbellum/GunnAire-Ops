@@ -64,3 +64,18 @@ jobs:
             ai-routing-audit.json
             ai-integration-inventory.txt
           if-no-files-found: error
+      - name: Retain integration source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-integration-source
+          path: |
+            Backend/gunnaire_backend.py
+            Backend/test_deployment_entrypoint.py
+            gunnaire_backend.py
+            GunnAire Ops/AppRootView.swift
+            GunnAire Ops/GunnAireBackendService.swift
+            GunnAire Ops/BusinessSuiteIntelligence.swift
+            GunnAire Ops/CustomerServiceText.swift
+            GunnAire Ops/OperationsDashboardView.swift
+            GunnAire Ops/SettingsView.swift
+          if-no-files-found: error
