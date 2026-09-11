@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "suites": {
+    "local-tooling": {
+      "description": "Local AI and firewall package unit tests; no provider credentials or network access required.",
+      "commands": [
+        ["python3", "-m", "unittest", "discover", "-s", "LocalAI/tests", "-p", "test_*.py", "-v"],
+        ["python3", "-m", "unittest", "discover", "-s", "Firewall/tests", "-p", "test_*.py", "-v"],
+        ["python3", "Firewall/validate_plan.py"]
+      ],
+      "timeout_seconds": 180,
+      "ai_on_failure": true,
+      "model_role": "coder"
+    },
+    "release-tools": {
+      "description": "Repository release/preflight Python tests.",
+      "commands": [
+        ["python3", "-m", "unittest", "discover", "-s", "Tools", "-p", "test_*.py", "-v"]
+      ],
+      "timeout_seconds": 600,
+      "ai_on_failure": true,
+      "model_role": "coder"
+    },
+    "backend": {
+      "description": "Backend Python tests with inherited provider credentials removed.",
+      "commands": [
+        ["python3", "-m", "unittest", "discover", "-s", "Backend", "-p", "test_*.py", "-v"]
+      ],
+      "timeout_seconds": 1800,
+      "ai_on_failure": true,
+      "model_role": "coder"
+    },
+    "loadsight-package": {
+      "description": "Swift Package tests for LoadSight.",
+      "commands": [
+        ["swift", "test", "--package-path", "LoadSight"]
+      ],
+      "timeout_seconds": 1800,
+      "ai_on_failure": true,
+      "model_role": "coder"
+    }
+  }
+}

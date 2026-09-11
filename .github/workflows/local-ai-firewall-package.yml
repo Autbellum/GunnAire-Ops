@@ -1,0 +1,33 @@
+name: Guarded Local AI and Firewall Package
+
+on:
+  pull_request:
+    paths:
+      - 'LocalAI/**'
+      - 'Firewall/**'
+      - 'Verification/**'
+      - 'Makefile'
+      - '.github/workflows/local-ai-firewall-package.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'LocalAI/**'
+      - 'Firewall/**'
+      - 'Verification/**'
+      - 'Makefile'
+      - '.github/workflows/local-ai-firewall-package.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify guarded local-AI and firewall tooling
+        run: make verify
