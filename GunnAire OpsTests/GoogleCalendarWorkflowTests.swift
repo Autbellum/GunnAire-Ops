@@ -26,6 +26,12 @@ struct GoogleCalendarWorkflowTests {
             }
 
         init(linked: Bool = false) throws {
+            // Every fixture models a fresh synthetic Google calendar. Earlier
+            // cancellation tests must not suppress a later fixture's pending job.
+            let deletedKey = "GunnAireDeletedGoogleCalendarEventKeys"
+            let fixtureKeys: Set<String> = ["calendar-fixture@gunnaire.com|fixture-event", "primary|fixture-event"]
+            UserDefaults.standard.set((UserDefaults.standard.stringArray(forKey: deletedKey) ?? [])
+                .filter { !fixtureKeys.contains($0) }, forKey: deletedKey)
             let schema = GunnAireModelSchema.schema
             context = ModelContext(try ModelContainer(for: schema, configurations: [
                 ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
@@ -123,6 +129,251 @@ struct GoogleCalendarWorkflowTests {
 
     private func failed(_ result: Result<String, Error>) {
         if case .success(let value) = result { Issue.record("Unexpected success: \(value)") }
+    }
+
+    @Test func bidirectionalSyncPublishesUpcomingOwnedJobBeforeImport() async throws {
+        let f = try Fixture()
+        f.call.scheduledDate = Date().addingTimeInterval(3600)
+        try f.context.save()
+        let result = await (try f.flow()).run { try await GoogleCalendarScheduleSync.synchronize(workflow: $0) }
+        #expect(try result.get().contains("Published 1"))
+        #expect(f.writes.count == 1)
+        #expect(!GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+        _ = try await (try f.flow()).run { try await GoogleCalendarScheduleSync.synchronize(workflow: $0) }.get()
+        #expect(f.writes.count == 1)
+    }
+
+    @Test func fractionalSecondScheduleSurvivesCreateAndPatchConfirmation() async throws {
+        let f = try Fixture()
+        f.call.scheduledDate = Date(timeIntervalSince1970: 1_800_000_000.1234)
+        try f.context.save()
+        _ = try await f.publish().get()
+        f.call.scheduledDate = f.call.scheduledDate.addingTimeInterval(60.2345)
+        try f.context.save()
+        _ = try await f.publish().get()
+        #expect(f.writes.map(\.httpMethod) == ["POST", "PATCH"])
+        #expect(f.remote.count == 1)
+    }
+
+    @Test func failedPublishRemainsPendingAndRetryRetainsIdentity() async throws {
+        let f = try Fixture()
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(f.call)
+        f.afterWrite = { _ in throw URLError(.networkConnectionLost) }
+        failed(try await f.publish())
+        #expect(GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+        let reserved = f.call.googleEventID
+        f.afterWrite = nil
+        _ = try await (try f.flow()).run { try await GoogleCalendarScheduleSync.synchronize(workflow: $0) }.get()
+        #expect(f.call.googleEventID == reserved)
+        #expect(f.writes.count == 1)
+        #expect(!GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+    }
+
+    @Test func pendingPolicyExcludesExternalAndCompletedJobs() throws {
+        let f = try Fixture()
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(f.call)
+        f.call.googleEventManagedByApp = false
+        #expect(!GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+        f.call.googleEventManagedByApp = true
+        f.call.status = .completed
+        #expect(!GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+    }
+
+    @Test func newAppointmentInvitesStaffNotCustomerAndAddsReminder() async throws {
+        let f = try Fixture()
+        let technician = Technician(name: "Assigned technician", contactInfo: " Tech@Example.invalid ")
+        let crew = Technician(name: "Crew", contactInfo: "crew@example.invalid")
+        f.context.insert(technician); f.context.insert(crew)
+        f.call.assignedTechnician = technician
+        f.call.additionalTechnicianIDs = [crew.id]
+        try f.context.save()
+        _ = try await f.publish().get()
+        let post = try #require(f.writes.first)
+        #expect(post.url?.query == "sendUpdates=all")
+        let body = try #require(JSONSerialization.jsonObject(with: post.httpBody!) as? [String: Any])
+        let guests = try #require(body["attendees"] as? [[String: String]])
+        #expect(Set(guests.compactMap { $0["email"] }) == ["tech@example.invalid", "crew@example.invalid"])
+        #expect(!(post.httpBody.flatMap { String(data: $0, encoding: .utf8) } ?? "").contains(f.customer.email!))
+        let reminders = try #require(body["reminders"] as? [String: Any])
+        #expect(reminders["useDefault"] as? Bool == false)
+        #expect((reminders["overrides"] as? [[String: Any]])?.first?["minutes"] as? Int == 30)
+    }
+
+    @Test func invalidStaffEmailDoesNotReserveAnUnsentEvent() async throws {
+        let f = try Fixture()
+        let technician = Technician(name: "Missing calendar email", contactInfo: "555-0100")
+        f.context.insert(technician); f.call.assignedTechnician = technician
+        try f.context.save()
+        failed(try await f.publish())
+        #expect(f.writes.isEmpty)
+        #expect(f.call.googleEventID == nil)
+        technician.contactInfo = "tech@example.invalid"
+        try f.context.save()
+        _ = try await f.publish().get()
+        #expect(f.writes.count == 1)
+    }
+
+    @Test func assignmentOnlyChangeInvitesNewStaffWithoutMovingOrDuplicatingEvent() async throws {
+        let f = try Fixture()
+        let first = Technician(name: "First", contactInfo: "first@example.invalid")
+        let second = Technician(name: "Second", contactInfo: "second@example.invalid")
+        f.context.insert(first); f.context.insert(second)
+        f.call.assignedTechnician = first
+        try f.context.save()
+        _ = try await f.publish().get()
+        let id = try #require(f.call.googleEventID)
+        f.call.assignedTechnician = second
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(f.call)
+        try f.context.save()
+        _ = try await f.publish().get()
+        #expect(f.call.googleEventID == id)
+        #expect(f.writes.count == 2)
+        let patch = try #require(f.writes.last)
+        #expect(patch.httpMethod == "PATCH")
+        #expect(patch.url?.query == "sendUpdates=all")
+        #expect(patch.value(forHTTPHeaderField: "If-Match") == "\"version-created\"")
+        let body = try #require(JSONSerialization.jsonObject(with: patch.httpBody!) as? [String: Any])
+        #expect(Set(body.keys) == ["attendees", "extendedProperties"])
+        #expect((body["attendees"] as? [[String: Any]])?.compactMap { $0["email"] as? String } == ["second@example.invalid"])
+        #expect(f.remote.count == 1)
+    }
+
+    @Test func externalGuestReviewNeverEmailsCustomerOrClearsPending() async throws {
+        let f = try Fixture(linked: true)
+        let technician = Technician(name: "Staff", contactInfo: "staff@example.invalid")
+        f.context.insert(technician); f.call.assignedTechnician = technician
+        f.remote[f.key(f.email, "fixture-event")]?["attendees"] = [["email": f.customer.email!]]
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(f.call)
+        try f.context.save()
+        failed(try await f.publish())
+        #expect(f.writes.isEmpty)
+        #expect(GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+    }
+
+    @Test func explicitPendingLegacyEventReceivesReminderWithoutCustomerEmail() async throws {
+        let f = try Fixture(linked: true)
+        f.remote[f.key(f.email, "fixture-event")]?["attendees"] = [["email": f.customer.email!]]
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(f.call)
+        _ = try await f.publish().get()
+        let patch = try #require(f.writes.first)
+        #expect(patch.url?.query == "sendUpdates=none")
+        let body = try #require(JSONSerialization.jsonObject(with: patch.httpBody!) as? [String: Any])
+        #expect(Set(body.keys) == ["reminders"])
+    }
+
+    @Test func staffDeliveryLostResponseRecoversWithoutAnotherInvitation() async throws {
+        let f = try Fixture(linked: true)
+        let technician = Technician(name: "Staff", contactInfo: "staff@example.invalid")
+        f.context.insert(technician); f.call.assignedTechnician = technician
+        try f.context.save()
+        f.afterWrite = { _ in throw URLError(.networkConnectionLost) }
+        failed(try await f.publish())
+        f.afterWrite = nil
+        _ = try await f.publish().get()
+        #expect(f.writes.count == 1)
+    }
+
+    @Test func cancelledPendingJobDeletesOriginalAndDoesNotRecreateIt() async throws {
+        let f = try Fixture(linked: true)
+        f.call.status = .cancelled
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(f.call)
+        try f.context.save()
+        _ = try await (try f.flow()).run { try await GoogleCalendarScheduleSync.synchronize(workflow: $0) }.get()
+        #expect(f.writes.map(\.httpMethod) == ["DELETE"])
+        #expect(!GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+    }
+
+    @Test func oneInvalidRouteDoesNotStarveOtherPendingJobs() async throws {
+        let f = try Fixture()
+        f.call.googleCalendarID = "not-shared@example.invalid"
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(f.call)
+        let second = ServiceCall(googleCalendarID: "primary", googleEventManagedByApp: true,
+            type: .service, scheduledDate: f.call.scheduledDate.addingTimeInterval(3600), customer: f.customer)
+        f.context.insert(second)
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(second)
+        try f.context.save()
+        let result = try await (try f.flow()).run { try await GoogleCalendarScheduleSync.synchronize(workflow: $0) }.get()
+        #expect(result.contains("Published 1"))
+        #expect(result.contains("1 update(s) still need review"))
+        #expect(GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+        #expect(!GoogleCalendarScheduleSync.needsOutboundSync(second))
+        #expect(f.writes.count == 1)
+    }
+
+    @Test func staffPatchRejectsOmittedAndDuplicateGuestLists() throws {
+        let f = try Fixture(linked: true)
+        var value = f.event(id: "fixture-event")
+        value["attendeesOmitted"] = true
+        let desired = [GoogleWritableCalendarAttendee(email: "staff@example.invalid", displayName: nil)]
+        #expect(throws: GoogleCalendarStaffDeliveryError.self) {
+            try GoogleCalendarStaffDelivery.patch(remote: f.decoded(value), desired: desired,
+                knownStaff: ["staff@example.invalid"], restoreReminder: false)
+        }
+        value["attendeesOmitted"] = false
+        value["attendees"] = [["email": "old@example.invalid"], ["email": "old@example.invalid"]]
+        #expect(throws: GoogleCalendarStaffDeliveryError.self) {
+            try GoogleCalendarStaffDelivery.patch(remote: f.decoded(value), desired: desired,
+                knownStaff: ["old@example.invalid", "staff@example.invalid"], restoreReminder: false)
+        }
+    }
+
+    @Test func staffPatchPreservesRSVPAndUnmanagedInternalGuests() throws {
+        let f = try Fixture(linked: true)
+        var value = f.event(id: "fixture-event")
+        value["attendees"] = [
+            ["email": "old@example.invalid"],
+            ["email": "office@example.invalid", "responseStatus": "accepted", "comment": "Joining remotely", "optional": true]
+        ]
+        var props = try #require(value["extendedProperties"] as? [String: [String: String]])
+        props["private"]?[GoogleCalendarStaffDelivery.managedEmailsKey] = "old@example.invalid"
+        value["extendedProperties"] = props
+        let proposed = try GoogleCalendarStaffDelivery.patch(remote: f.decoded(value),
+            desired: [.init(email: "new@example.invalid", displayName: "New")],
+            knownStaff: ["old@example.invalid", "office@example.invalid", "new@example.invalid"], restoreReminder: false)
+        let patch = try #require(proposed)
+        #expect(Set(patch.attendees?.compactMap(\.email) ?? []) == ["office@example.invalid", "new@example.invalid"])
+        let retained = try #require(patch.attendees?.first { $0.email == "office@example.invalid" })
+        #expect(retained.responseStatus == "accepted")
+        #expect(retained.comment == "Joining remotely")
+        #expect(retained.optional == true)
+        #expect(patch.extendedProperties?.privateProperties?["gunnaireServiceCallID"] == f.call.id.uuidString)
+    }
+
+    @Test func reminderOptOutIsPreserved() throws {
+        let f = try Fixture(linked: true)
+        var value = f.event(id: "fixture-event")
+        value["reminders"] = ["useDefault": false, "overrides": []] as [String: Any]
+        let patch = try GoogleCalendarStaffDelivery.patch(remote: f.decoded(value), desired: [], knownStaff: [], restoreReminder: true)
+        #expect(patch == nil)
+    }
+
+    @Test func duplicateOrUnknownDesiredStaffCannotAuthorizeInvitations() throws {
+        let f = try Fixture(linked: true)
+        let remote = try f.decoded(f.event(id: "fixture-event"))
+        let desired = GoogleWritableCalendarAttendee(email: "staff@example.invalid", displayName: nil)
+        #expect(throws: GoogleCalendarStaffDeliveryError.self) {
+            try GoogleCalendarStaffDelivery.patch(remote: remote, desired: [desired, desired],
+                knownStaff: [desired.email], restoreReminder: false)
+        }
+        #expect(throws: GoogleCalendarStaffDeliveryError.self) {
+            try GoogleCalendarStaffDelivery.patch(remote: remote, desired: [desired], knownStaff: [], restoreReminder: false)
+        }
+        #expect(GoogleCalendarStaffDelivery.email("555-0100") == nil)
+        #expect(GoogleCalendarStaffDelivery.email("tech@example.invalid\nBcc:customer@example.invalid") == nil)
+    }
+
+    @Test func changedProviderBlocksStaffInvitationBeforeSend() async throws {
+        let f = try Fixture(linked: true)
+        let technician = Technician(name: "Staff", contactInfo: "staff@example.invalid")
+        f.context.insert(technician); f.call.assignedTechnician = technician
+        try f.context.save()
+        f.beforeReply = { request in
+            if request.httpMethod == "GET", request.url?.path.hasSuffix("fixture-event") == true {
+                f.auth.signOut()
+            }
+        }
+        failed(try await f.publish())
+        #expect(f.writes.isEmpty)
     }
 
     @Test func firstCreatePersistsOriginalCalendarAndStableIdentityBeforeSending() async throws {

@@ -177,6 +177,8 @@ struct GoogleCalendarEvent: Codable, Identifiable {
     let end: GoogleCalendarEventDate
     var etag: String? = nil
     var status: String? = nil
+    var reminders: GoogleCalendarReminders? = nil
+    var attendeesOmitted: Bool? = nil
 
     var isManagedByGunnAire: Bool {
         let properties = extendedProperties?.privateProperties
@@ -191,12 +193,19 @@ struct GoogleCalendarAttendee: Codable {
     let displayName: String?
     let selfAttendee: Bool?
     let resource: Bool?
+    var responseStatus: String? = nil
+    var comment: String? = nil
+    var optional: Bool? = nil
+    var additionalGuests: Int? = nil
+    var organizer: Bool? = nil
+    var id: String? = nil
 
     private enum CodingKeys: String, CodingKey {
         case email
         case displayName
         case selfAttendee = "self"
         case resource
+        case responseStatus, comment, optional, additionalGuests, organizer, id
     }
 }
 
@@ -218,8 +227,9 @@ struct GoogleWritableCalendarEvent: Codable {
     let location: String?
     let start: GoogleWritableCalendarEventDate
     let end: GoogleWritableCalendarEventDate
-    let attendees: [GoogleWritableCalendarAttendee]?
-    let extendedProperties: GoogleCalendarExtendedProperties?
+    var attendees: [GoogleWritableCalendarAttendee]?
+    var extendedProperties: GoogleCalendarExtendedProperties?
+    var reminders: GoogleCalendarReminders? = nil
 }
 
 struct GoogleCalendarEventPatch: Codable {
@@ -347,6 +357,8 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     }
 
     @Published private(set) var isAuthenticated: Bool = false
+    @Published var calendarSyncMessage: String?
+    var calendarSyncRequestID = UUID()
     @Published private(set) var accessToken: String?
     @Published private(set) var refreshToken: String?
     @Published private(set) var idToken: String?
@@ -361,7 +373,12 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     private var activePresentationContext: ASWebAuthenticationPresentationContextProviding?
     private var pendingOAuthState: String?
     private var pendingCodeVerifier: String?
-    private var connectionGeneration = UUID()
+    private var connectionGeneration = UUID() {
+        didSet {
+            calendarSyncRequestID = UUID()
+            calendarSyncMessage = nil
+        }
+    }
     private let requestTransport: WorkspaceProviderOperation.Transport
     private let persistsCredentials: Bool
     private let businessEmailProvider: () -> String?
@@ -992,7 +1009,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         guard let encodedCalendarID = Self.calendarPathComponent(calendarID) else {
             completion(.failure(GoogleAuthError.invalidEndpoint)); return
         }
-        guard let url = URL(string: "https://www.googleapis.com/calendar/v3/calendars/\(encodedCalendarID)/events") else {
+        guard let url = URL(string: "https://www.googleapis.com/calendar/v3/calendars/\(encodedCalendarID)/events?sendUpdates=all") else {
             completion(.failure(GoogleAuthError.invalidEndpoint))
             return
         }
@@ -1004,7 +1021,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         completion(.failure(GoogleAuthError.unsafeCalendarPatch("summary, description, location, attendees, extendedProperties")))
     }
 
-    func patchCalendarEvent(calendarID: String = "primary", eventID: String, patch: GoogleCalendarEventPatch, ifMatch: String? = nil, operation: WorkspaceProviderOperation? = nil, completion: @escaping (Result<GoogleCalendarEvent, Error>) -> Void) {
+    func patchCalendarEvent(calendarID: String = "primary", eventID: String, patch: GoogleCalendarEventPatch, ifMatch: String? = nil, notifyAttendees: Bool = false, operation: WorkspaceProviderOperation? = nil, completion: @escaping (Result<GoogleCalendarEvent, Error>) -> Void) {
         guard !persistsCredentials || (operation != nil && ifMatch?.isEmpty == false) else {
             completion(.failure(GoogleCalendarWorkflowError.needsReview)); return
         }
@@ -1034,10 +1051,27 @@ final class GoogleAuthManager: NSObject, ObservableObject {
             completion(.failure(GoogleAuthError.invalidEndpoint))
             return
         }
-        authorizedJSONDataRequest(url: url, method: "PATCH", body: encodedPatch, existingOperation: operation, ifMatch: ifMatch, completion: completion)
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "sendUpdates", value: notifyAttendees ? "all" : "none")]
+        authorizedJSONDataRequest(url: components.url!, method: "PATCH", body: encodedPatch, existingOperation: operation, ifMatch: ifMatch, completion: completion)
     }
 
-    func deleteCalendarEvent(calendarID: String = "primary", eventID: String, ifMatch: String? = nil, operation: WorkspaceProviderOperation? = nil, completion: @escaping (Result<Void, Error>) -> Void) {
+    func patchCalendarStaffDelivery(calendarID: String, eventID: String, patch: GoogleCalendarStaffDeliveryPatch,
+                                    ifMatch: String, operation: WorkspaceProviderOperation,
+                                    completion: @escaping (Result<GoogleCalendarEvent, Error>) -> Void) {
+        guard !ifMatch.isEmpty, ifMatch != "*", !ifMatch.contains("\r"), !ifMatch.contains("\n"),
+              let calendar = Self.calendarPathComponent(calendarID), let event = Self.calendarPathComponent(eventID),
+              let url = URL(string: "https://www.googleapis.com/calendar/v3/calendars/\(calendar)/events/\(event)?sendUpdates=\(patch.attendees == nil ? "none" : "all")") else {
+            completion(.failure(GoogleCalendarWorkflowError.needsReview)); return
+        }
+        if let businessAccountLinkError { completion(.failure(businessAccountLinkError)); return }
+        do {
+            let data = try JSONEncoder().encode(patch)
+            authorizedJSONDataRequest(url: url, method: "PATCH", body: data, existingOperation: operation, ifMatch: ifMatch, completion: completion)
+        } catch { completion(.failure(GoogleAuthError.decoding)) }
+    }
+
+    func deleteCalendarEvent(calendarID: String = "primary", eventID: String, ifMatch: String? = nil, notifyAttendees: Bool = false, operation: WorkspaceProviderOperation? = nil, completion: @escaping (Result<Void, Error>) -> Void) {
         guard !persistsCredentials || (operation != nil && ifMatch?.isEmpty == false) else {
             completion(.failure(GoogleCalendarWorkflowError.needsReview)); return
         }
@@ -1052,7 +1086,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
             completion(.failure(GoogleAuthError.invalidEndpoint)); return
         }
         var components = URLComponents(string: "https://www.googleapis.com/calendar/v3/calendars/\(encodedCalendarID)/events/\(encodedEventID)")
-        components?.queryItems = [URLQueryItem(name: "sendUpdates", value: "none")]
+        components?.queryItems = [URLQueryItem(name: "sendUpdates", value: notifyAttendees ? "all" : "none")]
         guard let url = components?.url else {
             completion(.failure(GoogleAuthError.invalidEndpoint))
             return

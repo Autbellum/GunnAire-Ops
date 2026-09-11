@@ -1965,9 +1965,8 @@ struct OperationsDashboardView: View {
             return
         }
         call.assignedTechnician = technician
-        if GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call) {
-            call.googleCalendarID = ServiceCalendarRouting.assignedCalendarID(for: technician)
-        }
+        // Retain the selected calendar. An assignment is not proof that the
+        // technician's personal calendar grants this account write permission.
 
         if let nextStart, nextStart > originalStart {
             call.scheduledDate = nextStart
@@ -1997,8 +1996,11 @@ struct OperationsDashboardView: View {
     }
 
     private func publishToGoogleCalendar(_ call: ServiceCall) {
-        guard googleAuth.isAuthenticated else { return }
-        try? modelContext.save()
+        do { try modelContext.save() }
+        catch {
+            dispatchMessage = "Appointment changes could not be saved. No Google update was sent."
+            return
+        }
         GoogleCalendarScheduleSync.exportImmediately(
             call: call,
             auth: googleAuth,

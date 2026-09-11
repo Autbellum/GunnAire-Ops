@@ -4913,8 +4913,6 @@ struct AddServiceCallView: View {
     }
 
     private func publishToGoogleCalendar(_ call: ServiceCall) {
-        guard googleAuth.isAuthenticated else { return }
-        try? modelContext.save()
         let signedInEmail = AppIdentity.currentEmail
         GoogleCalendarScheduleSync.exportImmediately(
             call: call,
@@ -5722,7 +5720,6 @@ struct EditServiceCallView: View {
     }
 
     private func publishToGoogleCalendar(_ call: ServiceCall) {
-        guard googleAuth.isAuthenticated else { return }
         let signedInEmail = AppIdentity.currentEmail
         GoogleCalendarScheduleSync.exportImmediately(
             call: call,
@@ -5734,7 +5731,6 @@ struct EditServiceCallView: View {
     }
 
     private func cancelManagedGoogleCalendarEvent(for call: ServiceCall) {
-        guard googleAuth.isAuthenticated else { return }
         GoogleCalendarScheduleSync.cancelManagedEventImmediately(
             for: call,
             auth: googleAuth,

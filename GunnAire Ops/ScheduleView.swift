@@ -341,8 +341,8 @@ struct ScheduleView: View {
                             }
                         }
 
-                        if let syncMessage {
-                            Text(syncMessage)
+                        if let message = googleAuth.calendarSyncMessage ?? syncMessage {
+                            Text(message)
                                 .accessibilityIdentifier("ScheduleSyncStatus")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -1836,7 +1836,7 @@ struct ScheduleView: View {
             email: AppIdentity.currentEmail,
             users: users
         ) else {
-            syncMessage = "Dispatcher or administrator access is required to import Google Calendar appointments."
+            syncMessage = "Dispatcher or administrator access is required to sync Google Calendar appointments."
             return
         }
         guard googleAuth.isAuthenticated else {
@@ -2347,8 +2347,11 @@ GunnAire
     }
 
     private func publishToGoogleCalendar(_ call: ServiceCall) {
-        guard googleAuth.isAuthenticated else { return }
-        try? modelContext.save()
+        do { try modelContext.save() }
+        catch {
+            googleAuth.calendarSyncMessage = "Appointment changes could not be saved. No Google update was sent."
+            return
+        }
         let signedInEmail = AppIdentity.currentEmail
         GoogleCalendarScheduleSync.exportImmediately(
             call: call,
@@ -2492,9 +2495,8 @@ GunnAire
             actorEmail: AppIdentity.currentEmail,
             in: modelContext
         )
-        if GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call) {
-            call.googleCalendarID = ServiceCalendarRouting.assignedCalendarID(for: technician)
-        }
+        // Keep the selected calendar; staff delivery uses invitations rather
+        // than guessing write access to the newly assigned person's calendar.
         if let newStart { call.scheduledDate = newStart }
         do {
             try JobBillingDispatch.shared.save(call, original: originalBilling, context: modelContext)
