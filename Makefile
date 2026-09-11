@@ -21,6 +21,7 @@ checklist-check:
 
 syntax:
 	bash -n LocalAI/setup_local_ai.sh
+	bash -n Firewall/setup_local_reporting.sh
 	python3 -c 'import json,pathlib,plistlib; root=pathlib.Path("."); [json.loads(p.read_text()) for p in root.rglob("*.json")]; [(lambda f: plistlib.load(f))(p.open("rb")) for p in root.rglob("*.plist.template")]; print("Configuration syntax: PASS")'
 
 verify: test validate checklist-check syntax
