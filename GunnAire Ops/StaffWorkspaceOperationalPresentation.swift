@@ -262,6 +262,7 @@ struct StaffWorkspaceOperationalHostedDetailView: View {
     @ObservedObject var navigation: StaffWorkspaceNavigationController
     @Query(sort: \StaffWorkspaceOperationalProjectionRecord.kind, order: .forward)
     private var rows: [StaffWorkspaceOperationalProjectionRecord]
+    private var searchText: String { navigation.searchText }
 
     private var filtered: [StaffWorkspaceOperationalProjectionRecord] {
         if destination == .overview { return rows }
@@ -270,6 +271,14 @@ struct StaffWorkspaceOperationalHostedDetailView: View {
     }
 
     var body: some View {
+        let billing = StaffWorkspaceBillingQueue.summaries(hosted.plan.records)
+        let visible = filtered.filter { row in
+            let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !query.isEmpty else { return true }
+            if let summary = billing[row.navigationRoute] { return summary.searchText.localizedStandardContains(query) }
+            let summary = StaffWorkspaceOperationalDetail.summary(for: row)
+            return (summary.title + " " + summary.subtitle).localizedStandardContains(query)
+        }
         List {
             if let notice = navigation.notice {
                 Section { Text(notice).font(.callout).foregroundStyle(.secondary) }
@@ -285,20 +294,22 @@ struct StaffWorkspaceOperationalHostedDetailView: View {
             }
 
             Section {
-                Text("\(filtered.count) shared records available")
+                Text("\(visible.count) shared records available")
             } header: {
                 Text(destination.title)
             }
 
             Section("Records") {
-                if filtered.isEmpty {
-                    Text("No \(destination.title.lowercased()) records in this shared workspace.")
+                if visible.isEmpty {
+                    Text(searchText.isEmpty ? "No \(destination.title.lowercased()) records in this shared workspace." : "No matching records. Try another search.")
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(filtered, id: \.navigationRoute) { row in
+                    ForEach(visible, id: \.navigationRoute) { row in
                         let summary = StaffWorkspaceOperationalDetail.summary(for: row)
                         NavigationLink(value: row.navigationRoute) {
-                            StaffWorkspaceOperationalProjectionRowLabel(summary: summary)
+                            if let document = billing[row.navigationRoute] {
+                                StaffWorkspaceBillingQueueRow(summary: document)
+                            } else { StaffWorkspaceOperationalProjectionRowLabel(summary: summary) }
                         }
                         .accessibilityIdentifier("StaffOperationalRow.\(row.kind).\(row.recordID)")
                     }
@@ -306,6 +317,7 @@ struct StaffWorkspaceOperationalHostedDetailView: View {
             }
         }
         .navigationTitle(destination.title)
+        .searchable(text: $navigation.searchText, prompt: "Search " + destination.title.lowercased())
         .accessibilityIdentifier("StaffOperationalHostedList.\(destination.rawValue)")
     }
 }
@@ -332,9 +344,13 @@ struct StaffWorkspaceResolvedRecordView: View {
 
     var body: some View {
         if matches.count == 1, let row = matches.first {
-            StaffWorkspaceOperationalRecordDetailView(row: row, hosted: hosted, onEdit: { row, field in
-                navigation.beginEditing(hosted: hosted, row: row, field: field)
-            })
+            if ["invoice", "estimate"].contains(row.kind) {
+                StaffWorkspaceBillingDetailView(hosted: hosted, route: row.navigationRoute)
+            } else {
+                StaffWorkspaceOperationalRecordDetailView(row: row, hosted: hosted, onEdit: { row, field in
+                    navigation.beginEditing(hosted: hosted, row: row, field: field)
+                })
+            }
         } else {
             ContentUnavailableView("Record unavailable", systemImage: "doc.questionmark",
                 description: Text("Return to the list to choose a record from this shared workspace."))

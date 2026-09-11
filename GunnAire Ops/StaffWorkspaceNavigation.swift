@@ -53,8 +53,9 @@ struct StaffWorkspaceEditorSession: Identifiable {
 /// authorized content, while the controller retains the original draft version.
 @MainActor final class StaffWorkspaceNavigationController: ObservableObject {
     @Published var selected: StaffWorkspaceOperationalNavDestination? = .overview {
-        didSet { if selected != oldValue { path = []; notice = nil } }
+        didSet { if selected != oldValue { path = []; notice = nil; searchText = "" } }
     }
+    @Published var searchText = ""
     @Published var path: [StaffWorkspaceRecordRoute] = []
     @Published var editor: StaffWorkspaceEditorSession?
     @Published private(set) var notice: String?
@@ -102,6 +103,6 @@ struct StaffWorkspaceEditorSession: Identifiable {
 
     func reset() {
         editor?.controller.invalidate(); editor = nil
-        path = []; selected = .overview; notice = nil; authority = nil
+        path = []; selected = .overview; searchText = ""; notice = nil; authority = nil
     }
 }
