@@ -5,7 +5,9 @@ on:
     paths:
       - 'LocalAI/**'
       - 'Firewall/**'
-      - 'Verification/**'
+      - 'Synology/**'
+      - 'IMPLEMENTATION_STATUS.md'
+      - 'SOURCES.md'
       - 'Makefile'
       - '.github/workflows/local-ai-firewall-tooling.yml'
   push:
@@ -13,7 +15,9 @@ on:
     paths:
       - 'LocalAI/**'
       - 'Firewall/**'
-      - 'Verification/**'
+      - 'Synology/**'
+      - 'IMPLEMENTATION_STATUS.md'
+      - 'SOURCES.md'
       - 'Makefile'
       - '.github/workflows/local-ai-firewall-tooling.yml'
 
@@ -29,5 +33,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Verify guarded local-AI and firewall tooling
+      - name: Verify guarded local-AI, firewall, and reporting tooling
         run: make verify
