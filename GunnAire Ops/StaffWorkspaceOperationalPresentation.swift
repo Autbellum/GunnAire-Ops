@@ -184,40 +184,29 @@ enum StaffWorkspaceOperationalPresentation {
 /// Staff UI shell that presents the hosted staff projection ModelContainer.
 /// Uses NavigationSplitView (iPad-first) and queries projection rows only —
 /// never owner `@Model` types.
-struct StaffWorkspaceOperationalPresentationKey: Equatable {
-    let host: StaffWorkspaceOperationalHostJournal
-    let identity: StaffWorkspaceOperationalIdentityJournal
-    let accountHash: String
-    let environment: String
-    let deviceFingerprint: String
-}
-
 struct StaffWorkspaceOperationalHostedWorkspaceView: View {
     let hosted: StaffWorkspaceOperationalHostedStore
     let identity: StaffWorkspaceOperationalIdentityJournal
     let account: CompanyCloudKitAccount
     let deviceFingerprint: String
-    @Binding var selected: StaffWorkspaceOperationalNavDestination?
-    @State private var destinations: [StaffWorkspaceOperationalNavDestination] = [.overview]
-    @State private var loadError: String?
-    @State private var loadedIdentity: StaffWorkspaceOperationalPresentationKey?
+    @ObservedObject var navigation: StaffWorkspaceNavigationController
     @State private var showingFieldUpdates = false
+    private var destinations: [StaffWorkspaceOperationalNavDestination] {
+        StaffWorkspaceOperationalNavPolicy.destinations(kindsPresent: Set(hosted.plan.records.map(\.kind)))
+    }
 
     var body: some View {
         Group {
-            if let loadError = validationError ?? loadError {
+            if let loadError = validationError {
                 ContentUnavailableView(
                     "Staff workspace unavailable",
                     systemImage: "exclamationmark.triangle",
                     description: Text(loadError)
                 )
                 .accessibilityIdentifier("StaffOperationalHostedUnavailable")
-            } else if loadedIdentity != taskIdentity {
-                ProgressView("Opening shared workspace…")
-                    .accessibilityIdentifier("StaffOperationalHostedLoading")
             } else {
                 NavigationSplitView {
-                    List(destinations, selection: $selected) { destination in
+                    List(destinations, selection: $navigation.selected) { destination in
                         Label(destination.title, systemImage: destination.systemImage)
                             .tag(destination)
                             .accessibilityIdentifier("StaffOperationalNav.\(destination.rawValue)")
@@ -233,43 +222,29 @@ struct StaffWorkspaceOperationalHostedWorkspaceView: View {
                         }
                     }
                 } detail: {
-                    NavigationStack {
+                    NavigationStack(path: $navigation.path) {
                         StaffWorkspaceOperationalHostedDetailView(
                             hosted: hosted,
                             destination: StaffWorkspaceOperationalNavPolicy.resolvedSelection(
-                                selected, visible: destinations) ?? .overview,
-                            identity: identity
+                                navigation.selected, visible: destinations) ?? .overview,
+                            identity: identity,
+                            navigation: navigation
                         )
+                        .id(contentIdentity)
                         .accessibilityIdentifier("StaffOperationalHostedDetail")
+                        .navigationDestination(for: StaffWorkspaceRecordRoute.self) { route in
+                            StaffWorkspaceResolvedRecordView(route: route, hosted: hosted, navigation: navigation)
+                                .id(contentIdentity + ":" + route.kind + ":" + route.id)
+                        }
                     }
                 }
             }
         }
         .modelContainer(hosted.container)
         .sheet(isPresented: $showingFieldUpdates) { StaffWorkspaceFieldUpdatesView(hosted: hosted) }
-        .task(id: taskIdentity) {
-            do {
-                try StaffWorkspaceOperationalPresentation.requireBound(
-                    hosted: hosted, identity: identity, account: account,
-                    deviceFingerprint: deviceFingerprint)
-                let next = try StaffWorkspaceOperationalPresentation.destinations(for: hosted)
-                destinations = next
-                selected = StaffWorkspaceOperationalNavPolicy.resolvedSelection(selected, visible: next)
-                loadError = nil
-                loadedIdentity = taskIdentity
-            } catch {
-                loadError = StaffReplicaDeliveryPolicy.safe(error).localizedDescription
-                destinations = []
-                selected = nil
-                loadedIdentity = nil
-            }
-        }
     }
 
-    private var taskIdentity: StaffWorkspaceOperationalPresentationKey {
-        .init(host: hosted.journal, identity: identity, accountHash: account.accountHash,
-              environment: account.environment, deviceFingerprint: deviceFingerprint)
-    }
+    private var contentIdentity: String { hosted.journal.selectionID + ":" + hosted.journal.contentSHA256 }
 
     private var validationError: String? {
         do {
@@ -284,6 +259,7 @@ struct StaffWorkspaceOperationalHostedDetailView: View {
     let hosted: StaffWorkspaceOperationalHostedStore
     let destination: StaffWorkspaceOperationalNavDestination
     var identity: StaffWorkspaceOperationalIdentityJournal? = nil
+    @ObservedObject var navigation: StaffWorkspaceNavigationController
     @Query(sort: \StaffWorkspaceOperationalProjectionRecord.kind, order: .forward)
     private var rows: [StaffWorkspaceOperationalProjectionRecord]
 
@@ -295,6 +271,9 @@ struct StaffWorkspaceOperationalHostedDetailView: View {
 
     var body: some View {
         List {
+            if let notice = navigation.notice {
+                Section { Text(notice).font(.callout).foregroundStyle(.secondary) }
+            }
             if destination == .overview, let identity {
                 Section {
                     LabeledContent("Workspace", value: identity.environment == "production" ? "Live business" : "Test workspace")
@@ -316,11 +295,9 @@ struct StaffWorkspaceOperationalHostedDetailView: View {
                     Text("No \(destination.title.lowercased()) records in this shared workspace.")
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(filtered, id: \.recordID) { row in
+                    ForEach(filtered, id: \.navigationRoute) { row in
                         let summary = StaffWorkspaceOperationalDetail.summary(for: row)
-                        NavigationLink {
-                            StaffWorkspaceOperationalRecordDetailView(row: row, hosted: hosted)
-                        } label: {
+                        NavigationLink(value: row.navigationRoute) {
                             StaffWorkspaceOperationalProjectionRowLabel(summary: summary)
                         }
                         .accessibilityIdentifier("StaffOperationalRow.\(row.kind).\(row.recordID)")
@@ -330,6 +307,38 @@ struct StaffWorkspaceOperationalHostedDetailView: View {
         }
         .navigationTitle(destination.title)
         .accessibilityIdentifier("StaffOperationalHostedList.\(destination.rawValue)")
+    }
+}
+
+extension StaffWorkspaceOperationalProjectionRecord {
+    var navigationRoute: StaffWorkspaceRecordRoute { .init(kind: kind, id: recordID) }
+}
+
+/// Resolve an ID inside the current verified container, never retain a row from
+/// an older snapshot. A missing or ambiguous route cannot open an editor.
+struct StaffWorkspaceResolvedRecordView: View {
+    let hosted: StaffWorkspaceOperationalHostedStore
+    @ObservedObject var navigation: StaffWorkspaceNavigationController
+    @Query private var matches: [StaffWorkspaceOperationalProjectionRecord]
+
+    init(route: StaffWorkspaceRecordRoute, hosted: StaffWorkspaceOperationalHostedStore,
+         navigation: StaffWorkspaceNavigationController) {
+        self.hosted = hosted; self.navigation = navigation
+        let kind = route.kind, recordID = route.id
+        _matches = Query(filter: #Predicate<StaffWorkspaceOperationalProjectionRecord> {
+            $0.kind == kind && $0.recordID == recordID
+        })
+    }
+
+    var body: some View {
+        if matches.count == 1, let row = matches.first {
+            StaffWorkspaceOperationalRecordDetailView(row: row, hosted: hosted, onEdit: { row, field in
+                navigation.beginEditing(hosted: hosted, row: row, field: field)
+            })
+        } else {
+            ContentUnavailableView("Record unavailable", systemImage: "doc.questionmark",
+                description: Text("Return to the list to choose a record from this shared workspace."))
+        }
     }
 }
 
@@ -368,7 +377,7 @@ struct StaffWorkspaceOperationalProjectionRowLabel: View {
 struct StaffWorkspaceOperationalRecordDetailView: View {
     let row: StaffWorkspaceOperationalProjectionRecord
     var hosted: StaffWorkspaceOperationalHostedStore? = nil
-    @State private var editingField: String?
+    var onEdit: ((StaffWorkspaceOperationalProjectionRecord, String) -> Void)? = nil
 
     private var detail: StaffWorkspaceOperationalDetail.RecordDetail {
         StaffWorkspaceOperationalDetail.detail(for: row)
@@ -390,7 +399,7 @@ struct StaffWorkspaceOperationalRecordDetailView: View {
                 } else {
                     ForEach(detail.fields) { field in
                         if canEdit(field) {
-                            Button { editingField = field.key } label: {
+                            Button { onEdit?(row, field.key) } label: {
                                 LabeledContent(field.label) {
                                     HStack {
                                         Text(field.displayValue).multilineTextAlignment(.trailing)
@@ -414,14 +423,11 @@ struct StaffWorkspaceOperationalRecordDetailView: View {
         }
         .navigationTitle(detail.summary.title)
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: Binding(get: { editingField != nil }, set: { if !$0 { editingField = nil } })) {
-            if let hosted, let field = editingField { StaffWorkspaceFieldEditorView(hosted: hosted, row: row, field: field) }
-        }
         .accessibilityIdentifier(
             "StaffOperationalRecordDetail.\(detail.kind).\(detail.recordID)")
     }
     private func canEdit(_ field: StaffWorkspaceOperationalDetail.FieldRow) -> Bool {
-        guard let hosted, !field.isRestricted,
+        guard onEdit != nil, let hosted, !field.isRestricted,
               [AppUserRole.admin.rawValue, AppUserRole.dispatcher.rawValue, AppUserRole.fieldTechnician.rawValue].contains(hosted.plan.memberRole),
               StaffWorkspaceOperationalCommandPolicy.isOperationsField(kind: row.kind, field: field.key),
               let schema = StaffWorkspaceModelCatalog.all.first(where: { $0.kind == row.kind })?.fieldSchema[field.key] else { return false }

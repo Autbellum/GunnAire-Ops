@@ -13,11 +13,10 @@ struct StaffWorkspaceFieldEditorView: View {
     @State private var reviewSnapshot: StaffWorkspaceFieldEditorSnapshot?
     private let timer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
 
-    init(hosted: StaffWorkspaceOperationalHostedStore, row: StaffWorkspaceOperationalProjectionRecord, field: String) {
-        title = StaffWorkspaceOperationalDetail.summary(for: row).title
+    init(title: String, field: String, editor: StaffWorkspaceFieldEditorController) {
+        self.title = title
         self.field = field
-        _editor = .init(wrappedValue: StaffWorkspaceFieldEditorController(dependencies: .live(
-            hosted: hosted, kind: row.kind, recordID: row.recordID, revision: row.revision, field: field)))
+        _editor = .init(wrappedValue: editor)
     }
     var body: some View {
         NavigationStack {

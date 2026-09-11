@@ -7,7 +7,7 @@ import XCTest
 @MainActor
 final class StaffWorkspaceOpenSessionTests: XCTestCase {
     @MainActor
-    private final class Fixture {
+    final class Fixture {
         struct Vector: Decodable { let receipt: StaffWorkspaceContentReceipt; let payloadUtf8: String }
         let base = CloudKitStaffSharingTests()
         let plan: CloudKitStaffSharePlan
@@ -53,9 +53,22 @@ final class StaffWorkspaceOpenSessionTests: XCTestCase {
                 scope: context.scope, plan: plan.id, check: {})
             try StaffWorkspaceOperationalAcceptanceStore.accept(store: store, scope: context.scope, plan: plan.id)
         }
-        func advance() throws {
+        func advance(jobNotes: String? = nil) throws {
             var root = try XCTUnwrap(JSONSerialization.jsonObject(with: raw) as? [String: Any])
             root["sourceSequence"] = receipt.sourceSequence + 1
+            if let jobNotes {
+                var records = try XCTUnwrap(root["records"] as? [[String: Any]])
+                let index = try XCTUnwrap(records.firstIndex { $0["kind"] as? String == "job" })
+                var record = records[index]
+                var body = try XCTUnwrap(record["body"] as? [String: Any])
+                var operational = try XCTUnwrap(body["operational"] as? [String: Any])
+                var partition = try XCTUnwrap(operational["_0"] as? [String: Any])
+                var fields = try XCTUnwrap(partition["fields"] as? [String: Any])
+                fields["notes"] = ["text": ["_0": jobNotes]]
+                partition["fields"] = fields; operational["_0"] = partition; body["operational"] = operational
+                record["body"] = body; record["revision"] = (record["revision"] as? Int ?? 0) + 1
+                records[index] = record; root["records"] = records
+            }
             raw = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
             var wire = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(receipt)) as? [String: Any])
             wire["selectionID"] = UUID().uuidString.lowercased()

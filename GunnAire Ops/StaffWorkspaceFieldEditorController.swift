@@ -51,13 +51,33 @@ struct StaffWorkspaceFieldEditorDependencies {
     let send: (StaffWorkspaceOperationalCommandJournal, Context, CloudKitStaffSharePlan) async throws -> StaffWorkspaceOperationalCommandJournal
     var operation: () -> UUID = UUID.init
     static func live(hosted: StaffWorkspaceOperationalHostedStore, kind: String, recordID: String,
-                     revision: Int, field: String) -> Self {
-        let engine = StaffWorkspaceContentCoordinator(dependencies: .live)
-        return .init(authority: { try StaffReplicaReceiveController.shared.fieldEditingAuthority(for: hosted) },
+                     revision: Int, field: String, receive: StaffReplicaReceiveController? = nil,
+                     coordinator: StaffWorkspaceContentCoordinator? = nil) -> Self {
+        let receive = receive ?? .shared
+        let engine = coordinator ?? StaffWorkspaceContentCoordinator(dependencies: .live)
+        let anchor = receive.authorizedPresentation
+        let route = StaffWorkspaceRecordRoute(kind: kind, id: recordID)
+        // Follow only successor content within the original account/session/role.
+        // The old hosted object itself never becomes valid editing authority.
+        func current() throws -> StaffReplicaPresentation {
+            guard let anchor, anchor.workspace.hosted === hosted,
+                  hosted.plan.record(kind: kind, id: recordID)?.revision == revision,
+                  let value = receive.authorizedPresentation,
+                  value.navigationIdentity.authority == anchor.navigationIdentity.authority,
+                  route.canEdit(field, in: value.workspace.hosted) else { throw StaffReplicaDeliveryError.access }
+            _ = try receive.fieldEditingAuthority(for: value.workspace.hosted)
+            return value
+        }
+        return .init(authority: {
+            let value = try current(); return (value.context, value.plan)
+        },
             snapshot: { context, plan in
-                try engine.fieldEditorSnapshot(plan: plan, context: context, selectionID: hosted.journal.selectionID,
-                    sourceSequence: hosted.journal.sourceSequence, contentSHA256: hosted.journal.contentSHA256,
-                    kind: kind, recordID: recordID, revision: revision, field: field)
+                let value = try current(), currentHost = value.workspace.hosted
+                guard value.context.stamp == context.stamp, value.plan == plan,
+                      let record = currentHost.plan.record(kind: kind, id: recordID) else { throw StaffReplicaDeliveryError.access }
+                return try engine.fieldEditorSnapshot(plan: plan, context: context, selectionID: currentHost.journal.selectionID,
+                    sourceSequence: currentHost.journal.sourceSequence, contentSHA256: currentHost.journal.contentSHA256,
+                    kind: kind, recordID: recordID, revision: record.revision, field: field)
             }, head: { try engine.fieldEditorHead($0, plan: $2, context: $1) },
             history: { try engine.fieldEditorHistory($0, plan: $2, context: $1) },
             draft: { try engine.fieldEditorDraft($0, plan: $2, context: $1) },

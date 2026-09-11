@@ -59,7 +59,7 @@ struct CompanyWorkspaceHost: View {
     @Binding var hasAuthenticatedUser: Bool
     @State private var confirmsOwnership = false
     @State private var showingStaffSetup = false
-    @State private var selectedStaffDestination: StaffWorkspaceOperationalNavDestination? = .overview
+    @StateObject private var staffNavigation = StaffWorkspaceNavigationController()
     @ObservedObject private var staffInvitations = CloudKitStaffInvitationInbox.shared
 
     var body: some View {
@@ -75,9 +75,9 @@ struct CompanyWorkspaceHost: View {
                     identity: presentation.workspace.identity,
                     account: presentation.context.account,
                     deviceFingerprint: presentation.deviceFingerprint,
-                    selected: $selectedStaffDestination
+                    navigation: staffNavigation
                 )
-                    .id(presentation.viewIdentity)
+                    .id(presentation.navigationScope)
                     .accessibilityIdentifier("StaffOperationalHostedWorkspace")
             } else {
                 ScrollView {
@@ -140,8 +140,11 @@ struct CompanyWorkspaceHost: View {
             }
         }
         .modifier(StaffReplicaReceiveRecoveryModifier())
-        .onChange(of: receive.authorizedPresentation?.navigationScope) { _, _ in
-            selectedStaffDestination = .overview
+        .onChange(of: receive.authorizedPresentation?.navigationIdentity, initial: true) { _, _ in
+            staffNavigation.update(receive.authorizedPresentation)
+        }
+        .sheet(item: $staffNavigation.editor) { session in
+            StaffWorkspaceFieldEditorView(title: session.title, field: session.field, editor: session.controller)
         }
         .sheet(isPresented: $showingStaffSetup) { CloudKitStaffSetupView() }
         .onReceive(staffInvitations.$pending) { invitation in
