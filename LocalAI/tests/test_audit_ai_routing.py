@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +12,7 @@ MODULE_PATH = Path(__file__).resolve().parents[1] / "audit_ai_routing.py"
 SPEC = importlib.util.spec_from_file_location("audit_ai_routing", MODULE_PATH)
 assert SPEC and SPEC.loader
 AUDIT = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = AUDIT
 SPEC.loader.exec_module(AUDIT)
 
 
