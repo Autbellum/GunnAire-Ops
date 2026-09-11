@@ -1,3 +1,15 @@
+Staff invoice request/application follow-up, 2026-09-11:
+NATIVE_STAFF_INVOICE_REQUESTS.md records the previously qualified native staff
+composer and its encrypted drafts/immutable recorded-only receipts.
+OFFICE_INVOICE_APPLICATION_PROTOCOL.md records the new server-side explicit
+office approval claims, exact invoice/item source confirmation, package and
+quantity preservation, current-role/scope checks and retained recovery.
+These stages do not complete the native office application screen, claim
+resolution/handoff, QBO publication/reconciliation or signed independent-account
+CloudKit acceptance. The current report contains the exact regression evidence
+and remaining integration requirements; historical checkpoints below must not
+be generalized to current production readiness. The full goal remains ACTIVE.
+
 Full32 CloudKit integration and recovery candidate, 2026-09-10:
 STAFF_CLOUD_INTEGRATION.md records the frozen parallel integration, owner seal
 publication, participant key/receive paths and concrete failure-pattern corrections.
