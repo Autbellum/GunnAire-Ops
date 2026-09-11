@@ -1645,6 +1645,7 @@ GunnAire
                     AnyView(stackSafeInvoiceSnapshotSection)
                     AnyView(stackSafeGeneratedInvoiceDocumentSection)
                     AnyView(invoiceActionQueues)
+                    AnyView(StaffOwnerInvoiceReviewLink())
                     AnyView(invoicesWorkspaceSection)
                 }
                 .navigationTitle(navigationTitle)

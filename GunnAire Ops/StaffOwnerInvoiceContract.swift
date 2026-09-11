@@ -1,7 +1,7 @@
 import Foundation
 
 enum StaffOwnerInvoiceError: Error, LocalizedError {
-    case changed, manual, incompatible, otherDevice, missing, storage
+    case changed, manual, incompatible, otherDevice, missing, storage, backend
     var errorDescription: String? {
         switch self {
         case .changed: "Invoice or catalog details changed. Check the request again before approving."
@@ -10,6 +10,7 @@ enum StaffOwnerInvoiceError: Error, LocalizedError {
         case .otherDevice: "Recover this approved request on its original office device and account. No second invoice or item was created."
         case .missing: "The original invoice, customer, system or catalog record is not available on this device yet. Sync and try again."
         case .storage: "The original approval could not be saved or verified. Keep this app installed and retry."
+        case .backend: "Invoice approval is waiting for the server update with QuickBooks and payment safeguards. Your field requests are retained."
         }
     }
 }
@@ -227,6 +228,7 @@ struct StaffOwnerInvoiceApplicationEnvelope: Codable {
 }
 
 enum StaffOwnerInvoiceTransport {
+    static let rejectionCodes = Set("invoice_application_capacity invoice_approval_stale invoice_changed invoice_claimed invoice_dependencies_changed invoice_equipment_changed invoice_item_exists invoice_locked invoice_manual_lines_required invoice_new_item_changed invoice_not_prepared invoice_not_published invoice_package_changed invoice_proposal_changed invoice_proposal_empty invoice_provider_review_required invoice_quantity_changed invoice_request_changed invoice_request_missing invoice_scope_changed invoice_tax_review_required invoice_unrelated_lines_changed invoice_catalog_pending invoice_payment_pending invoice_provider_pending".split(separator: " ").map(String.init))
     static let root = "/api/workspace/invoice-applications"
     static let reviewRoot = "/api/workspace/invoice-line-requests"
     static let maximumRequestBytes = 7 * 1024 * 1024

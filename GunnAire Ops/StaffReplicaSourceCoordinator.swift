@@ -21,6 +21,7 @@ struct StaffReplicaSourceDependencies {
     var fullWorkspace: StaffWorkspacePublicationCoordinator? = nil
     var fullContent: StaffWorkspaceContentCoordinator? = nil
     var ownerFieldEdits: StaffOwnerFieldEditCoordinator? = nil
+    var ownerInvoices: StaffOwnerInvoiceCoordinator? = nil
 
     static func verify(_ context: StaffReplicaSourceContext) throws {
         try Task.checkCancellation()
@@ -54,7 +55,7 @@ struct StaffReplicaSourceDependencies {
             return try StaffReplicaSourceHistory.capture(container: container, after: token, storeUUID: context.scope.storeUUID)
         }, request: { try await GunnAireBackendService.staffReplicaSourceRequest(path: $0, method: $1, body: $2) }, store: StaffReplicaSourceStorage.device,
               deliver: { try await StaffReplicaAutomaticDelivery().deliver(source: $0, sequence: $1) },
-              fullWorkspace: .shared, fullContent: .shared, ownerFieldEdits: .shared)
+              fullWorkspace: .shared, fullContent: .shared, ownerFieldEdits: .shared, ownerInvoices: .shared)
     }
 }
 
@@ -88,12 +89,14 @@ enum StaffReplicaSourceStorage {
     private var displayScope: StaffReplicaSourceScope?
     let dependencies: StaffReplicaSourceDependencies
     var ownerFieldEdits: StaffOwnerFieldEditCoordinator? { dependencies.ownerFieldEdits }
+    var ownerInvoices: StaffOwnerInvoiceCoordinator? { dependencies.ownerInvoices }
     init(dependencies: StaffReplicaSourceDependencies? = nil) { self.dependencies = dependencies ?? .live }
 
     func clearDisplay() {
         conflicts = []; lastConfirmedAt = nil; displayScope = nil; hasMore = false
         workspaceConflicts = []; dependencies.fullWorkspace?.clearCache()
         dependencies.ownerFieldEdits?.clearDisplay()
+        dependencies.ownerInvoices?.clearDisplay()
         message = "Verify the approved owner workspace to prepare staff data."
     }
     private func load(_ context: StaffReplicaSourceContext) throws -> StaffReplicaSourceJournal {
@@ -243,6 +246,34 @@ enum StaffReplicaSourceStorage {
         }
     }
 
+    func reviewInvoice(_ id: String, reason: String) async throws -> StaffOwnerInvoiceDraft {
+        guard !isRunning, let invoices = dependencies.ownerInvoices else { throw StaffOwnerInvoiceError.changed }
+        isRunning = true; defer { isRunning = false }
+        do {
+            let context = try await dependencies.context(); try dependencies.check(context)
+            guard displayScope == context.scope else { throw StaffReplicaSourceSyncError.access }
+            return try await invoices.makeDraft(id, reason: reason, context: context)
+        } catch {
+            if case StaffReplicaSourceSyncError.access = error { clearDisplay() }
+            throw error
+        }
+    }
+
+    func applyInvoice(_ draft: StaffOwnerInvoiceDraft) async throws {
+        guard !isRunning, let invoices = dependencies.ownerInvoices else { throw StaffOwnerInvoiceError.changed }
+        isRunning = true
+        do {
+            let context = try await dependencies.context(); try dependencies.check(context)
+            guard displayScope == context.scope else { throw StaffReplicaSourceSyncError.access }
+            try await invoices.applyReviewed(draft, context: context)
+            isRunning = false; await sync()
+        } catch {
+            isRunning = false
+            if case StaffReplicaSourceSyncError.access = error { clearDisplay() }
+            message = StaffOwnerInvoiceCoordinator.safe(error); throw error
+        }
+    }
+
     func sync() async {
         guard !isRunning else { return }
         isRunning = true; hasMore = false
@@ -256,6 +287,7 @@ enum StaffReplicaSourceStorage {
             // edits, including after process death or a lost acknowledgement.
             try await recover(&journal, context: context)
             try await dependencies.ownerFieldEdits?.synchronize(context)
+            try await dependencies.ownerInvoices?.recover(context)
             try dependencies.check(context)
             // Prepare all 32 owner model kinds durably under a separate local
             // schema before publishing newer core facts. Never alter recovery
@@ -270,6 +302,8 @@ enum StaffReplicaSourceStorage {
                     return
                 }
                 try await dependencies.ownerFieldEdits?.confirmPublished(context)
+                try await dependencies.ownerInvoices?.confirmPublished(context)
+                try await dependencies.ownerInvoices?.refresh(context, published: summary)
                 try dependencies.check(context)
                 if let content = dependencies.fullContent {
                     let prepared = try await content.synchronize(context, published: summary)
@@ -308,7 +342,7 @@ enum StaffReplicaSourceStorage {
                 try await recover(&journal, context: context)
             }
             lastConfirmedAt = journal.lastConfirmedAt
-            hasMore = selected.count < plan.changes.count || dependencies.ownerFieldEdits?.hasMore == true
+            hasMore = selected.count < plan.changes.count || dependencies.ownerFieldEdits?.hasMore == true || dependencies.ownerInvoices?.hasMore == true
             if !conflicts.isEmpty { message = "\(conflicts.count) saved change\(conflicts.count == 1 ? " needs" : "s need") review." }
             else if plan.waitingForCloudKit > 0 { message = "Waiting for this device's company iCloud records to catch up." }
             else if hasMore { message = dependencies.ownerFieldEdits?.hasMore == true ? "Checking more field updates…" : "Preparing more saved changes…" }
@@ -331,6 +365,7 @@ enum StaffReplicaSourceStorage {
             if let safe = error as? StaffReplicaSourceSyncError { message = safe.localizedDescription }
             else if let safe = error as? StaffReplicaSourceError { message = safe.localizedDescription }
             else if let safe = error as? StaffReplicaDeliveryError { message = safe.localizedDescription }
+            else if let safe = error as? StaffOwnerInvoiceError { message = safe.localizedDescription }
             else { message = StaffReplicaSourceSyncError.unavailable.localizedDescription }
         }
     }

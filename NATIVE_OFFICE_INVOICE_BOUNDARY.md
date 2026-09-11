@@ -1,5 +1,10 @@
 # Native office invoice boundary — 2026-09-11
 
+Historical boundary qualification: the later
+`NATIVE_OFFICE_INVOICE_RECOVERY.md` candidate connects the durable coordinator,
+transport and office review UI. Its independent evidence is required; the
+earlier test/build results below do not qualify those later changes.
+
 ## Delivered scope
 
 This candidate adds a typed, review-only proposal planner and a tested SwiftData

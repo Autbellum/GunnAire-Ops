@@ -1,9 +1,22 @@
+Native office invoice recovery/review candidate, 2026-09-11:
+NATIVE_OFFICE_INVOICE_RECOVERY.md records durable original approvals, exact
+server-proposal checks, interruption recovery, bounded retries, retained
+unclaimed rejections, owner-source sequencing and a focused invoice review
+entry/sheet. The final native suite passes 2,344 tests with zero failures/skips
+and nine verified selectors; 38 backend guard/interop and 75 tooling tests pass.
+Unsigned Mac Catalyst and iOS Release builds pass; the two existing Mac Metal
+search-path warnings remain. Consult the current report for exact evidence.
+QBO/provider acceptance, independent-account CloudKit,
+claimed-conflict/device-loss recovery and production/device acceptance remain
+unfinished. The complete application goal remains ACTIVE.
+
 Office invoice publication/collection guard candidate, 2026-09-11:
 INVOICE_APPLICATION_PUBLICATION_GUARDS.md records transactional application,
 catalog, invoice-publication and payment gates; encrypted publication links;
 exact sold-line/source/provider identity checks; and interrupted-send recovery.
-Native office journal/coordinator/Apply UI and end-to-end provider, CloudKit,
-payment-handoff and production acceptance remain unfinished. This is not full
+The subsequent native recovery candidate above connects journal/coordinator/
+Apply UI; end-to-end provider, CloudKit, payment-handoff and production
+acceptance remain unfinished. This is not full
 application completion. See the report for exact qualification scope.
 The full goal remains ACTIVE.
 
@@ -11,8 +24,8 @@ Native office invoice boundary, 2026-09-11:
 NATIVE_OFFICE_INVOICE_BOUNDARY.md records typed proposal/recovery validation,
 atomic invoice/new-item saves, preserved sold/package/equipment evidence, and
 the retained discount-rounding and registered-model rollback reproductions.
-The live journal/coordinator/Apply UI remains unfinished. Shared provider/payment
-guards are covered by the subsequent candidate above, not by this historical
+The later native recovery candidate connects the journal/coordinator/Apply UI.
+Shared provider/payment guards are covered by the subsequent candidate above, not by this historical
 native qualification. This candidate is not a completed QBO invoice workflow or
 production acceptance; see that report for exact test/build evidence and gaps.
 The full goal remains ACTIVE.

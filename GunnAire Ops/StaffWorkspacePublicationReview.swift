@@ -42,7 +42,7 @@ struct StaffWorkspacePublicationReviewView: View {
         List {
             Section {
                 Text(source.message).accessibilityIdentifier("OwnerWorkspaceCopyStatus")
-                Text("This is the administrator-only server copy of saved company records. It does not replace your live iCloud workspace, change QuickBooks, or grant staff access.")
+                Text("Review company sync and field requests here. Invoice and field-update approvals can change office records. These actions do not send invoices, charge payments, publish to QuickBooks, or grant staff access.")
                     .font(.footnote).foregroundStyle(.secondary)
                 Button("Check Again") { Task { await source.sync() } }.disabled(source.isRunning)
                 if source.isRunning { ProgressView("Checking saved records…") }
@@ -53,6 +53,9 @@ struct StaffWorkspacePublicationReviewView: View {
             }
             if let edits = source.ownerFieldEdits {
                 StaffOwnerFieldEditsReview(edits: edits, source: source)
+            }
+            if let invoices = source.ownerInvoices {
+                StaffOwnerInvoicesReview(invoices: invoices, source: source)
             }
             ForEach(source.workspaceConflicts) { conflict in
                 Section {

@@ -3,8 +3,8 @@ import SwiftData
 
 /// Typed, synchronous application boundary. A caller must retain the complete
 /// proposal and confirmed exclusive claim before invoking this method. It is
-/// intentionally not exposed by a live button until provider/collection fencing
-/// and the durable native coordinator are connected.
+/// invoked by the durable invoice coordinator only after its backend-version,
+/// original-proposal and exclusive-claim checks. It does not publish to QBO.
 @MainActor enum StaffOwnerInvoiceModels {
     private static func originals(_ proposal: StaffOwnerInvoiceProposal, context: ModelContext) throws -> [String: StaffWorkspaceModelRecord] {
         let requested = Set(proposal.dependencies.map(\.key) + [proposal.expectedInvoice.key, "item:" + proposal.request.line.itemID])
