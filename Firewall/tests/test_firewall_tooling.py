@@ -43,16 +43,16 @@ class FirewallToolingTests(unittest.TestCase):
         rules["rules"].append({
             "id": "BAD-WAN",
             "order": 21,
-            "enabled": true,
+            "enabled": True,
             "source": "WAN",
             "destination": "NAS",
             "protocol": "TCP",
             "ports": [5000],
             "action": "ALLOW",
-            "logging": false,
+            "logging": False,
             "purpose": "synthetic unsafe rule",
-            "approval_required": false,
-            "temporary": false
+            "approval_required": False,
+            "temporary": False,
         })
         report = validate_plan.validate_all(self.network, rules, self.updates)
         codes = {item.code for item in report.findings}
@@ -64,16 +64,16 @@ class FirewallToolingTests(unittest.TestCase):
         rules["rules"].append({
             "id": "BAD-IOT",
             "order": 519,
-            "enabled": true,
+            "enabled": True,
             "source": "IOT",
             "destination": "BUSINESS",
             "protocol": "TCP",
             "ports": [445],
             "action": "ALLOW",
-            "logging": true,
+            "logging": True,
             "purpose": "synthetic unsafe lateral rule",
-            "approval_required": true,
-            "temporary": false
+            "approval_required": True,
+            "temporary": False,
         })
         report = validate_plan.validate_all(self.network, rules, self.updates)
         self.assertIn("RULE-LATERAL-UNTRUSTED", {item.code for item in report.findings})
