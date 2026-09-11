@@ -50,12 +50,32 @@ class AIRoutingAuditTests(unittest.TestCase):
         self.assertEqual(report["status"], "violations_found")
         self.assertIn("AI-SD-NONIMAGE", {item["code"] for item in report["violations"]})
 
+    def test_rejects_camel_case_stable_diffusion_client(self) -> None:
+        report = self.run_audit({
+            "Backend/business_text.py": "client = StableDiffusionClient()\n"
+        })
+        self.assertEqual(report["status"], "violations_found")
+        self.assertIn("AI-SD-NONIMAGE", {item["code"] for item in report["violations"]})
+
     def test_allows_stable_diffusion_in_image_provider_path(self) -> None:
         report = self.run_audit({
             "ImageAI/StableDiffusionGenerator.swift": 'let route = "/sdapi/v1/txt2img"\n'
         })
         self.assertEqual(report["status"], "pass")
         self.assertEqual(report["counts"]["stable_diffusion_matches"], 1)
+
+    def test_allows_negative_provider_metadata_without_treating_it_as_use(self) -> None:
+        report = self.run_audit({
+            "GunnAire Ops/LocalAIResponse.swift": "let stableDiffusionUsed = false\n"
+        })
+        self.assertEqual(report["status"], "pass")
+        self.assertEqual(report["counts"]["violations"], 0)
+
+    def test_allows_explicit_image_only_policy_statement(self) -> None:
+        report = self.run_audit({
+            "Backend/local_gateway.py": 'print("Stable Diffusion is image-only and excluded from business text")\n'
+        })
+        self.assertEqual(report["status"], "pass")
 
     def test_rejects_direct_hosted_llm_endpoint(self) -> None:
         report = self.run_audit({
@@ -70,6 +90,13 @@ class AIRoutingAuditTests(unittest.TestCase):
         })
         self.assertEqual(report["status"], "violations_found")
         self.assertIn("AI-MOBILE-DIRECT-OLLAMA", {item["code"] for item in report["violations"]})
+
+    def test_allows_mobile_to_validate_backend_provider_metadata(self) -> None:
+        report = self.run_audit({
+            "GunnAire Ops/LocalAIResponse.swift": 'guard provider == "ollama" else { return }\n'
+        })
+        self.assertEqual(report["status"], "pass")
+        self.assertEqual(report["counts"]["local_llm_matches"], 1)
 
     def test_allows_backend_to_use_loopback_ollama(self) -> None:
         report = self.run_audit({
