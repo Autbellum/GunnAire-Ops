@@ -5,16 +5,16 @@
   "addressing": {
     "ipv4_supernet": "10.77.0.0/16",
     "ipv6_enabled_at_initial_cutover": false,
-    "note": "Planning addresses only; check against the existing LAN, VPNs, ISP equipment and vendor networks before use."
+    "note": "Check all proposed addresses against the existing LAN, VPNs, provider networks, and static devices before use."
   },
   "zones": [
-    {"name": "MGMT", "vlan_id": 10, "subnet": "10.77.10.0/24", "gateway": "10.77.10.1", "purpose": "Firewall, switch and access-point administration", "trusted": true, "wireless_ssid": null},
-    {"name": "BUSINESS", "vlan_id": 20, "subnet": "10.77.20.0/24", "gateway": "10.77.20.1", "purpose": "Trusted office Macs, iPads and business workstations", "trusted": true, "wireless_ssid": "GunnAire-Business"},
+    {"name": "MGMT", "vlan_id": 10, "subnet": "10.77.10.0/24", "gateway": "10.77.10.1", "purpose": "Firewall, switch, and access-point administration", "trusted": true, "wireless_ssid": null},
+    {"name": "BUSINESS", "vlan_id": 20, "subnet": "10.77.20.0/24", "gateway": "10.77.20.1", "purpose": "Trusted office Macs, iPads, and workstations", "trusted": true, "wireless_ssid": "GunnAire-Business"},
     {"name": "SERVERS", "vlan_id": 30, "subnet": "10.77.30.0/24", "gateway": "10.77.30.1", "purpose": "GunnAire application and backend services", "trusted": false, "wireless_ssid": null},
-    {"name": "NAS", "vlan_id": 40, "subnet": "10.77.40.0/24", "gateway": "10.77.40.1", "purpose": "Synology storage, encrypted backups and retained logs", "trusted": false, "wireless_ssid": null},
-    {"name": "IOT", "vlan_id": 50, "subnet": "10.77.50.0/24", "gateway": "10.77.50.1", "purpose": "Printers, thermostats, cameras and constrained devices", "trusted": false, "wireless_ssid": "GunnAire-Devices"},
-    {"name": "GUEST", "vlan_id": 60, "subnet": "10.77.60.0/24", "gateway": "10.77.60.1", "purpose": "Guest internet access with client isolation", "trusted": false, "wireless_ssid": "GunnAire-Guest"},
-    {"name": "DEV_AI", "vlan_id": 70, "subnet": "10.77.70.0/24", "gateway": "10.77.70.1", "purpose": "Xcode, local Ollama, test services and development systems", "trusted": false, "wireless_ssid": null},
+    {"name": "NAS", "vlan_id": 40, "subnet": "10.77.40.0/24", "gateway": "10.77.40.1", "purpose": "Synology storage, encrypted backups, and retained logs", "trusted": false, "wireless_ssid": null},
+    {"name": "IOT", "vlan_id": 50, "subnet": "10.77.50.0/24", "gateway": "10.77.50.1", "purpose": "Printers, thermostats, cameras, and constrained devices", "trusted": false, "wireless_ssid": "GunnAire-Devices"},
+    {"name": "GUEST", "vlan_id": 60, "subnet": "10.77.60.0/24", "gateway": "10.77.60.1", "purpose": "Internet-only guest access with client isolation", "trusted": false, "wireless_ssid": "GunnAire-Guest"},
+    {"name": "DEV_AI", "vlan_id": 70, "subnet": "10.77.70.0/24", "gateway": "10.77.70.1", "purpose": "Xcode, local Ollama, testing, and development systems", "trusted": false, "wireless_ssid": null},
     {"name": "VPN_ADMIN", "vlan_id": 80, "subnet": "10.77.80.0/24", "gateway": "10.77.80.1", "purpose": "WireGuard administrative remote-access clients", "trusted": true, "wireless_ssid": null}
   ],
   "special_zones": ["WAN", "INTERNET", "FIREWALL", "ANY_INTERNAL"],

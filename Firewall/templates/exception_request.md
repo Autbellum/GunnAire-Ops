@@ -7,11 +7,14 @@
 - Destination alias/address:
 - Protocol/port/signature ID:
 - Exact business requirement:
-- Evidence of block or false positive:
+- Evidence of the block or false positive:
 - Narrowest proposed scope:
-- Data sensitivity and compensating controls:
-- Start date and expiration/review date:
+- Data sensitivity:
+- Compensating controls:
+- Start date:
+- Expiration/review date:
 - Test and rollback plan:
-- Security approval and disposition:
+- Security approval:
+- Final disposition:
 
-Permanent any-to-any exceptions are prohibited. Temporary exceptions require expiration and retained evidence.
+No permanent any-to-any exception is permitted. Temporary exceptions require an expiration and retained evidence.

@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Conservative static validation for the proposed GunnAire firewall plan."""
+"""Conservative static validator for the proposed GunnAire firewall plan.
+
+A pass means the checked-in JSON satisfies these static safety checks. It does not
+mean the plan fits the unverified physical network or has been deployed.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -18,9 +23,10 @@ DEFAULT_UPDATES = BASE_DIR / "config" / "threat_update_policy.json"
 
 ALLOWED_ACTIONS = {"ALLOW", "DENY", "REJECT"}
 ALLOWED_PROTOCOLS = {"ANY", "TCP", "UDP", "TCP_UDP", "ICMP"}
-SPECIAL = {"WAN", "INTERNET", "FIREWALL", "ANY_INTERNAL"}
-PROTECTED = {"MGMT", "BUSINESS", "SERVERS", "NAS", "DEV_AI", "VPN_ADMIN"}
-UNTRUSTED = {"GUEST", "IOT"}
+SPECIAL_ZONES = {"WAN", "INTERNET", "FIREWALL", "ANY_INTERNAL"}
+PROTECTED_ZONES = {"MGMT", "BUSINESS", "SERVERS", "NAS", "DEV_AI", "VPN_ADMIN"}
+UNTRUSTED_ZONES = {"GUEST", "IOT"}
+ADMIN_PORTS = {22, 80, 443}
 
 
 class ValidationInputError(RuntimeError):
@@ -36,37 +42,37 @@ class Finding:
 
     def as_dict(self) -> dict[str, Any]:
         value = {"severity": self.severity, "code": self.code, "message": self.message}
-        if self.item:
+        if self.item is not None:
             value["item"] = self.item
         return value
 
 
 class Report:
-    def __init__(self):
+    def __init__(self) -> None:
         self.findings: list[Finding] = []
 
-    def add(self, severity: str, code: str, message: str, item: str | None = None) -> None:
-        self.findings.append(Finding(severity, code, message, item))
-
     def error(self, code: str, message: str, item: str | None = None) -> None:
-        self.add("error", code, message, item)
+        self.findings.append(Finding("error", code, message, item))
 
     def warning(self, code: str, message: str, item: str | None = None) -> None:
-        self.add("warning", code, message, item)
+        self.findings.append(Finding("warning", code, message, item))
+
+    def info(self, code: str, message: str, item: str | None = None) -> None:
+        self.findings.append(Finding("info", code, message, item))
 
     @property
-    def errors(self) -> int:
+    def error_count(self) -> int:
         return sum(item.severity == "error" for item in self.findings)
 
     @property
-    def warnings(self) -> int:
+    def warning_count(self) -> int:
         return sum(item.severity == "warning" for item in self.findings)
 
     def as_dict(self) -> dict[str, Any]:
         return {
-            "status": "pass" if self.errors == 0 else "fail",
-            "error_count": self.errors,
-            "warning_count": self.warnings,
+            "status": "pass" if self.error_count == 0 else "fail",
+            "error_count": self.error_count,
+            "warning_count": self.warning_count,
             "finding_count": len(self.findings),
             "findings": [item.as_dict() for item in self.findings],
         }
@@ -75,10 +81,12 @@ class Report:
 def read_json(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError) as exc:
-        raise ValidationInputError(f"Cannot load {path}: {exc}") from exc
+    except FileNotFoundError as exc:
+        raise ValidationInputError(f"File not found: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValidationInputError(f"Invalid JSON in {path}: {exc}") from exc
     if not isinstance(value, dict):
-        raise ValidationInputError(f"Expected an object in {path}")
+        raise ValidationInputError(f"Expected a JSON object in {path}")
     return value
 
 
@@ -87,216 +95,271 @@ def validate_network(plan: Mapping[str, Any], report: Report) -> set[str]:
         report.error("NET-STATUS", "Network plan must remain proposed_only until live acceptance")
     raw_zones = plan.get("zones")
     if not isinstance(raw_zones, list) or not raw_zones:
-        report.error("NET-ZONES", "A non-empty zones list is required")
+        report.error("NET-ZONES", "Network plan requires a non-empty zones list")
         return set()
+
     names: set[str] = set()
-    vlans: set[int] = set()
+    vlan_ids: set[int] = set()
     networks: list[tuple[str, ipaddress._BaseNetwork]] = []
-    for zone in raw_zones:
-        if not isinstance(zone, dict):
-            report.error("NET-ZONE-TYPE", "Each zone must be an object")
+    for raw in raw_zones:
+        if not isinstance(raw, dict):
+            report.error("NET-ZONE-TYPE", "Every zone must be an object")
             continue
-        name = str(zone.get("name", "")).strip()
+        name = str(raw.get("name", "")).strip()
         item = name or "<unnamed>"
         if not name:
-            report.error("NET-ZONE-NAME", "Zone name is required", item)
+            report.error("NET-ZONE-NAME", "Zone has no name", item)
             continue
         if name in names:
             report.error("NET-ZONE-DUPLICATE", f"Duplicate zone {name}", item)
         names.add(name)
-        vlan = zone.get("vlan_id")
+        vlan = raw.get("vlan_id")
         if not isinstance(vlan, int) or not 1 <= vlan <= 4094:
-            report.error("NET-VLAN", "VLAN must be 1 through 4094", item)
-        elif vlan in vlans:
-            report.error("NET-VLAN-DUPLICATE", f"Duplicate VLAN {vlan}", item)
+            report.error("NET-VLAN", "VLAN ID must be 1 through 4094", item)
+        elif vlan in vlan_ids:
+            report.error("NET-VLAN-DUPLICATE", f"Duplicate VLAN ID {vlan}", item)
         else:
-            vlans.add(vlan)
+            vlan_ids.add(vlan)
         try:
-            subnet = ipaddress.ip_network(str(zone.get("subnet", "")), strict=True)
+            subnet = ipaddress.ip_network(str(raw.get("subnet", "")), strict=True)
         except ValueError as exc:
             report.error("NET-SUBNET", f"Invalid subnet: {exc}", item)
             continue
         if not subnet.is_private or subnet.is_loopback or subnet.is_link_local:
-            report.error("NET-SUBNET-PUBLIC", f"Subnet must be private: {subnet}", item)
+            report.error("NET-PUBLIC-SUBNET", f"Subnet must be private: {subnet}", item)
         try:
-            gateway = ipaddress.ip_address(str(zone.get("gateway", "")))
+            gateway = ipaddress.ip_address(str(raw.get("gateway", "")))
         except ValueError as exc:
             report.error("NET-GATEWAY", f"Invalid gateway: {exc}", item)
         else:
             if gateway not in subnet:
                 report.error("NET-GATEWAY-RANGE", f"Gateway {gateway} is outside {subnet}", item)
             if gateway in {subnet.network_address, subnet.broadcast_address}:
-                report.error("NET-GATEWAY-HOST", "Gateway is not a usable host", item)
+                report.error("NET-GATEWAY-HOST", f"Gateway {gateway} is not usable", item)
         for existing_name, existing in networks:
             if subnet.overlaps(existing):
-                report.error("NET-OVERLAP", f"{subnet} overlaps {existing_name} {existing}", item)
+                report.error("NET-OVERLAP", f"{subnet} overlaps {existing_name} ({existing})", item)
         networks.append((name, subnet))
+
     required = {"MGMT", "BUSINESS", "SERVERS", "NAS", "IOT", "GUEST", "DEV_AI", "VPN_ADMIN"}
-    if required - names:
-        report.error("NET-MISSING-ZONES", "Missing: " + ", ".join(sorted(required - names)))
+    missing = sorted(required - names)
+    if missing:
+        report.error("NET-MISSING-ZONES", "Missing required zones: " + ", ".join(missing))
+
     controls = plan.get("required_controls")
     if not isinstance(controls, dict):
         report.error("NET-CONTROLS", "required_controls must be an object")
     else:
-        for key in ("default_deny_inter_vlan", "upnp_disabled", "nat_pmp_disabled", "remote_admin_requires_wireguard", "configuration_backup_before_change", "physical_console_recovery"):
+        required_true = {
+            "default_deny_inter_vlan",
+            "upnp_disabled",
+            "nat_pmp_disabled",
+            "remote_admin_requires_wireguard",
+            "dns_enforcement",
+            "ntp_enforcement",
+            "configuration_backup_before_change",
+            "physical_console_recovery",
+        }
+        for key in required_true:
             if controls.get(key) is not True:
-                report.error("NET-CONTROL", f"{key} must be true", key)
+                report.error("NET-CONTROL", f"Control {key} must be true", key)
         if controls.get("management_ui_from_wan") is not False:
-            report.error("NET-WAN-ADMIN", "management_ui_from_wan must be false")
+            report.error("NET-WAN-MGMT", "management_ui_from_wan must be false")
     return names
 
 
-def _ports(value: Any, report: Report, item: str) -> set[int]:
-    if not isinstance(value, list):
-        report.error("RULE-PORTS", "ports must be an array", item)
+def _ports(raw: Any, report: Report, item: str) -> set[int]:
+    if not isinstance(raw, list):
+        report.error("RULE-PORTS-TYPE", "ports must be an array", item)
         return set()
     result: set[int] = set()
-    for port in value:
-        if not isinstance(port, int) or not 1 <= port <= 65535:
-            report.error("RULE-PORT", f"Invalid port {port!r}", item)
-        elif port in result:
-            report.warning("RULE-PORT-DUPLICATE", f"Duplicate port {port}", item)
-        result.add(port)
+    for value in raw:
+        if not isinstance(value, int) or not 1 <= value <= 65535:
+            report.error("RULE-PORT", f"Invalid port {value!r}", item)
+        elif value in result:
+            report.warning("RULE-PORT-DUPLICATE", f"Duplicate port {value}", item)
+        else:
+            result.add(value)
     return result
 
 
 def validate_rules(matrix: Mapping[str, Any], zones: set[str], report: Report) -> None:
     if matrix.get("status") != "proposed_only":
-        report.error("RULE-STATUS", "Rule matrix must remain proposed_only")
+        report.error("RULE-STATUS", "Rule matrix must remain proposed_only until live acceptance")
     if matrix.get("default_action") != "DENY":
-        report.error("RULE-DEFAULT", "Default action must be DENY")
-    rules = matrix.get("rules")
-    if not isinstance(rules, list) or not rules:
-        report.error("RULE-LIST", "Rules list is required")
+        report.error("RULE-DEFAULT", "Default firewall action must be DENY")
+    raw_rules = matrix.get("rules")
+    if not isinstance(raw_rules, list) or not raw_rules:
+        report.error("RULE-LIST", "Rule matrix requires a non-empty rules list")
         return
+
+    valid_zones = zones | SPECIAL_ZONES
     ids: set[str] = set()
     orders: set[int] = set()
-    valid_zones = zones | SPECIAL
-    guest_deny = iot_deny = egress_deny = False
-    for rule in rules:
-        if not isinstance(rule, dict):
-            report.error("RULE-TYPE", "Each rule must be an object")
+    saw_egress_default = False
+    saw_guest_isolation = False
+    saw_iot_isolation = False
+
+    for raw in raw_rules:
+        if not isinstance(raw, dict):
+            report.error("RULE-TYPE", "Every rule must be an object")
             continue
-        rule_id = str(rule.get("id", "")).strip()
+        rule_id = str(raw.get("id", "")).strip()
         item = rule_id or "<unnamed>"
         if not rule_id:
-            report.error("RULE-ID", "Rule ID is required", item)
+            report.error("RULE-ID", "Rule has no id", item)
         elif rule_id in ids:
-            report.error("RULE-ID-DUPLICATE", f"Duplicate rule ID {rule_id}", item)
+            report.error("RULE-ID-DUPLICATE", f"Duplicate rule id {rule_id}", item)
         ids.add(rule_id)
-        order = rule.get("order")
+        order = raw.get("order")
         if not isinstance(order, int) or order < 0:
-            report.error("RULE-ORDER", "Order must be a nonnegative integer", item)
+            report.error("RULE-ORDER", "Rule order must be a nonnegative integer", item)
         elif order in orders:
-            report.error("RULE-ORDER-DUPLICATE", f"Duplicate order {order}", item)
-        orders.add(order)
-        source, destination = str(rule.get("source", "")), str(rule.get("destination", ""))
-        action, protocol = str(rule.get("action", "")).upper(), str(rule.get("protocol", "")).upper()
-        ports = _ports(rule.get("ports", []), report, item)
-        enabled, logging = bool(rule.get("enabled")), bool(rule.get("logging"))
-        approval, temporary = bool(rule.get("approval_required")), bool(rule.get("temporary"))
-        purpose = str(rule.get("purpose", "")).strip()
+            report.error("RULE-ORDER-DUPLICATE", f"Duplicate rule order {order}", item)
+        orders.add(order if isinstance(order, int) else -1)
+
+        source = str(raw.get("source", ""))
+        destination = str(raw.get("destination", ""))
+        protocol = str(raw.get("protocol", "")).upper()
+        action = str(raw.get("action", "")).upper()
+        ports = _ports(raw.get("ports", []), report, item)
+        enabled = bool(raw.get("enabled", False))
+        logging = bool(raw.get("logging", False))
+        approval = bool(raw.get("approval_required", False))
+        purpose = str(raw.get("purpose", "")).strip()
+
         if source not in valid_zones:
-            report.error("RULE-SOURCE", f"Unknown source {source}", item)
+            report.error("RULE-SOURCE", f"Unknown source {source!r}", item)
         if destination not in valid_zones:
-            report.error("RULE-DESTINATION", f"Unknown destination {destination}", item)
-        if action not in ALLOWED_ACTIONS:
-            report.error("RULE-ACTION", f"Invalid action {action}", item)
+            report.error("RULE-DESTINATION", f"Unknown destination {destination!r}", item)
         if protocol not in ALLOWED_PROTOCOLS:
-            report.error("RULE-PROTOCOL", f"Invalid protocol {protocol}", item)
+            report.error("RULE-PROTOCOL", f"Unsupported protocol {protocol!r}", item)
+        if action not in ALLOWED_ACTIONS:
+            report.error("RULE-ACTION", f"Unsupported action {action!r}", item)
         if protocol in {"ANY", "ICMP"} and ports:
-            report.error("RULE-PROTOCOL-PORT", f"{protocol} cannot define ports", item)
+            report.error("RULE-PROTOCOL-PORT", f"{protocol} rules must not specify ports", item)
         if action == "ALLOW" and protocol in {"TCP", "UDP", "TCP_UDP"} and not ports:
-            report.error("RULE-ALLOW-NO-PORT", "TCP/UDP allows require ports", item)
+            report.error("RULE-ALLOW-NO-PORT", "Allowed TCP/UDP rule must specify ports", item)
         if not purpose:
-            report.error("RULE-PURPOSE", "Purpose is required", item)
+            report.error("RULE-PURPOSE", "Rule requires a business/security purpose", item)
         if action in {"DENY", "REJECT"} and not logging:
-            report.warning("RULE-DENY-NO-LOG", "Deny/reject should be logged", item)
+            report.warning("RULE-DENY-NO-LOG", "Deny/reject rule should be logged", item)
         if action == "ALLOW" and source == "ANY_INTERNAL":
-            report.error("RULE-BROAD-SOURCE", "ANY_INTERNAL cannot be an allow source", item)
+            report.error("RULE-BROAD-SOURCE", "ANY_INTERNAL must not be an ALLOW source", item)
         if action == "ALLOW" and destination == "ANY_INTERNAL":
-            report.error("RULE-BROAD-DEST", "ANY_INTERNAL cannot be an allow destination", item)
-        if temporary:
-            expiry = rule.get("expires_at")
-            if not isinstance(expiry, str):
+            report.error("RULE-BROAD-DEST", "ANY_INTERNAL must not be an ALLOW destination", item)
+
+        if raw.get("temporary"):
+            expiry = raw.get("expires_at")
+            if not isinstance(expiry, str) or not expiry:
                 report.error("RULE-TEMP-EXPIRY", "Temporary rule requires expires_at", item)
             else:
                 try:
                     parsed = dt.datetime.fromisoformat(expiry.replace("Z", "+00:00"))
-                    if parsed.tzinfo is None:
-                        raise ValueError("timezone missing")
                 except ValueError:
-                    report.error("RULE-TEMP-EXPIRY-FORMAT", "expires_at must be timezone-aware ISO 8601", item)
+                    report.error("RULE-TEMP-FORMAT", "expires_at must be ISO 8601", item)
+                else:
+                    if parsed.tzinfo is None:
+                        report.error("RULE-TEMP-TZ", "expires_at must include a timezone", item)
+
         if source == "WAN" and action == "ALLOW":
             if destination != "FIREWALL":
                 report.error("RULE-WAN-INTERNAL", "WAN allow cannot target an internal zone", item)
-            if protocol != "UDP" or ports != {51820} or "wireguard" not in purpose.lower():
-                report.error("RULE-WAN-SERVICE", "Only proposed WireGuard UDP/51820 is permitted", item)
+            if not (protocol == "UDP" and ports == {51820} and "wireguard" in purpose.lower()):
+                report.error("RULE-WAN-SERVICE", "Only the proposed WireGuard endpoint is allowed from WAN", item)
             if not approval:
-                report.error("RULE-WAN-APPROVAL", "WAN allow requires approval", item)
+                report.error("RULE-WAN-APPROVAL", "WAN allow requires explicit approval", item)
             if enabled:
-                report.warning("RULE-WAN-ENABLED", "WAN rule is enabled before live acceptance", item)
-        if enabled and action == "ALLOW" and source in UNTRUSTED and destination in PROTECTED:
-            report.error("RULE-UNTRUSTED-LATERAL", f"{source} cannot access protected {destination}", item)
-        if enabled and action == "ALLOW" and destination == "FIREWALL" and ports & {22, 80, 443} and source not in {"MGMT", "VPN_ADMIN"}:
-            report.error("RULE-FIREWALL-ADMIN", "Firewall admin is limited to MGMT/VPN_ADMIN", item)
-        if enabled and action == "ALLOW" and destination == "INTERNET" and source in {"SERVERS", "NAS", "IOT"} and not rule.get("destination_alias"):
-            report.error("RULE-EGRESS-ALIAS", f"{source} internet allow requires destination_alias", item)
-        guest_deny |= enabled and source == "GUEST" and destination == "ANY_INTERNAL" and action == "DENY"
-        iot_deny |= enabled and source == "IOT" and destination == "ANY_INTERNAL" and action == "DENY"
-        egress_deny |= enabled and source == "ANY_INTERNAL" and destination == "INTERNET" and action == "DENY" and protocol == "ANY"
-    if not guest_deny:
+                report.warning("RULE-WAN-ENABLED", "WAN WireGuard is enabled before live acceptance", item)
+
+        if enabled and action == "ALLOW" and source in UNTRUSTED_ZONES and destination in PROTECTED_ZONES:
+            report.error("RULE-LATERAL-UNTRUSTED", f"{source} cannot access protected zone {destination}", item)
+        if enabled and action == "ALLOW" and destination == "FIREWALL" and ports & ADMIN_PORTS and source not in {"MGMT", "VPN_ADMIN"}:
+            report.error("RULE-FIREWALL-ADMIN", "Firewall administration is limited to MGMT and VPN_ADMIN", item)
+        if enabled and action == "ALLOW" and destination == "INTERNET":
+            if source in {"SERVERS", "NAS", "IOT"} and not raw.get("destination_alias"):
+                report.error("RULE-EGRESS-ALIAS", f"{source} egress requires a destination alias", item)
+            if not ports.issubset({53, 80, 123, 443, 853}):
+                report.warning("RULE-EGRESS-PORT", "Internet allow includes a nonstandard port", item)
+
+        if enabled and source == "ANY_INTERNAL" and destination == "INTERNET" and action == "DENY" and protocol == "ANY":
+            saw_egress_default = True
+        if enabled and source == "GUEST" and destination == "ANY_INTERNAL" and action == "DENY":
+            saw_guest_isolation = True
+        if enabled and source == "IOT" and destination == "ANY_INTERNAL" and action == "DENY":
+            saw_iot_isolation = True
+
+    if not saw_egress_default:
+        report.error("RULE-EGRESS-DEFAULT", "Missing ANY_INTERNAL-to-INTERNET default deny")
+    if not saw_guest_isolation:
         report.error("RULE-GUEST-ISOLATION", "Missing guest-to-internal deny")
-    if not iot_deny:
+    if not saw_iot_isolation:
         report.error("RULE-IOT-ISOLATION", "Missing IoT-to-internal deny")
-    if not egress_deny:
-        report.error("RULE-EGRESS-DEFAULT", "Missing default internal egress deny")
+
+
+def _positive(value: Any) -> bool:
+    return isinstance(value, (int, float)) and value > 0
 
 
 def validate_updates(policy: Mapping[str, Any], report: Report) -> None:
     if policy.get("status") != "proposed_only":
-        report.error("UPD-STATUS", "Update policy must remain proposed_only")
+        report.error("UPD-STATUS", "Threat policy must remain proposed_only until live acceptance")
     firmware = policy.get("firmware")
     if not isinstance(firmware, dict):
-        report.error("UPD-FIRMWARE", "Firmware policy is required")
+        report.error("UPD-FIRMWARE", "firmware must be an object")
     else:
         if str(firmware.get("channel", "")).lower() != "production":
             report.error("UPD-CHANNEL", "Firmware channel must be production")
         if firmware.get("automatic_install") is not False:
-            report.error("UPD-AUTO", "Firmware must not install blindly")
+            report.error("UPD-AUTO-FIRMWARE", "Firmware must not install blindly")
         for key in ("configuration_backup_required", "release_notes_review_required", "major_upgrade_requires_console_recovery"):
             if firmware.get(key) is not True:
                 report.error("UPD-FIRMWARE-CONTROL", f"{key} must be true", key)
+        if not _positive(firmware.get("check_interval_hours")):
+            report.error("UPD-FIRMWARE-INTERVAL", "Firmware check interval must be positive")
+
     suricata = policy.get("suricata")
     if not isinstance(suricata, dict):
-        report.error("UPD-SURICATA", "Suricata policy is required")
+        report.error("UPD-SURICATA", "suricata must be an object")
     else:
         if suricata.get("initial_mode") != "IDS_ALERT_ONLY":
-            report.error("UPD-IDS-STAGE", "Initial mode must be IDS_ALERT_ONLY")
-        if not suricata.get("validate_before_activate") or not suricata.get("retain_last_known_good") or not suricata.get("automatic_rollback_on_load_failure"):
-            report.error("UPD-SURICATA-CONTROLS", "Validation, last-known-good and rollback are mandatory")
+            report.error("UPD-IDS-STAGE", "Initial Suricata mode must be IDS_ALERT_ONLY")
+        interval = suricata.get("update_interval_hours")
+        stale = suricata.get("maximum_staleness_hours")
+        if not _positive(interval) or not _positive(stale) or stale < interval:
+            report.error("UPD-SURICATA-INTERVAL", "Suricata intervals are invalid")
+        for key in ("validate_before_activate", "retain_last_known_good", "automatic_rollback_on_load_failure"):
+            if suricata.get(key) is not True:
+                report.error("UPD-SURICATA-CONTROL", f"{key} must be true", key)
         feeds = suricata.get("feeds")
-        enabled = [item for item in feeds or [] if isinstance(item, dict) and item.get("enabled")]
+        enabled = [feed for feed in feeds if isinstance(feed, dict) and feed.get("enabled")] if isinstance(feeds, list) else []
         if len(enabled) < 2:
-            report.error("UPD-FEEDS", "At least two enabled feeds are required")
+            report.error("UPD-FEEDS", "At least two threat feeds must be enabled")
         for feed in enabled:
             if feed.get("standalone_allowed") is not False:
-                report.error("UPD-FEED-STANDALONE", "No feed may be treated as complete standalone coverage", str(feed.get("name")))
-        interval, stale = suricata.get("update_interval_hours"), suricata.get("maximum_staleness_hours")
-        if not isinstance(interval, (int, float)) or interval <= 0 or not isinstance(stale, (int, float)) or stale < interval:
-            report.error("UPD-SURICATA-INTERVAL", "Suricata update/staleness intervals are invalid")
+                report.error("UPD-FEED-STANDALONE", "No single feed is standalone coverage", str(feed.get("name")))
+
     dns = policy.get("dns_blocking")
-    if not isinstance(dns, dict) or not all(dns.get(key) is True for key in ("validate_before_activate", "retain_last_known_good", "per_zone_policy")):
-        report.error("UPD-DNS", "DNS validation, last-known-good and per-zone policy are mandatory")
+    if not isinstance(dns, dict):
+        report.error("UPD-DNS", "dns_blocking must be an object")
+    else:
+        interval = dns.get("update_interval_hours")
+        stale = dns.get("maximum_staleness_hours")
+        if not _positive(interval) or not _positive(stale) or stale < interval:
+            report.error("UPD-DNS-INTERVAL", "DNS blocklist intervals are invalid")
+        for key in ("validate_before_activate", "retain_last_known_good", "per_zone_policy"):
+            if dns.get(key) is not True:
+                report.error("UPD-DNS-CONTROL", f"{key} must be true", key)
+
     monitoring = policy.get("monitoring")
     if not isinstance(monitoring, dict):
-        report.error("UPD-MONITORING", "Monitoring policy is required")
+        report.error("UPD-MONITORING", "monitoring must be an object")
     else:
         for key in ("daily_health_report", "alert_on_update_failure", "alert_on_stale_feed", "alert_on_ips_engine_stopped", "alert_on_configuration_change"):
             if monitoring.get(key) is not True:
                 report.error("UPD-MONITOR-CONTROL", f"{key} must be true", key)
         if monitoring.get("local_ai_may_change_rules") is not False:
-            report.error("UPD-AI-AUTHORITY", "Local AI cannot change firewall rules")
+            report.error("UPD-AI-AUTHORITY", "Local AI must never change firewall rules")
 
 
 def validate_all(network: Mapping[str, Any], rules: Mapping[str, Any], updates: Mapping[str, Any]) -> Report:
@@ -304,34 +367,39 @@ def validate_all(network: Mapping[str, Any], rules: Mapping[str, Any], updates: 
     zones = validate_network(network, report)
     validate_rules(rules, zones, report)
     validate_updates(updates, report)
-    if report.errors == 0:
-        report.add("info", "PLAN-STATIC-PASS", "Static checks passed; live inventory, hardware validation and acceptance remain required")
+    if report.error_count == 0:
+        report.info("PLAN-STATIC-PASS", "Static checks passed; live inventory, deployment, and acceptance remain required")
     return report
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--network", type=Path, default=DEFAULT_NETWORK)
     parser.add_argument("--rules", type=Path, default=DEFAULT_RULES)
     parser.add_argument("--updates", type=Path, default=DEFAULT_UPDATES)
     parser.add_argument("--output", type=Path)
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     try:
         report = validate_all(read_json(args.network), read_json(args.rules), read_json(args.updates))
-        result = {
+        payload = {
             "schema_version": 1,
             "created_at": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
-            "deployed": False,
+            "inputs": {"network": str(args.network), "rules": str(args.rules), "updates": str(args.updates)},
             **report.as_dict(),
+            "deployed": False,
         }
-        text = json.dumps(result, indent=2, sort_keys=True) + "\n"
+        rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_text(text, encoding="utf-8")
+            args.output.write_text(rendered, encoding="utf-8")
             print(args.output)
         else:
-            sys.stdout.write(text)
-        return 0 if report.errors == 0 else 1
+            sys.stdout.write(rendered)
+        return 0 if report.error_count == 0 else 1
     except (ValidationInputError, OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

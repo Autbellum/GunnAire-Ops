@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "package_version": "1.0.0",
+  "verified_at": "2026-09-11T01:20:00Z",
+  "status": "pass",
+  "deterministic_unit_tests": {
+    "local_ai": {
+      "passed": 29,
+      "failed": 0,
+      "skipped": 0
+    },
+    "firewall": {
+      "passed": 16,
+      "failed": 0,
+      "skipped": 0
+    },
+    "total": {
+      "passed": 45,
+      "failed": 0,
+      "skipped": 0
+    }
+  },
+  "firewall_static_validation": {
+    "status": "pass",
+    "errors": 0,
+    "warnings": 0,
+    "deployed": false
+  },
+  "guarded_qa_runner": {
+    "passed": true,
+    "commands_executed": 3,
+    "commands_expected": 3,
+    "ai_called": false
+  },
+  "shell_syntax": {
+    "setup_local_ai.sh": "pass"
+  },
+  "configuration_parse": {
+    "json": "pass",
+    "plist_templates": "pass"
+  },
+  "secret_pattern_scan": "pass outside intentional synthetic test fixtures",
+  "live_mac_model_installation_verified": false,
+  "live_firewall_deployment_verified": false,
+  "notes": [
+    "Static and isolated verification only.",
+    "No production application, provider account, network device, or NAS data was changed."
+  ]
+}
