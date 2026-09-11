@@ -1,3 +1,12 @@
+Native office invoice boundary, 2026-09-11:
+NATIVE_OFFICE_INVOICE_BOUNDARY.md records typed proposal/recovery validation,
+atomic invoice/new-item saves, preserved sold/package/equipment evidence, and
+the retained discount-rounding and registered-model rollback reproductions.
+The live journal/coordinator/Apply UI and shared provider/payment guards are
+still unfinished. This candidate is not a completed QBO invoice workflow or
+production acceptance; see that report for exact test/build evidence and gaps.
+The full goal remains ACTIVE.
+
 Staff invoice request/application follow-up, 2026-09-11:
 NATIVE_STAFF_INVOICE_REQUESTS.md records the previously qualified native staff
 composer and its encrypted drafts/immutable recorded-only receipts.

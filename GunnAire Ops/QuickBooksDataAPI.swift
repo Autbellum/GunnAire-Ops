@@ -4352,8 +4352,10 @@ enum QuickBooksAccountingPaymentCreateOperation {
     }
 
     private static func cents(_ amount: Double) -> Int64? {
-        guard amount.isFinite else { return nil }
-        return Int64((amount * 100).rounded())
+        // A malformed provider/local amount must neither trap during integer
+        // conversion nor round into a matching payment with different evidence.
+        guard QuickBooksSalesLineContract.decimal(amount, places: 2) != nil else { return nil }
+        return BillingDocumentDiscountPolicy.currencyCents(amount)
     }
 
     private static func normalizedIdentifier(_ value: String?) -> String {

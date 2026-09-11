@@ -57,7 +57,12 @@ import SwiftData
             if context.hasChanges {
                 // Roll back only when the complete pending change set is this
                 // exact scalar. A save observer's unrelated draft is preserved.
-                if field.ownsPendingWrite(edit.request.value) { context.rollback() }
+                if field.ownsPendingWrite(edit.request.value) {
+                    // Restore the registered accessor as well as the stored
+                    // value; rollback alone can leave a stale @Model value.
+                    try? field.write(oldValue)
+                    context.rollback()
+                }
                 else if field.value() == edit.request.value { try? field.write(oldValue) }
             }
             throw error

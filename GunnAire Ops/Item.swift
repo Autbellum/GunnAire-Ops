@@ -179,21 +179,24 @@ struct AuthorizedDocumentDiscount: Codable, Equatable {
     let authorizedAt: Date
 
     func amount(for grossSubtotal: Double) -> Double? {
-        guard grossSubtotal.isFinite,
-              grossSubtotal >= 0,
-              BillingDocumentDiscountPolicy.currencyCents(grossSubtotal) ==
-                BillingDocumentDiscountPolicy.currencyCents(grossSubtotalAtAuthorization) else {
+        guard let cents = BillingDocumentDiscountPolicy.currencyCents(grossSubtotal),
+              cents == BillingDocumentDiscountPolicy.currencyCents(grossSubtotalAtAuthorization),
+              value.isFinite, value >= 0,
+              let decimalValue = Decimal(string: String(value), locale: Locale(identifier: "en_US_POSIX")) else {
             return nil
         }
-        let rawAmount: Double
+        // The saved subtotal is currency, and percentage multiplication must
+        // stay decimal through the half-cent boundary (346.75 × 10% = 34.68).
+        let gross = Decimal(cents) / 100
+        let rawAmount: Decimal
         switch kind {
         case .percentage:
-            rawAmount = grossSubtotal * value / 100
+            rawAmount = gross * decimalValue / 100
         case .fixedAmount:
-            rawAmount = value
+            rawAmount = decimalValue
         }
-        guard rawAmount.isFinite, rawAmount >= 0 else { return nil }
-        return min(BillingDocumentDiscountPolicy.roundCurrency(rawAmount), grossSubtotal)
+        guard !rawAmount.isNaN, rawAmount >= 0 else { return nil }
+        return QuickBooksSalesLineContract.double(min(QuickBooksSalesLineContract.rounded(rawAmount), gross))
     }
 
     var valueDisplayName: String {
@@ -306,14 +309,16 @@ enum BillingDocumentDiscountPolicy {
     }
 
     static func roundCurrency(_ value: Double) -> Double {
-        Double((value * 100).rounded()) / 100
+        guard value.isFinite, let decimal = Decimal(string: String(value), locale: Locale(identifier: "en_US_POSIX")) else { return value }
+        return QuickBooksSalesLineContract.double(QuickBooksSalesLineContract.rounded(decimal))
     }
 
     static func currencyCents(_ value: Double) -> Int64? {
-        guard value.isFinite,
-              value >= 0,
-              value <= Double(Int64.max) / 100 else { return nil }
-        return Int64((value * 100).rounded())
+        guard value.isFinite, value >= 0,
+              let decimal = Decimal(string: String(value), locale: Locale(identifier: "en_US_POSIX")) else { return nil }
+        let cents = QuickBooksSalesLineContract.rounded(decimal) * 100
+        guard !cents.isNaN, cents >= 0, cents <= Decimal(Int64.max) else { return nil }
+        return NSDecimalNumber(decimal: cents).int64Value
     }
 }
 

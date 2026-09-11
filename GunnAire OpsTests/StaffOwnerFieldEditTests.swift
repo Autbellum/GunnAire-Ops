@@ -249,6 +249,7 @@ import XCTest
         f.saveModel = { _ in throw StaffReplicaSourceSyncError.storage }
         try await f.coordinator().synchronize(f.source)
         XCTAssertEqual(try f.savedValue(), .text("Original office note"))
+        XCTAssertEqual(f.job.notes, "Original office note", "Registered UI object must also roll back without another save")
         XCTAssertFalse(f.container.mainContext.hasChanges)
         XCTAssertEqual(try f.journal().pending[f.original.commandID]?.phase, "applying")
         f.saveModel = nil
