@@ -53,6 +53,7 @@ struct StaffReplicaReceiveDependencies {
     @Published private(set) var message = "Waiting for shared business data."
     @Published private(set) var received: StaffReplicaManifest?
     @Published private(set) var presentation: StaffReplicaPresentation?
+    @Published private(set) var showingSavedWorkspace = false
     /// Recheck live session, expiry and device evidence when a screen requests
     /// the snapshot, not only when the last network request completed.
     var authorizedPresentation: StaffReplicaPresentation? {
@@ -72,8 +73,12 @@ struct StaffReplicaReceiveDependencies {
     // No cleanup callbacks or actor-state changes are needed when releasing it.
     nonisolated deinit {}
     func clearDisplay() {
-        generation = UUID(); received = nil; presentation = nil
+        generation = UUID(); received = nil; presentation = nil; showingSavedWorkspace = false
         message = "Waiting for shared business data."
+    }
+    func enforceAccessDeadline() {
+        guard presentation != nil, authorizedPresentation == nil else { return }
+        clearDisplay(); message = "Staff access changed or expired. Sign in again; saved drafts are retained."
     }
     /// Reuse only this still-authorized, hosted session for offline local capture.
     /// Never grants the owner store or revives a previous account's cached context.
@@ -86,14 +91,17 @@ struct StaffReplicaReceiveDependencies {
     }
     /// Fresh setup reads recover the original accepted invitation while the
     /// authenticated staff device is waiting at the company gate.
-    func refreshFromSetup() async {
-        guard !isRunning, !GunnAireCloudKit.usesTestDatabase else { return }
+    func refreshFromSetup(using suppliedSetup: CloudKitStaffSetupController? = nil) async {
+        guard !isRunning, suppliedSetup != nil || !GunnAireCloudKit.usesTestDatabase else { return }
         let generation = generation
-        let setup = CloudKitStaffSetupController()
-        await setup.refresh()
+        let previous = authorizedPresentation
+        isRunning = true
+        defer { isRunning = false }
+        let setup = suppliedSetup ?? CloudKitStaffSetupController()
+        await setup.refresh(expected: previous.map { ($0.context, $0.plan) })
         guard !Task.isCancelled, self.generation == generation else { return }
         if let error = setup.error {
-            clearDisplay(); message = StaffReplicaDeliveryPolicy.safe(error).localizedDescription; return
+            handleFailure(error, generation: generation); return
         }
         guard !setup.needsRecovery, let context = setup.context, !context.ownerAdministrator else {
             clearDisplay(); message = "Verify the original staff setup before receiving business data."; return
@@ -103,7 +111,7 @@ struct StaffReplicaReceiveDependencies {
               let url = setup.journal?.invitationURLs[plan.id.uuidString.lowercased()] else {
             clearDisplay(); message = "Verify one original accepted invitation before receiving business data."; return
         }
-        await refresh(context: context, plan: plan, invitation: url)
+        await receive(context: context, plan: plan, invitation: url, generation: generation)
     }
     private func check(_ context: Context, _ plan: CloudKitStaffSharePlan, _ generation: UUID) throws {
         try Task.checkCancellation(); try dependencies.check(context)
@@ -118,15 +126,31 @@ struct StaffReplicaReceiveDependencies {
     }
     @discardableResult func refresh(context: Context, plan: CloudKitStaffSharePlan, invitation: URL) async -> Bool {
         guard !isRunning else { return false }
-        let generation = generation
-        isRunning = true; received = nil
+        isRunning = true
         defer { isRunning = false }
+        await receive(context: context, plan: plan, invitation: invitation, generation: generation)
+        return true
+    }
+    private func handleFailure(_ error: Error, generation: UUID) {
+        guard self.generation == generation else { return }
+        let safe = StaffReplicaDeliveryPolicy.safe(error)
+        // An already opened session is the only offline candidate. Never open
+        // disk data here, extend expiry, or replace device/account evidence.
+        if safe == .offline, authorizedPresentation != nil {
+            received = nil; showingSavedWorkspace = true
+            message = "Connection interrupted. Showing saved records; recent office changes may not be available."
+        } else {
+            clearDisplay(); message = safe.localizedDescription
+        }
+    }
+    private func receive(context: Context, plan: CloudKitStaffSharePlan, invitation: URL, generation: UUID) async {
+        received = nil
         do {
             try check(context, plan, generation)
             guard CloudKitStaffSetupPolicy.invitationURL(invitation) else { throw StaffReplicaDeliveryError.invalid }
             if let current = presentation,
                current.context.stamp != context.stamp || current.context.scope != context.scope || current.plan != plan {
-                presentation = nil
+                presentation = nil; showingSavedWorkspace = false
             }
             message = "Checking shared business data…"
             let value = try await dependencies.download(plan, context, invitation)
@@ -134,9 +158,9 @@ struct StaffReplicaReceiveDependencies {
             try value.validate(plan: plan, workspace: context.workspace, now: dependencies.now())
             received = value
             guard let receiveFullWorkspace = dependencies.receiveFullWorkspace else {
-                presentation = nil
+                presentation = nil; showingSavedWorkspace = false
                 message = "Shared records received. Full workspace data is still required before opening."
-                return true
+                return
             }
             do {
                 let cloud = try await receiveFullWorkspace(plan, context, invitation)
@@ -155,8 +179,9 @@ struct StaffReplicaReceiveDependencies {
                         presentation = .init(workspace: workspace, context: context, plan: plan, deviceFingerprint: fingerprint)
                     }
                     message = "Shared workspace is up to date."
+                    showingSavedWorkspace = false
                 } else {
-                    presentation = nil
+                    presentation = nil; showingSavedWorkspace = false
                     message = "Shared records are saved. Full workspace verification is still required before opening."
                 }
                 if cloud.commandRecovery.pending > 0 {
@@ -166,11 +191,11 @@ struct StaffReplicaReceiveDependencies {
                 throw CancellationError()
             } catch StaffReplicaDeliveryError.pending {
                 try check(context, plan, generation)
-                presentation = nil
+                presentation = nil; showingSavedWorkspace = false
                 message = "Shared records are saved. Workspace access still needs verification."
             } catch StaffReplicaDeliveryError.unavailable {
                 try check(context, plan, generation)
-                presentation = nil
+                presentation = nil; showingSavedWorkspace = false
                 message = "Shared records are saved. Check your connection and try again."
             }
         } catch is CancellationError {
@@ -179,11 +204,7 @@ struct StaffReplicaReceiveDependencies {
                 message = "Staff sync paused. Saved work is retained."
             }
         } catch {
-            if self.generation == generation {
-                clearDisplay()
-                message = StaffReplicaDeliveryPolicy.safe(error).localizedDescription
-            }
+            handleFailure(error, generation: generation)
         }
-        return true
     }
 }

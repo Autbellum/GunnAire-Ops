@@ -65,6 +65,7 @@ enum CloudKitStaffSetupPolicy {
             if status == 409 { return .review }
         }
         if case SharedTimeError.storage = error { return .storage }
+        if StaffSyncNetworkFailure.isTransient(error) { return .offline }
         return .unavailable
     }
 

@@ -79,6 +79,9 @@ struct CompanyWorkspaceHost: View {
                 )
                     .id(presentation.navigationScope)
                     .accessibilityIdentifier("StaffOperationalHostedWorkspace")
+                    .safeAreaInset(edge: .top, spacing: 0) {
+                        StaffReplicaOfflineStatusView(receive: receive)
+                    }
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
@@ -151,11 +154,19 @@ struct CompanyWorkspaceHost: View {
             if invitation != nil { showingStaffSetup = true }
         }
         .task { await access.refresh() }
+        .task(id: receive.presentation?.context.stamp.session.expiresAt) {
+            guard let expires = receive.presentation?.context.stamp.session.expiresAt else { return }
+            do { try await Task.sleep(for: .seconds(max(0, expires.timeIntervalSinceNow))) }
+            catch { return }
+            receive.enforceAccessDeadline()
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
             access.enforceAccessDeadline()
+            receive.enforceAccessDeadline()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             access.enforceAccessDeadline()
+            receive.enforceAccessDeadline()
             Task { await access.refresh() }
         }
     }

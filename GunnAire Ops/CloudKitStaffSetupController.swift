@@ -78,6 +78,11 @@ struct CloudKitStaffSetupDependencies {
         try check(stamp)
         let account = try await dependencies.account()
         try check(stamp)
+        if let prior {
+            // Do not let a later server outage conceal a newly observed account change.
+            guard stamp == prior.stamp, account.environment == prior.account.environment,
+                  account.accountHash == prior.account.accountHash else { throw CloudKitStaffSharingError.changed }
+        }
         let result: BackendCompanyWorkspaceResponse = try await request("/api/workspace", stamp)
         guard result.user.email == stamp.session.email, SharedTimeError.validEmail(result.user.email), result.user.isActive,
               AppUserRole(rawValue: result.user.role) != nil,
@@ -96,18 +101,22 @@ struct CloudKitStaffSetupDependencies {
         return value
     }
 
-    func refresh() async {
+    func refresh(expected: (context: Context, plan: CloudKitStaffSharePlan)? = nil) async {
         guard !busy else { return }
         busy = true; error = nil
         context = nil; plans = []; journal = nil
         defer { busy = false }
         do {
             guard let stamp = dependencies.stamp() else { throw CloudKitStaffSharingError.access }
-            let context = try await authority(stamp)
+            if let expected, stamp != expected.context.stamp { throw CloudKitStaffSharingError.changed }
+            let context = try await authority(stamp, prior: expected?.context)
             try CloudKitStaffSetupLocks.acquire(context.scope.key)
             defer { CloudKitStaffSetupLocks.release(context.scope.key) }
             let saved = try load(context)
-            let values = try await list(context)
+            if expected != nil, saved.pending != nil || saved.lastCloudOperation != nil {
+                throw CloudKitStaffSharingError.review
+            }
+            let values = try await list(context, expected: expected?.plan)
             try check(stamp)
             for old in saved.originalPlans {
                 guard let current = values.first(where: { $0.id == old.id }) else { throw CloudKitStaffSharingError.review }
@@ -117,7 +126,7 @@ struct CloudKitStaffSetupDependencies {
         } catch { self.error = CloudKitStaffSetupPolicy.safe(error) }
     }
 
-    private func list(_ context: Context) async throws -> [CloudKitStaffSharePlan] {
+    private func list(_ context: Context, expected: CloudKitStaffSharePlan? = nil) async throws -> [CloudKitStaffSharePlan] {
         var values: [CloudKitStaffSharePlan] = [], ids: Set<UUID> = [], zones: Set<String> = [], cursors: Set<UUID> = [], cursor: UUID?
         repeat {
             let page: CloudKitStaffShareList = try await request(CloudKitStaffSetupPolicy.query(company: context.workspace.companyID,
@@ -127,6 +136,11 @@ struct CloudKitStaffSetupDependencies {
             var previous = cursor?.uuidString.lowercased() ?? ""
             for plan in page.shares {
                 try plan.validate(workspace: context.workspace, now: dependencies.now())
+                // Inspect each page before another await. A later page timing out
+                // cannot downgrade an observed revocation or reassignment to offline.
+                if let expected, plan.id == expected.id || (plan.memberEmail == expected.memberEmail && plan.state != "revoked") {
+                    guard plan == expected else { throw CloudKitStaffSharingError.changed }
+                }
                 guard plan.environment == context.account.environment, ids.insert(plan.id).inserted, zones.insert(plan.zoneName).inserted,
                       plan.id.uuidString.lowercased() > previous,
                       context.member.role == "Admin" || plan.memberEmail == context.member.email else { throw CloudKitStaffSharingError.invalid }

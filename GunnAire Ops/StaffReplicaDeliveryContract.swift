@@ -2,7 +2,7 @@ import Foundation
 import CryptoKit
 
 enum StaffReplicaDeliveryError: Error, LocalizedError, Equatable {
-    case invalid, changed, access, storage, pending, superseded, unavailable
+    case invalid, changed, access, storage, pending, superseded, unavailable, offline
     var errorDescription: String? {
         switch self {
         case .invalid: "The original staff snapshot could not be verified. No workspace data was replaced."
@@ -12,6 +12,7 @@ enum StaffReplicaDeliveryError: Error, LocalizedError, Equatable {
         case .pending: "The owner has not delivered this staff snapshot through iCloud yet."
         case .superseded: "A newer staff snapshot is already in iCloud. The older operation was not published over it."
         case .unavailable: "Staff synchronization could not be confirmed. Recover the original operation when connected."
+        case .offline: "The connection was interrupted. Try again when connected."
         }
     }
 }
@@ -195,12 +196,23 @@ enum StaffReplicaDeliveryPolicy {
     }
     static func safe(_ error: Error) -> StaffReplicaDeliveryError {
         if let error = error as? StaffReplicaDeliveryError { return error }
+        if let error = error as? CloudKitStaffSharingError {
+            switch error {
+            case .offline: return .offline
+            case .access, .account, .permission: return .access
+            case .changed, .review: return .changed
+            case .storage: return .storage
+            case .invalid: return .invalid
+            case .unavailable: return .unavailable
+            }
+        }
         if error is DecodingError { return .invalid }
         if case GunnAireBackendError.server(let status, _) = error {
             if status == 401 || status == 403 { return .access }
             if status == 409 { return .changed }
             if status == 404 { return .pending }
         }
+        if StaffSyncNetworkFailure.isTransient(error) { return .offline }
         return .unavailable
     }
 }

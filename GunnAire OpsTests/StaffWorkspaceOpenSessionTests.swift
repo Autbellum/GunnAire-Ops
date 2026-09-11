@@ -20,6 +20,9 @@ final class StaffWorkspaceOpenSessionTests: XCTestCase {
         var device = String(repeating: "f", count: 64)
         var allowed = true
         var serverAllows = true
+        var downloadFailure: Error?
+        var fullReceiveFailure: Error?
+        var serverFailure: Error?
         var currentTime: Date
         var serverChecks = 0
         var afterServer: (() throws -> Void)?
@@ -92,6 +95,7 @@ final class StaffWorkspaceOpenSessionTests: XCTestCase {
                 store: store, participantCloudIO: { _, _, _, _ in io }, invitationURL: { _, _ in self.invitation },
                 staffRequest: { _ in
                     guard self.serverAllows else { throw StaffReplicaDeliveryError.access }
+                    if let error = self.serverFailure { throw error }
                     self.serverChecks += 1
                     let bytes = try StaffWorkspacePublicationContract.encode(StaffWorkspaceCloudSealResponse(
                         schema: StaffWorkspaceCloudSealResponse.schema, content: self.receipt,
@@ -115,9 +119,14 @@ final class StaffWorkspaceOpenSessionTests: XCTestCase {
                 payloadBytes: 16, recordCount: 0, createdAt: base.instant)
         }
         func controller() -> StaffReplicaReceiveController {
-            .init(dependencies: .init(check: { try self.authorize($0) }, download: { _, _, _ in self.core },
-                receiveFullWorkspace: { _, _, _ in .init(selectionID: self.receipt.selectionID, alreadyLeased: false,
-                    operationalMounted: true, operationalAccepted: true) },
+            .init(dependencies: .init(check: { try self.authorize($0) }, download: { _, _, _ in
+                if let error = self.downloadFailure { throw error }
+                return self.core
+            }, receiveFullWorkspace: { _, _, _ in
+                if let error = self.fullReceiveFailure { throw error }
+                return .init(selectionID: self.receipt.selectionID, alreadyLeased: false,
+                    operationalMounted: true, operationalAccepted: true)
+            },
                 openWorkspace: { plan, context, url, selection, device, previous in
                     let value: StaffWorkspaceOperationalSession
                     if let replacement = self.replacement { value = replacement }

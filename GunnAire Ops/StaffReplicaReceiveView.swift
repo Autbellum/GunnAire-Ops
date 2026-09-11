@@ -17,6 +17,28 @@ struct StaffReplicaReceiveRecoveryModifier: ViewModifier {
     }
 }
 
+/// Only shown during a positively identified outage, not as permanent dashboard noise.
+struct StaffReplicaOfflineStatusView: View {
+    @ObservedObject var receive: StaffReplicaReceiveController
+    var body: some View {
+        if receive.showingSavedWorkspace, receive.authorizedPresentation != nil {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("Showing saved records", systemImage: "wifi.slash").font(.headline)
+                    Text("Recent office changes may not be available. Drafts stay on this device until submitted.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Button(receive.isRunning ? "Checking…" : "Retry") { Task { await receive.refreshFromSetup() } }
+                    .disabled(receive.isRunning)
+                    .accessibilityIdentifier("StaffOfflineRetry")
+            }
+            .padding().background(.regularMaterial)
+            .accessibilityIdentifier("StaffOfflineStatus")
+        }
+    }
+}
+
 struct StaffReplicaReceiveStatusView: View {
     @ObservedObject var receive: StaffReplicaReceiveController
     let context: CloudKitStaffSetupController.Context

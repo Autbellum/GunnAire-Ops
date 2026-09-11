@@ -2,7 +2,7 @@ import Foundation
 import CloudKit
 
 enum CloudKitStaffSharingError: Error, LocalizedError, Equatable {
-    case invalid, changed, account, permission, review, storage, unavailable, access
+    case invalid, changed, account, permission, review, storage, unavailable, access, offline
     var errorDescription: String? {
         switch self {
         case .invalid: "This staff invitation could not be verified. Ask the administrator to review the original request."
@@ -13,6 +13,7 @@ enum CloudKitStaffSharingError: Error, LocalizedError, Equatable {
         case .storage: "Saved iCloud setup could not be verified on this device. It was retained; ask the administrator to review it before reinstalling."
         case .unavailable: "iCloud setup could not be confirmed. Reopen the original request and try recovery when connected."
         case .access: "Sign in again with your approved business account and reopen iCloud setup."
+        case .offline: "The connection was interrupted. Try again when connected."
         }
     }
 }
