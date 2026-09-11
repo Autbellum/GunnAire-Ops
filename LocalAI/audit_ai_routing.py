@@ -32,12 +32,13 @@ STABLE_DIFFUSION_PATTERNS: tuple[re.Pattern[str], ...] = (
 # invocations. They remain visible in the report but do not fail runtime code.
 STABLE_DIFFUSION_POLICY_METADATA: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bstableDiffusion(?:Used|Scope)\b"),
+    re.compile(r"image_generation.{0,120}stable[-_]diffusion", re.IGNORECASE),
     re.compile(
-        r"stable(?:\s+|[_-])diffusion.{0,100}\b(?:image[- ]only|image work|excluded|reserved|prohibited|disabled|false|never)\b",
+        r"stable(?:\s+|[_-])diffusion.{0,100}\b(?:image[- ]only|image work|excluded|reserved|prohibited|disabled|false|never|isolated)\b",
         re.IGNORECASE,
     ),
     re.compile(
-        r"\b(?:image[- ]only|image work|excluded|reserved|prohibited|disabled|false|never)\b.{0,100}stable(?:\s+|[_-])diffusion",
+        r"\b(?:image[- ]only|image work|excluded|reserved|prohibited|disabled|false|never|isolated)\b.{0,100}stable(?:\s+|[_-])diffusion",
         re.IGNORECASE,
     ),
 )
