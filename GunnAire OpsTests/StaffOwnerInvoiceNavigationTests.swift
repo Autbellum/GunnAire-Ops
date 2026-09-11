@@ -24,6 +24,7 @@ import XCTest
         try await c.confirmPublished(f.context)
         try await c.refresh(f.context, published: f.summary)
         let route = try XCTUnwrap(c.recentInvoices.first)
+        XCTAssertTrue(c.canOpenInvoice(route))
         let before = try f.models.records(), calls = f.calls.count, writes = f.memory.writes
         XCTAssertTrue(try resolve(route, f) === f.models.invoice)
         XCTAssertEqual(route.invoiceID.uuidString.lowercased(), draft.proposal.expectedInvoice.id)
@@ -54,14 +55,103 @@ import XCTest
         f.published = true
         try await c.confirmPublished(f.context); try await c.refresh(f.context, published: f.summary)
         XCTAssertEqual(c.recentInvoices.count, 1)
+        let opened = try XCTUnwrap(c.recentInvoices.first)
+        XCTAssertTrue(c.canOpenInvoice(opened))
         // A restored journal may still retain the original approval even when
         // the server already confirmed it. Cached navigation is not authority.
         var journal = try f.journal(); journal.pending = retained
         f.memory.saved[StaffOwnerInvoiceCoordinator.key(f.models.scope)] = try StaffWorkspacePublicationContract.encode(journal)
         try await c.refresh(f.context, published: f.summary)
         XCTAssertTrue(c.recentInvoices.isEmpty)
+        XCTAssertFalse(c.canOpenInvoice(opened), "An already-open sheet must also lose editing access")
         try await c.recover(f.context); try await c.refresh(f.context, published: f.summary)
         XCTAssertEqual(c.recentInvoices.count, 1); XCTAssertEqual(f.applyCalls, 1)
+        XCTAssertTrue(c.canOpenInvoice(opened))
+    }
+
+    func confirmed(_ f: Fixture, _ c: StaffOwnerInvoiceCoordinator) async throws -> StaffOwnerInvoiceRoute {
+        let draft = try await f.draft(c)
+        try await c.applyReviewed(draft, context: f.context); f.published = true
+        try await c.confirmPublished(f.context); try await c.refresh(f.context, published: f.summary)
+        return try XCTUnwrap(c.recentInvoices.first)
+    }
+
+    func testCapturedHandoffInvalidatesDuringRecoveryBeforeRefresh() async throws {
+        let f = try Fixture(), c = f.coordinator(), draft = try await f.draft(c)
+        try await c.applyReviewed(draft, context: f.context)
+        let retained = try f.journal().pending
+        f.published = true
+        try await c.confirmPublished(f.context); try await c.refresh(f.context, published: f.summary)
+        let opened = try XCTUnwrap(c.recentInvoices.first)
+        var journal = try f.journal(); journal.pending = retained
+        f.memory.saved[StaffOwnerInvoiceCoordinator.key(f.models.scope)] = try StaffWorkspacePublicationContract.encode(journal)
+        var checked = false
+        f.versionCallback = {
+            checked = true
+            XCTAssertFalse(c.canOpenInvoice(opened), "Pending intent must close the handoff before the first await finishes")
+        }
+        try await c.recover(f.context)
+        XCTAssertTrue(checked); XCTAssertFalse(c.canOpenInvoice(opened))
+        try await c.refresh(f.context, published: f.summary)
+        XCTAssertTrue(c.canOpenInvoice(opened)); XCTAssertEqual(f.applyCalls, 1)
+    }
+
+    func testUnreadableJournalInvalidatesOpenHandoffUntilRevalidated() async throws {
+        let f = try Fixture(), c = f.coordinator(), opened = try await confirmed(f, c)
+        let key = StaffOwnerInvoiceCoordinator.key(f.models.scope), original = f.memory.saved[key]
+        f.memory.saved[key] = Data("not a valid journal".utf8)
+        do { try await c.recover(f.context); XCTFail("Expected unreadable journal") } catch { }
+        XCTAssertFalse(c.canOpenInvoice(opened)); XCTAssertTrue(c.recentInvoices.isEmpty)
+        f.memory.saved[key] = original
+        try await c.refresh(f.context, published: f.summary)
+        XCTAssertTrue(c.canOpenInvoice(opened)); XCTAssertEqual(f.applyCalls, 1)
+    }
+
+    func testJournalWriteFailuresNeverLeaveOptimisticOpenHandoff() async throws {
+        for boundary in 1...2 {
+            for after in [false, true] {
+                let f = try Fixture(), c = f.coordinator(), opened = try await confirmed(f, c)
+                let target = f.memory.writes + boundary
+                if after { f.memory.failAfter = target } else { f.memory.failBefore = target }
+                do { try await c.refresh(f.context, published: f.summary); XCTFail("Expected write failure") } catch { }
+                XCTAssertFalse(c.canOpenInvoice(opened), "boundary \(boundary), after \(after)")
+                XCTAssertTrue(c.recentInvoices.isEmpty)
+                f.memory.failBefore = nil; f.memory.failAfter = nil
+                try await c.refresh(f.context, published: f.summary)
+                XCTAssertTrue(c.canOpenInvoice(opened)); XCTAssertEqual(f.applyCalls, 1)
+            }
+        }
+    }
+
+    func testHandoffAvailabilityDoesNotReadJournalOrMutateModels() async throws {
+        let f = try Fixture(), c = f.coordinator(), opened = try await confirmed(f, c)
+        let before = try f.models.records(), calls = f.calls.count, writes = f.memory.writes
+        f.memory.onRead = { _ in XCTFail("Rendering must not read the approval journal") }
+        for _ in 0..<25 { XCTAssertTrue(c.canOpenInvoice(opened)) }
+        XCTAssertEqual(f.calls.count, calls); XCTAssertEqual(f.memory.writes, writes)
+        XCTAssertEqual(try f.models.records(), before)
+        f.models.allowed = false
+        XCTAssertFalse(c.canOpenInvoice(opened))
+        f.models.allowed = true
+        c.clearDisplay(); XCTAssertFalse(c.canOpenInvoice(opened))
+    }
+
+    func testHandoffRejectsUnconfirmedForeignStaleAndExpiredRoutes() async throws {
+        let f = try Fixture()
+        var now = f.models.now
+        var dependencies = f.dependencies(); dependencies.now = { now }
+        let c = StaffOwnerInvoiceCoordinator(dependencies: dependencies)
+        XCTAssertFalse(c.canOpenInvoice(try route(f)))
+        let opened = try await confirmed(f, c)
+        XCTAssertTrue(c.canOpenInvoice(opened))
+        let other = try Fixture()
+        XCTAssertFalse(c.canOpenInvoice(try route(other)))
+        now = opened.context.stamp.session.expiresAt
+        XCTAssertFalse(c.canOpenInvoice(opened))
+        now = f.models.now
+        f.generation = UUID()
+        XCTAssertFalse(c.canOpenInvoice(opened))
+        XCTAssertFalse(c.canOpenInvoice(try route(f)), "New session cannot borrow a previous session's confirmation")
     }
 
     func testUnconfirmedFailedSaveDoesNotOfferSuccessfulHandoff() async throws {

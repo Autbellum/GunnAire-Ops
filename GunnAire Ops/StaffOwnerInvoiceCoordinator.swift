@@ -97,6 +97,23 @@ struct StaffOwnerInvoiceDraft: Identifiable {
     private func check(_ context: StaffReplicaSourceContext) throws {
         try Task.checkCancellation(); try dependencies.check(context)
     }
+    /// Captured sheets must still belong to a confirmed, currently offered
+    /// handoff. This is a read-only check: never decrypt the journal in a view.
+    func canOpenInvoice(_ route: StaffOwnerInvoiceRoute) -> Bool {
+        guard displayed?.scope == route.context.scope, displayed?.stamp == route.context.stamp,
+              dependencies.now() < route.context.stamp.session.expiresAt else { return false }
+        do { try check(route.context) } catch { return false }
+        return recentInvoices.contains {
+            $0.id == route.id && $0.invoiceID == route.invoiceID && $0.customerID == route.customerID &&
+            $0.jobID == route.jobID && $0.context.scope == route.context.scope && $0.context.stamp == route.context.stamp
+        }
+    }
+    private func invalidatePendingHandoffs(_ state: StaffOwnerInvoiceJournal) {
+        let pending = Set(state.pending.values.map { $0.proposal.expectedInvoice.id })
+        if recentInvoices.contains(where: { pending.contains($0.invoiceID.uuidString.lowercased()) }) {
+            recentInvoices.removeAll { pending.contains($0.invoiceID.uuidString.lowercased()) }
+        }
+    }
     private func gate(_ context: StaffReplicaSourceContext) async throws {
         try check(context)
         let version = try await dependencies.serviceVersion()
@@ -124,18 +141,31 @@ struct StaffOwnerInvoiceDraft: Identifiable {
         }
     }
     private func load(_ context: StaffReplicaSourceContext) throws -> StaffOwnerInvoiceJournal {
-        try check(context)
-        let bytes = try dependencies.store.read(Self.key(context.scope))
-        try check(context)
-        guard let bytes else { return .init(version: 1, scope: context.scope) }
-        let value = try StaffWorkspacePublicationContract.decode(StaffOwnerInvoiceJournal.self, from: bytes, maximum: 64 * 1024 * 1024)
-        try validate(value, context); return value
+        do {
+            try check(context)
+            let bytes = try dependencies.store.read(Self.key(context.scope))
+            try check(context)
+            guard let bytes else { return .init(version: 1, scope: context.scope) }
+            let value = try StaffWorkspacePublicationContract.decode(StaffOwnerInvoiceJournal.self, from: bytes, maximum: 64 * 1024 * 1024)
+            try validate(value, context)
+            invalidatePendingHandoffs(value)
+            return value
+        } catch {
+            recentInvoices = [] // Unknown recovery state must not leave an editable handoff.
+            throw error
+        }
     }
     private func save(_ value: StaffOwnerInvoiceJournal, _ context: StaffReplicaSourceContext) throws {
-        try check(context); try validate(value, context)
-        let bytes = try StaffWorkspacePublicationContract.encode(value)
-        guard bytes.count <= 64 * 1024 * 1024 else { throw StaffOwnerInvoiceError.storage }
-        try dependencies.store.write(Self.key(context.scope), bytes); try check(context)
+        do {
+            try check(context); try validate(value, context)
+            let bytes = try StaffWorkspacePublicationContract.encode(value)
+            guard bytes.count <= 64 * 1024 * 1024 else { throw StaffOwnerInvoiceError.storage }
+            try dependencies.store.write(Self.key(context.scope), bytes); try check(context)
+            invalidatePendingHandoffs(value)
+        } catch {
+            recentInvoices = [] // A write may have succeeded before its acknowledgement failed.
+            throw error
+        }
     }
     private func request<T: Codable>(_ type: T.Type, _ path: String, method: String = "GET", body: Data? = nil,
                                      context: StaffReplicaSourceContext) async throws -> T {
@@ -281,7 +311,6 @@ struct StaffOwnerInvoiceDraft: Identifiable {
         catch StaffOwnerInvoiceError.backend { message = StaffOwnerInvoiceError.backend.localizedDescription; return }
         var state = try load(context)
         let pendingInvoices = Set(state.pending.values.map { $0.proposal.expectedInvoice.id })
-        recentInvoices.removeAll { pendingInvoices.contains($0.invoiceID.uuidString.lowercased()) }
         if state.queue.isEmpty {
             let page = try await request(StaffOwnerInvoicePage.self,
                 StaffOwnerInvoiceTransport.path(context.scope, after: state.after), context: context)

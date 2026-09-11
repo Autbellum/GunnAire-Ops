@@ -1,3 +1,17 @@
+Open invoice handoff availability, 2026-09-11:
+NATIVE_OFFICE_INVOICE_OPEN_GUARD.md closes stale access from an already-open
+invoice follow-up when local approvals become pending or recovery storage fails.
+The destination observes the same approval coordinator; rendering does not read
+the encrypted journal. Five additional regression tests plus strengthened
+original recovery assertions pass: 67 focused, 2,360 full actual-owner native,
+and 75 tooling tests, all without failures/skips. Both unsigned Mac Catalyst/iOS
+Release builds pass. Fourteen full-suite selectors and all 639 owner build
+inputs are independently verified; owner branch/HEAD/index are unchanged.
+Existing test-macro/unused-variable and Mac Metal path warnings remain visible.
+This is a focused-handoff guard, not a global editing lock or cross-device claim
+recovery. The full application goal remains ACTIVE; live provider, CloudKit,
+device, visual/accessibility and production-release gates are still incomplete.
+
 Native office invoice follow-up candidate, 2026-09-11:
 NATIVE_OFFICE_INVOICE_HANDOFF.md connects completed approvals to the exact saved
 invoice and its existing QBO/edit/PDF/payment workflow. The focused view omits

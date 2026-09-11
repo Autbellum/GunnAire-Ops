@@ -54,7 +54,7 @@ struct StaffOwnerInvoicesReview: View {
             }
         }
         .sheet(item: $selected) { row in StaffOwnerInvoiceReviewSheet(row: row, source: source) }
-        .sheet(item: $openedInvoice) { route in StaffOwnerInvoiceDestination(route: route) }
+        .sheet(item: $openedInvoice) { route in StaffOwnerInvoiceDestination(route: route, approvals: invoices) }
         .onChange(of: invoices.displayGeneration) { _, _ in selected = nil; openedInvoice = nil }
         if !invoices.recentInvoices.isEmpty {
             Section("Invoice Follow-up") {
@@ -75,6 +75,7 @@ struct StaffOwnerInvoicesReview: View {
 /// normal edit, PDF, publication and collection actions.
 @MainActor private struct StaffOwnerInvoiceDestination: View {
     let route: StaffOwnerInvoiceRoute
+    @ObservedObject var approvals: StaffOwnerInvoiceCoordinator
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @ObservedObject private var access = CompanyWorkspaceAccessController.shared
@@ -84,7 +85,8 @@ struct StaffOwnerInvoicesReview: View {
     @State private var expired = false
 
     private var available: Bool {
-        guard !expired, access.authorizedContainer === modelContext.container else { return false }
+        guard !expired, approvals.canOpenInvoice(route),
+              access.authorizedContainer === modelContext.container else { return false }
         return (try? route.resolve(invoices: invoices, customers: customers, jobs: jobs,
                                   check: { try StaffReplicaSourceDependencies.verify($0) })) != nil
     }
