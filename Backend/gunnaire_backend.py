@@ -38,6 +38,7 @@ try:
     from Backend import document_storage
     from Backend import staff_owner_field_edits
     from Backend import staff_workspace_field_updates
+    from Backend import staff_invoice_lines
     from Backend.qbo_document_provider import DocumentQBOProvider
     from Backend import time_worker_mappings, time_publications, cloudkit_staff_shares, staff_replica, staff_workspace_source, staff_workspace_selections, staff_billing_delivery, staff_workspace_delivery, staff_workspace_cloud, staff_workspace_media, staff_workspace_commands
     from Backend.time_worker_provider import TimeWorkerQBOProvider
@@ -55,6 +56,7 @@ except ModuleNotFoundError:
     import document_storage
     import staff_owner_field_edits
     import staff_workspace_field_updates
+    import staff_invoice_lines
     import google_mail
     import qbo_change_capture
     import qbo_document_uploads
@@ -75,7 +77,7 @@ except ModuleNotFoundError:
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.10.60"
+SERVICE_VERSION = "2026.09.10.61"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -2553,6 +2555,7 @@ def initialize_database() -> None:
         staff_workspace_delivery.initialize_schema(connection)
         staff_workspace_commands.initialize_schema(connection)
         staff_owner_field_edits.initialize_schema(connection)
+        staff_invoice_lines.initialize_schema(connection)
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS customer_communications (
@@ -3654,6 +3657,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/workspace/full-records":
             self.handle_staff_workspace_source(parsed, method="GET")
             return
+        if parsed.path == "/api/workspace/invoice-line-requests" or parsed.path.startswith("/api/workspace/invoice-line-requests/"):
+            self.handle_staff_invoice_line_review(parsed)
+            return
         if parsed.path == "/api/workspace/field-edits" or parsed.path.startswith("/api/workspace/field-edits/"):
             self.handle_staff_owner_field_edits(parsed, method="GET")
             return
@@ -4362,6 +4368,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                     commands = staff_workspace_commands.StaffWorkspaceCommands(shares)
                     payload = qbo_change_capture.strict_json(self.read_limited_body(8192).decode("utf-8"))
                     result = commands.submit(self._application_session_id, parts[0], parts[2], payload)
+                elif method == "POST" and len(parts) == 5 and parts[4] == "invoice-line-requests" and not parsed.query:
+                    payload = qbo_change_capture.strict_json(self.read_limited_body(16384).decode("utf-8"))
+                    result = staff_invoice_lines.StaffInvoiceLines(shares).submit(self._application_session_id, parts[0], parts[2], payload)
                 elif method == "GET" and len(parts) == 5 and parts[4] == "media":
                     media = staff_workspace_media.StaffWorkspaceMedia(shares)
                     query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
@@ -4419,6 +4428,31 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         except (sqlite3.Error, RuntimeError):
             self.write_json({"error": "Selection storage is unavailable. Retain the original operation for recovery.",
                              "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+
+    def handle_staff_invoice_line_review(self, parsed):
+        if not self.require_application_session():
+            return
+        shares = cloudkit_staff_shares.StaffShares(db, record_audit_event,
+            encrypt=encrypt_catalog_payload, decrypt=decrypt_catalog_payload)
+        try:
+            suffix = parsed.path.removeprefix("/api/workspace/invoice-line-requests")
+            parts = suffix[1:].split("/") if suffix else []
+            if len(parts) > 1 or parts and not parts[0]:
+                raise cloudkit_staff_shares.fail("invalid_request", "Use an exact invoice-line request review endpoint.", 400)
+            query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+            if any(len(value) != 1 for value in query.values()):
+                raise cloudkit_staff_shares.fail("invalid_query", "Use one value per invoice-line review query.", 400)
+            result = staff_invoice_lines.StaffInvoiceLines(shares).review(
+                self._application_session_id, parts[0] if parts else None,
+                {key: value[0] for key, value in query.items()})
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError, RecursionError):
+            self.write_json({"error": "Invalid invoice-line review request", "code": "invalid_request"}, status=400)
+        except (sqlite3.Error, RuntimeError, KeyError):
+            self.write_json({"error": "Invoice-line review is unavailable. Original saved requests are retained.",
+                             "code": "storage_unavailable"}, status=503)
 
     def handle_staff_owner_field_edits(self, parsed, *, method):
         if not self.require_application_session():
@@ -7189,6 +7223,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         message = re.sub(r"/api/workspace/replica-records(?:[/?][^\s\"]*)?", "/api/workspace/replica-records/[redacted]", message)
         message = re.sub(r"/api/workspace/full-records(?:[/?][^\s\"]*)?", "/api/workspace/full-records/[redacted]", message)
         message = re.sub(r"/api/workspace/field-edits(?:[/?][^\s\"]*)?", "/api/workspace/field-edits/[redacted]", message)
+        message = re.sub(r"/api/workspace/invoice-line-requests(?:[/?][^\s\"]*)?", "/api/workspace/invoice-line-requests/[redacted]", message)
         message = re.sub(r"/api/time-publications(?:[/?][^\s\"]*)?", "/api/time-publications/[redacted]", message)
         print(f"{timestamp} {self.address_string()} {message}")
 
