@@ -80,6 +80,7 @@ struct StaffOwnerInvoiceDraft: Identifiable {
     static let shared = StaffOwnerInvoiceCoordinator()
     let dependencies: StaffOwnerInvoiceDependencies
     @Published private(set) var reviews: [StaffOwnerInvoiceRow] = []
+    @Published private(set) var recentInvoices: [StaffOwnerInvoiceRoute] = []
     @Published private(set) var message = "Check for invoice work submitted from the field."
     @Published private(set) var hasMore = false
     @Published private(set) var displayGeneration = UUID()
@@ -89,7 +90,7 @@ struct StaffOwnerInvoiceDraft: Identifiable {
     init(dependencies: StaffOwnerInvoiceDependencies? = nil) { self.dependencies = dependencies ?? .live }
     static func key(_ scope: StaffReplicaSourceScope) -> String { "owner-invoice-applications-v1\n" + scope.key }
     func clearDisplay() {
-        reviews = []; displayed = nil; published = nil; hasMore = false
+        reviews = []; recentInvoices = []; displayed = nil; published = nil; hasMore = false
         displayGeneration = UUID(); recoveryMessages = [:]
         message = "Check for invoice work submitted from the field."
     }
@@ -279,6 +280,8 @@ struct StaffOwnerInvoiceDraft: Identifiable {
         do { try await gate(context) }
         catch StaffOwnerInvoiceError.backend { message = StaffOwnerInvoiceError.backend.localizedDescription; return }
         var state = try load(context)
+        let pendingInvoices = Set(state.pending.values.map { $0.proposal.expectedInvoice.id })
+        recentInvoices.removeAll { pendingInvoices.contains($0.invoiceID.uuidString.lowercased()) }
         if state.queue.isEmpty {
             let page = try await request(StaffOwnerInvoicePage.self,
                 StaffOwnerInvoiceTransport.path(context.scope, after: state.after), context: context)
@@ -300,6 +303,8 @@ struct StaffOwnerInvoiceDraft: Identifiable {
             // Completed history stays on the server and invoice, not in the action queue.
             if saved?.receipt.state != "published" {
                 reviews.append(.init(review: review, customer: title, message: status, canReview: saved == nil && state.pending[id] == nil))
+            } else if !pendingInvoices.contains(review.request.origin.invoiceID) {
+                try rememberInvoice(review, context: context, customer: title)
             }
             state.queue.removeAll { $0 == id }; try save(state, context)
         }
@@ -333,11 +338,22 @@ struct StaffOwnerInvoiceDraft: Identifiable {
               try await application(draft.review.id, context) == nil else { throw StaffOwnerInvoiceError.changed }
         try draft.proposal.validate(context.scope, original: draft.review)
         _ = try dependencies.verify(draft.proposal, context, false); try check(context)
+        // A later approval for this invoice retires an earlier follow-up link.
+        recentInvoices.removeAll { $0.invoiceID.uuidString.lowercased() == draft.proposal.expectedInvoice.id }
         state.pending[draft.review.id] = .init(review: draft.review, proposal: draft.proposal,
             prepareBytes: try StaffWorkspacePublicationContract.encode(draft.proposal), phase: "queued", receipt: nil)
         try save(state, context) // Full original and exact wire bytes precede every remote claim.
         try await resume(draft.review.id, state: &state, context: context)
+        // Offer the editable invoice only after refresh observes the published
+        // application; a local save alone still needs source confirmation.
         hasMore = true; message = "Saved on this device. Sync to confirm the company workspace, then review QuickBooks publication."
+    }
+    private func rememberInvoice(_ review: StaffOwnerInvoiceReview, context: StaffReplicaSourceContext, customer: String) throws {
+        try check(context)
+        let route = try StaffOwnerInvoiceRoute(review: review, context: context, customer: customer)
+        recentInvoices.removeAll { $0.invoiceID == route.invoiceID }
+        recentInvoices.insert(route, at: 0)
+        recentInvoices = Array(recentInvoices.prefix(8))
     }
     static func safe(_ error: Error) -> String {
         if let value = error as? StaffOwnerInvoiceError { return value.localizedDescription }

@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 struct StaffOwnerInvoiceReviewLink: View {
     @ObservedObject private var access = CompanyWorkspaceAccessController.shared
@@ -36,6 +37,7 @@ struct StaffOwnerInvoicesReview: View {
     @ObservedObject var invoices: StaffOwnerInvoiceCoordinator
     @ObservedObject var source: StaffReplicaSourceCoordinator
     @State private var selected: StaffOwnerInvoiceRow?
+    @State private var openedInvoice: StaffOwnerInvoiceRoute?
     var body: some View {
         Section("Invoice Requests") {
             Text(invoices.message).font(.footnote).foregroundStyle(.secondary)
@@ -52,7 +54,58 @@ struct StaffOwnerInvoicesReview: View {
             }
         }
         .sheet(item: $selected) { row in StaffOwnerInvoiceReviewSheet(row: row, source: source) }
-        .onChange(of: invoices.displayGeneration) { _, _ in selected = nil }
+        .sheet(item: $openedInvoice) { route in StaffOwnerInvoiceDestination(route: route) }
+        .onChange(of: invoices.displayGeneration) { _, _ in selected = nil; openedInvoice = nil }
+        if !invoices.recentInvoices.isEmpty {
+            Section("Invoice Follow-up") {
+                ForEach(invoices.recentInvoices) { route in
+                    Button { openedInvoice = route } label: {
+                        Label("Open Invoice · " + route.customer, systemImage: "doc.text")
+                    }.accessibilityIdentifier("OfficeInvoiceOpen-" + route.id)
+                }
+                Text("Review saved items, tax and QuickBooks status. Opening an invoice does not send or charge it.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+/// Resolve live models at the destination, never retain a SwiftData invoice
+/// across account changes. The existing stack-safe invoice workspace owns its
+/// normal edit, PDF, publication and collection actions.
+@MainActor private struct StaffOwnerInvoiceDestination: View {
+    let route: StaffOwnerInvoiceRoute
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @ObservedObject private var access = CompanyWorkspaceAccessController.shared
+    @Query private var invoices: [Invoice]
+    @Query private var customers: [Customer]
+    @Query private var jobs: [ServiceCall]
+    @State private var expired = false
+
+    private var available: Bool {
+        guard !expired, access.authorizedContainer === modelContext.container else { return false }
+        return (try? route.resolve(invoices: invoices, customers: customers, jobs: jobs,
+                                  check: { try StaffReplicaSourceDependencies.verify($0) })) != nil
+    }
+    var body: some View {
+        Group {
+            if available {
+                BillingDocumentsView(workspaceMode: .invoices, showsDismissButton: true,
+                                     dismissButtonTitle: "Close", focusedInvoiceID: route.invoiceID)
+            } else {
+                NavigationStack {
+                    ContentUnavailableView("Invoice Needs Another Check", systemImage: "doc.text.magnifyingglass",
+                        description: Text("Reopen the current business workspace and check this invoice again. It may still be syncing or its customer or job may have changed. No replacement was created."))
+                        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+                }
+            }
+        }
+        .task {
+            let delay = max(0, route.context.stamp.session.expiresAt.timeIntervalSinceNow)
+            do { try await Task.sleep(for: .seconds(delay)); expired = true }
+            catch { /* Dismissal cancels the expiry observer. */ }
+        }
     }
 }
 

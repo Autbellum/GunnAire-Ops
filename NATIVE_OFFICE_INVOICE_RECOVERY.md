@@ -103,6 +103,38 @@ The tests use synthetic actual SwiftData records and injected transport/storage
 failures. No live business data, provider writes, UI test target, screen capture,
 foreground activation, signing change or physical-device installation is used.
 
+## Actual owner-composite qualification
+
+The owner also contains parallel LoadSight discovery/association work not
+present in the candidate commit. That work was preserved, not overwritten.
+All nine build-input roots (637 files, including new owner files) were copied
+to the private local snapshot
+`/Users/gunnaire/.codex/worktrees/OpsOwnerComposite.JuVXOE`.
+`owner-snapshot-inputs.json` records exact paths, sizes and SHA-256 hashes.
+After every test and Release build, the owner's complete input file set and
+all 637 original/snapshot hashes still matched.
+
+The initial direct iCloud-hosted build was cancelled before compilation
+(exit 130), after a process-stack sample showed a coordinated-file-read wait
+while opening the project. The access-claim holder was not identified. Only
+copied filesystem extended attributes on the private snapshot were cleared;
+no owner file, service, signing or iCloud setting was changed.
+
+| Owner-composite check | Confirmed result / evidence |
+| --- | --- |
+| Full hidden iPad unit suite | 2,344 passed, zero failures/skips. Fresh `xcresulttool` summary/tree matches retained evidence; nine required selectors verified. `owner-snapshot-full1.xcresult`. |
+| LoadSight package | 322 passed, zero failures. Includes six discovery and two preparation cases; `owner-package1.log`. |
+| Unsigned Mac Catalyst Release | `BUILD SUCCEEDED`; `owner-mac-release1.log`. Binary verified as `x86_64 arm64`. |
+| Unsigned iOS Release | `BUILD SUCCEEDED`; `owner-ios-release1.log`. Binary verified as `arm64`. |
+
+The Mac build retains two missing optional Metal toolchain search-path linker
+warnings, one per architecture. Fresh Debug compilation also exposed five
+existing test-only warning locations (one unused variable and four redundant
+`#require` diagnostics); none was suppressed. No production/UI/provider
+acceptance is inferred from these results. The owner branch, HEAD and index
+remain unchanged; exact values and the qualification commands are retained
+in the evidence directory's `NOTES.md`.
+
 ## Remaining production requirements
 
 Safely resolve already-claimed invoice conflicts and original-device loss;

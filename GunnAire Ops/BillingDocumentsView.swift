@@ -43,6 +43,7 @@ struct BillingDocumentsView: View {
     private let showsDismissButton: Bool
     private let dismissButtonTitle: String
     private let startsNewDocument: Bool
+    private let focusedInvoiceID: UUID?
     private let liveAPI = QuickBooksDataAPI.shared
     private let googleAuth = GoogleAuthManager.shared
     private let byteCountFormatter: ByteCountFormatter = {
@@ -53,6 +54,7 @@ struct BillingDocumentsView: View {
 
     @State private var selectedDocumentKind: BillingDocumentKind
     @State private var invoiceWorkspaceLane: InvoiceWorkspaceLane = .overview
+    @State private var expandedInvoiceIDs: Set<UUID> = []
     @State private var completedNewDocument: QuickBooksBillingDocument?
     @State private var newDocumentSaveConfirmed = false
     @State private var standaloneInvoiceWorkType: InvoiceWorkType = .service
@@ -165,7 +167,8 @@ struct BillingDocumentsView: View {
         openTapToPayOnAppear: Bool = false,
         showsDismissButton: Bool = false,
         dismissButtonTitle: String = "Minimize",
-        startsNewDocument: Bool = false
+        startsNewDocument: Bool = false,
+        focusedInvoiceID: UUID? = nil
     ) {
         self.initialServiceCall = initialServiceCall
         self.initialJobStage = initialJobStage
@@ -174,6 +177,7 @@ struct BillingDocumentsView: View {
         self.showsDismissButton = showsDismissButton
         self.dismissButtonTitle = dismissButtonTitle
         self.startsNewDocument = startsNewDocument
+        self.focusedInvoiceID = focusedInvoiceID
         self.workspaceMode = workspaceMode
         let initialKind: BillingDocumentKind
         if let initialServiceCall {
@@ -183,6 +187,7 @@ struct BillingDocumentsView: View {
         }
         _selectedDocumentKind = State(initialValue: initialKind)
         _invoiceWorkspaceLane = State(initialValue: startsNewDocument ? .newInvoice : .overview)
+        _expandedInvoiceIDs = State(initialValue: focusedInvoiceID.map { [$0] } ?? [])
     }
 
     private var activeServiceCall: ServiceCall? {
@@ -946,7 +951,13 @@ struct BillingDocumentsView: View {
     private var displayedInvoices: [Invoice] {
         // Authorize before coalescing replicas, so another user's row cannot
         // suppress assigned field work. Keep unresolved CloudKit records saved.
-        let resolved = BillingMilestoneReconciliation.project(invoices, payments: payments).activeInvoices.filter { $0.customer != nil }
+        let active = BillingMilestoneReconciliation.project(invoices, payments: payments).activeInvoices
+        let candidates: [Invoice]
+        if let focusedInvoiceID {
+            candidates = BillingFocusedInvoicePolicy.resolve(focusedInvoiceID, in: invoices)
+                .flatMap { invoice in active.contains(where: { $0 === invoice }) ? [invoice] : nil } ?? []
+        } else { candidates = active }
+        let resolved = candidates.filter { $0.customer != nil }
         if canViewFinancials { return Invoice.displayDeduplicated(resolved) }
         guard canCollectFieldPayments else { return [] }
         let visibleCallIDs = visibleBillingServiceCallIDsForFieldUser
@@ -964,7 +975,7 @@ struct BillingDocumentsView: View {
     }
 
     private var retainedMilestoneDrafts: [Invoice] {
-        guard canViewFinancials else { return [] }
+        guard canViewFinancials, focusedInvoiceID == nil else { return [] }
         return BillingMilestoneReconciliation.project(invoices, payments: payments).retainedDrafts
             .filter { $0.customer != nil }.sorted { $0.createdAt > $1.createdAt }
     }
@@ -1641,11 +1652,16 @@ GunnAire
         AnyView(
             NavigationStack {
                 List {
-                    AnyView(stackSafeInvoiceLanePickerSection)
-                    AnyView(stackSafeInvoiceSnapshotSection)
+                    if focusedInvoiceID == nil {
+                        AnyView(stackSafeInvoiceLanePickerSection)
+                        AnyView(stackSafeInvoiceSnapshotSection)
+                        AnyView(invoiceActionQueues)
+                        AnyView(StaffOwnerInvoiceReviewLink())
+                    }
                     AnyView(stackSafeGeneratedInvoiceDocumentSection)
-                    AnyView(invoiceActionQueues)
-                    AnyView(StaffOwnerInvoiceReviewLink())
+                    if focusedInvoiceID != nil, !actionMessage.isEmpty {
+                        Section { Text(actionMessage).accessibilityIdentifier("FocusedInvoiceStatus") }
+                    }
                     AnyView(invoicesWorkspaceSection)
                 }
                 .navigationTitle(navigationTitle)
@@ -1701,7 +1717,7 @@ GunnAire
                             Section { Text(actionMessage).accessibilityIdentifier("ManagementBillingSavedStatus") }
                         }
                     } else {
-                        if !startsNewDocument { AnyView(stackSafeInvoiceLanePickerSection) }
+                        if !startsNewDocument, focusedInvoiceID == nil { AnyView(stackSafeInvoiceLanePickerSection) }
                         AnyView(builderDetailsWorkspaceSection)
                     }
                 }
@@ -2492,6 +2508,9 @@ GunnAire
     private func loadInitialContextIfNeeded() {
         guard !didLoadInitialContext else { return }
         didLoadInitialContext = true
+        // A focused saved-invoice visit is navigation only. Do not seed/save
+        // templates, import/reprice items, or consume an unrelated queued job.
+        guard focusedInvoiceID == nil else { return }
         FieldFormTemplate.ensureStarterTemplates(in: modelContext)
         try? modelContext.save()
         selectedInvoicePaymentTerms = configuredDefaultInvoicePaymentTerms
@@ -3764,7 +3783,7 @@ GunnAire
                     }
                     Section("Invoices") {
                         if displayedInvoices.isEmpty {
-                            Text("No invoices yet.")
+                            Text(focusedInvoiceID == nil ? "No invoices yet." : "This invoice needs review in the current business workspace. No replacement was created.")
                                 .foregroundColor(.secondary)
                         } else {
                             ForEach(displayedInvoices) { invoice in
@@ -3772,7 +3791,10 @@ GunnAire
                                     invoice: invoice,
                                     attachments: attachments
                                 )
-                                DisclosureGroup {
+                                DisclosureGroup(isExpanded: Binding(
+                                    get: { expandedInvoiceIDs.contains(invoice.id) },
+                                    set: { if $0 { expandedInvoiceIDs.insert(invoice.id) } else { expandedInvoiceIDs.remove(invoice.id) } }
+                                )) {
                                     VStack(alignment: .leading, spacing: 8) {
                                         Text(invoice.lineItemSummary)
                                             .font(.caption)
@@ -3816,6 +3838,12 @@ GunnAire
                                         }
                                         BillingPublicationReviewLink(document: .invoice(invoice), context: modelContext)
                                             .buttonStyle(.plain)
+                                        if invoice.quickBooksSyncState != "synced" {
+                                            Button("Sync Saved Invoice") { publishBillingDocument(.invoice(invoice)) }
+                                                .buttonStyle(.bordered)
+                                                .disabled(!canAttemptSharedBilling || billingSyncLifecycles["Invoice-\(invoice.id)"] != nil)
+                                                .accessibilityIdentifier("SyncSavedInvoice-\(invoice.id.uuidString)")
+                                        }
                                         if canEditInvoice(invoice) {
                                             Button("Edit Line Items") {
                                                 beginEditingInvoice(invoice)
@@ -7590,7 +7618,7 @@ GunnAire
     }
 
     private func loadPendingIntentServiceCallIfNeeded() {
-        guard initialServiceCall == nil, pendingIntentServiceCallID == nil else { return }
+        guard focusedInvoiceID == nil, initialServiceCall == nil, pendingIntentServiceCallID == nil else { return }
         pendingIntentServiceCallID = GunnAireAppIntentRouter.consumePendingServiceCallID()
         if let call = activeServiceCall {
             selectedDocumentKind = call.type == .estimate ? .estimate : .invoice

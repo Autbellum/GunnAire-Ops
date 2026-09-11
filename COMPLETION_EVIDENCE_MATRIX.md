@@ -1,3 +1,19 @@
+Native office invoice follow-up candidate, 2026-09-11:
+NATIVE_OFFICE_INVOICE_HANDOFF.md connects completed approvals to the exact saved
+invoice and its existing QBO/edit/PDF/payment workflow. The focused view omits
+unrelated dashboard panels and skips general workspace initialization/imports;
+saved invoice rows now expose explicit Sync Saved Invoice. Eleven new tests cover
+original-record resolution, duplicates, changed customer/job, standalone bills,
+session/company authority, durable source-confirmation gating, recovery and
+read-only navigation. The actor-refinement focused pass verifies 122 cases
+across all six requested suites; the final ordering guard adds one case. Final
+actual-owner qualification passes 2,355 tests with zero failures/skips and eleven
+verified selectors, 75 tooling tests, and both unsigned Release builds. All 639
+owner/snapshot inputs and five candidate implementation/test files remain
+unchanged. No app-source compiler warning remains; the two existing Mac Metal
+toolchain warnings remain. No live provider, visual/device or production acceptance is inferred. The complete
+application goal remains ACTIVE; consult the report for current evidence.
+
 Native office invoice recovery/review candidate, 2026-09-11:
 NATIVE_OFFICE_INVOICE_RECOVERY.md records durable original approvals, exact
 server-proposal checks, interruption recovery, bounded retries, retained
@@ -5,7 +21,11 @@ unclaimed rejections, owner-source sequencing and a focused invoice review
 entry/sheet. The final native suite passes 2,344 tests with zero failures/skips
 and nine verified selectors; 38 backend guard/interop and 75 tooling tests pass.
 Unsigned Mac Catalyst and iOS Release builds pass; the two existing Mac Metal
-search-path warnings remain. Consult the current report for exact evidence.
+search-path warnings remain. The actual owner composite, including preserved
+parallel LoadSight additions, separately passes 2,344 native and 322 package
+tests plus both unsigned Release builds. All 637 owner/snapshot build inputs
+still match; owner branch/HEAD/index are unchanged. See the report's actual
+owner-composite section and retained manifest for exact qualification scope.
 QBO/provider acceptance, independent-account CloudKit,
 claimed-conflict/device-loss recovery and production/device acceptance remain
 unfinished. The complete application goal remains ACTIVE.
