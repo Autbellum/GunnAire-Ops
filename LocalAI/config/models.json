@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "endpoint": "http://127.0.0.1:11434",
+  "minimum_ollama_version": "0.13.3",
+  "models": {
+    "coder": {
+      "name": "devstral-small-2:24b",
+      "required": true,
+      "approximate_download_gib": 15,
+      "purpose": "software engineering, multi-file exploration, patch and test proposals"
+    },
+    "reviewer": {
+      "name": "gpt-oss:20b",
+      "required": true,
+      "approximate_download_gib": 14,
+      "purpose": "independent security, authorization, accounting and deployment-risk review"
+    },
+    "challenger": {
+      "name": "qwen3-coder:30b",
+      "required": false,
+      "approximate_download_gib": 19,
+      "purpose": "benchmark challenger and independent coding alternative"
+    },
+    "triage": {
+      "name": "qwen2.5-coder:7b",
+      "required": false,
+      "approximate_download_gib": 5,
+      "purpose": "fast log classification and report formatting"
+    }
+  },
+  "generation": {
+    "temperature": 0.1,
+    "num_ctx": 32768,
+    "seed": 481516
+  }
+}

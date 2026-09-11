@@ -28,3 +28,9 @@ realm-bound QuickBooks OAuth flow and role policies covered by backend tests.
 - [`RELEASE_READINESS.md`](RELEASE_READINESS.md) — Apple, backend, OAuth, and
   physical-device release requirements.
 - [`AppStoreAssets/`](AppStoreAssets/) — verified App Store screenshot assets.
+
+## Local AI and firewall preparation
+
+- [`LOCAL_AI_AND_FIREWALL_PREP.md`](LOCAL_AI_AND_FIREWALL_PREP.md) — guarded local Ollama roles, deterministic test offload, model benchmarks, and the pre-deployment firewall design.
+- [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) — completed package work and the remaining Mac, firewall, and Synology execution gates.
+- [`Verification/VERIFICATION.md`](Verification/VERIFICATION.md) — isolated verification results and explicit limits.
