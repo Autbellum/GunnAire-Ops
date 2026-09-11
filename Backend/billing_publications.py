@@ -16,11 +16,11 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 try:
-    from Backend import billing_assignments, billing_milestones
+    from Backend import billing_assignments, billing_milestones, invoice_application_fences as invoice_fences
     from Backend.catalog_publications import canonical, failure, scope
     from Backend.payment_attempts import AttemptError, canonical_uuid, grant_fingerprint, reference
 except ModuleNotFoundError:
-    import billing_assignments, billing_milestones
+    import billing_assignments, billing_milestones, invoice_application_fences as invoice_fences
     from catalog_publications import canonical, failure, scope
     from payment_attempts import AttemptError, canonical_uuid, grant_fingerprint, reference
 
@@ -208,6 +208,20 @@ def line_values(values, *, _components=False):
 
 
 def provider_line_values(values):
+    # Shared by recovery, mapped reads and response projection. A malformed
+    # provider response is not a rejected local draft: retain its original
+    # publication for reconciliation instead of reporting client input error.
+    try:
+        return _provider_line_values(values)
+    except AttemptError as error:
+        if error.code == "provider_unconfirmed":
+            raise
+        raise failure("provider_unconfirmed", "QuickBooks did not confirm valid complete sold lines.") from None
+    except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        raise failure("provider_unconfirmed", "QuickBooks did not confirm valid complete sold lines.") from None
+
+
+def _provider_line_values(values):
     """Validate provider evidence once for recovery, mapped reads and responses.
 
     Ignore known accounting metadata, never a charge-bearing line. IDs are
@@ -538,12 +552,14 @@ class BillingPublisher:
             self.document_mapping(connection, intent)
             self.payment_boundary(connection, intent)
             self.assignments.bind_document(connection, intent)
+            applications = invoice_fences.billing_boundary(connection, intent, self.decrypt, self.now)
             identifier, now = str(uuid.uuid4()), self.now().isoformat()
             request_id = "ga-" + (intent["document_type"].lower() if intent["operation"] == "create" else "update") + "-" + (intent["local_document_id"] if intent["operation"] == "create" else identifier)
             connection.execute("INSERT INTO billing_publications VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'reserved',NULL,?,?,?)",
                 (identifier, *document_scope(intent), intent["local_customer_id"], intent["operation"], hash_value, ciphertext,
                  context["grant_fingerprint"], request_id, actor["email"], now, now))
             billing_milestones.index_row(connection, self, self.record(connection, identifier))
+            invoice_fences.bind_publication(connection, self.record(connection, identifier), applications, self.encrypt)
             self.audit(actor["email"], "reserve", "billing-publication", identifier, connection=connection)
             return dict(self.record(connection, identifier))
 
@@ -573,6 +589,7 @@ class BillingPublisher:
             self.document_mapping(connection, intent)
             self.payment_boundary(connection, intent)
             billing_milestones.ensure(connection, self, intent)
+            invoice_fences.claim_publication(connection, row, intent, self.decrypt, self.now)
             connection.execute("UPDATE billing_publications SET state='sending',updated_at=? WHERE id=?", (self.now().isoformat(), identifier))
             self.audit(actor["email"], "dispatch", "billing-publication", identifier, connection=connection)
 

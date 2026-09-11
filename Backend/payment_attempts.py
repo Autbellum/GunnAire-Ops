@@ -16,6 +16,11 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal, DecimalException, InvalidOperation
 
+try:
+    from Backend import invoice_application_fences as invoice_fences
+except ModuleNotFoundError:
+    import invoice_application_fences as invoice_fences
+
 
 MAX_CENTS = 100_000_000  # Existing field-collection business limit: USD 1,000,000.
 REFERENCE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
@@ -131,13 +136,14 @@ def initialize_schema(connection):
 
 
 class PaymentAttemptJournal:
-    def __init__(self, database, read_invoice, read_transaction, read_accounting, audit, now=None):
+    def __init__(self, database, read_invoice, read_transaction, read_accounting, audit, now=None, *, decrypt=None):
         self.database = database
         self.read_invoice = read_invoice
         self.read_transaction = read_transaction
         self.read_accounting = read_accounting
         self.audit = audit
         self.now = now or (lambda: datetime.now(timezone.utc))
+        self.decrypt = decrypt
 
     def timestamp(self):
         return self.now().isoformat()
@@ -297,6 +303,7 @@ class PaymentAttemptJournal:
                 self.authorize(connection, session_id, existing, ownership=True)
                 return self.public(existing)
             self.billing_publication_boundary(connection, intent)
+            invoice_fences.payment_boundary(connection, intent, self.decrypt, self.now)
             scope = (intent["company_id"], intent["realm_id"], intent["environment"], intent["invoice_qbo_id"])
             active = connection.execute(
                 """SELECT id FROM payment_attempts WHERE company_id = ? AND realm_id = ?
@@ -402,6 +409,7 @@ class PaymentAttemptJournal:
             if row["state"] != "reserved":
                 raise AttemptError("dispatch_already_started", "This payment may already have been sent. Reconcile the original attempt; do not send it again.")
             self.billing_publication_boundary(connection, row)
+            invoice_fences.payment_boundary(connection, row, self.decrypt, self.now)
             if row["kind"] == "charge" and row["amount_cents"] > balance:
                 raise AttemptError("balance_exceeded", "The invoice balance changed before collection. Refresh the invoice.")
             if source_amount is not None:

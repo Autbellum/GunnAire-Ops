@@ -1,9 +1,19 @@
+Office invoice publication/collection guard candidate, 2026-09-11:
+INVOICE_APPLICATION_PUBLICATION_GUARDS.md records transactional application,
+catalog, invoice-publication and payment gates; encrypted publication links;
+exact sold-line/source/provider identity checks; and interrupted-send recovery.
+Native office journal/coordinator/Apply UI and end-to-end provider, CloudKit,
+payment-handoff and production acceptance remain unfinished. This is not full
+application completion. See the report for exact qualification scope.
+The full goal remains ACTIVE.
+
 Native office invoice boundary, 2026-09-11:
 NATIVE_OFFICE_INVOICE_BOUNDARY.md records typed proposal/recovery validation,
 atomic invoice/new-item saves, preserved sold/package/equipment evidence, and
 the retained discount-rounding and registered-model rollback reproductions.
-The live journal/coordinator/Apply UI and shared provider/payment guards are
-still unfinished. This candidate is not a completed QBO invoice workflow or
+The live journal/coordinator/Apply UI remains unfinished. Shared provider/payment
+guards are covered by the subsequent candidate above, not by this historical
+native qualification. This candidate is not a completed QBO invoice workflow or
 production acceptance; see that report for exact test/build evidence and gaps.
 The full goal remains ACTIVE.
 

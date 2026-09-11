@@ -79,7 +79,7 @@ except ModuleNotFoundError:
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.10.63"
+SERVICE_VERSION = "2026.09.11.64"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -6804,6 +6804,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             ),
             lambda context, kind, accounting_id: read_payment_provider_record(context, "accounting", accounting_id, kind=kind),
             record_audit_event,
+            decrypt=decrypt_catalog_payload,
         )
         suffix = parsed.path.removeprefix("/api/payment-attempts")
         parts = suffix.strip("/").split("/") if suffix else []

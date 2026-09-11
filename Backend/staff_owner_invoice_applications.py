@@ -11,10 +11,11 @@ from collections import defaultdict
 from decimal import Decimal, InvalidOperation
 
 try:
-    from Backend import staff_invoice_lines as lines, staff_billing_projection as billing
+    from Backend import staff_invoice_lines as lines, staff_billing_projection as billing, invoice_application_fences as fences
 except ModuleNotFoundError:
     import staff_invoice_lines as lines
     import staff_billing_projection as billing
+    import invoice_application_fences as fences
 
 contract, sharing, source = lines.contract, lines.sharing, lines.source
 SCHEMA = "staff-owner-invoice-application-v1"
@@ -27,6 +28,7 @@ INVOICE_CHANGES = set("catalogSnapshotJSON lineItemSummary amount salesTaxAmount
 
 def initialize_schema(connection):
     lines.initialize_schema(connection)
+    fences.initialize_schema(connection)
     connection.execute("""CREATE TABLE IF NOT EXISTS staff_owner_invoice_applications (
         command_id TEXT PRIMARY KEY, operation_id TEXT NOT NULL UNIQUE,
         company_id TEXT NOT NULL, environment TEXT NOT NULL, replica_id TEXT NOT NULL,
@@ -323,6 +325,7 @@ class StaffOwnerInvoiceApplications(lines.StaffInvoiceLines):
                 item_id = payload["request"]["line"]["itemID"]
                 if payload["newItemFields"] is not None and self.current(connection, scope, "item", item_id) is not None:
                     raise fail("invoice_item_exists", "Recover the original item identity instead of creating another item.")
+                fences.application_boundary(connection, payload)
                 if connection.execute("SELECT 1 FROM staff_owner_invoice_applications WHERE operation_id=? OR (company_id=? AND environment=? AND replica_id=? AND invoice_id=? AND state='prepared')",
                         (payload["operationID"], *scope[:3], invoice["id"])).fetchone():
                     raise fail("invoice_claimed", "Finish the original pending invoice proposal before preparing another.")

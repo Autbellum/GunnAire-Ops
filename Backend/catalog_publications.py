@@ -14,8 +14,10 @@ import uuid
 from datetime import date, datetime, timezone
 
 try:
+    from Backend import invoice_application_fences as invoice_fences
     from Backend.payment_attempts import AttemptError, canonical_uuid, grant_fingerprint, reference
 except ModuleNotFoundError:
+    import invoice_application_fences as invoice_fences
     from payment_attempts import AttemptError, canonical_uuid, grant_fingerprint, reference
 
 SCHEMA = """
@@ -301,6 +303,7 @@ class CatalogPublisher:
             # A local UUID that was created once cannot create another provider ID.
             if intent["operation"] == "create" and rows:
                 raise failure("already_published", "This item was already published. Recover its original link before reviewing changes.")
+            invoice_fences.catalog_boundary(connection, intent, self.decrypt, self.now)
             identifier = str(uuid.uuid4())
             request_id = ("ga-item-" + intent["local_item_id"]) if intent["operation"] == "create" else ("ga-iu-" + digest[:44])
             now = self.now().isoformat()
@@ -363,6 +366,7 @@ class CatalogPublisher:
             if row["state"] != "reserved":
                 raise failure("publication_pending", "This catalog attempt is already being sent or reviewed. No second request was sent.")
             item = self.item_payload(row)
+            invoice_fences.catalog_boundary(connection, row, self.decrypt, self.now)
             if row["operation"] == "create" and item["Type"] != "Inventory":
                 config = connection.execute(
                     "SELECT * FROM qbo_accounting_config WHERE realm_id=? AND environment=?",

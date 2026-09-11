@@ -80,9 +80,11 @@ The original failed runtime/compile attempts are retained rather than relabeled.
 ## Remaining integration and production gates
 
 The durable native journal, current-owner coordinator and office review UI are
-not connected. Before enabling Apply, implement shared server guards between
-invoice applications, catalog publication, invoice publication and collection,
-including final pre-send checks and recovery of existing ambiguous attempts.
+not connected. The subsequent `INVOICE_APPLICATION_PUBLICATION_GUARDS.md` candidate
+implements shared server guards between invoice applications, catalog publication,
+invoice publication and collection, including final pre-send checks and recovery
+of existing ambiguous attempts. Consult its separate qualification evidence before
+connecting and enabling native Apply; the earlier native run does not qualify it.
 Payment collection must not use the old QBO amount after an office source
 confirmation. `published` is owner-source proof, never QBO success.
 
