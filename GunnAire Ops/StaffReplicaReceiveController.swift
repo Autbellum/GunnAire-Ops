@@ -23,6 +23,7 @@ struct StaffReplicaReceiveDependencies {
     /// Independent device evidence, never taken from a saved identity journal.
     var currentDeviceFingerprint: () throws -> String = { throw StaffReplicaDeliveryError.unavailable }
     var now: () -> Date = Date.init
+    var recoveryWait: () async throws -> Void = { try await Task.sleep(for: .seconds(60)) }
     static var live: Self {
         .init(check: { context in
             guard !GunnAireCloudKit.usesTestDatabase, CloudKitStaffSetupStamp.current == context.stamp else { throw StaffReplicaDeliveryError.access }
@@ -69,10 +70,86 @@ struct StaffReplicaReceiveDependencies {
     var hostedStore: StaffWorkspaceOperationalHostedStore? { authorizedPresentation?.workspace.hosted }
     var operationalIdentity: StaffWorkspaceOperationalIdentityJournal? { authorizedPresentation?.workspace.identity }
     private var generation = UUID()
+    private var applicationActive = true
+    private var requestTask: (id: UUID, task: Task<Void, Never>)?
+    private var recoveryTask: (id: UUID, task: Task<Void, Never>)?
+    private var recoveryEnabled = false
+    private var recoveryAction: (() async -> Void)?
     init(dependencies: StaffReplicaReceiveDependencies? = nil) { self.dependencies = dependencies ?? .live }
     // No cleanup callbacks or actor-state changes are needed when releasing it.
     nonisolated deinit {}
+    /// Called with SwiftUI App's aggregate phase, not a single window's phase.
+    func applicationActivityChanged(_ active: Bool) {
+        enforceAccessDeadline()
+        guard applicationActive != active else { return }
+        applicationActive = active
+        if active { startRecoveryIfNeeded() }
+        else {
+            let hasVerifiedWorkspace = authorizedPresentation != nil
+            // Invalidate late publication before cancellation reaches transport.
+            generation = UUID(); received = nil
+            recoveryTask?.task.cancel(); requestTask?.task.cancel()
+            showingSavedWorkspace = hasVerifiedWorkspace
+            message = "Staff sync paused. Saved work is retained."
+        }
+    }
+    func startRecovery(using action: (() async -> Void)? = nil) {
+        guard action != nil || !GunnAireCloudKit.usesTestDatabase else { return }
+        recoveryEnabled = true; recoveryAction = action
+        startRecoveryIfNeeded()
+    }
+    func stopRecovery() {
+        recoveryEnabled = false; recoveryAction = nil
+        recoveryTask?.task.cancel(); clearDisplay()
+    }
+    private func startRecoveryIfNeeded() {
+        guard applicationActive, recoveryEnabled, recoveryTask == nil else { return }
+        let id = UUID()
+        let task = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.recoveryTask?.id == id {
+                    self.recoveryTask = nil
+                    // A quick resume waits for the old worker and its locks to
+                    // finish before starting one successor, never a second loop.
+                    if Task.isCancelled { self.startRecoveryIfNeeded() }
+                }
+            }
+            while !Task.isCancelled, self.applicationActive, self.recoveryEnabled {
+                if let previous = self.requestTask {
+                    await previous.task.value
+                    self.finishRequest(previous.id)
+                }
+                guard !Task.isCancelled, self.applicationActive, self.recoveryEnabled else { return }
+                if let action = self.recoveryAction { await action() }
+                else { await self.refreshFromSetup() }
+                guard !Task.isCancelled, self.applicationActive, self.recoveryEnabled else { return }
+                do { try await self.dependencies.recoveryWait() } catch { return }
+            }
+        }
+        recoveryTask = (id, task)
+    }
+    /// Also lets teardown/verification wait for the exact retained worker.
+    func waitForRecovery() async {
+        if let task = recoveryTask?.task { await task.value }
+        if let task = requestTask?.task { await task.value }
+    }
+    private func finishRequest(_ id: UUID) {
+        guard requestTask?.id == id else { return }
+        requestTask = nil; isRunning = false
+    }
+    private func runRequest(_ action: @escaping (UUID) async -> Void) async -> Bool {
+        guard applicationActive, requestTask == nil, !Task.isCancelled else { return false }
+        let id = UUID(), generation = generation
+        isRunning = true
+        let task = Task { await action(generation) }
+        requestTask = (id, task)
+        await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+        finishRequest(id)
+        return true
+    }
     func clearDisplay() {
+        requestTask?.task.cancel()
         generation = UUID(); received = nil; presentation = nil; showingSavedWorkspace = false
         message = "Waiting for shared business data."
     }
@@ -82,21 +159,21 @@ struct StaffReplicaReceiveDependencies {
     }
     /// Reuse only this still-authorized, hosted session for offline local capture.
     /// Never grants the owner store or revives a previous account's cached context.
-    func fieldEditingAuthority(for hosted: StaffWorkspaceOperationalHostedStore) throws -> (Context, CloudKitStaffSharePlan) {
+    func fieldEditingAuthority(for hosted: StaffWorkspaceOperationalHostedStore, localDraftOnly: Bool = false) throws -> (Context, CloudKitStaffSharePlan) {
         guard let presentation = authorizedPresentation, presentation.workspace.hosted === hosted else {
             throw StaffReplicaDeliveryError.access
         }
-        if isRunning { throw StaffReplicaDeliveryError.pending }
+        if !localDraftOnly && (isRunning || !applicationActive) { throw StaffReplicaDeliveryError.pending }
         return (presentation.context, presentation.plan)
     }
     /// Fresh setup reads recover the original accepted invitation while the
     /// authenticated staff device is waiting at the company gate.
     func refreshFromSetup(using suppliedSetup: CloudKitStaffSetupController? = nil) async {
-        guard !isRunning, suppliedSetup != nil || !GunnAireCloudKit.usesTestDatabase else { return }
-        let generation = generation
+        guard suppliedSetup != nil || !GunnAireCloudKit.usesTestDatabase else { return }
+        _ = await runRequest { generation in await self.receiveFromSetup(using: suppliedSetup, generation: generation) }
+    }
+    private func receiveFromSetup(using suppliedSetup: CloudKitStaffSetupController?, generation: UUID) async {
         let previous = authorizedPresentation
-        isRunning = true
-        defer { isRunning = false }
         let setup = suppliedSetup ?? CloudKitStaffSetupController()
         await setup.refresh(expected: previous.map { ($0.context, $0.plan) })
         guard !Task.isCancelled, self.generation == generation else { return }
@@ -125,11 +202,9 @@ struct StaffReplicaReceiveDependencies {
         }
     }
     @discardableResult func refresh(context: Context, plan: CloudKitStaffSharePlan, invitation: URL) async -> Bool {
-        guard !isRunning else { return false }
-        isRunning = true
-        defer { isRunning = false }
-        await receive(context: context, plan: plan, invitation: invitation, generation: generation)
-        return true
+        await runRequest { generation in
+            await self.receive(context: context, plan: plan, invitation: invitation, generation: generation)
+        }
     }
     private func handleFailure(_ error: Error, generation: UUID) {
         guard self.generation == generation else { return }

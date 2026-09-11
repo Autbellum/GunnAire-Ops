@@ -50,6 +50,9 @@ struct StaffWorkspaceFieldEditorDependencies {
     let queue: (StaffWorkspaceFieldEditorSnapshot, Context, CloudKitStaffSharePlan, UUID, StaffWorkspaceValue) throws -> StaffWorkspaceOperationalCommandJournal
     let send: (StaffWorkspaceOperationalCommandJournal, Context, CloudKitStaffSharePlan) async throws -> StaffWorkspaceOperationalCommandJournal
     var operation: () -> UUID = UUID.init
+    /// Local draft capture may outlive a network refresh or foreground scene.
+    /// It is never used to queue, rebase or send a business mutation.
+    var localDraftAuthority: (() throws -> (Context, CloudKitStaffSharePlan))? = nil
     static func live(hosted: StaffWorkspaceOperationalHostedStore, kind: String, recordID: String,
                      revision: Int, field: String, receive: StaffReplicaReceiveController? = nil,
                      coordinator: StaffWorkspaceContentCoordinator? = nil) -> Self {
@@ -59,13 +62,13 @@ struct StaffWorkspaceFieldEditorDependencies {
         let route = StaffWorkspaceRecordRoute(kind: kind, id: recordID)
         // Follow only successor content within the original account/session/role.
         // The old hosted object itself never becomes valid editing authority.
-        func current() throws -> StaffReplicaPresentation {
+        func current(localDraftOnly: Bool = false) throws -> StaffReplicaPresentation {
             guard let anchor, anchor.workspace.hosted === hosted,
                   hosted.plan.record(kind: kind, id: recordID)?.revision == revision,
                   let value = receive.authorizedPresentation,
                   value.navigationIdentity.authority == anchor.navigationIdentity.authority,
                   route.canEdit(field, in: value.workspace.hosted) else { throw StaffReplicaDeliveryError.access }
-            _ = try receive.fieldEditingAuthority(for: value.workspace.hosted)
+            _ = try receive.fieldEditingAuthority(for: value.workspace.hosted, localDraftOnly: localDraftOnly)
             return value
         }
         return .init(authority: {
@@ -83,7 +86,10 @@ struct StaffWorkspaceFieldEditorDependencies {
             draft: { try engine.fieldEditorDraft($0, plan: $2, context: $1) },
             persist: { try engine.saveFieldEditorDraft($0, expected: $1, reviewing: $2, plan: $4, context: $3) },
             queue: { try engine.queueFieldEditorUpdate($0, plan: $2, context: $1, commandID: $3, value: $4) },
-            send: { try await engine.sendFieldEditorUpdate($0, plan: $2, context: $1) })
+            send: { try await engine.sendFieldEditorUpdate($0, plan: $2, context: $1) },
+            localDraftAuthority: {
+                let value = try current(localDraftOnly: true); return (value.context, value.plan)
+            })
     }
 }
 
@@ -126,6 +132,7 @@ struct StaffWorkspaceFieldEditorDependencies {
         return pending + (saved.last(where: { $0.state == "recorded" }).map { [$0] } ?? [])
     }
     var canSave: Bool { available && isEditing && !isRunning && !needsReview && (try? proposedValue()) != nil }
+    var canUseCurrentRecord: Bool { available && !isRunning && (try? authority()) != nil }
     private func proposedValue() throws -> StaffWorkspaceValue {
         guard let schema, let snapshot, let commandID else { throw StaffReplicaDeliveryError.invalid }
         let value = try input.value(schema: schema)
@@ -134,8 +141,9 @@ struct StaffWorkspaceFieldEditorDependencies {
         _ = try snapshot.request(plan: plan, commandID: commandID, value: value)
         return value
     }
-    private func authority() throws -> (StaffWorkspaceFieldEditorDependencies.Context, CloudKitStaffSharePlan) {
-        let (context, plan) = try dependencies.authority()
+    private func authority(localDraftOnly: Bool = false) throws -> (StaffWorkspaceFieldEditorDependencies.Context, CloudKitStaffSharePlan) {
+        let check = localDraftOnly ? dependencies.localDraftAuthority ?? dependencies.authority : dependencies.authority
+        let (context, plan) = try check()
         guard stamp == nil || context.stamp == stamp else { throw StaffReplicaDeliveryError.access }
         return (context, plan)
     }
@@ -211,7 +219,18 @@ struct StaffWorkspaceFieldEditorDependencies {
                 if hasUnprotectedChanges { persistDraft() }
             }
         }
-        catch StaffReplicaDeliveryError.pending { available = false; message = "Staff access is refreshing. Your unsaved text is still here." }
+        catch StaffReplicaDeliveryError.pending {
+            do {
+                _ = try authority(localDraftOnly: true)
+                available = true
+                message = "Shared data is refreshing. Keep writing; submission will wait for the current checks."
+                if hasUnprotectedChanges { persistDraft() }
+            } catch StaffReplicaDeliveryError.pending {
+                available = false; message = "Staff access is refreshing. Your unsaved text is still here."
+            } catch {
+                invalidate(); message = "Staff access changed. Saved updates are retained on this device."
+            }
+        }
         catch { invalidate(); message = "Staff access changed. Saved updates are retained on this device." }
     }
     func invalidate() {
@@ -230,18 +249,18 @@ struct StaffWorkspaceFieldEditorDependencies {
     }
     private func persist(_ next: StaffWorkspaceFieldDraft, reviewing: Bool) -> Bool {
         do {
-            let (context, plan) = try authority()
+            let (context, plan) = try authority(localDraftOnly: !reviewing)
             do { draft = try dependencies.persist(next, draft, reviewing, context, plan) }
             catch {
                 // An atomic write may have succeeded before its acknowledgement failed.
-                _ = try authority()
+                _ = try authority(localDraftOnly: !reviewing)
                 guard try dependencies.draft(next.snapshot, context, plan) == next else { throw error }
                 draft = next
             }
             draftMessage = next.input == nil ? "Draft discarded. Submitted updates are unchanged." : "Draft saved on this device · not submitted"
             return true
         } catch {
-            do { _ = try authority() }
+            do { _ = try authority(localDraftOnly: !reviewing) }
             catch StaffReplicaDeliveryError.pending { available = false }
             catch { invalidate(); message = "Staff access changed. Previously saved drafts are retained on this device."; return false }
             draftMessage = "Draft save is not verified. Keep this view open and retry. If another window changed it, reopen the saved draft; this text has not replaced it."

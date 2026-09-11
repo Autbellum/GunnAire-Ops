@@ -222,7 +222,12 @@ private struct CloudKitStaffRequestView: View {
         .task(id: receiveIdentity) {
             guard receiveIdentity?.isActive == true, let context = model.context,
                   let plan, let url = originalURL else { return }
-            receive.clearDisplay()
+            // A setup view must not clear an already verified shared workspace
+            // merely because this window or sheet has reappeared.
+            if !GunnAireCloudKit.usesTestDatabase {
+                receive.startRecovery(); return
+            }
+            // Isolated UI fixtures retain their explicitly injected transport.
             while !Task.isCancelled {
                 let ran = await receive.refresh(context: context, plan: plan, invitation: url)
                 do { try await Task.sleep(for: .seconds(ran ? 60 : 1)) } catch { return }

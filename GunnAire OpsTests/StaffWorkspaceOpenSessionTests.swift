@@ -23,6 +23,7 @@ final class StaffWorkspaceOpenSessionTests: XCTestCase {
         var downloadFailure: Error?
         var fullReceiveFailure: Error?
         var serverFailure: Error?
+        var failWrites = false
         var currentTime: Date
         var serverChecks = 0
         var afterServer: (() throws -> Void)?
@@ -47,7 +48,10 @@ final class StaffWorkspaceOpenSessionTests: XCTestCase {
         }
         nonisolated deinit {}
         func cleanup() { afterOpen = nil; afterServer = nil; serverWait = nil; replacement = nil }
-        var store: SharedTimeLocalStore { .init(read: { self.saved[$0] }, write: { self.saved[$0] = $1 }) }
+        var store: SharedTimeLocalStore { .init(read: { self.saved[$0] }, write: {
+            if self.failWrites { throw StaffReplicaDeliveryError.storage }
+            self.saved[$0] = $1
+        }) }
         func authorize(_ context: CloudKitStaffSetupController.Context) throws {
             guard allowed, context.stamp == self.context.stamp else { throw StaffReplicaDeliveryError.access }
         }
@@ -118,7 +122,7 @@ final class StaffWorkspaceOpenSessionTests: XCTestCase {
                 sourceSequence: 1, authorizationSequence: 1, payloadSHA256: String(repeating: "a", count: 64),
                 payloadBytes: 16, recordCount: 0, createdAt: base.instant)
         }
-        func controller() -> StaffReplicaReceiveController {
+        func controller(recoveryWait: (() async throws -> Void)? = nil) -> StaffReplicaReceiveController {
             .init(dependencies: .init(check: { try self.authorize($0) }, download: { _, _, _ in
                 if let error = self.downloadFailure { throw error }
                 return self.core
@@ -134,7 +138,8 @@ final class StaffWorkspaceOpenSessionTests: XCTestCase {
                         invitation: url, selectionID: selection, deviceFingerprint: device, previous: previous) }
                     try self.afterOpen?(value)
                     return value
-                }, currentDeviceFingerprint: { self.device }, now: { self.currentTime }))
+                }, currentDeviceFingerprint: { self.device }, now: { self.currentTime },
+                recoveryWait: recoveryWait ?? { try await Task.sleep(for: .seconds(60)) }))
         }
         func refresh(_ controller: StaffReplicaReceiveController) async {
             await controller.refresh(context: context, plan: plan, invitation: invitation)

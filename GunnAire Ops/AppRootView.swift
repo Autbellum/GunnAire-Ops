@@ -126,6 +126,7 @@ struct AppRootView: View {
         }
         .onChange(of: hasAuthenticatedUser) { _, isAuthenticated in
             if !isAuthenticated {
+                StaffReplicaReceiveController.shared.stopRecovery()
                 CompanyWorkspaceAccessController.shared.invalidate()
             }
         }

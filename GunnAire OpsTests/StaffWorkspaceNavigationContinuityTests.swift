@@ -62,7 +62,7 @@ import SwiftData
         XCTAssertTrue(newRow !== row)
     }
 
-    func testTypingDuringSuspendedRefreshIsKeptAndPersistedAfterSuccess() async throws {
+    func testTypingDuringSuspendedRefreshIsDurableBeforeSuccess() async throws {
         let f = try Fixture(); defer { f.cleanup() }
         let receive = f.controller(); await f.refresh(receive)
         let hosted = try XCTUnwrap(receive.hostedStore), row = try jobRow(hosted)
@@ -77,7 +77,10 @@ import SwiftData
         let refresh = Task { await f.refresh(receive) }
         await fulfillment(of: [entered], timeout: 5)
         editor.setText("Typed while shared data was refreshing")
-        XCTAssertTrue(editor.hasUnprotectedChanges); XCTAssertEqual(editor.draft, original)
+        XCTAssertFalse(editor.hasUnprotectedChanges)
+        XCTAssertEqual(editor.draft?.input?.text, "Typed while shared data was refreshing")
+        XCTAssertEqual(editor.draft?.commandID, original.commandID)
+        XCTAssertEqual(editor.draft?.snapshot, original.snapshot)
         release?.resume(); release = nil; await refresh.value
         f.serverWait = nil; navigation.update(receive.authorizedPresentation)
         XCTAssertTrue(navigation.editor?.controller === editor)

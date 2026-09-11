@@ -17,6 +17,7 @@ import UIKit
 struct GunnAire_OpsApp: App {
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "GunnAireOps", category: "AppStartup")
     @UIApplicationDelegateAdaptor(GunnAireApplicationDelegate.self) private var applicationDelegate
+    @Environment(\.scenePhase) private var scenePhase
     private let startupState: StartupState
     @StateObject private var cloudKitEventMonitor: GunnAireCloudKitEventMonitor
 
@@ -57,6 +58,11 @@ struct GunnAire_OpsApp: App {
             #else
             appRoot
             #endif
+        }
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            // App-level phase is active while ANY window is active. Never use
+            // one scene's inactivity to clear another scene's staff workspace.
+            StaffReplicaReceiveController.shared.applicationActivityChanged(phase == .active)
         }
         .commands {
             GunnAireNavigationCommands()

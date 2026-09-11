@@ -71,6 +71,19 @@ struct CloudKitStaffInvitation: Codable, Equatable, Identifiable {
 }
 
 @MainActor final class GunnAireStaffSharingSceneDelegate: NSObject, UIWindowSceneDelegate {
+    private let privacy = GunnAireScenePrivacyCover()
+    func sceneWillResignActive(_ scene: UIScene) {
+        if let scene = scene as? UIWindowScene { privacy.install(in: scene.windows) }
+    }
+    func sceneDidEnterBackground(_ scene: UIScene) {
+        if let scene = scene as? UIWindowScene { privacy.install(in: scene.windows) }
+    }
+    func sceneDidBecomeActive(_ scene: UIScene) {
+        CompanyWorkspaceAccessController.shared.enforceAccessDeadline()
+        StaffReplicaReceiveController.shared.enforceAccessDeadline()
+        privacy.remove()
+    }
+    func sceneDidDisconnect(_ scene: UIScene) { privacy.remove() }
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
         if let metadata = connectionOptions.cloudKitShareMetadata { CloudKitStaffInvitationInbox.shared.receive(metadata) }
     }

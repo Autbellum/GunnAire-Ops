@@ -1,18 +1,14 @@
 import SwiftUI
 
 struct StaffReplicaReceiveRecoveryModifier: ViewModifier {
-    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var access = CompanyWorkspaceAccessController.shared
     @ObservedObject private var receive = StaffReplicaReceiveController.shared
     func body(content: Content) -> some View {
-        content.task(id: "\(access.generation)-\(scenePhase == .active)") {
-            guard scenePhase == .active, !GunnAireCloudKit.usesTestDatabase, access.authorizedContainer == nil else {
-                receive.clearDisplay(); return
-            }
-            while !Task.isCancelled {
-                await receive.refreshFromSetup()
-                do { try await Task.sleep(for: .seconds(60)) } catch { return }
-            }
+        // This view only enables recovery for the current access mode. The
+        // controller owns one worker; a disappearing window doesn't cancel it.
+        content.task(id: access.generation) {
+            if GunnAireCloudKit.usesTestDatabase || access.authorizedContainer != nil { receive.stopRecovery() }
+            else { receive.startRecovery() }
         }
     }
 }

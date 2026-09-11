@@ -42,7 +42,7 @@ struct StaffWorkspaceFieldEditorView: View {
                             .accessibilityIdentifier("StaffFieldEditorSave")
                         Text("Drafts stay on this device. Submitting sends only this field for office review.")
                             .font(.footnote).foregroundStyle(.secondary)
-                        if editor.hasUnsavedChanges && !editor.canSave && !editor.isRunning && !editor.needsReview {
+                        if editor.hasUnsavedChanges && !editor.canSave && editor.canUseCurrentRecord && !editor.needsReview {
                             Text("Enter a valid new value. Keep notes short enough to send as one finding.")
                                 .font(.footnote).foregroundStyle(.secondary)
                         }
@@ -50,12 +50,12 @@ struct StaffWorkspaceFieldEditorView: View {
                     if editor.needsReview {
                         Section("Review changed record") {
                             Button("Refresh Shared Record") { editor.checkLifetime(forceRefresh: true) }
-                                .disabled(!editor.available || editor.isRunning)
+                                .disabled(!editor.canUseCurrentRecord)
                             if let previous = editor.snapshot, let current = editor.currentSnapshot {
                                 LabeledContent("Original field", value: StaffWorkspacePublicationReview.value(previous.candidate.currentValue, field: field))
                                 LabeledContent("Current field", value: StaffWorkspacePublicationReview.value(current.candidate.currentValue, field: field))
                                 Button("Use Draft with Current Record") { reviewSnapshot = current; reviewing = true }
-                                    .disabled(!editor.available || editor.isRunning)
+                                    .disabled(!editor.canUseCurrentRecord)
                             }
                             Text("Your draft was kept with its original record version. Review before submitting it against the updated record.")
                                 .font(.footnote).foregroundStyle(.secondary)
@@ -74,12 +74,12 @@ struct StaffWorkspaceFieldEditorView: View {
                                     .font(.caption).foregroundStyle(.secondary)
                                 if original.state == "pending" {
                                     Button("Retry Saved Update") { Task { await editor.retry(original) } }
-                                        .disabled(!editor.available || editor.isRunning)
+                                        .disabled(!editor.canUseCurrentRecord)
                                 }
                             }.padding(.vertical, 4)
                         }
                         if !editor.isEditing && !editor.saved.contains(where: { $0.state == "pending" }) {
-                            Button("Create Another Update") { editor.newUpdate() }.disabled(!editor.available || editor.isRunning)
+                            Button("Create Another Update") { editor.newUpdate() }.disabled(!editor.canUseCurrentRecord)
                         }
                     }
                 }
@@ -109,14 +109,14 @@ struct StaffWorkspaceFieldEditorView: View {
         .alert("Use draft with this record?", isPresented: $reviewing) {
             Button("Use Draft") {
                 if let reviewSnapshot { editor.useDraftWithCurrentRecord(reviewed: reviewSnapshot) }
-            }
+            }.disabled(!editor.canUseCurrentRecord)
             Button("Keep Reviewing", role: .cancel) {}
         } message: { Text("This creates a new local intent against the displayed current record. It does not submit or change the office record yet.") }
         .task { editor.open() }
-        .onReceive(timer) { _ in editor.checkLifetime() }
+        .onReceive(timer) { _ in if scenePhase == .active { editor.checkLifetime() } }
         .onChange(of: CloudKitStaffSetupStamp.current) { _, _ in editor.checkLifetime() }
         .onChange(of: scenePhase) { _, phase in if phase == .active { editor.checkLifetime(forceRefresh: true) } else { editor.persistDraft() } }
-        .onDisappear { editor.invalidate() }
+        .onDisappear { editor.persistDraft(); editor.invalidate() }
         .accessibilityIdentifier("StaffFieldEditor")
     }
 
