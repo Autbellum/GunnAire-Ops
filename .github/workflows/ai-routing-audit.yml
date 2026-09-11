@@ -42,10 +42,25 @@ jobs:
             --max-findings 250 \
             --report-only
           cat ai-routing-audit.json
+      - name: Inventory authenticated AI integration hooks
+        run: |
+          {
+            echo '=== BACKEND ROUTE/HANDLER HOOKS ==='
+            grep -nE '^(class|def) |def do_(GET|POST|PUT|PATCH|DELETE)|urlparse\(|parsed\.path|self\.path|send_json|write_json|json_response|require_(auth|role)|authorized' Backend/gunnaire_backend.py | tail -n 420 || true
+            echo
+            echo '=== SWIFT BACKEND SERVICE HOOKS ==='
+            grep -nE '^(actor|class|struct|enum) |static (let|var|func)|func |URLRequest|URLSession|authorization|sessionToken|backendURL|baseURL|/v[0-9]+/|/api/' 'GunnAire Ops/GunnAireBackendService.swift' | tail -n 420 || true
+            echo
+            echo '=== CUSTOMER DRAFT HOOKS ==='
+            grep -nE 'followUpEmailDraft|reminderEmailDraft|reviewRequestDraft|CustomerServiceText|subject:|body:' 'GunnAire Ops/'*.swift | head -n 420 || true
+          } > ai-integration-inventory.txt
+          cat ai-integration-inventory.txt
       - name: Retain routing audit
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ai-routing-audit
-          path: ai-routing-audit.json
+          path: |
+            ai-routing-audit.json
+            ai-integration-inventory.txt
           if-no-files-found: error
