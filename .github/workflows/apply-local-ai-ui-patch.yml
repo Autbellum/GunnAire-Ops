@@ -1,0 +1,43 @@
+name: Apply Local AI UI Patch
+
+on:
+  push:
+    branches:
+      - codex/guarded-local-ai-firewall-v1.0.0-exact-20260911
+    paths:
+      - 'Tools/apply_local_ai_ui_patch.py'
+      - '.github/workflows/apply-local-ai-ui-patch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[local-ai-ui-applied]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/guarded-local-ai-firewall-v1.0.0-exact-20260911
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply anchor-checked Swift edits
+        run: python3 Tools/apply_local_ai_ui_patch.py
+      - name: Verify only approved views changed
+        run: |
+          changed="$(git diff --name-only)"
+          printf '%s\n' "$changed"
+          test "$changed" = $'GunnAire Ops/OperationsDashboardView.swift\nGunnAire Ops/SettingsView.swift'
+          grep -q 'CommandCenterLocalAIButton' 'GunnAire Ops/OperationsDashboardView.swift'
+          grep -q 'GunnAireLocalAIWorkspace' 'GunnAire Ops/OperationsDashboardView.swift'
+          grep -q 'GunnAireLocalAIReadinessSection' 'GunnAire Ops/SettingsView.swift'
+      - name: Commit reviewed UI entry points
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add 'GunnAire Ops/OperationsDashboardView.swift' 'GunnAire Ops/SettingsView.swift'
+          git commit -m 'Connect business app to local AI workspace [local-ai-ui-applied]'
+          git push origin HEAD:codex/guarded-local-ai-firewall-v1.0.0-exact-20260911
