@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Audit GunnAire source for AI-provider routing and Stable Diffusion misuse.
+"""Audit GunnAire source for AI-provider routing and image-model misuse.
 
 The audit is deterministic. It does not call any model or external service.
-Stable Diffusion is permitted only for image work. Business text/reasoning must
-route through the guarded local Ollama gateway or remain deterministic.
+The image-generation provider is permitted only for image work. Business
+text/reasoning must route through the guarded local Ollama gateway or remain
+deterministic.
 """
 
 from __future__ import annotations
@@ -19,12 +20,26 @@ from typing import Any, Iterable
 
 
 STABLE_DIFFUSION_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"stable\s*diffusion", re.IGNORECASE),
-    re.compile(r"stable[_-]?diffusion", re.IGNORECASE),
+    re.compile(r"\bstable(?:\s+|[_-])diffusion\b", re.IGNORECASE),
+    re.compile(r"\bStableDiffusion(?:Client|Service|Provider|Pipeline|Model|Engine|Generator)?\b"),
     re.compile(r"automatic\s*1111|automatic1111", re.IGNORECASE),
     re.compile(r"\bcomfyui\b", re.IGNORECASE),
     re.compile(r"/sdapi/v\d+/(?:txt2img|img2img)", re.IGNORECASE),
     re.compile(r"\b(?:txt2img|img2img)\b", re.IGNORECASE),
+)
+
+# These references describe or verify provider isolation; they are not provider
+# invocations. They remain visible in the report but do not fail runtime code.
+STABLE_DIFFUSION_POLICY_METADATA: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bstableDiffusion(?:Used|Scope)\b"),
+    re.compile(
+        r"stable(?:\s+|[_-])diffusion.{0,100}\b(?:image[- ]only|image work|excluded|reserved|prohibited|disabled|false|never)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:image[- ]only|image work|excluded|reserved|prohibited|disabled|false|never)\b.{0,100}stable(?:\s+|[_-])diffusion",
+        re.IGNORECASE,
+    ),
 )
 
 HOSTED_LLM_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -45,6 +60,15 @@ LOCAL_LLM_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\b(?:127\.0\.0\.1|localhost):11434\b", re.IGNORECASE),
     re.compile(r"/api/(?:chat|generate|tags)\b", re.IGNORECASE),
     re.compile(r"\bollama\b", re.IGNORECASE),
+)
+
+# Mobile code may describe a local provider returned by the authenticated
+# backend, but it must never connect to the Ollama transport itself.
+DIRECT_MOBILE_OLLAMA_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b(?:127\.0\.0\.1|localhost):11434\b", re.IGNORECASE),
+    re.compile(r"/api/(?:chat|generate|tags)\b", re.IGNORECASE),
+    re.compile(r"\bOllamaClient\s*\("),
+    re.compile(r"URLSession.{0,160}\bollama\b", re.IGNORECASE),
 )
 
 CANDIDATE_TERMS: tuple[tuple[str, int, re.Pattern[str]], ...] = (
@@ -180,14 +204,19 @@ def audit_repository(root: Path, policy: dict[str, Any], max_findings: int = 300
 
         for line_number, line in enumerate(text.splitlines(), start=1):
             if first_pattern_match(line, STABLE_DIFFUSION_PATTERNS):
+                policy_metadata = first_pattern_match(line, STABLE_DIFFUSION_POLICY_METADATA)
                 allowed = (
                     exempt
                     or test_or_fixture
                     or path_has_prefix(relative, image_prefixes)
                     or (stable_allow_marker and stable_allow_marker in line)
+                    or policy_metadata
                     or not runtime
                 )
-                reason = "image-provider path/marker or non-runtime documentation" if allowed else "Stable Diffusion is restricted to image work"
+                if policy_metadata:
+                    reason = "provider-isolation metadata"
+                else:
+                    reason = "image-provider path/marker or non-runtime documentation" if allowed else "image provider is restricted to image work"
                 matches.append(Match("stable_diffusion", relative, line_number, excerpt(line), runtime, test_or_fixture, allowed, reason))
                 if not allowed:
                     violations.append(Violation(
@@ -200,7 +229,7 @@ def audit_repository(root: Path, policy: dict[str, Any], max_findings: int = 300
 
             if first_pattern_match(line, HOSTED_LLM_PATTERNS):
                 allowed = exempt or test_or_fixture or (hosted_allow_marker and hosted_allow_marker in line) or not runtime
-                reason = "explicit marker/test/documentation" if allowed else "Direct hosted LLM usage bypasses the local-first gateway"
+                reason = "explicit marker/test/documentation" if allowed else "direct hosted LLM usage bypasses the local-first gateway"
                 matches.append(Match("hosted_llm", relative, line_number, excerpt(line), runtime, test_or_fixture, allowed, reason))
                 if not allowed:
                     violations.append(Violation(
@@ -212,9 +241,13 @@ def audit_repository(root: Path, policy: dict[str, Any], max_findings: int = 300
                     ))
 
             if first_pattern_match(line, LOCAL_LLM_PATTERNS):
-                direct_mobile = relative.startswith("GunnAire Ops/") and runtime
+                direct_mobile = (
+                    relative.startswith("GunnAire Ops/")
+                    and runtime
+                    and first_pattern_match(line, DIRECT_MOBILE_OLLAMA_PATTERNS)
+                )
                 allowed = exempt or test_or_fixture or not direct_mobile or (mobile_allow_marker and mobile_allow_marker in line)
-                reason = "local tooling/backend use" if allowed else "Mobile clients must use the authenticated backend gateway"
+                reason = "local tooling/backend use or provider metadata" if allowed else "mobile clients must use the authenticated backend gateway"
                 matches.append(Match("local_llm", relative, line_number, excerpt(line), runtime, test_or_fixture, allowed, reason))
                 if direct_mobile and not allowed:
                     violations.append(Violation(
@@ -283,6 +316,7 @@ def audit_repository(root: Path, policy: dict[str, Any], max_findings: int = 300
             "Candidate files are review leads, not automatic instructions to replace deterministic business logic.",
             "Stable Diffusion remains allowed only for image generation/editing/visual asset prototyping.",
             "Mobile app code must use an authenticated backend gateway rather than contacting Ollama directly.",
+            "Provider-isolation metadata such as stableDiffusionUsed=false is reported but is not an invocation.",
             "No model or external service was called by this audit.",
         ],
     }
