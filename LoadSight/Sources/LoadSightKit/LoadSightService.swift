@@ -22,6 +22,8 @@ public protocol LoadSightServicing: Sendable {
     func draftRFI(_ project: ProjectDocument, rfiID: String, generatedAt: Date, progress: @escaping LoadSightProgressHandler) async throws -> Data
     func draftCO(_ project: ProjectDocument, changeOrderID: String, generatedAt: Date, progress: @escaping LoadSightProgressHandler) async throws -> Data
     func exportTakeoff(_ project: ProjectDocument, progress: @escaping LoadSightProgressHandler) async throws -> Data
+    func prepareDiscoveredSchedule(_ candidate: EquipmentScheduleCandidate, drawings: DrawingArchive) async throws -> EquipmentScheduleRequest
+    func discoverEquipmentSchedules(_ drawings: DrawingArchive, progress: @escaping LoadSightProgressHandler) async throws -> EquipmentScheduleDiscovery
     func extractEquipmentSchedules(_ drawings: DrawingArchive, request: EquipmentScheduleRequest, progress: @escaping LoadSightProgressHandler) async throws -> EquipmentScheduleExtraction
     func extractMechanicalText(_ drawings: DrawingArchive, progress: @escaping LoadSightProgressHandler) async throws -> MechanicalTextExtraction
 }

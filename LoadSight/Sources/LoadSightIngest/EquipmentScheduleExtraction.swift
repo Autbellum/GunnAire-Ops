@@ -241,7 +241,7 @@ public enum EquipmentScheduleExtractor {
         if a.bounds.x != b.bounds.x { return a.bounds.x < b.bounds.x }
         return a.id < b.id
     }
-    private static func validate(_ region: EquipmentScheduleRegion, page: DrawingPage) throws {
+    static func validate(_ region: EquipmentScheduleRegion, page: DrawingPage) throws {
         try region.bodyBounds.validate()
         try require(page.rotation == 0, "Rotate/normalize the schedule page to zero rotation before mapping table columns.")
         try require(page.bounds.rect.contains(region.bodyBounds.rect), "Schedule body must fit inside the source page.")
@@ -257,7 +257,7 @@ public enum EquipmentScheduleExtractor {
         }
     }
     /// PDFKit range selections localize words without changing the archive's original line anchors.
-    private static func nativeWords(_ data: Data, page record: DrawingPage) throws -> [DrawingText] {
+    static func nativeWords(_ data: Data, page record: DrawingPage) throws -> [DrawingText] {
         guard let pdf = PDFDocument(data: data), !pdf.isLocked, let page = pdf.page(at: record.number - 1) else { throw LoadSightError.invalid("Unable to localize schedule PDF text.") }
         try require(page.rotation == record.rotation && DrawingBounds(page.bounds(for: .cropBox)) == record.bounds, "Schedule page geometry differs from its original PDF.")
         guard let text = page.string else { return [] }

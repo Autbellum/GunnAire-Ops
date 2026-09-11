@@ -4,6 +4,7 @@ public extension ProjectDocument {
     func validateDrawingEvidence(in drawings: DrawingArchive) throws {
         try validate(); _ = try airNetwork(); _ = try envelopeAssemblies(); _ = try roomTransmissions(); try drawings.validate(); try validateMarkupQuantities()
         try validateScheduleMaps(in: drawings)
+        try validateEquipmentAssociationSnapshots()
         let ledger = try markupLedger()
         let pages = Dictionary(uniqueKeysWithValues: drawings.records.flatMap(\.pages).map { ($0.id, $0) })
         func check(_ point: PagePoint, pageID: String) throws {

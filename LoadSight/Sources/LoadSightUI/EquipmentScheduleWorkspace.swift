@@ -7,6 +7,7 @@ public struct EquipmentScheduleWorkspace: View {
     @Binding private var document: LoadSightDocument
     private let initialRequest: EquipmentScheduleRequest?
     @StateObject private var preparation = EquipmentSchedulePreparation()
+    @State private var discovering = false
     @State private var importing = false
     @State private var importSession: DrawingReviewSession?
     @State private var failure: String?
@@ -18,6 +19,7 @@ public struct EquipmentScheduleWorkspace: View {
     public var body: some View {
         List {
             Section("Mapped equipment schedules") {
+                Button("Find equipment schedules") { discovering = true }.disabled(document.drawings.records.isEmpty).accessibilityIdentifier("DiscoverEquipmentSchedules")
                 Text(preparation.stage).accessibilityIdentifier("ScheduleStatus")
                 Text("Create a map by selecting a table body and matching its columns to the drawing headers. Saved maps remain with this project. Row candidates do not establish equipment counts or approved design values.").font(.caption)
                 if let message = failure ?? preparation.failure { Text(message).foregroundStyle(.red) }
@@ -74,6 +76,7 @@ public struct EquipmentScheduleWorkspace: View {
                 start(try EquipmentScheduleRequest.decode(Data(contentsOf: url)))
             } catch { failure = error.localizedDescription }
         }
+        .sheet(isPresented: $discovering) { ScheduleDiscoveryWorkspace(document: $document) }
         .sheet(item: $editor) { session in ScheduleMapEditor(document: $document, session: session) }
         .sheet(item: $review.selected) { selection in EquipmentScheduleRowReview(document: $document, row: selection.value, session: selection.session) }
         .onChange(of: document.project.root["scheduleMaps"]) { _, _ in reset() }

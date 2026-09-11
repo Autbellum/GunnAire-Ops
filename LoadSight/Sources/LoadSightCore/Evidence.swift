@@ -95,6 +95,7 @@ public struct ProjectDocument: Sendable {
         _ = try changeOrderHistory()
         _ = try opsContextHistory()
         _ = try scheduleMapHistory()
+        _ = try equipmentAssociationHistory()
         _ = try catalogMaterialHistory()
         _ = try attachments()
         for item in items {
