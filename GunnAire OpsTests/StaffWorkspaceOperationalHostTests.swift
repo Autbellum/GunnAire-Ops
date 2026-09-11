@@ -432,7 +432,7 @@ final class StaffWorkspaceOperationalHostTests: XCTestCase {
     }
 
     @MainActor
-    func testReceiveControllerFailSoftHostMessage() async throws {
+    func testReceiveControllerRequiresCompleteSessionForFieldEditing() async throws {
         let vector = try vector()
         let raw = Data(vector.payloadUtf8.utf8)
         let (context, plan, base) = try scopeContextAndPlan()
@@ -452,6 +452,7 @@ final class StaffWorkspaceOperationalHostTests: XCTestCase {
             payloadBytes: 16, recordCount: 0, createdAt: base.instant)
 
         var opened = false
+        let fingerprint = String(repeating: "f", count: 64)
         let failSoft = StaffReplicaReceiveController(dependencies: .init(
             check: { _ in },
             download: { _, _, _ in manifest },
@@ -459,17 +460,16 @@ final class StaffWorkspaceOperationalHostTests: XCTestCase {
                 .init(selectionID: ready.selectionID, alreadyLeased: false,
                       operationalMounted: true, operationalAccepted: true)
             },
-            markOperationalReady: { _, _, _ in ready },
-            loadOperationalReady: { _, _ in nil },
-            openOperationalHost: { _, _ in
+            openWorkspace: { _, _, _, _, _, _ in
                 opened = true
                 throw StaffReplicaDeliveryError.pending
             },
+            currentDeviceFingerprint: { fingerprint },
             now: { base.now }))
         _ = await failSoft.refresh(context: context, plan: plan, invitation: invitation)
         XCTAssertTrue(opened)
-        XCTAssertTrue(failSoft.message.contains("Operational workspace ready for staff projection"))
-        XCTAssertFalse(failSoft.message.contains("hosted for staff projection"))
+        XCTAssertTrue(failSoft.message.contains("Workspace access still needs verification"))
+        XCTAssertNil(failSoft.hostedStore)
 
         var editingAllowed = true
         let success = StaffReplicaReceiveController(dependencies: .init(
@@ -479,17 +479,19 @@ final class StaffWorkspaceOperationalHostTests: XCTestCase {
                 .init(selectionID: ready.selectionID, alreadyLeased: false,
                       operationalMounted: true, operationalAccepted: true)
             },
-            markOperationalReady: { _, _, _ in ready },
-            loadOperationalReady: { _, _ in nil },
-            openOperationalHost: { sharePlan, _ in
+            openWorkspace: { sharePlan, _, _, _, device, _ in
                 let hosted = try StaffWorkspaceOperationalHostStore.open(
                     plan: sharePlan, store: memory.store, scope: context.scope, planID: sharePlan.id)
                 HostTestRetain.hosted.append(hosted)
-                return hosted
+                let identity = try StaffWorkspaceOperationalIdentityStore.bind(plan: sharePlan, store: memory.store,
+                    scope: context.scope, planID: sharePlan.id, account: context.account,
+                    deviceFingerprint: device, hosted: hosted)
+                return .init(hosted: hosted, identity: identity)
             },
+            currentDeviceFingerprint: { fingerprint },
             now: { base.now }))
         _ = await success.refresh(context: context, plan: plan, invitation: invitation)
-        XCTAssertTrue(success.message.contains("Operational workspace hosted for staff projection"))
+        XCTAssertEqual(success.message, "Shared workspace is up to date.")
         let hosted = try XCTUnwrap(success.hostedStore)
         XCTAssertEqual(try success.fieldEditingAuthority(for: hosted).0.stamp, context.stamp)
         XCTAssertEqual(try success.fieldEditingAuthority(for: hosted).1, plan)
@@ -502,5 +504,33 @@ final class StaffWorkspaceOperationalHostTests: XCTestCase {
         editingAllowed = true
         success.clearDisplay()
         XCTAssertThrowsError(try success.fieldEditingAuthority(for: hosted))
+    }
+
+    @MainActor
+    func testReceiveNeverPublishesAHostWhenDeviceIdentityBindingFails() async throws {
+        let vector = try vector(), raw = Data(vector.payloadUtf8.utf8)
+        let (context, plan, base) = try scopeContextAndPlan()
+        let memory = MemoryStore()
+        let (_, activated, ready) = try installAcceptedImportActivateConvergeMarkReady(
+            raw: raw, receipt: vector.receipt, sealedSHA256: String(repeating: "b", count: 64),
+            scope: context.scope, plan: plan, participantAccountHash: context.account.accountHash, memory: memory)
+        HostTestRetain.handles = [activated]
+        let hosted = try StaffWorkspaceOperationalHostStore.open(plan: plan, store: memory.store, scope: context.scope, planID: plan.id)
+        HostTestRetain.hosted = [hosted]
+        let manifest = StaffReplicaManifest(protocolVersion: 1, schema: StaffReplicaCoreSource.schemaVersion,
+            coverage: StaffReplicaCoreSource.recordKinds, operationID: UUID(), membershipID: plan.id,
+            companyID: plan.companyID, environment: plan.environment, replicaID: plan.replicaID,
+            memberRevision: plan.memberRevision, projectionPolicy: plan.projectionPolicy, sourceSequence: 1,
+            authorizationSequence: 1, payloadSHA256: String(repeating: "a", count: 64), payloadBytes: 16,
+            recordCount: 0, createdAt: base.instant)
+        let receive = StaffReplicaReceiveController(dependencies: .init(check: { _ in }, download: { _, _, _ in manifest },
+            receiveFullWorkspace: { _, _, _ in .init(selectionID: ready.selectionID, alreadyLeased: false,
+                operationalMounted: true, operationalAccepted: true) },
+            openWorkspace: { _, _, _, _, _, _ in throw StaffReplicaDeliveryError.storage },
+            currentDeviceFingerprint: { String(repeating: "f", count: 64) }, now: { base.now }))
+        _ = await receive.refresh(context: context, plan: plan, invitation: URL(string: "https://www.icloud.com/share/fixture-identity-failure")!)
+        XCTAssertNil(receive.hostedStore, "A ready host alone is not a device-bound operational session")
+        XCTAssertNil(receive.operationalIdentity)
+        XCTAssertThrowsError(try receive.fieldEditingAuthority(for: hosted))
     }
 }

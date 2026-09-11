@@ -1244,6 +1244,62 @@ struct StaffWorkspaceContentSummary {
         return journal
     }
 
+    /// Complete the actual receive-to-screen handoff. Never authorize a new
+    /// snapshot using an older ready/host/identity journal's state flag alone.
+    func openReceivedOperationalWorkspace(plan: CloudKitStaffSharePlan,
+        context: CloudKitStaffSetupController.Context, invitation: URL,
+        selectionID: String, deviceFingerprint: String,
+        previous: StaffWorkspaceOperationalSession? = nil) async throws -> StaffWorkspaceOperationalSession {
+        try staffCheck(context, plan)
+        guard CloudKitStaffSetupPolicy.canonicalID(selectionID),
+              JobBillingAssignmentSnapshot.validConnectionRevision(deviceFingerprint) else {
+            throw StaffReplicaDeliveryError.invalid
+        }
+        let key = "full-staff-open-v1\n" + context.scope.key + "\n" + plan.id.uuidString.lowercased()
+        let lock = try SharedTimeMutationGate.begin(key)
+        defer { SharedTimeMutationGate.finish(key, id: lock) }
+        _ = try acceptMountedOperationalView(plan: plan, context: context, selectionID: selectionID)
+        _ = try importAcceptedOperationalModels(plan: plan, context: context, selectionID: selectionID)
+        let cached = previous.flatMap { $0.hosted.journal.selectionID == selectionID ? $0 : nil }
+        if let cached {
+            try cached.validate(plan: plan, context: context, selectionID: selectionID, deviceFingerprint: deviceFingerprint)
+            guard try StaffWorkspaceOperationalStoreActivator.loadJournal(store: dependencies.store,
+                scope: context.scope, plan: plan.id) == cached.hosted.activated.journal else {
+                throw StaffReplicaDeliveryError.changed
+            }
+        } else {
+            _ = try activateImportedOperationalStore(plan: plan, context: context)
+        }
+        // Includes fresh server authority and independent participant-head checks,
+        // even when retaining an unchanged screen's existing ModelContainer.
+        _ = try await markOperationalWorkspaceReady(plan: plan, context: context, invitation: invitation)
+        try staffCheck(context, plan)
+        let result: StaffWorkspaceOperationalSession
+        if let cached {
+            guard try loadOperationalIdentity(plan: plan, context: context) == cached.identity,
+                  try StaffWorkspaceOperationalHostStore.loadJournal(store: dependencies.store,
+                    scope: context.scope, plan: plan.id) == cached.hosted.journal else {
+                throw StaffReplicaDeliveryError.changed
+            }
+            result = cached
+        } else {
+            let hosted = try openOperationalHost(plan: plan, context: context)
+            let identity = try bindOperationalIdentity(plan: plan, context: context,
+                deviceFingerprint: deviceFingerprint, hosted: hosted)
+            result = .init(hosted: hosted, identity: identity)
+        }
+        try staffCheck(context, plan)
+        try result.validate(plan: plan, context: context, selectionID: selectionID, deviceFingerprint: deviceFingerprint)
+        guard let mount = try StaffWorkspaceOperationalMountStore.peekMetadata(store: dependencies.store,
+            scope: context.scope, plan: plan.id), mount.selectionID == selectionID,
+              mount.contentSHA256 == result.hosted.journal.contentSHA256,
+              mount.sealedSHA256 == result.hosted.journal.sealedSHA256,
+              mount.sourceSequence == result.hosted.journal.sourceSequence else {
+            throw StaffReplicaDeliveryError.changed
+        }
+        return result
+    }
+
     /// Reload the durable operational identity journal, or nil.
     func loadOperationalIdentity(plan: CloudKitStaffSharePlan,
                                  context: CloudKitStaffSetupController.Context) throws

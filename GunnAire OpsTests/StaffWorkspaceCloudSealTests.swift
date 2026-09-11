@@ -428,8 +428,8 @@ e4439cc0e840c41f60e6b24593c2c05eabc7b3bdaa078d47c15fb6a770b531f1
             now: { base.now }))
         _ = await controller.refresh(context: context, plan: plan, invitation: invitation)
         XCTAssertEqual(controller.received, manifest)
-        XCTAssertTrue(controller.message.contains("mounted for staff lease"))
-        XCTAssertFalse(controller.message.contains("still required"))
+        XCTAssertTrue(controller.message.contains("Full workspace verification is still required"))
+        XCTAssertNil(controller.hostedStore)
     }
 
 

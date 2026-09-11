@@ -180,17 +180,16 @@ final class StaffWorkspaceOperationalPresentationTests: XCTestCase {
                 .init(selectionID: hosted.journal.selectionID, alreadyLeased: false,
                       operationalMounted: true, operationalAccepted: true)
             },
-            markOperationalReady: { _, _, _ in
-                try XCTUnwrap(StaffWorkspaceOperationalReadyStore.load(
-                    store: memory.store, scope: context.scope, plan: plan.id))
-            },
-            loadOperationalReady: { _, _ in nil },
-            openOperationalHost: { sharePlan, _ in
+            openWorkspace: { sharePlan, _, _, _, fingerprint, _ in
                 let opened = try StaffWorkspaceOperationalHostStore.open(
                     plan: sharePlan, store: memory.store, scope: context.scope, planID: sharePlan.id)
                 PresentationTestRetain.hosted.append(opened)
-                return opened
+                let identity = try StaffWorkspaceOperationalIdentityStore.bind(plan: sharePlan, store: memory.store,
+                    scope: context.scope, planID: sharePlan.id, account: context.account,
+                    deviceFingerprint: fingerprint, hosted: opened)
+                return .init(hosted: opened, identity: identity)
             },
+            currentDeviceFingerprint: { String(repeating: "f", count: 64) },
             now: { base.now }))
         PresentationTestRetain.receive = receive
 
@@ -200,7 +199,8 @@ final class StaffWorkspaceOperationalPresentationTests: XCTestCase {
         PresentationTestRetain.hosted.append(published)
         XCTAssertEqual(published.journal.state, "hosted")
         XCTAssertTrue(published.journal.operationalWorkspaceReady)
-        XCTAssertTrue(receive.message.contains("hosted for staff projection"))
+        XCTAssertEqual(receive.message, "Shared workspace is up to date.")
+        XCTAssertNotNil(receive.operationalIdentity)
 
         let destinations = try StaffWorkspaceOperationalPresentation.destinations(for: published)
         XCTAssertEqual(destinations.first, .overview)

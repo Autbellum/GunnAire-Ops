@@ -59,6 +59,7 @@ struct CompanyWorkspaceHost: View {
     @Binding var hasAuthenticatedUser: Bool
     @State private var confirmsOwnership = false
     @State private var showingStaffSetup = false
+    @State private var selectedStaffDestination: StaffWorkspaceOperationalNavDestination? = .overview
     @ObservedObject private var staffInvitations = CloudKitStaffInvitationInbox.shared
 
     var body: some View {
@@ -66,16 +67,17 @@ struct CompanyWorkspaceHost: View {
             if let container = access.authorizedContainer {
                 ContentView().modifier(JobBillingRecoveryModifier()).modifier(StaffReplicaSourceRecoveryModifier()).modelContainer(container)
                     .id(access.generation)
-            } else if let hosted = receive.hostedStore {
-                // Staff projection UI/nav presents via HostedStore ModelContainer —
-                // never the owner private store. Prefer bound identity gate when present.
+            } else if let presentation = receive.authorizedPresentation {
+                // One verified session, never independently published host/identity
+                // fields. Navigation survives content refresh within this scope.
                 StaffWorkspaceOperationalHostedWorkspaceView(
-                    hosted: hosted,
-                    identity: receive.operationalIdentity,
-                    account: receive.presentationAccount,
-                    deviceFingerprint: receive.presentationDeviceFingerprint
+                    hosted: presentation.workspace.hosted,
+                    identity: presentation.workspace.identity,
+                    account: presentation.context.account,
+                    deviceFingerprint: presentation.deviceFingerprint,
+                    selected: $selectedStaffDestination
                 )
-                    .id(hosted.journal.contentSHA256 + ":\(hosted.journal.sourceSequence):\(receive.operationalIdentity?.deviceFingerprint ?? "unbound")")
+                    .id(presentation.viewIdentity)
                     .accessibilityIdentifier("StaffOperationalHostedWorkspace")
             } else {
                 ScrollView {
@@ -138,6 +140,9 @@ struct CompanyWorkspaceHost: View {
             }
         }
         .modifier(StaffReplicaReceiveRecoveryModifier())
+        .onChange(of: receive.authorizedPresentation?.navigationScope) { _, _ in
+            selectedStaffDestination = .overview
+        }
         .sheet(isPresented: $showingStaffSetup) { CloudKitStaffSetupView() }
         .onReceive(staffInvitations.$pending) { invitation in
             if invitation != nil { showingStaffSetup = true }

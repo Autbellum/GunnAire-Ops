@@ -184,26 +184,37 @@ enum StaffWorkspaceOperationalPresentation {
 /// Staff UI shell that presents the hosted staff projection ModelContainer.
 /// Uses NavigationSplitView (iPad-first) and queries projection rows only —
 /// never owner `@Model` types.
+struct StaffWorkspaceOperationalPresentationKey: Equatable {
+    let host: StaffWorkspaceOperationalHostJournal
+    let identity: StaffWorkspaceOperationalIdentityJournal
+    let accountHash: String
+    let environment: String
+    let deviceFingerprint: String
+}
+
 struct StaffWorkspaceOperationalHostedWorkspaceView: View {
     let hosted: StaffWorkspaceOperationalHostedStore
-    var identity: StaffWorkspaceOperationalIdentityJournal? = nil
-    var account: CompanyCloudKitAccount? = nil
-    var deviceFingerprint: String? = nil
-    @State private var selected: StaffWorkspaceOperationalNavDestination? = .overview
+    let identity: StaffWorkspaceOperationalIdentityJournal
+    let account: CompanyCloudKitAccount
+    let deviceFingerprint: String
+    @Binding var selected: StaffWorkspaceOperationalNavDestination?
     @State private var destinations: [StaffWorkspaceOperationalNavDestination] = [.overview]
     @State private var loadError: String?
-    @State private var boundIdentity: StaffWorkspaceOperationalIdentityJournal?
+    @State private var loadedIdentity: StaffWorkspaceOperationalPresentationKey?
     @State private var showingFieldUpdates = false
 
     var body: some View {
         Group {
-            if let loadError {
+            if let loadError = validationError ?? loadError {
                 ContentUnavailableView(
                     "Staff workspace unavailable",
                     systemImage: "exclamationmark.triangle",
                     description: Text(loadError)
                 )
                 .accessibilityIdentifier("StaffOperationalHostedUnavailable")
+            } else if loadedIdentity != taskIdentity {
+                ProgressView("Opening shared workspace…")
+                    .accessibilityIdentifier("StaffOperationalHostedLoading")
             } else {
                 NavigationSplitView {
                     List(destinations, selection: $selected) { destination in
@@ -227,7 +238,7 @@ struct StaffWorkspaceOperationalHostedWorkspaceView: View {
                             hosted: hosted,
                             destination: StaffWorkspaceOperationalNavPolicy.resolvedSelection(
                                 selected, visible: destinations) ?? .overview,
-                            identity: boundIdentity
+                            identity: identity
                         )
                         .accessibilityIdentifier("StaffOperationalHostedDetail")
                     }
@@ -238,45 +249,34 @@ struct StaffWorkspaceOperationalHostedWorkspaceView: View {
         .sheet(isPresented: $showingFieldUpdates) { StaffWorkspaceFieldUpdatesView(hosted: hosted) }
         .task(id: taskIdentity) {
             do {
-                if let identity, let account, let deviceFingerprint {
-                    try StaffWorkspaceOperationalPresentation.requireBound(
-                        hosted: hosted, identity: identity, account: account,
-                        deviceFingerprint: deviceFingerprint)
-                    boundIdentity = identity
-                } else if let identity {
-                    // Identity journal present but account/device proof missing → fail closed.
-                    throw StaffReplicaDeliveryError.storage
-                } else {
-                    try StaffWorkspaceOperationalPresentation.requireHosted(hosted)
-                    boundIdentity = nil
-                }
+                try StaffWorkspaceOperationalPresentation.requireBound(
+                    hosted: hosted, identity: identity, account: account,
+                    deviceFingerprint: deviceFingerprint)
                 let next = try StaffWorkspaceOperationalPresentation.destinations(for: hosted)
                 destinations = next
                 selected = StaffWorkspaceOperationalNavPolicy.resolvedSelection(selected, visible: next)
                 loadError = nil
+                loadedIdentity = taskIdentity
             } catch {
                 loadError = StaffReplicaDeliveryPolicy.safe(error).localizedDescription
                 destinations = []
                 selected = nil
-                boundIdentity = nil
+                loadedIdentity = nil
             }
         }
     }
 
-    private var taskIdentity: String {
-        var parts = [hosted.journal.contentSHA256, "\(hosted.journal.sourceSequence)"]
-        if let identity {
-            parts.append(identity.participantAccountHash)
-            parts.append(identity.deviceFingerprint)
-        }
-        if let account {
-            parts.append(account.accountHash)
-            parts.append(account.environment)
-        }
-        if let deviceFingerprint {
-            parts.append(deviceFingerprint)
-        }
-        return parts.joined(separator: ":")
+    private var taskIdentity: StaffWorkspaceOperationalPresentationKey {
+        .init(host: hosted.journal, identity: identity, accountHash: account.accountHash,
+              environment: account.environment, deviceFingerprint: deviceFingerprint)
+    }
+
+    private var validationError: String? {
+        do {
+            try StaffWorkspaceOperationalPresentation.requireBound(hosted: hosted, identity: identity,
+                account: account, deviceFingerprint: deviceFingerprint)
+            return nil
+        } catch { return StaffReplicaDeliveryPolicy.safe(error).localizedDescription }
     }
 }
 
