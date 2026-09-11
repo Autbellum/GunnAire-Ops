@@ -199,7 +199,8 @@ enum StaffWorkspaceOperationalReadyStore {
                           storeJournal: storeJournal, mount: mount,
                           acceptance: acceptance, importJournal: importJournal)
 
-        if let existing = try load(store: store, scope: scope, plan: planID) {
+        let previous = try load(store: store, scope: scope, plan: planID)
+        if let existing = previous {
             if existing.selectionID == next.selectionID,
                existing.contentSHA256 == next.contentSHA256,
                existing.sealedSHA256 == next.sealedSHA256,
@@ -220,13 +221,12 @@ enum StaffWorkspaceOperationalReadyStore {
             if existing.sourceSequence > next.sourceSequence {
                 throw StaffReplicaDeliveryError.superseded
             }
-            throw StaffReplicaDeliveryError.changed
+            guard existing.sourceSequence < next.sourceSequence else { throw StaffReplicaDeliveryError.changed }
         }
 
         try check()
-        let encoded = try StaffWorkspacePublicationContract.encode(next)
-        guard encoded.count <= 8192 else { throw StaffReplicaDeliveryError.storage }
-        try store.write(key(scope, planID), encoded)
+        try StaffWorkspaceOperationalJournalAdvance.commit(next, replacing: previous,
+            key: key(scope, planID), store: store, check: check)
         try check()
 
         guard let (_, confirmedPayload) = try StaffWorkspaceOperationalMountStore.load(

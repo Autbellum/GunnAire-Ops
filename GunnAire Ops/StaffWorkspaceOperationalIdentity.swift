@@ -185,7 +185,8 @@ enum StaffWorkspaceOperationalIdentityStore {
         try next.validate(scope: scope, plan: plan, hosted: hostJournal,
                           account: account, deviceFingerprint: deviceFingerprint)
 
-        if let existing = try loadJournal(store: store, scope: scope, plan: planID) {
+        let previous = try loadJournal(store: store, scope: scope, plan: planID)
+        if let existing = previous {
             if existing.selectionID == next.selectionID,
                existing.contentSHA256 == next.contentSHA256,
                existing.sealedSHA256 == next.sealedSHA256,
@@ -210,13 +211,12 @@ enum StaffWorkspaceOperationalIdentityStore {
             if existing.sourceSequence > next.sourceSequence {
                 throw StaffReplicaDeliveryError.superseded
             }
-            throw StaffReplicaDeliveryError.changed
+            guard existing.sourceSequence < next.sourceSequence else { throw StaffReplicaDeliveryError.changed }
         }
 
         try check()
-        let encoded = try StaffWorkspacePublicationContract.encode(next)
-        guard encoded.count <= 8192 else { throw StaffReplicaDeliveryError.storage }
-        try store.write(key(scope, planID), encoded)
+        try StaffWorkspaceOperationalJournalAdvance.commit(next, replacing: previous,
+            key: key(scope, planID), store: store, check: check)
         try check()
 
         // Prior journals remain historical proofs — identity stays ready=false;

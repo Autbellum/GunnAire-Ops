@@ -368,7 +368,8 @@ enum StaffWorkspaceOperationalStoreActivator {
             scope: scope, planID: planID, selectionID: importJournal.selectionID,
             sourceSequence: importJournal.sourceSequence, contentSHA256: importJournal.contentSHA256,
             recordCount: importJournal.recordCount)
-        if let existing = try loadJournal(store: store, scope: scope, plan: planID) {
+        let previous = try loadJournal(store: store, scope: scope, plan: planID)
+        if let existing = previous {
             if existing.selectionID == nextJournal.selectionID,
                existing.contentSHA256 == nextJournal.contentSHA256,
                existing.sourceSequence == nextJournal.sourceSequence,
@@ -388,9 +389,10 @@ enum StaffWorkspaceOperationalStoreActivator {
         }
         try check()
         let (container, directory) = try makeContainer(from: loadedPlan)
-        let encoded = try StaffWorkspacePublicationContract.encode(nextJournal)
-        guard encoded.count <= 8192 else { throw StaffReplicaDeliveryError.storage }
-        try store.write(key(scope, planID), encoded)
+        var returnedStore = false
+        defer { if !returnedStore { try? FileManager.default.removeItem(at: directory) } }
+        try StaffWorkspaceOperationalJournalAdvance.commit(nextJournal, replacing: previous,
+            key: key(scope, planID), store: store, check: check)
         try check()
         // Mount payload bytes must be unchanged by store activation.
         guard let (_, confirmedPayload) = try StaffWorkspaceOperationalMountStore.load(
@@ -406,6 +408,7 @@ enum StaffWorkspaceOperationalStoreActivator {
             throw StaffReplicaDeliveryError.storage
         }
         try confirmed.validate(scope: scope, plan: planID, importJournal: importJournal, mount: mount)
+        returnedStore = true
         return StaffWorkspaceOperationalActivatedStore(
             journal: confirmed, plan: loadedPlan, container: container, storageDirectory: directory)
     }

@@ -346,7 +346,8 @@ enum StaffWorkspaceOperationalImportStore {
             scope: scope, planID: plan, selectionID: mount.selectionID,
             sourceSequence: mount.sourceSequence, contentSHA256: mount.contentSHA256,
             recordCount: nextPlan.recordCount)
-        if let existing = try load(store: store, scope: scope, plan: plan) {
+        let previous = try load(store: store, scope: scope, plan: plan)
+        if let existing = previous {
             if existing.selectionID == journal.selectionID,
                existing.contentSHA256 == journal.contentSHA256,
                existing.sourceSequence == journal.sourceSequence,
@@ -365,9 +366,8 @@ enum StaffWorkspaceOperationalImportStore {
             }
         }
         try check()
-        let encoded = try StaffWorkspacePublicationContract.encode(journal)
-        guard encoded.count <= 8192 else { throw StaffReplicaDeliveryError.storage }
-        try store.write(key(scope, plan), encoded)
+        try StaffWorkspaceOperationalJournalAdvance.commit(journal, replacing: previous,
+            key: key(scope, plan), store: store, check: check)
         try check()
         // Mount payload bytes must be unchanged by import.
         guard let (_, confirmedPayload) = try StaffWorkspaceOperationalMountStore.load(

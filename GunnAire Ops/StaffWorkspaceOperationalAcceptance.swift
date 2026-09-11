@@ -145,7 +145,8 @@ enum StaffWorkspaceOperationalAcceptanceStore {
             scope: scope, planID: plan, selectionID: mount.selectionID,
             sourceSequence: mount.sourceSequence, contentSHA256: mount.contentSHA256,
             recordCount: view.records.count)
-        if let existing = try load(store: store, scope: scope, plan: plan) {
+        let previous = try load(store: store, scope: scope, plan: plan)
+        if let existing = previous {
             if existing.selectionID == next.selectionID,
                existing.contentSHA256 == next.contentSHA256,
                existing.sourceSequence == next.sourceSequence,
@@ -156,9 +157,8 @@ enum StaffWorkspaceOperationalAcceptanceStore {
             // Different head — replace journal only after successful parse of new mount.
         }
         try check()
-        let encoded = try StaffWorkspacePublicationContract.encode(next)
-        guard encoded.count <= 8192 else { throw StaffReplicaDeliveryError.storage }
-        try store.write(key(scope, plan), encoded)
+        try StaffWorkspaceOperationalJournalAdvance.commit(next, replacing: previous,
+            key: key(scope, plan), store: store, check: check)
         try check()
         guard let confirmed = try load(store: store, scope: scope, plan: plan), confirmed == next else {
             throw StaffReplicaDeliveryError.storage

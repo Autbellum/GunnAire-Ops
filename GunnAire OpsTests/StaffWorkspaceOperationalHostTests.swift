@@ -70,6 +70,81 @@ final class StaffWorkspaceOperationalHostTests: XCTestCase {
     }
 
     @MainActor
+    func testSuccessorSnapshotReopensStaffWorkspaceWithoutClearingOriginalWork() throws {
+        let vector = try vector(), raw = Data(vector.payloadUtf8.utf8)
+        let (context, plan, _) = try scopeContextAndPlan()
+        let memory = MemoryStore()
+        let (_, firstStore, _) = try installAcceptedImportActivateConvergeMarkReady(
+            raw: raw, receipt: vector.receipt, sealedSHA256: String(repeating: "b", count: 64),
+            scope: context.scope, plan: plan, participantAccountHash: context.account.accountHash, memory: memory)
+        let first = try StaffWorkspaceOperationalHostStore.open(plan: plan, store: memory.store, scope: context.scope, planID: plan.id)
+        let device = String(repeating: "d", count: 64)
+        _ = try StaffWorkspaceOperationalIdentityStore.bind(plan: plan, store: memory.store, scope: context.scope,
+            planID: plan.id, account: context.account, deviceFingerprint: device, hosted: first)
+        HostTestRetain.handles = [firstStore]; HostTestRetain.hosted = [first]
+        let originalPayload = try XCTUnwrap(memory.saved[StaffWorkspaceOperationalMountStore.payloadKey(context.scope, plan.id)])
+        let stageKeys = [
+            StaffWorkspaceOperationalAcceptanceStore.key(context.scope, plan.id),
+            StaffWorkspaceOperationalImportStore.key(context.scope, plan.id),
+            StaffWorkspaceOperationalStoreActivator.key(context.scope, plan.id),
+            StaffWorkspaceOperationalConvergenceStore.key(context.scope, plan.id),
+            StaffWorkspaceOperationalReadyStore.key(context.scope, plan.id),
+            StaffWorkspaceOperationalHostStore.key(context.scope, plan.id),
+            StaffWorkspaceOperationalIdentityStore.key(context.scope, plan.id),
+        ]
+        let predecessors = try stageKeys.map { try XCTUnwrap(memory.saved[$0]) }
+        memory.saved["pending-field-draft-fixture"] = Data("Keep this unsent finding".utf8)
+        let selection = UUID().uuidString.lowercased(), sequence = vector.receipt.sourceSequence + 1
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: raw) as? [String: Any])
+        object["sourceSequence"] = sequence
+        var records = try XCTUnwrap(object["records"] as? [[String: Any]])
+        let jobIndex = try XCTUnwrap(records.firstIndex { $0["kind"] as? String == "job" })
+        let jobID = try XCTUnwrap(records[jobIndex]["id"] as? String)
+        let jobRevision = try XCTUnwrap(records[jobIndex]["revision"] as? Int) + 1
+        var body = try XCTUnwrap(records[jobIndex]["body"] as? [String: Any])
+        var branch = try XCTUnwrap(body["operational"] as? [String: Any])
+        var partition = try XCTUnwrap(branch["_0"] as? [String: Any])
+        var fields = try XCTUnwrap(partition["fields"] as? [String: Any])
+        fields["notes"] = ["text": ["_0": "Updated office finding"]]
+        partition["fields"] = fields; branch["_0"] = partition; body["operational"] = branch
+        records[jobIndex]["body"] = body; records[jobIndex]["revision"] = jobRevision
+        object["records"] = records
+        let nextRaw = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        var wire = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(vector.receipt)) as? [String: Any])
+        wire["selectionID"] = selection; wire["sourceSequence"] = sequence; wire["currentSourceSequence"] = sequence
+        wire["contentSHA256"] = StaffReplicaManifest.hash(nextRaw); wire["payloadBytes"] = nextRaw.count
+        let receipt = try JSONDecoder().decode(StaffWorkspaceContentReceipt.self, from: JSONSerialization.data(withJSONObject: wire))
+        let (_, secondStore, _) = try installAcceptedImportActivateConvergeMarkReady(
+            raw: nextRaw, receipt: receipt, sealedSHA256: String(repeating: "c", count: 64),
+            scope: context.scope, plan: plan, participantAccountHash: context.account.accountHash, memory: memory)
+        let second = try StaffWorkspaceOperationalHostStore.open(plan: plan, store: memory.store, scope: context.scope, planID: plan.id)
+        let identity = try StaffWorkspaceOperationalIdentityStore.bind(plan: plan, store: memory.store, scope: context.scope,
+            planID: plan.id, account: context.account, deviceFingerprint: device, hosted: second)
+        HostTestRetain.handles.append(secondStore); HostTestRetain.hosted.append(second)
+        XCTAssertEqual(second.journal.sourceSequence, sequence)
+        XCTAssertEqual(identity.selectionID, selection)
+        XCTAssertEqual(try second.fetch().count, try first.fetch().count)
+        let updatedJob = try XCTUnwrap(second.fetch(kind: "job", id: jobID).first)
+        XCTAssertEqual(updatedJob.revision, jobRevision)
+        guard case let .operational(updatedPartition) = updatedJob.body else {
+            return XCTFail("Expected the refreshed operational job")
+        }
+        XCTAssertEqual(updatedPartition.fields["notes"], .text("Updated office finding"))
+        XCTAssertEqual(memory.saved["pending-field-draft-fixture"], Data("Keep this unsent finding".utf8))
+        XCTAssertEqual(memory.saved[StaffWorkspaceOperationalMountStore.payloadKey(context.scope, plan.id)], originalPayload)
+        for (key, original) in zip(stageKeys, predecessors) {
+            let archive = key + "\nprevious-generation-v1\n" + String(vector.receipt.sourceSequence) + "\n" + vector.receipt.selectionID
+            XCTAssertEqual(memory.saved[archive], original, "Missing exact predecessor: \(key)")
+            let current = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(memory.saved[key])) as? [String: Any])
+            XCTAssertEqual(current["selectionID"] as? String, selection)
+            XCTAssertEqual(current["sourceSequence"] as? Int, sequence)
+        }
+        let reloaded = try XCTUnwrap(StaffWorkspaceOperationalHostStore.load(plan: plan, store: memory.store, scope: context.scope, planID: plan.id))
+        HostTestRetain.hosted.append(reloaded)
+        XCTAssertEqual(reloaded.journal, second.journal)
+    }
+
+    @MainActor
     func testDetachedCallerReadsHostedStoreWithoutRewritingJournals() async throws {
         let vector = try vector(), raw = Data(vector.payloadUtf8.utf8)
         let (context, plan, _) = try scopeContextAndPlan()
