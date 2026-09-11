@@ -50,6 +50,10 @@ def verify(summary: dict, tree: dict, selectors: list[str]) -> dict:
     )]
     if missing:
         raise ValueError("Required tests were not executed: " + ", ".join(missing))
+    if len(cases) != summary["passedTests"]:
+        raise ValueError("Actual test case count does not match passedTests count")
+    if len(cases) != len(set(cases)):
+        raise ValueError("Duplicate test case identities detected")
     return {"verifiedSelectors": len(expected), "passedTestCases": len(cases)}
 
 

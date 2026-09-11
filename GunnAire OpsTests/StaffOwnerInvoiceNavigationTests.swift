@@ -168,6 +168,7 @@ import XCTest
         XCTAssertNil(BillingFocusedInvoicePolicy.resolve(r.invoiceID, in: [unrelated]))
         let duplicate = Invoice(id: r.invoiceID, serviceCallID: f.models.job.id, customer: f.models.customer)
         XCTAssertNil(BillingFocusedInvoicePolicy.resolve(r.invoiceID, in: [f.models.invoice, duplicate]))
+        XCTAssertNil(BillingFocusedInvoicePolicy.resolve(r.invoiceID, in: [f.models.invoice, f.models.invoice]))
         for invoices in [[], [unrelated], [f.models.invoice, duplicate]] {
             XCTAssertThrowsError(try r.resolve(invoices: invoices, customers: [f.models.customer], jobs: [f.models.job], check: f.check))
         }

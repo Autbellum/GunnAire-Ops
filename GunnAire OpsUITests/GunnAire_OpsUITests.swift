@@ -1354,7 +1354,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Staff synchronization could not be confirmed. Recover the original operation when connected."].waitForExistence(timeout: 8))
         let again = app.buttons["StaffReplicaReceiveAgain"]
         XCTAssertTrue(waitForHittable(again)); again.tap()
-        XCTAssertTrue(app.staticTexts["Core records received. Full workspace data is still required before opening."].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Shared records received. Full workspace data is still required before opening."].waitForExistence(timeout: 5))
         let receiptEvidence = XCTAttachment(screenshot: app.screenshot())
         receiptEvidence.name = "Staff shared-data receipt and retained workspace gate"; receiptEvidence.lifetime = .keepAlways; add(receiptEvidence)
         app.navigationBars["Staff request"].buttons.firstMatch.tap()

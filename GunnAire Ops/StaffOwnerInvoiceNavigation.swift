@@ -40,7 +40,13 @@ struct StaffOwnerInvoiceRoute: Identifiable {
 
 enum BillingFocusedInvoicePolicy {
     @MainActor static func resolve(_ id: UUID, in invoices: [Invoice]) -> Invoice? {
-        let matches = invoices.filter { $0.id == id }
-        return matches.count == 1 ? matches.first : nil
+        var found: Invoice? = nil
+        for invoice in invoices {
+            if invoice.id == id {
+                if found != nil { return nil }
+                found = invoice
+            }
+        }
+        return found
     }
 }
