@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "package_version": "1.0.0",
+  "archive_sha256": "64004d3e6ea8a87e3acdfc522f3e596f392f094012a5fb9eb8c8dc74f6fa60db",
+  "status": "pass",
+  "deterministic_unit_tests": {
+    "local_ai": {
+      "passed": 20,
+      "failed": 0,
+      "skipped": 0
+    },
+    "firewall": {
+      "passed": 13,
+      "failed": 0,
+      "skipped": 0
+    },
+    "total": {
+      "passed": 33,
+      "failed": 0,
+      "skipped": 0
+    }
+  },
+  "firewall_static_validation": {
+    "status": "pass",
+    "errors": 0,
+    "warnings": 0,
+    "deployed": false
+  },
+  "guarded_qa_runner": {
+    "passed": true,
+    "commands_executed": 3,
+    "commands_expected": 3,
+    "ai_called": false
+  },
+  "shell_syntax": {
+    "setup_local_ai.sh": "pass"
+  },
+  "configuration_parse": {
+    "json": "pass",
+    "plist_templates": "pass"
+  },
+  "live_mac_model_installation_verified": false,
+  "live_model_benchmark_verified": false,
+  "live_firewall_deployment_verified": false,
+  "live_synology_logging_verified": false,
+  "notes": [
+    "Static and isolated verification only.",
+    "No production system, provider account, network device, or NAS data was changed."
+  ]
+}
