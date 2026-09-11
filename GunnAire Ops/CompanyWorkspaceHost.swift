@@ -149,6 +149,9 @@ struct CompanyWorkspaceHost: View {
         .sheet(item: $staffNavigation.editor) { session in
             StaffWorkspaceFieldEditorView(title: session.title, field: session.field, editor: session.controller)
         }
+        .sheet(item: $staffNavigation.invoiceEditor) { session in
+            StaffInvoiceEditorView(editor: session.controller)
+        }
         .sheet(isPresented: $showingStaffSetup) { CloudKitStaffSetupView() }
         .onReceive(staffInvitations.$pending) { invitation in
             if invitation != nil { showingStaffSetup = true }

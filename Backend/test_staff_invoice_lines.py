@@ -265,7 +265,7 @@ class StaffInvoiceLinesHTTPTests(unittest.TestCase):
 
     def test_decimal_half_up_zero_price_and_group_do_not_fabricate_totals(self):
         self.seed_content()
-        for price, quantity, expected in ((1.005, 1, "1.01"), (0, 2, "0.00"), (0.00001, 0.00001, "0.00")):
+        for price, quantity, expected in ((1.005, 1, "1.01"), (0, 2, "0.00"), (-0.0, 2, "0.00"), (0.00001, 0.00001, "0.00")):
             body = self.body()
             body["line"].update(unitPrice=price, quantity=quantity)
             status, result = self.submit(body)

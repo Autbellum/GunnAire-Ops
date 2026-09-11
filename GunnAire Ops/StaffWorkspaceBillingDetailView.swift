@@ -4,6 +4,7 @@ import SwiftUI
 struct StaffWorkspaceBillingDetailView: View {
     let hosted: StaffWorkspaceOperationalHostedStore
     let route: StaffWorkspaceRecordRoute
+    var onRequests: (() -> Void)? = nil
 
     var body: some View {
         if let document = try? StaffWorkspaceBillingDetail.load(hosted: hosted, route: route) {
@@ -46,6 +47,14 @@ struct StaffWorkspaceBillingDetailView: View {
             }
             .navigationTitle(document.title)
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if route.kind == "invoice", let onRequests {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("Add items", systemImage: "plus") { onRequests() }
+                            .accessibilityIdentifier("StaffInvoiceAddItems")
+                    }
+                }
+            }
             .accessibilityIdentifier("StaffBillingDocument." + route.kind + "." + route.id)
         } else {
             ContentUnavailableView("Document unavailable", systemImage: "doc.questionmark",

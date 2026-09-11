@@ -27,9 +27,9 @@ enum StaffWorkspacePublicationContract {
     }
     static func decode<T: Codable>(_ type: T.Type, from bytes: Data, maximum: Int = maximumResponseBytes) throws -> T {
         guard !bytes.isEmpty, bytes.count <= maximum else { throw StaffReplicaSourceSyncError.invalid }
-        try StaffWorkspacePublicationJSON.validate(bytes)
+        let comparison = try StaffWorkspacePublicationJSON.normalizingSignedZeros(bytes)
         let value = try JSONDecoder().decode(type, from: bytes)
-        let original = try JSONSerialization.jsonObject(with: bytes)
+        let original = try JSONSerialization.jsonObject(with: comparison)
         let encoded = try JSONSerialization.jsonObject(with: encode(value))
         guard try JSONSerialization.data(withJSONObject: original, options: [.sortedKeys]) ==
                 JSONSerialization.data(withJSONObject: encoded, options: [.sortedKeys]) else {
@@ -61,6 +61,8 @@ enum StaffWorkspacePublicationContract {
 /// Duplicate keys (including Unicode-escaped aliases) must not be discarded.
 private struct StaffWorkspacePublicationJSON {
     let bytes: [UInt8]
+    var collectSignedZeros = false
+    var signedZeros: [Range<Int>] = []
     var index = 0
     var nodes = 0
     var current: UInt8? { index < bytes.count ? bytes[index] : nil }
@@ -68,6 +70,21 @@ private struct StaffWorkspacePublicationJSON {
         var reader = Self(bytes: Array(data))
         try reader.value(depth: 0); reader.whitespace()
         guard reader.index == reader.bytes.count else { throw StaffReplicaSourceSyncError.invalid }
+    }
+    /// Python emits -0.0; Swift may emit -0, which Foundation parses as integer 0.
+    /// Normalize only literal zero number tokens for structural comparison, never
+    /// strings, booleans, nonzero/underflowing numbers, stored bytes or digests.
+    static func normalizingSignedZeros(_ data: Data) throws -> Data {
+        var reader = Self(bytes: Array(data), collectSignedZeros: true)
+        try reader.value(depth: 0); reader.whitespace()
+        guard reader.index == reader.bytes.count else { throw StaffReplicaSourceSyncError.invalid }
+        guard !reader.signedZeros.isEmpty else { return data }
+        var result = Data(), start = 0
+        for range in reader.signedZeros {
+            result.append(contentsOf: reader.bytes[start..<range.lowerBound]); result.append(48)
+            start = range.upperBound
+        }
+        result.append(contentsOf: reader.bytes[start...]); return result
     }
     mutating func whitespace() { while let byte = current, [9, 10, 13, 32].contains(byte) { index += 1 } }
     mutating func take(_ byte: UInt8) throws {
@@ -112,6 +129,12 @@ private struct StaffWorkspacePublicationJSON {
             let start = index
             while let byte = current, ![9, 10, 13, 32, 44, 93, 125].contains(byte) { index += 1 }
             guard index > start else { throw StaffReplicaSourceSyncError.invalid }
+            if collectSignedZeros, bytes[start] == 45, index > start + 1, bytes[start + 1] == 48 {
+                let token = String(decoding: bytes[start..<index], as: UTF8.self)
+                if token.range(of: #"^-0(?:\.0+)?(?:[eE][+-]?[0-9]+)?$"#, options: .regularExpression) != nil {
+                    signedZeros.append(start..<index)
+                }
+            }
         }
     }
 }

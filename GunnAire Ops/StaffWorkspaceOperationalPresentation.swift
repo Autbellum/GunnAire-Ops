@@ -345,7 +345,8 @@ struct StaffWorkspaceResolvedRecordView: View {
     var body: some View {
         if matches.count == 1, let row = matches.first {
             if ["invoice", "estimate"].contains(row.kind) {
-                StaffWorkspaceBillingDetailView(hosted: hosted, route: row.navigationRoute)
+                StaffWorkspaceBillingDetailView(hosted: hosted, route: row.navigationRoute,
+                    onRequests: row.kind == "invoice" ? { navigation.beginInvoice(hosted: hosted, route: row.navigationRoute) } : nil)
             } else {
                 StaffWorkspaceOperationalRecordDetailView(row: row, hosted: hosted, onEdit: { row, field in
                     navigation.beginEditing(hosted: hosted, row: row, field: field)

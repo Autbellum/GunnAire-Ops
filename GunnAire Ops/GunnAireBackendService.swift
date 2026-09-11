@@ -1078,6 +1078,34 @@ enum GunnAireBackendService {
         }
     }
 
+    /// Financial intent only: immutable staff invoice-line requests for office review.
+    static func staffInvoiceRequest(path: String, body: Data) async throws -> Data {
+        guard StaffInvoiceHTTPPolicy.allows(path: path, method: "POST", body: body), Config.Backend.usesBusinessIdentity,
+              let stamp = CloudKitStaffSetupStamp.current else { throw StaffReplicaDeliveryError.access }
+        let candidates = [AppleAuthManager.shared.sessionToken, GoogleAuthManager.shared.applicationSessionToken].compactMap { $0 }
+        guard let token = candidates.first(where: { !$0.isEmpty && CompanyWorkspaceSession.digest($0) == stamp.session.tokenFingerprint }) else {
+            throw StaffReplicaDeliveryError.access
+        }
+        func check() throws {
+            try Task.checkCancellation()
+            guard CloudKitStaffSetupStamp.current == stamp, Date() < stamp.session.expiresAt else { throw StaffReplicaDeliveryError.access }
+        }
+        try check()
+        var request = try baseRequest(path: path, method: "POST", body: body)
+        request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
+        do {
+            let (bytes, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: 32 * 1024)
+            try check(); return bytes
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let code) = error {
+                throw GunnAireBackendError.server(statusCode: code, message: "The original invoice-line request was not confirmed. Keep the saved request for recovery.")
+            }
+            throw StaffReplicaDeliveryPolicy.safe(error)
+        }
+    }
+
     /// Staff (and Admin) GET of an already-prepared full-workspace cloud-key.
     /// Never returns sealed content bytes; never uses the Admin-only owner source helper.
     static func staffWorkspaceCloudKeyRequest(path: String) async throws -> Data {

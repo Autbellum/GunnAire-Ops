@@ -96,7 +96,10 @@ def validate(payload):
     if quantity <= 0 or quantity * price > 99_999_999_999 or len(contract.wire(payload).encode()) > 16_384:
         raise contract.invalid()
     # A group has no standalone sales price; office expands original members.
-    return None if line["itemType"] == "Group" else str((quantity * price).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+    if line["itemType"] == "Group":
+        return None
+    subtotal = (quantity * price).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return "0.00" if subtotal.is_zero() else str(subtotal)
 
 
 def atom(fields, key, tag, nullable=False):

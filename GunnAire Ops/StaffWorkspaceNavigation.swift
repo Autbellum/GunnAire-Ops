@@ -48,6 +48,12 @@ struct StaffWorkspaceEditorSession: Identifiable {
     let controller: StaffWorkspaceFieldEditorController
 }
 
+struct StaffInvoiceEditorSession: Identifiable {
+    let id = UUID()
+    let route: StaffWorkspaceRecordRoute
+    let controller: StaffInvoiceEditorController
+}
+
 /// Per-window state lives above the snapshot's ModelContainer/view identity.
 /// The sheet keeps the same controller; its live dependencies resolve current
 /// authorized content, while the controller retains the original draft version.
@@ -58,6 +64,7 @@ struct StaffWorkspaceEditorSession: Identifiable {
     @Published var searchText = ""
     @Published var path: [StaffWorkspaceRecordRoute] = []
     @Published var editor: StaffWorkspaceEditorSession?
+    @Published var invoiceEditor: StaffInvoiceEditorSession?
     @Published private(set) var notice: String?
     private var authority: StaffWorkspaceNavigationAuthority?
     nonisolated deinit {}
@@ -81,12 +88,19 @@ struct StaffWorkspaceEditorSession: Identifiable {
                 notice = "This field is no longer available. Previously saved drafts remain on this device."
             }
         }
+        if let invoiceEditor {
+            if invoiceEditor.route.exists(in: hosted) { invoiceEditor.controller.checkLifetime() }
+            else {
+                invoiceEditor.controller.invalidate(); self.invoiceEditor = nil
+                notice = "This invoice is no longer shared. Previously saved invoice drafts and requests remain on this device."
+            }
+        }
     }
 
     func beginEditing(hosted: StaffWorkspaceOperationalHostedStore, row: StaffWorkspaceOperationalProjectionRecord,
                       field: String, receive: StaffReplicaReceiveController? = nil,
                       coordinator: StaffWorkspaceContentCoordinator? = nil) {
-        guard editor == nil else { return } // Never replace another open editor's input.
+        guard editor == nil, invoiceEditor == nil else { return } // Never replace another open editor's input.
         let route = StaffWorkspaceRecordRoute(kind: row.kind, id: row.recordID)
         guard route.canEdit(field, in: hosted) else { return }
         let controller = StaffWorkspaceFieldEditorController(dependencies: .live(hosted: hosted,
@@ -103,6 +117,18 @@ struct StaffWorkspaceEditorSession: Identifiable {
 
     func reset() {
         editor?.controller.invalidate(); editor = nil
+        invoiceEditor?.controller.invalidate(); invoiceEditor = nil
         path = []; selected = .overview; searchText = ""; notice = nil; authority = nil
+    }
+
+    func beginInvoice(hosted: StaffWorkspaceOperationalHostedStore, route: StaffWorkspaceRecordRoute,
+                      receive: StaffReplicaReceiveController? = nil, store: SharedTimeLocalStore? = nil) {
+        guard editor == nil, invoiceEditor == nil, route.kind == "invoice", route.exists(in: hosted) else { return }
+        do {
+            let client = try StaffInvoiceClient(dependencies: .live(hosted: hosted, invoice: route.id, receive: receive, store: store))
+            let controller = StaffInvoiceEditorController(client: client); controller.open()
+            guard controller.available else { throw StaffReplicaDeliveryError.access }
+            invoiceEditor = .init(route: route, controller: controller); notice = nil
+        } catch { notice = "Refresh the shared workspace before opening invoice requests." }
     }
 }
