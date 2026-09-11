@@ -178,6 +178,8 @@ struct SettingsView: View {
                             readinessRow(title: "Payments configured", isComplete: onsitePaymentConfigurationReady)
                         }
 
+                        GunnAireLocalAIReadinessSection()
+
                         Section("App Loading Video") {
                             Toggle("Play Splash Video On Launch", isOn: $enableSplashVideo)
 

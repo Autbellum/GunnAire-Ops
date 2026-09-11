@@ -39,6 +39,7 @@ struct OperationsDashboardView: View {
     @State private var showingFleetWorkspace = false
     @State private var showingBusinessTasks = false
     @State private var showingTimeOffRequests = false
+    @State private var showingLocalAIWorkspace = false
 
     private let calendar = Calendar.current
 
@@ -509,6 +510,16 @@ struct OperationsDashboardView: View {
                     .accessibilityIdentifier("CommandCenterToolbarFindButton")
                     .tint(Color.brandGold)
                 }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showingLocalAIWorkspace = true
+                    } label: {
+                        Label("Local AI", systemImage: "sparkles")
+                    }
+                    .accessibilityIdentifier("CommandCenterLocalAIButton")
+                    .tint(Color.brandGold)
+                    .disabled(!GunnAireBackendService.isConfigured)
+                }
             }
             .sheet(isPresented: $showingCommandPalette) {
                 OperationsCommandPalette(
@@ -520,6 +531,13 @@ struct OperationsDashboardView: View {
                     access: operationsAccess
                 )
                     .tint(Color.brandGold)
+            }
+            .sheet(isPresented: $showingLocalAIWorkspace) {
+                GunnAireLocalAIWorkspace(
+                    snapshot: suiteSnapshot,
+                    role: currentUserRole,
+                    canViewFinancials: canViewFinancials
+                )
             }
             .sheet(isPresented: $showingFleetWorkspace) {
                 FleetWorkspaceView()
