@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "loopback_only": true,
+  "max_prompt_characters": 60000,
+  "max_log_characters": 45000,
+  "default_timeout_seconds": 300,
+  "denied_path_names": [
+    ".env",
+    ".env.local",
+    ".env.production",
+    "Secrets",
+    "Keychains",
+    "Provisioning Profiles"
+  ],
+  "denied_extensions": [
+    ".p12",
+    ".pfx",
+    ".pem",
+    ".key",
+    ".mobileprovision",
+    ".cer",
+    ".crt",
+    ".der",
+    ".sqlite-wal",
+    ".sqlite-shm"
+  ],
+  "sensitive_environment_fragments": [
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "PASSWD",
+    "API_KEY",
+    "PRIVATE_KEY",
+    "CLIENT_ID",
+    "CLIENT_SECRET",
+    "OAUTH",
+    "STRIPE",
+    "QUICKBOOKS",
+    "INTUIT",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "APPLE_ID",
+    "ASC_",
+    "CLOUDKIT"
+  ],
+  "forbidden_model_authorities": [
+    "merge",
+    "push",
+    "deploy",
+    "sign",
+    "notarize",
+    "charge_customer",
+    "mark_invoice_paid",
+    "change_firewall",
+    "open_port",
+    "install_firmware",
+    "delete_backup",
+    "rotate_production_secret"
+  ],
+  "high_risk_domains": [
+    "authentication",
+    "authorization",
+    "payments",
+    "accounting",
+    "cloudkit",
+    "firewall",
+    "vpn",
+    "signing",
+    "deployment",
+    "data_recovery"
+  ]
+}

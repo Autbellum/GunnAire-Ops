@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "status": "proposed_only",
+  "firmware": {
+    "channel": "production",
+    "check_interval_hours": 24,
+    "automatic_install": false,
+    "configuration_backup_required": true,
+    "release_notes_review_required": true,
+    "major_upgrade_requires_console_recovery": true,
+    "critical_patch_target_hours": 24
+  },
+  "suricata": {
+    "enabled": true,
+    "initial_mode": "IDS_ALERT_ONLY",
+    "update_interval_hours": 4,
+    "maximum_staleness_hours": 12,
+    "validate_before_activate": true,
+    "retain_last_known_good": true,
+    "automatic_rollback_on_load_failure": true,
+    "policy_promotion_observation_hours": 48,
+    "feeds": [
+      {"name": "Emerging Threats Open", "enabled": true, "standalone_allowed": false, "default_action": "ALERT"},
+      {"name": "abuse.ch SSL Blacklist", "enabled": true, "standalone_allowed": false, "default_action": "DROP_HIGH_CONFIDENCE"},
+      {"name": "abuse.ch Feodo Tracker", "enabled": true, "standalone_allowed": false, "default_action": "DROP_HIGH_CONFIDENCE"},
+      {"name": "abuse.ch URLHaus", "enabled": true, "standalone_allowed": false, "default_action": "DROP_HIGH_CONFIDENCE"}
+    ]
+  },
+  "dns_blocking": {
+    "enabled": true,
+    "resolver": "Unbound",
+    "update_interval_hours": 24,
+    "maximum_staleness_hours": 36,
+    "validate_before_activate": true,
+    "retain_last_known_good": true,
+    "per_zone_policy": true,
+    "business_allowlist_requires_reason": true
+  },
+  "monitoring": {
+    "daily_health_report": true,
+    "alert_on_update_failure": true,
+    "alert_on_stale_feed": true,
+    "alert_on_ips_engine_stopped": true,
+    "alert_on_configuration_change": true,
+    "remote_syslog_to_synology_after_dsm_hardening": true,
+    "local_ai_summary_is_advisory": true,
+    "local_ai_may_change_rules": false
+  }
+}
