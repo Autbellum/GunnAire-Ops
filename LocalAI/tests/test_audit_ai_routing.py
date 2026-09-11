@@ -77,6 +77,13 @@ class AIRoutingAuditTests(unittest.TestCase):
         })
         self.assertEqual(report["status"], "pass")
 
+    def test_allows_image_provider_policy_validation(self) -> None:
+        report = self.run_audit({
+            "Backend/local_gateway.py": 'if value.get("image_generation", {}).get("provider") != "stable-diffusion":\n    raise RuntimeError("Stable Diffusion must remain isolated as the image provider")\n'
+        })
+        self.assertEqual(report["status"], "pass")
+        self.assertEqual(report["counts"]["violations"], 0)
+
     def test_rejects_direct_hosted_llm_endpoint(self) -> None:
         report = self.run_audit({
             "Backend/business_ai.py": 'endpoint = "https://api.openai.com/v1/responses"\n'
