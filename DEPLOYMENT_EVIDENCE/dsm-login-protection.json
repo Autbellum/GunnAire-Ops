@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-09-12T06:11:27.149Z",
+  "target": "GunnAire_Server DS925+",
+  "method": "Authenticated Safari DSM Security/Protection, applied then navigated away and reopened",
+  "before": {"auto_block": false, "attempts": 10, "minutes": 5, "block_expiry": false},
+  "after": {"auto_block": true, "attempts": 10, "minutes": 5, "block_expiry": true, "expiry_days": 1},
+  "session_retained": true,
+  "negative_login_test_performed": false,
+  "rollback": "Disable auto block and block expiration in the same Protection panel, then Apply",
+  "scope": "Reversible DSM login protection only; no VLAN, firewall or exposure change"
+}

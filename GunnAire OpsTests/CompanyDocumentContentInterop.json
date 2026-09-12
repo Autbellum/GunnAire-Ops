@@ -1,0 +1,27 @@
+{
+  "dataBase64": "b3JpZ2luYWwtZmlsZQ==",
+  "proof": {
+    "contentType": "application/pdf",
+    "createdAt": "2026-09-10T16:06:01.791800+00:00",
+    "fileSHA256": "2e4b8e24101354f89bbd5296f5bb480cbdabb93afde9ef92c3229bc529d27836",
+    "fileSizeBytes": 13,
+    "filename": "Report.pdf",
+    "id": "9cd13c67-38ee-453c-9409-68de90b8c50e",
+    "schema": "company-document-content-v1"
+  },
+  "staffDataBase64": "JVBERi1maXh0dXJlLW1lZGlhLTEyMzQ1Njc4OTA=",
+  "staffGrant": {
+    "attachmentID": "dd56f517-f2a5-478c-9ff2-3abe09c41d3f",
+    "backendDocumentID": "3fe42042-0a55-46a1-abe7-435229f7d947",
+    "contentSHA256": "98406ee5195235c4fb93151d3353a219833936feedd534df5e4728d7913e8047",
+    "contentType": "application/pdf",
+    "displayName": "Original.pdf",
+    "fileSHA256": "5d1f68fe6c09ea34a31786d5dc7d0e07c9b0c2d4b75f8f6cfc7114a0551f9e44",
+    "fileSizeBytes": 29,
+    "kindRaw": "service_report",
+    "operationalWorkspaceReady": false,
+    "schema": "staff-workspace-operational-media-v2",
+    "selectionID": "e050750e-0d2c-479a-a1dd-5ce00e9bcc97",
+    "sourceSequence": 1
+  }
+}

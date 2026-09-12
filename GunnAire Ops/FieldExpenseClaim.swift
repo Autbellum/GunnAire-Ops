@@ -164,7 +164,7 @@ enum FieldExpenseClaimError: LocalizedError, Equatable {
 
 @Model
 final class FieldExpenseClaim {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var serviceCallID: UUID?
     var customerID: UUID?
     var customerName: String?

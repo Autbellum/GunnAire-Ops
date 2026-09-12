@@ -1,0 +1,3522 @@
+{
+  "projections": {
+    "Accounting": {
+      "companyID": "a1000000-0000-4000-8000-000000000001",
+      "documents": [
+        {
+          "catalog": {
+            "saved": {
+              "_0": {
+                "discount": {
+                  "authorizedAt": 810687500,
+                  "authorizedByEmail": "historical.owner@example.invalid",
+                  "grossSubtotalAtAuthorization": 225,
+                  "kind": "percentage",
+                  "reason": "Service plan discount",
+                  "value": 10
+                },
+                "lines": [
+                  {
+                    "bundle": {
+                      "members": [
+                        {
+                          "id": "A3000000-0000-4000-8000-000000000001",
+                          "line": {
+                            "catalogItemID": "A2000000-0000-4000-8000-000000000001",
+                            "catalogUpdatedAt": 810687500,
+                            "extendedAmount": 150.0,
+                            "isTaxable": true,
+                            "itemTypeRawValue": "Service",
+                            "name": "Original sold valve",
+                            "pricebookUnitPrice": 25,
+                            "purchaseCost": {
+                              "recorded": {
+                                "_0": 19.375
+                              }
+                            },
+                            "quantity": 6,
+                            "quickBooksItemID": {
+                              "recorded": {
+                                "_0": "MEMBER"
+                              }
+                            },
+                            "servicedEquipment": {
+                              "equipmentID": "F1C6763B-4CCA-4252-B3BD-B221C72EC550",
+                              "name": "Original system",
+                              "serialNumber": "ORIGINAL-123"
+                            },
+                            "unitPrice": 25
+                          },
+                          "tracksInventory": true
+                        },
+                        {
+                          "id": "A3000000-0000-4000-8000-000000000002",
+                          "line": {
+                            "catalogItemID": "A2000000-0000-4000-8000-000000000001",
+                            "catalogUpdatedAt": 810687500,
+                            "extendedAmount": 75.0,
+                            "isTaxable": true,
+                            "itemTypeRawValue": "Service",
+                            "name": "Original sold valve",
+                            "pricebookUnitPrice": 25,
+                            "purchaseCost": {
+                              "recorded": {
+                                "_0": 19.375
+                              }
+                            },
+                            "quantity": 3,
+                            "quickBooksItemID": {
+                              "recorded": {
+                                "_0": "MEMBER"
+                              }
+                            },
+                            "servicedEquipment": {
+                              "equipmentID": "F1C6763B-4CCA-4252-B3BD-B221C72EC550",
+                              "name": "Original system",
+                              "serialNumber": "ORIGINAL-123"
+                            },
+                            "unitPrice": 25
+                          },
+                          "tracksInventory": true
+                        }
+                      ],
+                      "printGroupedItems": false,
+                      "scope": {
+                        "recorded": {
+                          "_0": {
+                            "companyID": "A1000000-0000-4000-8000-000000000001",
+                            "environment": "sandbox",
+                            "realmID": "ORIGINAL-REALM"
+                          }
+                        }
+                      }
+                    },
+                    "catalogItemID": "662E0CCA-4E8D-4000-91F1-30D63F4B079F",
+                    "catalogUpdatedAt": 810687500,
+                    "extendedAmount": 225.0,
+                    "isTaxable": true,
+                    "itemTypeRawValue": "Group",
+                    "name": "Original sold valve",
+                    "pricebookUnitPrice": 0,
+                    "purchaseCost": {
+                      "recorded": {
+                        "_0": 19.375
+                      }
+                    },
+                    "quantity": 3,
+                    "quickBooksItemID": {
+                      "recorded": {
+                        "_0": "SOLD-GROUP"
+                      }
+                    },
+                    "unitPrice": 0
+                  }
+                ]
+              }
+            }
+          },
+          "fields": {
+            "amount": {
+              "number": {
+                "_0": 205.65
+              }
+            },
+            "completionNotes": {
+              "null": {}
+            },
+            "createdAt": {
+              "date": {
+                "_0": 810687548.627036
+              }
+            },
+            "customer": {
+              "identifier": {
+                "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+              }
+            },
+            "customerSignatureImageBase64": {
+              "null": {}
+            },
+            "customerSignatureName": {
+              "null": {}
+            },
+            "customerSignedAt": {
+              "null": {}
+            },
+            "dueDate": {
+              "null": {}
+            },
+            "finalizedAt": {
+              "null": {}
+            },
+            "lineItemSummary": {
+              "text": {
+                "_0": ""
+              }
+            },
+            "notes": {
+              "null": {}
+            },
+            "projectBillingPercent": {
+              "null": {}
+            },
+            "projectContractAmount": {
+              "null": {}
+            },
+            "projectMilestoneID": {
+              "null": {}
+            },
+            "projectMilestoneSequence": {
+              "null": {}
+            },
+            "projectMilestoneTitle": {
+              "null": {}
+            },
+            "quickBooksBalanceDue": {
+              "null": {}
+            },
+            "quickBooksID": {
+              "null": {}
+            },
+            "quickBooksLastSyncedAt": {
+              "null": {}
+            },
+            "quickBooksSyncStatus": {
+              "text": {
+                "_0": "pending"
+              }
+            },
+            "salesTaxAmount": {
+              "number": {
+                "_0": 3.15
+              }
+            },
+            "serviceCallID": {
+              "identifier": {
+                "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+              }
+            },
+            "serviceLocationID": {
+              "null": {}
+            },
+            "siteAddress": {
+              "null": {}
+            },
+            "status": {
+              "text": {
+                "_0": "unpaid"
+              }
+            },
+            "taxCalculatedAt": {
+              "null": {}
+            },
+            "taxCalculationStatusRawValue": {
+              "null": {}
+            },
+            "workTypeRaw": {
+              "text": {
+                "_0": "service"
+              }
+            }
+          },
+          "id": "52BE8B00-7A09-49C5-9096-424A00043EF0",
+          "kind": "invoice",
+          "unavailableFields": {
+            "milestoneDraftReceiptJSON": "serviceOnly",
+            "quickBooksPaymentReviewJSON": "serviceOnly",
+            "quickBooksSyncDetail": "serviceOnly"
+          }
+        }
+      ],
+      "environment": "development",
+      "memberRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "membershipID": "a1000000-0000-4000-8000-000000000003",
+      "projectionPolicy": "accounting-operations-v1",
+      "replicaID": "a1000000-0000-4000-8000-000000000002",
+      "schema": "staff-billing-view-v1",
+      "shareRevision": 4,
+      "sourceSequence": 1
+    },
+    "Admin": {
+      "companyID": "a1000000-0000-4000-8000-000000000001",
+      "documents": [
+        {
+          "catalog": {
+            "saved": {
+              "_0": {
+                "lines": [
+                  {
+                    "assembly": {
+                      "assemblyItemID": "662E0CCA-4E8D-4000-91F1-30D63F4B079F",
+                      "components": [
+                        {
+                          "itemID": "A2000000-0000-4000-8000-000000000001",
+                          "name": "Included valve",
+                          "purchaseCost": {
+                            "recorded": {
+                              "_0": 3.125
+                            }
+                          },
+                          "quantity": 2,
+                          "tracksInventory": true
+                        }
+                      ],
+                      "name": "Original repair package",
+                      "presentation": "flat_rate",
+                      "revision": 3
+                    },
+                    "catalogItemID": "662E0CCA-4E8D-4000-91F1-30D63F4B079F",
+                    "catalogUpdatedAt": 810687500,
+                    "extendedAmount": 62.5,
+                    "isTaxable": true,
+                    "itemTypeRawValue": "Service",
+                    "name": "Original sold valve",
+                    "pricebookUnitPrice": 25,
+                    "purchaseCost": {
+                      "recorded": {
+                        "_0": 19.375
+                      }
+                    },
+                    "quantity": 2.5,
+                    "quickBooksItemID": {
+                      "recorded": {
+                        "_0": "SOLD-VALVE"
+                      }
+                    },
+                    "unitPrice": 25
+                  }
+                ]
+              }
+            }
+          },
+          "fields": {
+            "amount": {
+              "number": {
+                "_0": 62.5
+              }
+            },
+            "changeOrderReason": {
+              "null": {}
+            },
+            "createdAt": {
+              "date": {
+                "_0": 810687548.62712
+              }
+            },
+            "customer": {
+              "identifier": {
+                "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+              }
+            },
+            "customerApprovalMethodRaw": {
+              "null": {}
+            },
+            "customerApprovalRecordedByEmail": {
+              "null": {}
+            },
+            "customerApprovalReference": {
+              "null": {}
+            },
+            "customerApprovalSignatureImageBase64": {
+              "null": {}
+            },
+            "customerApprovedAt": {
+              "null": {}
+            },
+            "customerApprovedByName": {
+              "null": {}
+            },
+            "lineItemSummary": {
+              "text": {
+                "_0": ""
+              }
+            },
+            "notes": {
+              "null": {}
+            },
+            "parentEstimateID": {
+              "null": {}
+            },
+            "proposalGroupID": {
+              "null": {}
+            },
+            "proposalIsRecommended": {
+              "flag": {
+                "_0": false
+              }
+            },
+            "proposalOption": {
+              "null": {}
+            },
+            "quickBooksID": {
+              "null": {}
+            },
+            "salesTaxAmount": {
+              "number": {
+                "_0": 0
+              }
+            },
+            "scheduledServiceCallID": {
+              "null": {}
+            },
+            "serviceCallID": {
+              "null": {}
+            },
+            "serviceLocationID": {
+              "null": {}
+            },
+            "siteAddress": {
+              "null": {}
+            },
+            "status": {
+              "text": {
+                "_0": "pending"
+              }
+            },
+            "taxCalculatedAt": {
+              "null": {}
+            },
+            "taxCalculationStatusRawValue": {
+              "null": {}
+            }
+          },
+          "id": "AA862A6A-8277-4601-B2C8-AFB8A9B7104D",
+          "kind": "estimate",
+          "unavailableFields": {}
+        },
+        {
+          "catalog": {
+            "saved": {
+              "_0": {
+                "discount": {
+                  "authorizedAt": 810687500,
+                  "authorizedByEmail": "historical.owner@example.invalid",
+                  "grossSubtotalAtAuthorization": 225,
+                  "kind": "percentage",
+                  "reason": "Service plan discount",
+                  "value": 10
+                },
+                "lines": [
+                  {
+                    "bundle": {
+                      "members": [
+                        {
+                          "id": "A3000000-0000-4000-8000-000000000001",
+                          "line": {
+                            "catalogItemID": "A2000000-0000-4000-8000-000000000001",
+                            "catalogUpdatedAt": 810687500,
+                            "extendedAmount": 150.0,
+                            "isTaxable": true,
+                            "itemTypeRawValue": "Service",
+                            "name": "Original sold valve",
+                            "pricebookUnitPrice": 25,
+                            "purchaseCost": {
+                              "recorded": {
+                                "_0": 19.375
+                              }
+                            },
+                            "quantity": 6,
+                            "quickBooksItemID": {
+                              "recorded": {
+                                "_0": "MEMBER"
+                              }
+                            },
+                            "servicedEquipment": {
+                              "equipmentID": "F1C6763B-4CCA-4252-B3BD-B221C72EC550",
+                              "name": "Original system",
+                              "serialNumber": "ORIGINAL-123"
+                            },
+                            "unitPrice": 25
+                          },
+                          "tracksInventory": true
+                        },
+                        {
+                          "id": "A3000000-0000-4000-8000-000000000002",
+                          "line": {
+                            "catalogItemID": "A2000000-0000-4000-8000-000000000001",
+                            "catalogUpdatedAt": 810687500,
+                            "extendedAmount": 75.0,
+                            "isTaxable": true,
+                            "itemTypeRawValue": "Service",
+                            "name": "Original sold valve",
+                            "pricebookUnitPrice": 25,
+                            "purchaseCost": {
+                              "recorded": {
+                                "_0": 19.375
+                              }
+                            },
+                            "quantity": 3,
+                            "quickBooksItemID": {
+                              "recorded": {
+                                "_0": "MEMBER"
+                              }
+                            },
+                            "servicedEquipment": {
+                              "equipmentID": "F1C6763B-4CCA-4252-B3BD-B221C72EC550",
+                              "name": "Original system",
+                              "serialNumber": "ORIGINAL-123"
+                            },
+                            "unitPrice": 25
+                          },
+                          "tracksInventory": true
+                        }
+                      ],
+                      "printGroupedItems": false,
+                      "scope": {
+                        "recorded": {
+                          "_0": {
+                            "companyID": "A1000000-0000-4000-8000-000000000001",
+                            "environment": "sandbox",
+                            "realmID": "ORIGINAL-REALM"
+                          }
+                        }
+                      }
+                    },
+                    "catalogItemID": "662E0CCA-4E8D-4000-91F1-30D63F4B079F",
+                    "catalogUpdatedAt": 810687500,
+                    "extendedAmount": 225.0,
+                    "isTaxable": true,
+                    "itemTypeRawValue": "Group",
+                    "name": "Original sold valve",
+                    "pricebookUnitPrice": 0,
+                    "purchaseCost": {
+                      "recorded": {
+                        "_0": 19.375
+                      }
+                    },
+                    "quantity": 3,
+                    "quickBooksItemID": {
+                      "recorded": {
+                        "_0": "SOLD-GROUP"
+                      }
+                    },
+                    "unitPrice": 0
+                  }
+                ]
+              }
+            }
+          },
+          "fields": {
+            "amount": {
+              "number": {
+                "_0": 205.65
+              }
+            },
+            "completionNotes": {
+              "null": {}
+            },
+            "createdAt": {
+              "date": {
+                "_0": 810687548.627036
+              }
+            },
+            "customer": {
+              "identifier": {
+                "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+              }
+            },
+            "customerSignatureImageBase64": {
+              "null": {}
+            },
+            "customerSignatureName": {
+              "null": {}
+            },
+            "customerSignedAt": {
+              "null": {}
+            },
+            "dueDate": {
+              "null": {}
+            },
+            "finalizedAt": {
+              "null": {}
+            },
+            "lineItemSummary": {
+              "text": {
+                "_0": ""
+              }
+            },
+            "notes": {
+              "null": {}
+            },
+            "projectBillingPercent": {
+              "null": {}
+            },
+            "projectContractAmount": {
+              "null": {}
+            },
+            "projectMilestoneID": {
+              "null": {}
+            },
+            "projectMilestoneSequence": {
+              "null": {}
+            },
+            "projectMilestoneTitle": {
+              "null": {}
+            },
+            "quickBooksBalanceDue": {
+              "null": {}
+            },
+            "quickBooksID": {
+              "null": {}
+            },
+            "quickBooksLastSyncedAt": {
+              "null": {}
+            },
+            "quickBooksSyncStatus": {
+              "text": {
+                "_0": "pending"
+              }
+            },
+            "salesTaxAmount": {
+              "number": {
+                "_0": 3.15
+              }
+            },
+            "serviceCallID": {
+              "identifier": {
+                "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+              }
+            },
+            "serviceLocationID": {
+              "null": {}
+            },
+            "siteAddress": {
+              "null": {}
+            },
+            "status": {
+              "text": {
+                "_0": "unpaid"
+              }
+            },
+            "taxCalculatedAt": {
+              "null": {}
+            },
+            "taxCalculationStatusRawValue": {
+              "null": {}
+            },
+            "workTypeRaw": {
+              "text": {
+                "_0": "service"
+              }
+            }
+          },
+          "id": "52BE8B00-7A09-49C5-9096-424A00043EF0",
+          "kind": "invoice",
+          "unavailableFields": {
+            "milestoneDraftReceiptJSON": "serviceOnly",
+            "quickBooksPaymentReviewJSON": "serviceOnly",
+            "quickBooksSyncDetail": "serviceOnly"
+          }
+        }
+      ],
+      "environment": "development",
+      "memberRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "membershipID": "a1000000-0000-4000-8000-000000000003",
+      "projectionPolicy": "admin-operations-v1",
+      "replicaID": "a1000000-0000-4000-8000-000000000002",
+      "schema": "staff-billing-view-v1",
+      "shareRevision": 4,
+      "sourceSequence": 1
+    },
+    "Dispatcher": {
+      "companyID": "a1000000-0000-4000-8000-000000000001",
+      "documents": [
+        {
+          "catalog": {
+            "saved": {
+              "_0": {
+                "lines": [
+                  {
+                    "assembly": {
+                      "assemblyItemID": "662E0CCA-4E8D-4000-91F1-30D63F4B079F",
+                      "components": [
+                        {
+                          "itemID": "A2000000-0000-4000-8000-000000000001",
+                          "name": "Included valve",
+                          "purchaseCost": {
+                            "restricted": {}
+                          },
+                          "quantity": 2,
+                          "tracksInventory": true
+                        }
+                      ],
+                      "name": "Original repair package",
+                      "presentation": "flat_rate",
+                      "revision": 3
+                    },
+                    "catalogItemID": "662E0CCA-4E8D-4000-91F1-30D63F4B079F",
+                    "catalogUpdatedAt": 810687500,
+                    "extendedAmount": 62.5,
+                    "isTaxable": true,
+                    "itemTypeRawValue": "Service",
+                    "name": "Original sold valve",
+                    "pricebookUnitPrice": 25,
+                    "purchaseCost": {
+                      "restricted": {}
+                    },
+                    "quantity": 2.5,
+                    "quickBooksItemID": {
+                      "restricted": {}
+                    },
+                    "unitPrice": 25
+                  }
+                ]
+              }
+            }
+          },
+          "fields": {
+            "amount": {
+              "number": {
+                "_0": 62.5
+              }
+            },
+            "changeOrderReason": {
+              "null": {}
+            },
+            "createdAt": {
+              "date": {
+                "_0": 810687548.62712
+              }
+            },
+            "customer": {
+              "identifier": {
+                "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+              }
+            },
+            "customerApprovalMethodRaw": {
+              "null": {}
+            },
+            "customerApprovalRecordedByEmail": {
+              "null": {}
+            },
+            "customerApprovalReference": {
+              "null": {}
+            },
+            "customerApprovalSignatureImageBase64": {
+              "null": {}
+            },
+            "customerApprovedAt": {
+              "null": {}
+            },
+            "customerApprovedByName": {
+              "null": {}
+            },
+            "lineItemSummary": {
+              "text": {
+                "_0": ""
+              }
+            },
+            "notes": {
+              "null": {}
+            },
+            "parentEstimateID": {
+              "null": {}
+            },
+            "proposalGroupID": {
+              "null": {}
+            },
+            "proposalIsRecommended": {
+              "flag": {
+                "_0": false
+              }
+            },
+            "proposalOption": {
+              "null": {}
+            },
+            "salesTaxAmount": {
+              "number": {
+                "_0": 0
+              }
+            },
+            "scheduledServiceCallID": {
+              "null": {}
+            },
+            "serviceCallID": {
+              "null": {}
+            },
+            "serviceLocationID": {
+              "null": {}
+            },
+            "siteAddress": {
+              "null": {}
+            },
+            "status": {
+              "text": {
+                "_0": "pending"
+              }
+            },
+            "taxCalculatedAt": {
+              "null": {}
+            },
+            "taxCalculationStatusRawValue": {
+              "null": {}
+            }
+          },
+          "id": "AA862A6A-8277-4601-B2C8-AFB8A9B7104D",
+          "kind": "estimate",
+          "unavailableFields": {
+            "quickBooksID": "roleRestricted"
+          }
+        }
+      ],
+      "environment": "development",
+      "memberRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "membershipID": "a1000000-0000-4000-8000-000000000003",
+      "projectionPolicy": "dispatch-operations-v1",
+      "replicaID": "a1000000-0000-4000-8000-000000000002",
+      "schema": "staff-billing-view-v1",
+      "shareRevision": 4,
+      "sourceSequence": 1
+    },
+    "Field Technician": {
+      "companyID": "a1000000-0000-4000-8000-000000000001",
+      "documents": [
+        {
+          "catalog": {
+            "saved": {
+              "_0": {
+                "discount": {
+                  "authorizedAt": 810687500,
+                  "authorizedByEmail": "historical.owner@example.invalid",
+                  "grossSubtotalAtAuthorization": 225,
+                  "kind": "percentage",
+                  "reason": "Service plan discount",
+                  "value": 10
+                },
+                "lines": [
+                  {
+                    "bundle": {
+                      "members": [
+                        {
+                          "id": "A3000000-0000-4000-8000-000000000001",
+                          "line": {
+                            "catalogItemID": "A2000000-0000-4000-8000-000000000001",
+                            "catalogUpdatedAt": 810687500,
+                            "extendedAmount": 150.0,
+                            "isTaxable": true,
+                            "itemTypeRawValue": "Service",
+                            "name": "Original sold valve",
+                            "pricebookUnitPrice": 25,
+                            "purchaseCost": {
+                              "restricted": {}
+                            },
+                            "quantity": 6,
+                            "quickBooksItemID": {
+                              "restricted": {}
+                            },
+                            "servicedEquipment": {
+                              "equipmentID": "F1C6763B-4CCA-4252-B3BD-B221C72EC550",
+                              "name": "Original system",
+                              "serialNumber": "ORIGINAL-123"
+                            },
+                            "unitPrice": 25
+                          },
+                          "tracksInventory": true
+                        },
+                        {
+                          "id": "A3000000-0000-4000-8000-000000000002",
+                          "line": {
+                            "catalogItemID": "A2000000-0000-4000-8000-000000000001",
+                            "catalogUpdatedAt": 810687500,
+                            "extendedAmount": 75.0,
+                            "isTaxable": true,
+                            "itemTypeRawValue": "Service",
+                            "name": "Original sold valve",
+                            "pricebookUnitPrice": 25,
+                            "purchaseCost": {
+                              "restricted": {}
+                            },
+                            "quantity": 3,
+                            "quickBooksItemID": {
+                              "restricted": {}
+                            },
+                            "servicedEquipment": {
+                              "equipmentID": "F1C6763B-4CCA-4252-B3BD-B221C72EC550",
+                              "name": "Original system",
+                              "serialNumber": "ORIGINAL-123"
+                            },
+                            "unitPrice": 25
+                          },
+                          "tracksInventory": true
+                        }
+                      ],
+                      "printGroupedItems": false,
+                      "scope": {
+                        "restricted": {}
+                      }
+                    },
+                    "catalogItemID": "662E0CCA-4E8D-4000-91F1-30D63F4B079F",
+                    "catalogUpdatedAt": 810687500,
+                    "extendedAmount": 225.0,
+                    "isTaxable": true,
+                    "itemTypeRawValue": "Group",
+                    "name": "Original sold valve",
+                    "pricebookUnitPrice": 0,
+                    "purchaseCost": {
+                      "restricted": {}
+                    },
+                    "quantity": 3,
+                    "quickBooksItemID": {
+                      "restricted": {}
+                    },
+                    "unitPrice": 0
+                  }
+                ]
+              }
+            }
+          },
+          "fields": {
+            "amount": {
+              "number": {
+                "_0": 205.65
+              }
+            },
+            "completionNotes": {
+              "null": {}
+            },
+            "createdAt": {
+              "date": {
+                "_0": 810687548.627036
+              }
+            },
+            "customer": {
+              "identifier": {
+                "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+              }
+            },
+            "customerSignatureImageBase64": {
+              "null": {}
+            },
+            "customerSignatureName": {
+              "null": {}
+            },
+            "customerSignedAt": {
+              "null": {}
+            },
+            "dueDate": {
+              "null": {}
+            },
+            "finalizedAt": {
+              "null": {}
+            },
+            "lineItemSummary": {
+              "text": {
+                "_0": ""
+              }
+            },
+            "notes": {
+              "null": {}
+            },
+            "projectBillingPercent": {
+              "null": {}
+            },
+            "projectContractAmount": {
+              "null": {}
+            },
+            "projectMilestoneID": {
+              "null": {}
+            },
+            "projectMilestoneSequence": {
+              "null": {}
+            },
+            "projectMilestoneTitle": {
+              "null": {}
+            },
+            "quickBooksBalanceDue": {
+              "null": {}
+            },
+            "quickBooksLastSyncedAt": {
+              "null": {}
+            },
+            "quickBooksSyncStatus": {
+              "text": {
+                "_0": "pending"
+              }
+            },
+            "salesTaxAmount": {
+              "number": {
+                "_0": 3.15
+              }
+            },
+            "serviceCallID": {
+              "identifier": {
+                "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+              }
+            },
+            "serviceLocationID": {
+              "null": {}
+            },
+            "siteAddress": {
+              "null": {}
+            },
+            "status": {
+              "text": {
+                "_0": "unpaid"
+              }
+            },
+            "taxCalculatedAt": {
+              "null": {}
+            },
+            "taxCalculationStatusRawValue": {
+              "null": {}
+            },
+            "workTypeRaw": {
+              "text": {
+                "_0": "service"
+              }
+            }
+          },
+          "id": "52BE8B00-7A09-49C5-9096-424A00043EF0",
+          "kind": "invoice",
+          "unavailableFields": {
+            "milestoneDraftReceiptJSON": "serviceOnly",
+            "quickBooksID": "roleRestricted",
+            "quickBooksPaymentReviewJSON": "serviceOnly",
+            "quickBooksSyncDetail": "serviceOnly"
+          }
+        }
+      ],
+      "environment": "development",
+      "memberRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "membershipID": "a1000000-0000-4000-8000-000000000003",
+      "projectionPolicy": "field-assigned-jobs-v1",
+      "replicaID": "a1000000-0000-4000-8000-000000000002",
+      "schema": "staff-billing-view-v1",
+      "shareRevision": 4,
+      "sourceSequence": 1
+    },
+    "Standard": {
+      "companyID": "a1000000-0000-4000-8000-000000000001",
+      "documents": [],
+      "environment": "development",
+      "memberRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "membershipID": "a1000000-0000-4000-8000-000000000003",
+      "projectionPolicy": "standard-self-v1",
+      "replicaID": "a1000000-0000-4000-8000-000000000002",
+      "schema": "staff-billing-view-v1",
+      "shareRevision": 4,
+      "sourceSequence": 1
+    }
+  },
+  "records": [
+    {
+      "fields": {
+        "address": {
+          "null": {}
+        },
+        "allowsMarketing": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "allowsServiceText": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "allowsTransactionalEmail": {
+          "flag": {
+            "_0": true
+          }
+        },
+        "communicationConsentUpdatedAt": {
+          "null": {}
+        },
+        "email": {
+          "null": {}
+        },
+        "name": {
+          "text": {
+            "_0": "Original customer"
+          }
+        },
+        "phone": {
+          "null": {}
+        },
+        "preferredContactMethodRaw": {
+          "text": {
+            "_0": "email"
+          }
+        },
+        "quickBooksID": {
+          "null": {}
+        }
+      },
+      "id": "9D98492B-8093-46D4-B89E-E9C745F5BEAB",
+      "kind": "customer",
+      "version": 1
+    },
+    {
+      "fields": {
+        "contactInfo": {
+          "text": {
+            "_0": "field.technician@gunnaire.com"
+          }
+        },
+        "laborCostPerHour": {
+          "null": {}
+        },
+        "name": {
+          "text": {
+            "_0": "Original lead"
+          }
+        },
+        "qualificationNotes": {
+          "null": {}
+        },
+        "quickBooksTimeEntityKindRawValue": {
+          "null": {}
+        },
+        "quickBooksTimeEntityRef": {
+          "null": {}
+        },
+        "serviceAreasJSON": {
+          "null": {}
+        },
+        "supportedEquipmentTypesJSON": {
+          "null": {}
+        }
+      },
+      "id": "672272B3-F890-4945-8275-D0B823F02859",
+      "kind": "technician",
+      "version": 1
+    },
+    {
+      "fields": {
+        "createdAt": {
+          "date": {
+            "_0": 810687548.626528
+          }
+        },
+        "defaultInventoryLocation": {
+          "null": {}
+        },
+        "flatRateAssemblyJSON": {
+          "null": {}
+        },
+        "isTaxable": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "itemDescription": {
+          "null": {}
+        },
+        "itemTypeRawValue": {
+          "text": {
+            "_0": "Service"
+          }
+        },
+        "name": {
+          "text": {
+            "_0": "Original valve"
+          }
+        },
+        "preferredVendorName": {
+          "null": {}
+        },
+        "preferredVendorQuickBooksID": {
+          "null": {}
+        },
+        "pricebookCreatedByEmail": {
+          "null": {}
+        },
+        "pricebookReviewStatusRawValue": {
+          "text": {
+            "_0": "approved"
+          }
+        },
+        "pricebookReviewedAt": {
+          "null": {}
+        },
+        "pricebookReviewedByEmail": {
+          "null": {}
+        },
+        "purchaseCost": {
+          "null": {}
+        },
+        "purchaseDescription": {
+          "null": {}
+        },
+        "purchaseURL": {
+          "null": {}
+        },
+        "quickBooksCatalogDetailsJSON": {
+          "null": {}
+        },
+        "quickBooksCatalogReceiptJSON": {
+          "null": {}
+        },
+        "quickBooksID": {
+          "null": {}
+        },
+        "quickBooksInventorySetupJSON": {
+          "null": {}
+        },
+        "quickBooksLastSyncedAt": {
+          "null": {}
+        },
+        "quickBooksSyncDetail": {
+          "null": {}
+        },
+        "quickBooksSyncStatus": {
+          "text": {
+            "_0": "pending"
+          }
+        },
+        "reorderPoint": {
+          "null": {}
+        },
+        "sku": {
+          "null": {}
+        },
+        "timestamp": {
+          "date": {
+            "_0": 810687548.626528
+          }
+        },
+        "tracksInventory": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "unitPrice": {
+          "number": {
+            "_0": 123.375
+          }
+        },
+        "vendorPartNumber": {
+          "null": {}
+        }
+      },
+      "id": "662E0CCA-4E8D-4000-91F1-30D63F4B079F",
+      "kind": "item",
+      "version": 1
+    },
+    {
+      "fields": {
+        "additionalTechnicianIDsJSON": {
+          "null": {}
+        },
+        "afterPhotoCount": {
+          "integer": {
+            "_0": 0
+          }
+        },
+        "arrivalConfirmed": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "assignedTechnician": {
+          "identifier": {
+            "_0": "672272B3-F890-4945-8275-D0B823F02859"
+          }
+        },
+        "beforePhotoCount": {
+          "integer": {
+            "_0": 0
+          }
+        },
+        "cancellationReason": {
+          "null": {}
+        },
+        "cancelledAt": {
+          "null": {}
+        },
+        "correctiveWorkReasonRaw": {
+          "null": {}
+        },
+        "customer": {
+          "identifier": {
+            "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+          }
+        },
+        "customerEquipmentID": {
+          "identifier": {
+            "_0": "F1C6763B-4CCA-4252-B3BD-B221C72EC550"
+          }
+        },
+        "customerNotified": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "diagnosticsCaptured": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "dispatchUrgencyRaw": {
+          "text": {
+            "_0": "normal"
+          }
+        },
+        "documentationChecklist": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "documentationCompletedAt": {
+          "null": {}
+        },
+        "documentationStartedAt": {
+          "null": {}
+        },
+        "drainLineCondition": {
+          "null": {}
+        },
+        "duration": {
+          "number": {
+            "_0": 3600
+          }
+        },
+        "equipmentInstallDate": {
+          "null": {}
+        },
+        "equipmentLocation": {
+          "null": {}
+        },
+        "equipmentManufacturer": {
+          "null": {}
+        },
+        "equipmentModel": {
+          "null": {}
+        },
+        "equipmentName": {
+          "null": {}
+        },
+        "equipmentNotes": {
+          "null": {}
+        },
+        "equipmentSerialNumber": {
+          "null": {}
+        },
+        "equipmentTypeRaw": {
+          "null": {}
+        },
+        "equipmentVerifiedChecklist": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "equipmentWarrantyExpiration": {
+          "null": {}
+        },
+        "eventTitle": {
+          "null": {}
+        },
+        "filterCondition": {
+          "null": {}
+        },
+        "filterSize": {
+          "null": {}
+        },
+        "findingsSummary": {
+          "null": {}
+        },
+        "followUpAction": {
+          "null": {}
+        },
+        "followUpDueDate": {
+          "null": {}
+        },
+        "followUpRequired": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "googleCalendarID": {
+          "null": {}
+        },
+        "googleEventID": {
+          "null": {}
+        },
+        "googleEventManagedByApp": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "indoorCoilCondition": {
+          "null": {}
+        },
+        "linkedEstimateID": {
+          "null": {}
+        },
+        "linkedInvoiceID": {
+          "null": {}
+        },
+        "maintenanceAgreementDueDate": {
+          "null": {}
+        },
+        "maintenanceAgreementID": {
+          "null": {}
+        },
+        "maintenanceChecklistComplete": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "notes": {
+          "null": {}
+        },
+        "originatingServiceCallID": {
+          "null": {}
+        },
+        "outdoorCoilCondition": {
+          "null": {}
+        },
+        "paymentCollectedChecklist": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "promisedArrivalWindowEnd": {
+          "null": {}
+        },
+        "promisedArrivalWindowStart": {
+          "null": {}
+        },
+        "quoteReviewedWithCustomer": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "recommendedWorkSummary": {
+          "null": {}
+        },
+        "safetyChecklistComplete": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "scheduledDate": {
+          "date": {
+            "_0": 810123456.123456
+          }
+        },
+        "scheduledFollowUpServiceCallID": {
+          "null": {}
+        },
+        "serviceActionChecklistJSON": {
+          "null": {}
+        },
+        "serviceLocationID": {
+          "identifier": {
+            "_0": "93A1FF38-AA34-48AA-AA8E-5DE0E7C42D63"
+          }
+        },
+        "serviceReportReadingsJSON": {
+          "null": {}
+        },
+        "serviceReportSummary": {
+          "null": {}
+        },
+        "siteAddress": {
+          "null": {}
+        },
+        "startupChecklistComplete": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "status": {
+          "text": {
+            "_0": "scheduled"
+          }
+        },
+        "technicianArrivedAt": {
+          "null": {}
+        },
+        "technicianEnRouteAt": {
+          "null": {}
+        },
+        "thermostatOperation": {
+          "null": {}
+        },
+        "type": {
+          "text": {
+            "_0": "repair"
+          }
+        },
+        "visitDispositionNotes": {
+          "null": {}
+        },
+        "visitDispositionRaw": {
+          "text": {
+            "_0": "standard"
+          }
+        },
+        "workCompletedChecklist": {
+          "flag": {
+            "_0": false
+          }
+        }
+      },
+      "id": "ECC96BF1-0A93-42CC-B497-A580799067B9",
+      "kind": "job",
+      "version": 1
+    },
+    {
+      "fields": {
+        "amount": {
+          "number": {
+            "_0": 205.65
+          }
+        },
+        "catalogSnapshotJSON": {
+          "text": {
+            "_0": "{\"version\": 1, \"lines\": [{\"catalogItemID\": \"662E0CCA-4E8D-4000-91F1-30D63F4B079F\", \"name\": \"Original sold valve\", \"itemTypeRawValue\": \"Group\", \"quickBooksItemID\": \"SOLD-GROUP\", \"unitPrice\": 0, \"pricebookUnitPrice\": 0, \"purchaseCost\": 19.375, \"isTaxable\": true, \"quantity\": 3, \"catalogUpdatedAt\": 810687500, \"bundle\": {\"scope\": {\"companyID\": \"A1000000-0000-4000-8000-000000000001\", \"realmID\": \"ORIGINAL-REALM\", \"environment\": \"sandbox\"}, \"printGroupedItems\": false, \"members\": [{\"id\": \"A3000000-0000-4000-8000-000000000001\", \"line\": {\"catalogItemID\": \"A2000000-0000-4000-8000-000000000001\", \"name\": \"Original sold valve\", \"itemTypeRawValue\": \"Service\", \"quickBooksItemID\": \"MEMBER\", \"unitPrice\": 25, \"pricebookUnitPrice\": 25, \"purchaseCost\": 19.375, \"isTaxable\": true, \"quantity\": 6, \"catalogUpdatedAt\": 810687500, \"servicedEquipment\": {\"equipmentID\": \"F1C6763B-4CCA-4252-B3BD-B221C72EC550\", \"name\": \"Original system\", \"serialNumber\": \"ORIGINAL-123\"}}, \"tracksInventory\": true}, {\"id\": \"A3000000-0000-4000-8000-000000000002\", \"line\": {\"catalogItemID\": \"A2000000-0000-4000-8000-000000000001\", \"name\": \"Original sold valve\", \"itemTypeRawValue\": \"Service\", \"quickBooksItemID\": \"MEMBER\", \"unitPrice\": 25, \"pricebookUnitPrice\": 25, \"purchaseCost\": 19.375, \"isTaxable\": true, \"quantity\": 3, \"catalogUpdatedAt\": 810687500, \"servicedEquipment\": {\"equipmentID\": \"F1C6763B-4CCA-4252-B3BD-B221C72EC550\", \"name\": \"Original system\", \"serialNumber\": \"ORIGINAL-123\"}}, \"tracksInventory\": true}]}}], \"documentDiscount\": {\"kind\": \"percentage\", \"value\": 10, \"grossSubtotalAtAuthorization\": 225, \"reason\": \"Service plan discount\", \"authorizedByEmail\": \"historical.owner@example.invalid\", \"authorizedAt\": 810687500}}"
+          }
+        },
+        "completionNotes": {
+          "null": {}
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.627036
+          }
+        },
+        "customer": {
+          "identifier": {
+            "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+          }
+        },
+        "customerSignatureImageBase64": {
+          "null": {}
+        },
+        "customerSignatureName": {
+          "null": {}
+        },
+        "customerSignedAt": {
+          "null": {}
+        },
+        "dueDate": {
+          "null": {}
+        },
+        "finalizedAt": {
+          "null": {}
+        },
+        "lineItemSummary": {
+          "text": {
+            "_0": ""
+          }
+        },
+        "milestoneDraftReceiptJSON": {
+          "null": {}
+        },
+        "notes": {
+          "null": {}
+        },
+        "projectBillingPercent": {
+          "null": {}
+        },
+        "projectContractAmount": {
+          "null": {}
+        },
+        "projectMilestoneID": {
+          "null": {}
+        },
+        "projectMilestoneSequence": {
+          "null": {}
+        },
+        "projectMilestoneTitle": {
+          "null": {}
+        },
+        "quickBooksBalanceDue": {
+          "null": {}
+        },
+        "quickBooksID": {
+          "null": {}
+        },
+        "quickBooksLastSyncedAt": {
+          "null": {}
+        },
+        "quickBooksPaymentReviewJSON": {
+          "null": {}
+        },
+        "quickBooksSyncDetail": {
+          "null": {}
+        },
+        "quickBooksSyncStatus": {
+          "text": {
+            "_0": "pending"
+          }
+        },
+        "salesTaxAmount": {
+          "number": {
+            "_0": 3.15
+          }
+        },
+        "serviceCallID": {
+          "identifier": {
+            "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+          }
+        },
+        "serviceLocationID": {
+          "null": {}
+        },
+        "siteAddress": {
+          "null": {}
+        },
+        "status": {
+          "text": {
+            "_0": "unpaid"
+          }
+        },
+        "taxCalculatedAt": {
+          "null": {}
+        },
+        "taxCalculationStatusRawValue": {
+          "null": {}
+        },
+        "workTypeRaw": {
+          "text": {
+            "_0": "service"
+          }
+        }
+      },
+      "id": "52BE8B00-7A09-49C5-9096-424A00043EF0",
+      "kind": "invoice",
+      "version": 1
+    },
+    {
+      "fields": {
+        "amount": {
+          "number": {
+            "_0": 62.5
+          }
+        },
+        "catalogSnapshotJSON": {
+          "text": {
+            "_0": "{\"version\": 1, \"lines\": [{\"catalogItemID\": \"662E0CCA-4E8D-4000-91F1-30D63F4B079F\", \"name\": \"Original sold valve\", \"itemTypeRawValue\": \"Service\", \"quickBooksItemID\": \"SOLD-VALVE\", \"unitPrice\": 25, \"pricebookUnitPrice\": 25, \"purchaseCost\": 19.375, \"isTaxable\": true, \"quantity\": 2.5, \"catalogUpdatedAt\": 810687500, \"assembly\": {\"assemblyItemID\": \"662E0CCA-4E8D-4000-91F1-30D63F4B079F\", \"name\": \"Original repair package\", \"revision\": 3, \"presentation\": \"flat_rate\", \"components\": [{\"itemID\": \"A2000000-0000-4000-8000-000000000001\", \"name\": \"Included valve\", \"quantity\": 2, \"purchaseCost\": 3.125, \"tracksInventory\": true}]}}]}"
+          }
+        },
+        "changeOrderReason": {
+          "null": {}
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.62712
+          }
+        },
+        "customer": {
+          "identifier": {
+            "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+          }
+        },
+        "customerApprovalMethodRaw": {
+          "null": {}
+        },
+        "customerApprovalRecordedByEmail": {
+          "null": {}
+        },
+        "customerApprovalReference": {
+          "null": {}
+        },
+        "customerApprovalSignatureImageBase64": {
+          "null": {}
+        },
+        "customerApprovedAt": {
+          "null": {}
+        },
+        "customerApprovedByName": {
+          "null": {}
+        },
+        "lineItemSummary": {
+          "text": {
+            "_0": ""
+          }
+        },
+        "notes": {
+          "null": {}
+        },
+        "parentEstimateID": {
+          "null": {}
+        },
+        "proposalGroupID": {
+          "null": {}
+        },
+        "proposalIsRecommended": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "proposalOption": {
+          "null": {}
+        },
+        "quickBooksID": {
+          "null": {}
+        },
+        "salesTaxAmount": {
+          "number": {
+            "_0": 0
+          }
+        },
+        "scheduledServiceCallID": {
+          "null": {}
+        },
+        "serviceCallID": {
+          "null": {}
+        },
+        "serviceLocationID": {
+          "null": {}
+        },
+        "siteAddress": {
+          "null": {}
+        },
+        "status": {
+          "text": {
+            "_0": "pending"
+          }
+        },
+        "taxCalculatedAt": {
+          "null": {}
+        },
+        "taxCalculationStatusRawValue": {
+          "null": {}
+        }
+      },
+      "id": "AA862A6A-8277-4601-B2C8-AFB8A9B7104D",
+      "kind": "estimate",
+      "version": 1
+    },
+    {
+      "fields": {
+        "accessNotes": {
+          "null": {}
+        },
+        "address": {
+          "text": {
+            "_0": "10 Main"
+          }
+        },
+        "contactName": {
+          "null": {}
+        },
+        "contactPhone": {
+          "null": {}
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.627311
+          }
+        },
+        "customer": {
+          "identifier": {
+            "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+          }
+        },
+        "isActive": {
+          "flag": {
+            "_0": true
+          }
+        },
+        "isPrimary": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "name": {
+          "text": {
+            "_0": "Shop"
+          }
+        },
+        "updatedAt": {
+          "date": {
+            "_0": 810687548.627311
+          }
+        }
+      },
+      "id": "93A1FF38-AA34-48AA-AA8E-5DE0E7C42D63",
+      "kind": "location",
+      "version": 1
+    },
+    {
+      "fields": {
+        "createdAt": {
+          "date": {
+            "_0": 810687548.627351
+          }
+        },
+        "customer": {
+          "identifier": {
+            "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+          }
+        },
+        "equipmentTypeRaw": {
+          "null": {}
+        },
+        "filterSize": {
+          "null": {}
+        },
+        "installDate": {
+          "null": {}
+        },
+        "isActive": {
+          "flag": {
+            "_0": true
+          }
+        },
+        "location": {
+          "null": {}
+        },
+        "manufacturer": {
+          "null": {}
+        },
+        "modelNumber": {
+          "null": {}
+        },
+        "name": {
+          "text": {
+            "_0": "Original heat pump"
+          }
+        },
+        "notes": {
+          "null": {}
+        },
+        "serialNumber": {
+          "null": {}
+        },
+        "serviceLocationID": {
+          "identifier": {
+            "_0": "93A1FF38-AA34-48AA-AA8E-5DE0E7C42D63"
+          }
+        },
+        "technicalBaselineReadingsJSON": {
+          "null": {}
+        },
+        "warrantyExpiration": {
+          "null": {}
+        }
+      },
+      "id": "F1C6763B-4CCA-4252-B3BD-B221C72EC550",
+      "kind": "equipment",
+      "version": 1
+    },
+    {
+      "fields": {
+        "amount": {
+          "number": {
+            "_0": 12.125
+          }
+        },
+        "authorizationReference": {
+          "null": {}
+        },
+        "cardLast4": {
+          "null": {}
+        },
+        "collectionAttemptID": {
+          "null": {}
+        },
+        "date": {
+          "date": {
+            "_0": 810687548.627384
+          }
+        },
+        "invoice": {
+          "identifier": {
+            "_0": "52BE8B00-7A09-49C5-9096-424A00043EF0"
+          }
+        },
+        "isRefund": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "method": {
+          "text": {
+            "_0": "cash"
+          }
+        },
+        "notes": {
+          "null": {}
+        },
+        "processor": {
+          "null": {}
+        },
+        "processorSyncDetail": {
+          "null": {}
+        },
+        "processorSyncStatus": {
+          "null": {}
+        },
+        "providerPaymentStatus": {
+          "null": {}
+        },
+        "quickBooksAccountingSyncDetail": {
+          "null": {}
+        },
+        "quickBooksAccountingSyncStatus": {
+          "null": {}
+        },
+        "quickBooksChargeID": {
+          "null": {}
+        },
+        "quickBooksClientTransID": {
+          "null": {}
+        },
+        "quickBooksDepositID": {
+          "null": {}
+        },
+        "quickBooksID": {
+          "null": {}
+        },
+        "quickBooksRefundReceiptID": {
+          "null": {}
+        },
+        "quickBooksSalesReceiptID": {
+          "null": {}
+        },
+        "refundedPaymentID": {
+          "null": {}
+        },
+        "settlementBatchID": {
+          "null": {}
+        }
+      },
+      "id": "640F75A3-F70C-4D32-B9E2-41E88382ACF7",
+      "kind": "payment",
+      "version": 1
+    },
+    {
+      "fields": {
+        "createdAt": {
+          "date": {
+            "_0": 810687548.627555
+          }
+        },
+        "email": {
+          "text": {
+            "_0": "field.technician@gunnaire.com"
+          }
+        },
+        "isActive": {
+          "flag": {
+            "_0": true
+          }
+        },
+        "roleRawValue": {
+          "text": {
+            "_0": "Field Technician"
+          }
+        }
+      },
+      "id": "08A8BBD2-0397-44FD-9D63-F0409ECB59FF",
+      "kind": "user",
+      "version": 1
+    },
+    {
+      "fields": {
+        "cancellationOperationID": {
+          "null": {}
+        },
+        "cancellationReason": {
+          "null": {}
+        },
+        "cancelledAt": {
+          "null": {}
+        },
+        "cancelledByEmail": {
+          "null": {}
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.62757
+          }
+        },
+        "createdByEmail": {
+          "text": {
+            "_0": ""
+          }
+        },
+        "creationOperationID": {
+          "identifier": {
+            "_0": "AEDE1742-7E32-4BE9-9EE2-B4FEDF114205"
+          }
+        },
+        "endsAt": {
+          "date": {
+            "_0": 810127056.123456
+          }
+        },
+        "kindRawValue": {
+          "text": {
+            "_0": "unavailable"
+          }
+        },
+        "reason": {
+          "null": {}
+        },
+        "sourceTimeOffRequestID": {
+          "null": {}
+        },
+        "startsAt": {
+          "date": {
+            "_0": 810123456.123456
+          }
+        },
+        "technicianID": {
+          "identifier": {
+            "_0": "672272B3-F890-4945-8275-D0B823F02859"
+          }
+        }
+      },
+      "id": "7633FB22-2BF4-4E92-9529-233BED134D5F",
+      "kind": "availability",
+      "version": 1
+    },
+    {
+      "fields": {
+        "createdAt": {
+          "date": {
+            "_0": 810687548.627626
+          }
+        },
+        "createdByEmail": {
+          "text": {
+            "_0": "office@example.invalid"
+          }
+        },
+        "creationOperationID": {
+          "identifier": {
+            "_0": "B9744C3C-E47F-499B-9C8B-CD794F38D729"
+          }
+        },
+        "durationMinutes": {
+          "integer": {
+            "_0": 540
+          }
+        },
+        "effectiveFrom": {
+          "date": {
+            "_0": 810123456.123456
+          }
+        },
+        "effectiveUntil": {
+          "null": {}
+        },
+        "kindRawValue": {
+          "text": {
+            "_0": "regular"
+          }
+        },
+        "note": {
+          "null": {}
+        },
+        "retiredAt": {
+          "null": {}
+        },
+        "retiredByEmail": {
+          "null": {}
+        },
+        "retirementOperationID": {
+          "null": {}
+        },
+        "retirementReason": {
+          "null": {}
+        },
+        "startMinute": {
+          "integer": {
+            "_0": 480
+          }
+        },
+        "technicianID": {
+          "identifier": {
+            "_0": "672272B3-F890-4945-8275-D0B823F02859"
+          }
+        },
+        "technicianNameSnapshot": {
+          "text": {
+            "_0": "Original lead"
+          }
+        },
+        "timeZoneIdentifier": {
+          "text": {
+            "_0": "America/New_York"
+          }
+        },
+        "weekdayRawValue": {
+          "integer": {
+            "_0": 2
+          }
+        }
+      },
+      "id": "9136D6E7-3681-4AB8-94FF-54ECE0CEF8E7",
+      "kind": "shift",
+      "version": 1
+    },
+    {
+      "fields": {
+        "approvedAvailabilityBlockID": {
+          "null": {}
+        },
+        "cancellationOperationID": {
+          "null": {}
+        },
+        "cancellationReason": {
+          "null": {}
+        },
+        "cancelledAt": {
+          "null": {}
+        },
+        "cancelledByEmail": {
+          "null": {}
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.627652
+          }
+        },
+        "creationOperationID": {
+          "identifier": {
+            "_0": "A472AB1F-5233-44C2-BC4A-40C0EDAEAECA"
+          }
+        },
+        "endsAt": {
+          "date": {
+            "_0": 810127056.123456
+          }
+        },
+        "privateReason": {
+          "null": {}
+        },
+        "privateReviewNote": {
+          "null": {}
+        },
+        "requestedByEmail": {
+          "text": {
+            "_0": "field.technician@gunnaire.com"
+          }
+        },
+        "reviewOperationID": {
+          "null": {}
+        },
+        "reviewedAt": {
+          "null": {}
+        },
+        "reviewedByEmail": {
+          "null": {}
+        },
+        "startsAt": {
+          "date": {
+            "_0": 810123456.123456
+          }
+        },
+        "statusRawValue": {
+          "text": {
+            "_0": "pending"
+          }
+        },
+        "technicianID": {
+          "identifier": {
+            "_0": "672272B3-F890-4945-8275-D0B823F02859"
+          }
+        },
+        "technicianNameSnapshot": {
+          "text": {
+            "_0": "Original lead"
+          }
+        },
+        "updatedAt": {
+          "date": {
+            "_0": 810687548.627652
+          }
+        },
+        "withdrawalOperationID": {
+          "null": {}
+        },
+        "withdrawnAt": {
+          "null": {}
+        },
+        "withdrawnByEmail": {
+          "null": {}
+        }
+      },
+      "id": "31B9EBBC-A518-4D5D-B17B-49FD0DBD12AC",
+      "kind": "timeOff",
+      "version": 1
+    },
+    {
+      "fields": {
+        "actorEmail": {
+          "text": {
+            "_0": "field@example.invalid"
+          }
+        },
+        "availabilityBlockID": {
+          "null": {}
+        },
+        "endsAt": {
+          "date": {
+            "_0": 810127056.123456
+          }
+        },
+        "kindRawValue": {
+          "text": {
+            "_0": "requested"
+          }
+        },
+        "occurredAt": {
+          "date": {
+            "_0": 810687548.627689
+          }
+        },
+        "operationID": {
+          "identifier": {
+            "_0": "E8903AFF-8FF1-4D69-9541-F9A12B9DA494"
+          }
+        },
+        "privateDetail": {
+          "text": {
+            "_0": "Original"
+          }
+        },
+        "requestID": {
+          "null": {}
+        },
+        "requestStatusRawSnapshot": {
+          "text": {
+            "_0": "pending"
+          }
+        },
+        "startsAt": {
+          "date": {
+            "_0": 810123456.123456
+          }
+        },
+        "technicianID": {
+          "identifier": {
+            "_0": "672272B3-F890-4945-8275-D0B823F02859"
+          }
+        },
+        "technicianNameSnapshot": {
+          "text": {
+            "_0": "Original lead"
+          }
+        }
+      },
+      "id": "D074BC76-3559-4B9B-825B-24314DD80CF8",
+      "kind": "availabilityEvent",
+      "version": 1
+    },
+    {
+      "fields": {
+        "clockIn": {
+          "date": {
+            "_0": 810123456.123456
+          }
+        },
+        "clockOut": {
+          "null": {}
+        },
+        "notes": {
+          "null": {}
+        },
+        "quickBooksTimeActivityID": {
+          "null": {}
+        },
+        "quickBooksTimeActivitySyncError": {
+          "null": {}
+        },
+        "quickBooksTimeActivitySyncToken": {
+          "null": {}
+        },
+        "quickBooksTimeActivitySyncedAt": {
+          "null": {}
+        },
+        "reviewAuditJSON": {
+          "null": {}
+        },
+        "reviewNote": {
+          "null": {}
+        },
+        "reviewStatusRawValue": {
+          "text": {
+            "_0": "submitted"
+          }
+        },
+        "reviewedAt": {
+          "null": {}
+        },
+        "reviewedByEmail": {
+          "null": {}
+        },
+        "serviceCall": {
+          "identifier": {
+            "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+          }
+        },
+        "userEmail": {
+          "text": {
+            "_0": "field.technician@gunnaire.com"
+          }
+        }
+      },
+      "id": "FD799D6B-37A1-4AD5-9D03-6757A88EFC3E",
+      "kind": "timeEntry",
+      "version": 1
+    },
+    {
+      "fields": {
+        "active": {
+          "flag": {
+            "_0": true
+          }
+        },
+        "coveredEquipmentIDsJSON": {
+          "null": {}
+        },
+        "customer": {
+          "identifier": {
+            "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+          }
+        },
+        "includedVisitsPerTerm": {
+          "null": {}
+        },
+        "lifecycleJSON": {
+          "null": {}
+        },
+        "nextDate": {
+          "date": {
+            "_0": 810123456.123456
+          }
+        },
+        "planName": {
+          "null": {}
+        },
+        "pricePerVisit": {
+          "null": {}
+        },
+        "renewalReminderDays": {
+          "integer": {
+            "_0": 30
+          }
+        },
+        "schedulePattern": {
+          "text": {
+            "_0": "every 6 months"
+          }
+        },
+        "termEndsOn": {
+          "null": {}
+        }
+      },
+      "id": "4F467296-196C-4766-8367-36138BF411AC",
+      "kind": "agreement",
+      "version": 1
+    },
+    {
+      "fields": {
+        "address": {
+          "null": {}
+        },
+        "backendRequestID": {
+          "null": {}
+        },
+        "convertedCustomerID": {
+          "null": {}
+        },
+        "convertedServiceCallID": {
+          "null": {}
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.62798
+          }
+        },
+        "createdByEmail": {
+          "null": {}
+        },
+        "customerName": {
+          "text": {
+            "_0": "Original lead"
+          }
+        },
+        "email": {
+          "null": {}
+        },
+        "phone": {
+          "null": {}
+        },
+        "preferredDate": {
+          "null": {}
+        },
+        "qualificationNotes": {
+          "text": {
+            "_0": "GUNNAIRE_REQUEST_METADATA_V1:eyJzb3VyY2VSYXciOiJwaG9uZSIsInZlcnNpb24iOjF9"
+          }
+        },
+        "qualifiedAt": {
+          "null": {}
+        },
+        "requestedServiceTypeRaw": {
+          "text": {
+            "_0": "service"
+          }
+        },
+        "statusRaw": {
+          "text": {
+            "_0": "new"
+          }
+        },
+        "summary": {
+          "text": {
+            "_0": "No cooling"
+          }
+        },
+        "urgencyRaw": {
+          "text": {
+            "_0": "normal"
+          }
+        }
+      },
+      "id": "945F8922-821E-47F1-80DC-61A0BFDECCA7",
+      "kind": "request",
+      "version": 1
+    },
+    {
+      "fields": {
+        "action": {
+          "text": {
+            "_0": "Arrived"
+          }
+        },
+        "actorEmail": {
+          "null": {}
+        },
+        "detail": {
+          "text": {
+            "_0": "Original arrival"
+          }
+        },
+        "occurredAt": {
+          "date": {
+            "_0": 810687548.62807
+          }
+        },
+        "serviceCallID": {
+          "identifier": {
+            "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+          }
+        }
+      },
+      "id": "0A813731-6ECE-4374-A14F-BE1193F01598",
+      "kind": "activity",
+      "version": 1
+    },
+    {
+      "fields": {
+        "billingPercent": {
+          "number": {
+            "_0": 33.333
+          }
+        },
+        "billingTriggerRaw": {
+          "text": {
+            "_0": "milestoneCompletion"
+          }
+        },
+        "completedAt": {
+          "null": {}
+        },
+        "completedByEmail": {
+          "null": {}
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.628106
+          }
+        },
+        "createdByEmail": {
+          "null": {}
+        },
+        "estimateID": {
+          "identifier": {
+            "_0": "AA862A6A-8277-4601-B2C8-AFB8A9B7104D"
+          }
+        },
+        "invoiceID": {
+          "null": {}
+        },
+        "milestoneDescription": {
+          "null": {}
+        },
+        "plannedAmount": {
+          "number": {
+            "_0": 123.375
+          }
+        },
+        "plannedDate": {
+          "date": {
+            "_0": 810123456.123456
+          }
+        },
+        "projectServiceCallID": {
+          "identifier": {
+            "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+          }
+        },
+        "scheduledVisitID": {
+          "null": {}
+        },
+        "sequence": {
+          "integer": {
+            "_0": 2
+          }
+        },
+        "statusRaw": {
+          "text": {
+            "_0": "planned"
+          }
+        },
+        "title": {
+          "text": {
+            "_0": "Equipment delivery"
+          }
+        },
+        "updatedAt": {
+          "date": {
+            "_0": 810687548.628106
+          }
+        }
+      },
+      "id": "3BB12418-C9DA-45E5-BB78-CB56AFB7B138",
+      "kind": "milestone",
+      "version": 1
+    },
+    {
+      "fields": {
+        "createdAt": {
+          "date": {
+            "_0": 810687548.628136
+          }
+        },
+        "createdByEmail": {
+          "text": {
+            "_0": "office@example.invalid"
+          }
+        },
+        "creationOperationID": {
+          "identifier": {
+            "_0": "FD828AA4-C605-4A7B-8199-42384239973E"
+          }
+        },
+        "customerID": {
+          "identifier": {
+            "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+          }
+        },
+        "customerName": {
+          "text": {
+            "_0": "Original customer"
+          }
+        },
+        "detail": {
+          "null": {}
+        },
+        "kindRaw": {
+          "text": {
+            "_0": "other"
+          }
+        },
+        "resolutionNote": {
+          "null": {}
+        },
+        "resolutionOperationID": {
+          "null": {}
+        },
+        "resolvedAt": {
+          "null": {}
+        },
+        "resolvedByEmail": {
+          "null": {}
+        },
+        "serviceLocationID": {
+          "null": {}
+        },
+        "serviceLocationName": {
+          "null": {}
+        },
+        "title": {
+          "text": {
+            "_0": "Side entry"
+          }
+        },
+        "updatedAt": {
+          "date": {
+            "_0": 810687548.628136
+          }
+        }
+      },
+      "id": "82449CD5-0799-4DBF-A089-ACAB5FA114C8",
+      "kind": "alert",
+      "version": 1
+    },
+    {
+      "fields": {
+        "assignedToEmail": {
+          "text": {
+            "_0": "field.technician@gunnaire.com"
+          }
+        },
+        "cancellationOperationID": {
+          "null": {}
+        },
+        "cancellationReason": {
+          "null": {}
+        },
+        "cancelledAt": {
+          "null": {}
+        },
+        "cancelledByEmail": {
+          "null": {}
+        },
+        "completedAt": {
+          "null": {}
+        },
+        "completedByEmail": {
+          "null": {}
+        },
+        "completionNote": {
+          "null": {}
+        },
+        "completionOperationID": {
+          "null": {}
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.627244
+          }
+        },
+        "createdByEmail": {
+          "text": {
+            "_0": "office@example.invalid"
+          }
+        },
+        "creationOperationID": {
+          "identifier": {
+            "_0": "99D62288-4143-4103-826F-40D8C6C7E3BB"
+          }
+        },
+        "customerID": {
+          "null": {}
+        },
+        "customerName": {
+          "null": {}
+        },
+        "dueAt": {
+          "date": {
+            "_0": 810123456.123456
+          }
+        },
+        "estimateID": {
+          "null": {}
+        },
+        "estimateSummary": {
+          "null": {}
+        },
+        "priorityRaw": {
+          "text": {
+            "_0": "normal"
+          }
+        },
+        "serviceCallID": {
+          "identifier": {
+            "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+          }
+        },
+        "serviceCallSummary": {
+          "null": {}
+        },
+        "serviceLocationID": {
+          "null": {}
+        },
+        "serviceLocationName": {
+          "null": {}
+        },
+        "taskDescription": {
+          "null": {}
+        },
+        "title": {
+          "text": {
+            "_0": "Order valve"
+          }
+        },
+        "updatedAt": {
+          "date": {
+            "_0": 810687548.627244
+          }
+        }
+      },
+      "id": "63912DE3-E9C9-4C4D-8977-F97B6DE7FBD6",
+      "kind": "task",
+      "version": 1
+    },
+    {
+      "fields": {
+        "actorEmail": {
+          "text": {
+            "_0": "office@example.invalid"
+          }
+        },
+        "assignedToEmailSnapshot": {
+          "text": {
+            "_0": "field@example.invalid"
+          }
+        },
+        "detail": {
+          "text": {
+            "_0": "Original"
+          }
+        },
+        "dueAtSnapshot": {
+          "date": {
+            "_0": 810123456.123456
+          }
+        },
+        "kindRaw": {
+          "text": {
+            "_0": "created"
+          }
+        },
+        "occurredAt": {
+          "date": {
+            "_0": 810687548.62817
+          }
+        },
+        "operationID": {
+          "identifier": {
+            "_0": "047508E2-60A7-4107-85AD-8ED547CF305D"
+          }
+        },
+        "priorityRawSnapshot": {
+          "text": {
+            "_0": "normal"
+          }
+        },
+        "taskID": {
+          "identifier": {
+            "_0": "63912DE3-E9C9-4C4D-8977-F97B6DE7FBD6"
+          }
+        },
+        "titleSnapshot": {
+          "text": {
+            "_0": "Order valve"
+          }
+        }
+      },
+      "id": "6F7308E8-E9D2-47BC-B01F-E0F7C8741E13",
+      "kind": "taskEvent",
+      "version": 1
+    },
+    {
+      "fields": {
+        "backendDocumentID": {
+          "null": {}
+        },
+        "caption": {
+          "null": {}
+        },
+        "contentType": {
+          "text": {
+            "_0": "application/pdf"
+          }
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.628202
+          }
+        },
+        "customer": {
+          "identifier": {
+            "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+          }
+        },
+        "customerEquipmentID": {
+          "null": {}
+        },
+        "displayName": {
+          "text": {
+            "_0": "Original.pdf"
+          }
+        },
+        "estimateID": {
+          "null": {}
+        },
+        "expenseClaimID": {
+          "null": {}
+        },
+        "fileSizeBytes": {
+          "integer": {
+            "_0": 123
+          }
+        },
+        "fleetVehicleEventID": {
+          "null": {}
+        },
+        "fleetVehicleID": {
+          "null": {}
+        },
+        "googleDriveArchivedByEmail": {
+          "null": {}
+        },
+        "googleDriveFileID": {
+          "null": {}
+        },
+        "googleDriveLastSyncedAt": {
+          "null": {}
+        },
+        "googleDriveSyncDetail": {
+          "null": {}
+        },
+        "googleDriveSyncStatus": {
+          "null": {}
+        },
+        "googleDriveWebViewLink": {
+          "null": {}
+        },
+        "invoiceID": {
+          "null": {}
+        },
+        "kindRaw": {
+          "text": {
+            "_0": "service_report"
+          }
+        },
+        "maintenanceContractID": {
+          "null": {}
+        },
+        "quickBooksAttachableID": {
+          "null": {}
+        },
+        "quickBooksAttachedEntityKeysRaw": {
+          "null": {}
+        },
+        "quickBooksSyncError": {
+          "null": {}
+        },
+        "serviceCallID": {
+          "identifier": {
+            "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+          }
+        },
+        "sharedCompanySyncDetail": {
+          "null": {}
+        },
+        "sharedCompanySyncStatus": {
+          "null": {}
+        }
+      },
+      "id": "DD56F517-F2A5-478C-9FF2-3ABE09C41D3F",
+      "kind": "attachment",
+      "version": 1
+    },
+    {
+      "fields": {
+        "actorEmail": {
+          "null": {}
+        },
+        "attachmentFileNamesJSON": {
+          "text": {
+            "_0": "[]"
+          }
+        },
+        "backendCommunicationID": {
+          "null": {}
+        },
+        "backendSyncError": {
+          "null": {}
+        },
+        "channel": {
+          "text": {
+            "_0": "email"
+          }
+        },
+        "consentSnapshotJSON": {
+          "null": {}
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.628248
+          }
+        },
+        "customer": {
+          "identifier": {
+            "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+          }
+        },
+        "deliveredAt": {
+          "date": {
+            "_0": 810123456.123456
+          }
+        },
+        "deliveryStatus": {
+          "text": {
+            "_0": "sent"
+          }
+        },
+        "direction": {
+          "text": {
+            "_0": "outbound"
+          }
+        },
+        "estimateID": {
+          "null": {}
+        },
+        "invoiceID": {
+          "null": {}
+        },
+        "maintenanceContractID": {
+          "null": {}
+        },
+        "providerMessageID": {
+          "text": {
+            "_0": "original-message"
+          }
+        },
+        "providerStatusDetail": {
+          "null": {}
+        },
+        "recipient": {
+          "text": {
+            "_0": "customer@example.invalid"
+          }
+        },
+        "serviceCallID": {
+          "identifier": {
+            "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+          }
+        },
+        "subject": {
+          "text": {
+            "_0": "Original service report"
+          }
+        },
+        "templateVersion": {
+          "text": {
+            "_0": "general-v1"
+          }
+        },
+        "workflowRawValue": {
+          "text": {
+            "_0": "general"
+          }
+        }
+      },
+      "id": "EECABFD9-072A-450A-A145-697606A11254",
+      "kind": "communication",
+      "version": 1
+    },
+    {
+      "fields": {
+        "applicableServiceTypesJSON": {
+          "text": {
+            "_0": "{\"version\":1,\"requiredForCloseout\":false,\"serviceTypes\":[]}"
+          }
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.627169
+          }
+        },
+        "isActive": {
+          "flag": {
+            "_0": true
+          }
+        },
+        "questionsJSON": {
+          "text": {
+            "_0": "[]"
+          }
+        },
+        "title": {
+          "text": {
+            "_0": "Original form"
+          }
+        }
+      },
+      "id": "FFD3210E-C1EA-44C1-86C8-6E85D0DF1803",
+      "kind": "formTemplate",
+      "version": 1
+    },
+    {
+      "fields": {
+        "answersJSON": {
+          "text": {
+            "_0": "{\"version\":2,\"questions\":[],\"rows\":[]}"
+          }
+        },
+        "completedAt": {
+          "date": {
+            "_0": 810687548.628304
+          }
+        },
+        "completedByEmail": {
+          "null": {}
+        },
+        "serviceCallID": {
+          "identifier": {
+            "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+          }
+        },
+        "templateID": {
+          "identifier": {
+            "_0": "FFD3210E-C1EA-44C1-86C8-6E85D0DF1803"
+          }
+        },
+        "templateTitle": {
+          "text": {
+            "_0": "Original form"
+          }
+        }
+      },
+      "id": "74571481-D71D-4D52-A9D5-24784D71DCE7",
+      "kind": "formResponse",
+      "version": 1
+    },
+    {
+      "fields": {
+        "contactInfo": {
+          "null": {}
+        },
+        "name": {
+          "text": {
+            "_0": "Original supplier"
+          }
+        },
+        "quickBooksID": {
+          "null": {}
+        }
+      },
+      "id": "CF2286D7-B76E-4D00-925E-E2978837FAA2",
+      "kind": "vendor",
+      "version": 1
+    },
+    {
+      "fields": {
+        "createdAt": {
+          "date": {
+            "_0": 810687548.628459
+          }
+        },
+        "createdByEmail": {
+          "null": {}
+        },
+        "itemName": {
+          "text": {
+            "_0": "Original valve"
+          }
+        },
+        "itemSKU": {
+          "null": {}
+        },
+        "notes": {
+          "null": {}
+        },
+        "number": {
+          "text": {
+            "_0": "ORIGINAL-PO-123"
+          }
+        },
+        "orderedAt": {
+          "null": {}
+        },
+        "quantity": {
+          "number": {
+            "_0": 2.5
+          }
+        },
+        "receivedAt": {
+          "null": {}
+        },
+        "receivedToLocation": {
+          "null": {}
+        },
+        "serviceCallID": {
+          "identifier": {
+            "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+          }
+        },
+        "shippingCost": {
+          "number": {
+            "_0": 0
+          }
+        },
+        "statusRaw": {
+          "text": {
+            "_0": "draft"
+          }
+        },
+        "unitCost": {
+          "number": {
+            "_0": 12.125
+          }
+        },
+        "updatedAt": {
+          "date": {
+            "_0": 810687548.628459
+          }
+        },
+        "vendorName": {
+          "text": {
+            "_0": "Original supplier"
+          }
+        },
+        "vendorPartNumber": {
+          "null": {}
+        },
+        "vendorQuickBooksID": {
+          "null": {}
+        }
+      },
+      "id": "459BA003-86C0-4751-8D7D-EA549DF50646",
+      "kind": "purchaseOrder",
+      "version": 1
+    },
+    {
+      "fields": {
+        "createdAt": {
+          "date": {
+            "_0": 810687548.628526
+          }
+        },
+        "createdByEmail": {
+          "null": {}
+        },
+        "destinationLocation": {
+          "null": {}
+        },
+        "itemID": {
+          "identifier": {
+            "_0": "662E0CCA-4E8D-4000-91F1-30D63F4B079F"
+          }
+        },
+        "itemName": {
+          "text": {
+            "_0": "Original valve"
+          }
+        },
+        "itemSKU": {
+          "null": {}
+        },
+        "movementTypeRaw": {
+          "text": {
+            "_0": "adjust"
+          }
+        },
+        "notes": {
+          "null": {}
+        },
+        "quantity": {
+          "number": {
+            "_0": -0.125
+          }
+        },
+        "serviceCallID": {
+          "identifier": {
+            "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+          }
+        },
+        "sourceLocation": {
+          "null": {}
+        }
+      },
+      "id": "0B6AD657-9D6E-454E-A985-EC6152EB3FAA",
+      "kind": "movement",
+      "version": 1
+    },
+    {
+      "fields": {
+        "administrativeStatusRaw": {
+          "text": {
+            "_0": "in_service"
+          }
+        },
+        "assignedTechnicianID": {
+          "identifier": {
+            "_0": "672272B3-F890-4945-8275-D0B823F02859"
+          }
+        },
+        "assignedTechnicianName": {
+          "null": {}
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.627196
+          }
+        },
+        "latestInspectionAt": {
+          "null": {}
+        },
+        "licensePlate": {
+          "null": {}
+        },
+        "make": {
+          "null": {}
+        },
+        "model": {
+          "null": {}
+        },
+        "nextInspectionDueAt": {
+          "null": {}
+        },
+        "nextServiceDueAt": {
+          "null": {}
+        },
+        "nextServiceDueOdometer": {
+          "null": {}
+        },
+        "notes": {
+          "null": {}
+        },
+        "odometer": {
+          "null": {}
+        },
+        "odometerUpdatedAt": {
+          "null": {}
+        },
+        "stockLocation": {
+          "text": {
+            "_0": "Truck 2"
+          }
+        },
+        "unitNumber": {
+          "text": {
+            "_0": "Truck 2"
+          }
+        },
+        "updatedAt": {
+          "date": {
+            "_0": 810687548.627196
+          }
+        },
+        "updatedByEmail": {
+          "null": {}
+        },
+        "vehicleYear": {
+          "null": {}
+        },
+        "vin": {
+          "null": {}
+        }
+      },
+      "id": "A52A4A66-754E-48BE-BDD1-DC5B21CC6784",
+      "kind": "vehicle",
+      "version": 1
+    },
+    {
+      "fields": {
+        "actorEmail": {
+          "text": {
+            "_0": "office@example.invalid"
+          }
+        },
+        "assignmentTechnicianID": {
+          "null": {}
+        },
+        "assignmentTechnicianName": {
+          "null": {}
+        },
+        "detail": {
+          "text": {
+            "_0": "Original inspection"
+          }
+        },
+        "failedInspectionItemsRaw": {
+          "null": {}
+        },
+        "inspectionResultsJSON": {
+          "null": {}
+        },
+        "invoiceNumber": {
+          "null": {}
+        },
+        "kindRaw": {
+          "text": {
+            "_0": "created"
+          }
+        },
+        "newStatusRaw": {
+          "null": {}
+        },
+        "occurredAt": {
+          "date": {
+            "_0": 810687548.628581
+          }
+        },
+        "odometer": {
+          "null": {}
+        },
+        "priorStatusRaw": {
+          "null": {}
+        },
+        "resolvesOutOfService": {
+          "null": {}
+        },
+        "serviceCategoryRaw": {
+          "null": {}
+        },
+        "serviceCenter": {
+          "null": {}
+        },
+        "serviceCost": {
+          "null": {}
+        },
+        "vehicleID": {
+          "identifier": {
+            "_0": "A52A4A66-754E-48BE-BDD1-DC5B21CC6784"
+          }
+        },
+        "vehicleUnitNumber": {
+          "text": {
+            "_0": "Truck 2"
+          }
+        }
+      },
+      "id": "AD4ECBD0-CBBF-4844-A80C-B7A266AB31EA",
+      "kind": "vehicleEvent",
+      "version": 1
+    },
+    {
+      "fields": {
+        "amount": {
+          "number": {
+            "_0": 12.13
+          }
+        },
+        "auditJSON": {
+          "text": {
+            "_0": "[{\"occurredAt\":810687548.628616,\"id\":\"762DE800-CB5C-4545-8090-395B7D21E650\",\"actorEmail\":\"field@example.invalid\",\"detail\":\"Submitted a job-linked claim.\",\"action\":\"submitted\"}]"
+          }
+        },
+        "businessPurpose": {
+          "text": {
+            "_0": "Valve"
+          }
+        },
+        "categoryRaw": {
+          "text": {
+            "_0": "other"
+          }
+        },
+        "claimTypeRaw": {
+          "text": {
+            "_0": "expense"
+          }
+        },
+        "claimantEmail": {
+          "text": {
+            "_0": "field.technician@gunnaire.com"
+          }
+        },
+        "claimantName": {
+          "text": {
+            "_0": "Original lead"
+          }
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.628616
+          }
+        },
+        "customerID": {
+          "identifier": {
+            "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+          }
+        },
+        "customerName": {
+          "null": {}
+        },
+        "expenseDate": {
+          "date": {
+            "_0": 810123456.123456
+          }
+        },
+        "jobSummary": {
+          "null": {}
+        },
+        "merchant": {
+          "text": {
+            "_0": "Original supplier"
+          }
+        },
+        "mileageDestination": {
+          "null": {}
+        },
+        "mileageMiles": {
+          "null": {}
+        },
+        "mileageOrigin": {
+          "null": {}
+        },
+        "mileageRatePerMile": {
+          "null": {}
+        },
+        "receiptAttachmentID": {
+          "null": {}
+        },
+        "reimbursable": {
+          "flag": {
+            "_0": true
+          }
+        },
+        "reimbursedAt": {
+          "null": {}
+        },
+        "reimbursedByEmail": {
+          "null": {}
+        },
+        "reimbursementReference": {
+          "null": {}
+        },
+        "reviewNote": {
+          "null": {}
+        },
+        "reviewedAt": {
+          "null": {}
+        },
+        "reviewedByEmail": {
+          "null": {}
+        },
+        "serviceCallID": {
+          "identifier": {
+            "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+          }
+        },
+        "statusRaw": {
+          "text": {
+            "_0": "submitted"
+          }
+        },
+        "submittedAt": {
+          "date": {
+            "_0": 810687548.628616
+          }
+        },
+        "updatedAt": {
+          "date": {
+            "_0": 810687548.628616
+          }
+        }
+      },
+      "id": "F2686925-36FD-43A8-9F39-062884C7C685",
+      "kind": "expense",
+      "version": 1
+    },
+    {
+      "fields": {
+        "createdAt": {
+          "date": {
+            "_0": 810687548.626528
+          }
+        },
+        "defaultInventoryLocation": {
+          "null": {}
+        },
+        "flatRateAssemblyJSON": {
+          "null": {}
+        },
+        "isTaxable": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "itemDescription": {
+          "null": {}
+        },
+        "itemTypeRawValue": {
+          "text": {
+            "_0": "Service"
+          }
+        },
+        "name": {
+          "text": {
+            "_0": "Original valve"
+          }
+        },
+        "preferredVendorName": {
+          "null": {}
+        },
+        "preferredVendorQuickBooksID": {
+          "null": {}
+        },
+        "pricebookCreatedByEmail": {
+          "null": {}
+        },
+        "pricebookReviewStatusRawValue": {
+          "text": {
+            "_0": "approved"
+          }
+        },
+        "pricebookReviewedAt": {
+          "null": {}
+        },
+        "pricebookReviewedByEmail": {
+          "null": {}
+        },
+        "purchaseCost": {
+          "null": {}
+        },
+        "purchaseDescription": {
+          "null": {}
+        },
+        "purchaseURL": {
+          "null": {}
+        },
+        "quickBooksCatalogDetailsJSON": {
+          "null": {}
+        },
+        "quickBooksCatalogReceiptJSON": {
+          "null": {}
+        },
+        "quickBooksID": {
+          "null": {}
+        },
+        "quickBooksInventorySetupJSON": {
+          "null": {}
+        },
+        "quickBooksLastSyncedAt": {
+          "null": {}
+        },
+        "quickBooksSyncDetail": {
+          "null": {}
+        },
+        "quickBooksSyncStatus": {
+          "text": {
+            "_0": "pending"
+          }
+        },
+        "reorderPoint": {
+          "null": {}
+        },
+        "sku": {
+          "null": {}
+        },
+        "timestamp": {
+          "date": {
+            "_0": 810687548.626528
+          }
+        },
+        "tracksInventory": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "unitPrice": {
+          "number": {
+            "_0": 123.375
+          }
+        },
+        "vendorPartNumber": {
+          "null": {}
+        }
+      },
+      "id": "A2000000-0000-4000-8000-000000000001",
+      "kind": "item",
+      "version": 1
+    }
+  ]
+}

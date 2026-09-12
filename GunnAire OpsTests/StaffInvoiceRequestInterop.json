@@ -1,0 +1,208 @@
+{
+  "vectors": [
+    {
+      "request": {
+        "schema": "staff-invoice-line-request-v1",
+        "companyID": "a577f57f-a202-4808-b278-b45ecbd8ba40",
+        "environment": "development",
+        "replicaID": "e76c41fe-b3c3-4430-932e-c25d54efb41d",
+        "commandID": "eda025a2-1f67-4441-b2a9-bce908f6f39f",
+        "selectionID": "71a6e246-4558-4f83-85de-43c8382b86b0",
+        "sourceSequence": 1,
+        "contentSHA256": "4d48c65443705c26e44f1bd412b7e1e74d2eb11782b1fcebf2cd3138da19e5a6",
+        "invoiceID": "52be8b00-7a09-49c5-9096-424a00043ef0",
+        "invoiceRevision": 1,
+        "customerID": "9d98492b-8093-46d4-b89e-e9c745f5beab",
+        "jobID": "ecc96bf1-0a93-42cc-b497-a580799067b9",
+        "line": {
+          "kind": "new",
+          "itemID": "e44d7956-3c29-4b5b-899c-48a0e9551e79",
+          "itemRevision": 0,
+          "itemType": "Service",
+          "name": "Synthetic capacitor replacement",
+          "description": "Parts and labor",
+          "sku": null,
+          "unitPrice": 123.375,
+          "quantity": 2,
+          "isTaxable": false,
+          "equipmentID": "f1c6763b-4cca-4252-b3bd-b221c72ec550"
+        },
+        "reason": "Authorized office review required"
+      },
+      "receipt": {
+        "schema": "staff-invoice-line-request-v1",
+        "request": {
+          "schema": "staff-invoice-line-request-v1",
+          "companyID": "a577f57f-a202-4808-b278-b45ecbd8ba40",
+          "environment": "development",
+          "replicaID": "e76c41fe-b3c3-4430-932e-c25d54efb41d",
+          "commandID": "eda025a2-1f67-4441-b2a9-bce908f6f39f",
+          "selectionID": "71a6e246-4558-4f83-85de-43c8382b86b0",
+          "sourceSequence": 1,
+          "contentSHA256": "4d48c65443705c26e44f1bd412b7e1e74d2eb11782b1fcebf2cd3138da19e5a6",
+          "invoiceID": "52be8b00-7a09-49c5-9096-424a00043ef0",
+          "invoiceRevision": 1,
+          "customerID": "9d98492b-8093-46d4-b89e-e9c745f5beab",
+          "jobID": "ecc96bf1-0a93-42cc-b497-a580799067b9",
+          "line": {
+            "kind": "new",
+            "itemID": "e44d7956-3c29-4b5b-899c-48a0e9551e79",
+            "itemRevision": 0,
+            "itemType": "Service",
+            "name": "Synthetic capacitor replacement",
+            "description": "Parts and labor",
+            "sku": null,
+            "unitPrice": 123.375,
+            "quantity": 2,
+            "isTaxable": false,
+            "equipmentID": "f1c6763b-4cca-4252-b3bd-b221c72ec550"
+          },
+          "reason": "Authorized office review required"
+        },
+        "actorEmail": "field.technician@gunnaire.com",
+        "shareID": "92f5f335-c6d1-4995-a013-139f37cf595e",
+        "createdAt": "2026-09-11T07:28:44.147938+00:00",
+        "state": "recorded",
+        "officeReviewRequired": true,
+        "qboPublished": false,
+        "lineSubtotal": "246.75"
+      }
+    },
+    {
+      "request": {
+        "schema": "staff-invoice-line-request-v1",
+        "companyID": "a577f57f-a202-4808-b278-b45ecbd8ba40",
+        "environment": "development",
+        "replicaID": "e76c41fe-b3c3-4430-932e-c25d54efb41d",
+        "commandID": "44db8e84-bd0c-498a-aa35-04090d595a4b",
+        "selectionID": "71a6e246-4558-4f83-85de-43c8382b86b0",
+        "sourceSequence": 1,
+        "contentSHA256": "4d48c65443705c26e44f1bd412b7e1e74d2eb11782b1fcebf2cd3138da19e5a6",
+        "invoiceID": "52be8b00-7a09-49c5-9096-424a00043ef0",
+        "invoiceRevision": 1,
+        "customerID": "9d98492b-8093-46d4-b89e-e9c745f5beab",
+        "jobID": "ecc96bf1-0a93-42cc-b497-a580799067b9",
+        "line": {
+          "kind": "catalog",
+          "itemID": "662e0cca-4e8d-4000-91f1-30d63f4b079f",
+          "itemRevision": 1,
+          "itemType": "Service",
+          "name": "Original valve",
+          "description": null,
+          "sku": null,
+          "unitPrice": 123.375,
+          "quantity": 2,
+          "isTaxable": false,
+          "equipmentID": "f1c6763b-4cca-4252-b3bd-b221c72ec550"
+        },
+        "reason": "Authorized office review required"
+      },
+      "receipt": {
+        "schema": "staff-invoice-line-request-v1",
+        "request": {
+          "schema": "staff-invoice-line-request-v1",
+          "companyID": "a577f57f-a202-4808-b278-b45ecbd8ba40",
+          "environment": "development",
+          "replicaID": "e76c41fe-b3c3-4430-932e-c25d54efb41d",
+          "commandID": "44db8e84-bd0c-498a-aa35-04090d595a4b",
+          "selectionID": "71a6e246-4558-4f83-85de-43c8382b86b0",
+          "sourceSequence": 1,
+          "contentSHA256": "4d48c65443705c26e44f1bd412b7e1e74d2eb11782b1fcebf2cd3138da19e5a6",
+          "invoiceID": "52be8b00-7a09-49c5-9096-424a00043ef0",
+          "invoiceRevision": 1,
+          "customerID": "9d98492b-8093-46d4-b89e-e9c745f5beab",
+          "jobID": "ecc96bf1-0a93-42cc-b497-a580799067b9",
+          "line": {
+            "kind": "catalog",
+            "itemID": "662e0cca-4e8d-4000-91f1-30d63f4b079f",
+            "itemRevision": 1,
+            "itemType": "Service",
+            "name": "Original valve",
+            "description": null,
+            "sku": null,
+            "unitPrice": 123.375,
+            "quantity": 2,
+            "isTaxable": false,
+            "equipmentID": "f1c6763b-4cca-4252-b3bd-b221c72ec550"
+          },
+          "reason": "Authorized office review required"
+        },
+        "actorEmail": "field.technician@gunnaire.com",
+        "shareID": "92f5f335-c6d1-4995-a013-139f37cf595e",
+        "createdAt": "2026-09-11T07:28:44.152878+00:00",
+        "state": "recorded",
+        "officeReviewRequired": true,
+        "qboPublished": false,
+        "lineSubtotal": "246.75"
+      }
+    },
+    {
+      "request": {
+        "schema": "staff-invoice-line-request-v1",
+        "companyID": "a577f57f-a202-4808-b278-b45ecbd8ba40",
+        "environment": "development",
+        "replicaID": "e76c41fe-b3c3-4430-932e-c25d54efb41d",
+        "commandID": "cb4a7c75-0d67-4f98-b7af-95056c56d094",
+        "selectionID": "71a6e246-4558-4f83-85de-43c8382b86b0",
+        "sourceSequence": 1,
+        "contentSHA256": "4d48c65443705c26e44f1bd412b7e1e74d2eb11782b1fcebf2cd3138da19e5a6",
+        "invoiceID": "52be8b00-7a09-49c5-9096-424a00043ef0",
+        "invoiceRevision": 1,
+        "customerID": "9d98492b-8093-46d4-b89e-e9c745f5beab",
+        "jobID": "ecc96bf1-0a93-42cc-b497-a580799067b9",
+        "line": {
+          "kind": "new",
+          "itemID": "37f97b69-88c5-4e6f-a37b-4df4b87d747b",
+          "itemRevision": 0,
+          "itemType": "Service",
+          "name": "Synthetic capacitor replacement",
+          "description": "Parts and labor",
+          "sku": null,
+          "unitPrice": -0.0,
+          "quantity": 2,
+          "isTaxable": false,
+          "equipmentID": "f1c6763b-4cca-4252-b3bd-b221c72ec550"
+        },
+        "reason": "Authorized office review required"
+      },
+      "receipt": {
+        "schema": "staff-invoice-line-request-v1",
+        "request": {
+          "schema": "staff-invoice-line-request-v1",
+          "companyID": "a577f57f-a202-4808-b278-b45ecbd8ba40",
+          "environment": "development",
+          "replicaID": "e76c41fe-b3c3-4430-932e-c25d54efb41d",
+          "commandID": "cb4a7c75-0d67-4f98-b7af-95056c56d094",
+          "selectionID": "71a6e246-4558-4f83-85de-43c8382b86b0",
+          "sourceSequence": 1,
+          "contentSHA256": "4d48c65443705c26e44f1bd412b7e1e74d2eb11782b1fcebf2cd3138da19e5a6",
+          "invoiceID": "52be8b00-7a09-49c5-9096-424a00043ef0",
+          "invoiceRevision": 1,
+          "customerID": "9d98492b-8093-46d4-b89e-e9c745f5beab",
+          "jobID": "ecc96bf1-0a93-42cc-b497-a580799067b9",
+          "line": {
+            "kind": "new",
+            "itemID": "37f97b69-88c5-4e6f-a37b-4df4b87d747b",
+            "itemRevision": 0,
+            "itemType": "Service",
+            "name": "Synthetic capacitor replacement",
+            "description": "Parts and labor",
+            "sku": null,
+            "unitPrice": -0.0,
+            "quantity": 2,
+            "isTaxable": false,
+            "equipmentID": "f1c6763b-4cca-4252-b3bd-b221c72ec550"
+          },
+          "reason": "Authorized office review required"
+        },
+        "actorEmail": "field.technician@gunnaire.com",
+        "shareID": "92f5f335-c6d1-4995-a013-139f37cf595e",
+        "createdAt": "2026-09-11T07:28:44.157622+00:00",
+        "state": "recorded",
+        "officeReviewRequired": true,
+        "qboPublished": false,
+        "lineSubtotal": "0.00"
+      }
+    }
+  ]
+}

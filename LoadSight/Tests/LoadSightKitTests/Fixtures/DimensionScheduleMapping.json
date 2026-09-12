@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "regions": [
+    {
+      "sourceID": "c4a2b25f89d831f29a80857271e9721098bfe58b6c2366b5b1c4e07b22e1907c",
+      "pageID": "c4a2b25f89d831f29a80857271e9721098bfe58b6c2366b5b1c4e07b22e1907c:1",
+      "bodyBounds": {
+        "x": 40,
+        "y": 520,
+        "width": 480,
+        "height": 160
+      },
+      "columns": [
+        {
+          "field": "tag",
+          "minX": 40,
+          "maxX": 160,
+          "headerText": "TAG"
+        },
+        {
+          "field": "dimensions",
+          "minX": 160,
+          "maxX": 320,
+          "headerText": "DIMENSIONS IN",
+          "unitText": "in"
+        },
+        {
+          "field": "airflow",
+          "minX": 320,
+          "maxX": 430,
+          "headerText": "CFM",
+          "unitText": "CFM"
+        },
+        {
+          "field": "minimumCircuitAmpacity",
+          "minX": 430,
+          "maxX": 520,
+          "headerText": "MCA"
+        }
+      ],
+      "textMode": "nativePDFWords",
+      "recordedBy": "Synthetic fixture author",
+      "mappingBasis": "Controlled fixture header positions; not customer or engineering evidence."
+    }
+  ]
+}

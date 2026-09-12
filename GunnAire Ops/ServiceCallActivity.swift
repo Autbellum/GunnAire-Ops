@@ -5,7 +5,7 @@ import SwiftData
 /// the handoff, not customer message contents or other sensitive payloads.
 @Model
 final class ServiceCallActivity {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var serviceCallID: UUID = UUID()
     var action: String = ""
     var detail: String = ""

@@ -985,6 +985,11 @@ struct JobCloseoutReadiness: Equatable {
         return remainder > 0 ? "\(summary) +\(remainder) more" : summary
     }
 
+    var compactNextActionSummary: String {
+        guard let nextAction else { return statusLabel }
+        return "\(summary) • Next: \(nextAction.label)"
+    }
+
     var statusLabel: String {
         isReady ? "Ready for closeout" : "Needs closeout details"
     }
@@ -1269,7 +1274,7 @@ struct PhotoEvidenceStatus: Equatable {
 
 @Model
 final class ServiceCall {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var googleCalendarID: String?
     var googleEventID: String?
     var googleEventManagedByApp: Bool = false

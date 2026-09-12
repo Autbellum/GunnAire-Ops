@@ -32,6 +32,8 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>CKSharingSupported</key>
+	<true/>
 	<key>GOOGLE_CALLBACK_SCHEME</key>
 	<string>$(GOOGLE_CALLBACK_SCHEME)</string>
 	<key>GOOGLE_CLIENT_ID</key>
@@ -104,6 +106,15 @@
 		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key><string>com.gunnaire.loadsight.project</string>
+			<key>UTTypeDescription</key><string>LoadSight mechanical project</string>
+			<key>UTTypeConformsTo</key><array><string>com.apple.package</string></array>
+			<key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>loadsight</string></array></dict>
+		</dict>
 	</array>
 </dict>
 </plist>

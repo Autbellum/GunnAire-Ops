@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-09-12T06:05:40.535738+00:00",
+  "run_id": "0c8a36b3-6f03-4147-8449-1ee1e9848218",
+  "target": "/Volumes/GunnAireLocalAI",
+  "backup": "ReleaseEvidence/restore-tests/0c8a36b3-6f03-4147-8449-1ee1e9848218/synthetic.txt",
+  "expected_sha256": "ae3b1fb13b9c77e58c2c6e8e89b8efe2e5167f6404f3df6a074384a8b3f1add4",
+  "restored_sha256": "ae3b1fb13b9c77e58c2c6e8e89b8efe2e5167f6404f3df6a074384a8b3f1add4",
+  "file_backup_restore_passed": true,
+  "snapshot_restore_tested": false,
+  "configuration_restore_tested": false,
+  "off_nas_backup_tested": false,
+  "scope": "Synthetic file copied to mounted NAS, original removed, copied back and verified"
+}

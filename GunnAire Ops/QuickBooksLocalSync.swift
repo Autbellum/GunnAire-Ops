@@ -10,27 +10,62 @@ enum QuickBooksLocalSync {
         invoices: [QuickBooksInvoice],
         payments: [QuickBooksPayment],
         vendors: [QuickBooksVendor],
-        into modelContext: ModelContext
+        into modelContext: ModelContext,
+        catalogHistory: QuickBooksCatalogHistoryBatch? = nil,
+        saveSnapshot: (ModelContext) throws -> Void = { try $0.save() }
     ) throws {
+        // The shared-history import owns one synchronous save. Never roll back
+        // an unrelated editor's unsaved work, or let autosave persist half a
+        // projection and its receipt after an error.
+        if let catalogHistory {
+            try catalogHistory.validate(records: items)
+            guard !modelContext.hasChanges else {
+                throw QuickBooksCatalogImportError.unsavedEdits
+            }
+        }
+        let wasAutosaveEnabled = modelContext.autosaveEnabled
+        var snapshotSaved = false
+        var catalogRollbacks: [() -> Void] = []
+        if catalogHistory != nil { modelContext.autosaveEnabled = false }
+        defer {
+            if catalogHistory != nil {
+                if !snapshotSaved {
+                    for restore in catalogRollbacks { restore() }
+                    modelContext.processPendingChanges()
+                    modelContext.rollback()
+                }
+                modelContext.autosaveEnabled = wasAutosaveEnabled
+            }
+        }
         let existingCustomers = try modelContext.fetch(FetchDescriptor<Customer>())
         let existingItems = try modelContext.fetch(FetchDescriptor<Item>())
+        if catalogHistory != nil {
+            catalogRollbacks = existingItems.map { QuickBooksCatalogApplicationReceipt.captureRollback($0) }
+        }
         let existingEstimates = try modelContext.fetch(FetchDescriptor<Estimate>())
         let existingInvoices = try modelContext.fetch(FetchDescriptor<Invoice>())
         let existingPayments = try modelContext.fetch(FetchDescriptor<Payment>())
         let existingVendors = try modelContext.fetch(FetchDescriptor<Vendor>())
-        let existingServiceCalls = try modelContext.fetch(FetchDescriptor<ServiceCall>())
-        let existingAttachments = try modelContext.fetch(FetchDescriptor<ServiceDocumentAttachment>())
-
-        var customersByQBID: [String: Customer] = [:]
-        var customersByName: [String: Customer] = [:]
-        for customer in existingCustomers {
-            if let quickBooksID = customer.quickBooksID?.nilIfEmpty {
-                customersByQBID[quickBooksID] = customersByQBID[quickBooksID] ?? customer
-            }
-            let nameKey = normalized(customer.name)
-            if !nameKey.isEmpty {
-                customersByName[nameKey] = customersByName[nameKey] ?? customer
-            }
+        let itemUUIDConflicts = QuickBooksBillingIdentity.conflictingKeys(existingItems) { $0.id.uuidString }
+        let unlinkedItems = existingItems.filter {
+            $0.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
+        }
+        let unlinkedItemsByName = Dictionary(grouping: unlinkedItems) { normalized($0.name) }
+        let unlinkedItemsBySKU = Dictionary(grouping: unlinkedItems) { normalized($0.sku ?? "") }
+        let remoteInvoiceConflicts = QuickBooksBillingIdentity.conflictingKeys(invoices) { $0.Id }
+        let remoteEstimateConflicts = QuickBooksBillingIdentity.conflictingKeys(estimates) { $0.Id }
+        let remoteInvoiceLineageConflicts = QuickBooksBillingIdentity.conflictingKeys(invoices) {
+            QuickBooksInvoiceLineage.localInvoiceID(from: $0.PrivateNote)?.uuidString
+        }
+        let remoteEstimateLineageConflicts = QuickBooksBillingIdentity.conflictingKeys(estimates) {
+            QuickBooksEstimateLineage.localEstimateID(from: $0.PrivateNote)?.uuidString
+        }
+        var reviewReasons: Set<String> = []
+        let customerConflicts = QuickBooksBillingIdentity.conflictingKeys(existingCustomers) {
+            QuickBooksBillingIdentity.identifier($0.quickBooksID)
+        }
+        var customersByQBID = QuickBooksBillingIdentity.uniqueCache(existingCustomers) {
+            QuickBooksBillingIdentity.identifier($0.quickBooksID)
         }
 
         let itemMappingConflicts = QuickBooksCatalogMappingIntegrity.conflicts(in: existingItems)
@@ -58,34 +93,45 @@ enum QuickBooksLocalSync {
             }
         }
 
-        var invoicesByQBID: [String: Invoice] = [:]
-        for invoice in existingInvoices {
-            guard let quickBooksID = invoice.quickBooksID?.nilIfEmpty else { continue }
-            if let existing = invoicesByQBID[quickBooksID], existing !== invoice {
-                mergeInvoice(existing, withDuplicate: invoice, payments: existingPayments, serviceCalls: existingServiceCalls, attachments: existingAttachments, modelContext: modelContext)
-            } else {
-                invoicesByQBID[quickBooksID] = invoice
-            }
+        let invoiceConflicts = QuickBooksBillingIdentity.conflictingKeys(existingInvoices) {
+            QuickBooksBillingIdentity.identifier($0.quickBooksID)
         }
-        var estimatesByQBID: [String: Estimate] = [:]
-        for estimate in existingEstimates {
-            guard let quickBooksID = estimate.quickBooksID?.nilIfEmpty else { continue }
-            if let existing = estimatesByQBID[quickBooksID], existing !== estimate {
-                mergeEstimate(existing, withDuplicate: estimate, serviceCalls: existingServiceCalls, modelContext: modelContext)
-            } else {
-                estimatesByQBID[quickBooksID] = estimate
-            }
+        let invoiceUUIDConflicts = QuickBooksBillingIdentity.conflictingKeys(existingInvoices) { $0.id.uuidString }
+        let estimateConflicts = QuickBooksBillingIdentity.conflictingKeys(existingEstimates) {
+            QuickBooksBillingIdentity.identifier($0.quickBooksID)
         }
-        var paymentsByQBID: [String: Payment] = [:]
-        for payment in existingPayments {
-            guard let quickBooksID = payment.quickBooksID?.nilIfEmpty else { continue }
-            paymentsByQBID[quickBooksID] = paymentsByQBID[quickBooksID] ?? payment
+        let estimateUUIDConflicts = QuickBooksBillingIdentity.conflictingKeys(existingEstimates) { $0.id.uuidString }
+        let conflictedInvoices = existingInvoices.filter {
+            invoiceConflicts.contains(QuickBooksBillingIdentity.identifier($0.quickBooksID) ?? "") ||
+            invoiceUUIDConflicts.contains($0.id.uuidString)
         }
-        let importedPaymentTotalsByInvoiceID = paymentTotalsByInvoiceID(from: payments)
+        QuickBooksBillingIdentity.markForReview(conflictedInvoices)
+        if !conflictedInvoices.isEmpty { reviewReasons.insert("Multiple local invoice records claim one billing identity.") }
+        if !estimateConflicts.isEmpty || !estimateUUIDConflicts.isEmpty {
+            reviewReasons.insert("Multiple local estimate records claim one billing identity.")
+        }
+        var invoicesByQBID = QuickBooksBillingIdentity.uniqueCache(existingInvoices.filter {
+            !invoiceUUIDConflicts.contains($0.id.uuidString)
+        }) { QuickBooksBillingIdentity.identifier($0.quickBooksID) }
+        var estimatesByQBID = QuickBooksBillingIdentity.uniqueCache(existingEstimates.filter {
+            !estimateUUIDConflicts.contains($0.id.uuidString)
+        }) { QuickBooksBillingIdentity.identifier($0.quickBooksID) }
+        let keyedPayments = existingPayments.compactMap { payment -> (String, Payment)? in
+            guard let paymentID = QuickBooksBillingIdentity.identifier(payment.quickBooksID),
+                  let invoiceID = QuickBooksBillingIdentity.identifier(payment.invoice?.quickBooksID) else { return nil }
+            return (paymentSyncKey(paymentID: paymentID, invoiceID: invoiceID), payment)
+        }
+        let paymentGroups = Dictionary(grouping: keyedPayments, by: { $0.0 })
+        let conflictingPaymentKeys = Set(paymentGroups.filter { $0.value.count > 1 }.keys)
+        var paymentsBySyncKey = paymentGroups.filter { $0.value.count == 1 }.mapValues { $0[0].1 }
+        let remotePaymentConflicts = QuickBooksBillingIdentity.conflictingKeys(payments) { $0.Id }
 
         for quickBooksCustomer in customers {
+            guard !customerConflicts.contains(quickBooksCustomer.Id) else {
+                reviewReasons.insert("Multiple local customers claim one QuickBooks customer.")
+                continue
+            }
             let customer = customersByQBID[quickBooksCustomer.Id]
-                ?? customersByName[normalized(quickBooksCustomer.DisplayName)]
                 ?? Customer(name: quickBooksCustomer.DisplayName)
             if customer.modelContext == nil {
                 modelContext.insert(customer)
@@ -96,7 +142,7 @@ enum QuickBooksLocalSync {
             customer.phone = quickBooksCustomer.PrimaryPhone?.FreeFormNumber
             customer.address = quickBooksCustomer.BillAddr?.Line1
             customersByQBID[quickBooksCustomer.Id] = customer
-            customersByName[normalized(customer.name)] = customer
+
         }
 
         for quickBooksItem in items {
@@ -104,7 +150,49 @@ enum QuickBooksLocalSync {
             // Never select an arbitrary local owner or create a third record
             // when this QBO identity is already ambiguous. The conflict stays
             // local and visible until an administrator chooses the owner.
-            guard !conflictedItemIDs.contains(normalizedQuickBooksID) else { continue }
+            guard !conflictedItemIDs.contains(normalizedQuickBooksID) else {
+                if catalogHistory != nil {
+                    reviewReasons.insert("Multiple local items claim one QuickBooks item. Administrator mapping review is required.")
+                }
+                continue
+            }
+            if let catalogHistory {
+                let version = try catalogHistory.version(for: quickBooksItem)
+                let linked = itemsByQBID[normalizedQuickBooksID]
+                // Names and SKUs are useful review candidates, never proof of
+                // identity. Do not silently link a field proposal or create a
+                // duplicate beside an unresolved candidate.
+                if linked == nil {
+                    let skuKey = normalized(quickBooksItem.Sku ?? "")
+                    let candidates = (unlinkedItemsByName[normalized(quickBooksItem.Name)] ?? []) +
+                        (skuKey.isEmpty ? [] : (unlinkedItemsBySKU[skuKey] ?? []))
+                    if !candidates.isEmpty {
+                        for candidate in candidates {
+                            candidate.quickBooksSyncDetail = "A possible QuickBooks match needs administrator review before linking. Your local item is unchanged."
+                        }
+                        reviewReasons.insert("Possible catalog matches need administrator review before linking.")
+                        continue
+                    }
+                }
+                let item = linked ?? Item(name: quickBooksItem.Name, unitPrice: quickBooksItem.UnitPrice ?? 0)
+                guard !itemUUIDConflicts.contains(item.id.uuidString),
+                      item.quickBooksID == nil || item.quickBooksID == quickBooksItem.Id else {
+                    reviewReasons.insert("An item's local UUID or QuickBooks mapping is ambiguous. Local values were preserved.")
+                    continue
+                }
+                if let reason = QuickBooksCatalogApplicationReceipt.reviewReason(for: item, incoming: version, record: quickBooksItem) {
+                    item.quickBooksSyncDetail = reason
+                    if !item.requiresPricebookReview && !item.hasPendingQuickBooksCatalogUpdate {
+                        item.quickBooksSyncStatus = "needs_review"
+                    }
+                    reviewReasons.insert(reason)
+                    continue
+                }
+                if item.modelContext == nil { modelContext.insert(item) }
+                try QuickBooksCatalogApplicationReceipt.apply(quickBooksItem, version: version, to: item)
+                itemsByQBID[normalizedQuickBooksID] = item
+                continue
+            }
             let item = itemsByQBID[normalizedQuickBooksID]
                 ?? Item.matchingLocalCatalogItem(
                     in: existingItems,
@@ -115,6 +203,18 @@ enum QuickBooksLocalSync {
                 ?? Item(name: quickBooksItem.Name, unitPrice: quickBooksItem.UnitPrice ?? 0)
             if item.modelContext == nil {
                 modelContext.insert(item)
+            }
+            if item.requiresPricebookReview {
+                // A provider match may establish the accounting identity, but
+                // it is not administrator approval. Preserve every field value
+                // and the original author so a background refresh cannot turn
+                // a technician draft into a reusable company pricebook item.
+                item.quickBooksID = quickBooksItem.Id
+                item.quickBooksSyncStatus = "needs_review"
+                item.quickBooksSyncDetail = "A matching QuickBooks item was found. Administrator pricebook review is still required before this draft becomes reusable."
+                item.quickBooksLastSyncedAt = Date()
+                itemsByQBID[normalizedQuickBooksID] = item
+                continue
             }
             if item.hasPendingQuickBooksCatalogUpdate,
                !QuickBooksCatalogReconciliation.differences(
@@ -127,20 +227,7 @@ enum QuickBooksLocalSync {
                 itemsByQBID[normalizedQuickBooksID] = item
                 continue
             }
-            item.quickBooksID = quickBooksItem.Id
-            item.quickBooksSyncStatus = "synced"
-            item.quickBooksSyncDetail = nil
-            item.quickBooksLastSyncedAt = Date()
-            item.name = quickBooksItem.Name
-            item.itemTypeRawValue = quickBooksItem.ItemType ?? item.itemTypeRawValue
-            item.unitPrice = quickBooksItem.UnitPrice ?? item.unitPrice
-            item.purchaseCost = quickBooksItem.PurchaseCost ?? item.purchaseCost
-            item.isTaxable = quickBooksItem.Taxable ?? item.isTaxable
-            item.itemDescription = quickBooksItem.Description
-            item.sku = quickBooksItem.Sku ?? item.sku
-            item.purchaseDescription = quickBooksItem.PurchaseDesc ?? item.purchaseDescription
-            item.preferredVendorName = quickBooksItem.PrefVendorRef?.name ?? item.preferredVendorName
-            item.preferredVendorQuickBooksID = quickBooksItem.PrefVendorRef?.value ?? item.preferredVendorQuickBooksID
+            QuickBooksCatalogSnapshotApplication.apply(quickBooksItem, to: item)
             itemsByQBID[normalizedQuickBooksID] = item
         }
 
@@ -163,13 +250,32 @@ enum QuickBooksLocalSync {
         }
 
         for quickBooksEstimate in estimates {
-            let customer = resolveCustomer(ref: quickBooksEstimate.CustomerRef, cacheByQBID: &customersByQBID, cacheByName: &customersByName, modelContext: modelContext)
-            let lineageMatch = QuickBooksEstimateLineage.localEstimateID(from: quickBooksEstimate.PrivateNote)
-                .flatMap { localID in existingEstimates.first { $0.id == localID } }
-            let existingEstimate = estimatesByQBID[quickBooksEstimate.Id]
-                ?? lineageMatch
-                ?? matchingUnlinkedEstimate(for: quickBooksEstimate, customer: customer, in: existingEstimates)
-            let estimate = existingEstimate ?? Estimate(customer: customer)
+            guard QuickBooksBillingIdentity.identifier(quickBooksEstimate.CustomerRef.value) != nil,
+                  !customerConflicts.contains(quickBooksEstimate.CustomerRef.value),
+                  !estimateConflicts.contains(quickBooksEstimate.Id),
+                  !remoteEstimateConflicts.contains(quickBooksEstimate.Id),
+                  !remoteEstimateLineageConflicts.contains(QuickBooksEstimateLineage.localEstimateID(from: quickBooksEstimate.PrivateNote)?.uuidString ?? "") else {
+                reviewReasons.insert("An estimate has an ambiguous customer or QuickBooks mapping.")
+                continue
+            }
+            let customer = resolveCustomer(ref: quickBooksEstimate.CustomerRef, cacheByQBID: &customersByQBID, modelContext: modelContext)
+            let lineageID = QuickBooksEstimateLineage.localEstimateID(from: quickBooksEstimate.PrivateNote)
+            let candidates = existingEstimates.filter {
+                QuickBooksBillingIdentity.identifier($0.quickBooksID) == quickBooksEstimate.Id ||
+                (lineageID != nil && $0.id == lineageID)
+            }
+            guard candidates.count <= 1,
+                  candidates.allSatisfy({
+                      !estimateUUIDConflicts.contains($0.id.uuidString) &&
+                      QuickBooksBillingIdentity.customerMatches($0.customer, reference: quickBooksEstimate.CustomerRef) &&
+                      (QuickBooksBillingIdentity.identifier($0.quickBooksID) == nil || QuickBooksBillingIdentity.identifier($0.quickBooksID) == quickBooksEstimate.Id) &&
+                      (lineageID == nil || $0.id == lineageID)
+                  }) else {
+                reviewReasons.insert("An estimate's customer, local UUID, or QuickBooks ID disagrees.")
+                continue
+            }
+            let existingEstimate = candidates.first ?? estimatesByQBID[quickBooksEstimate.Id]
+            let estimate = existingEstimate ?? Estimate(id: lineageID ?? UUID(), customer: customer)
             let isNewQuickBooksImport = existingEstimate == nil
             if estimate.modelContext == nil {
                 modelContext.insert(estimate)
@@ -192,39 +298,54 @@ enum QuickBooksLocalSync {
             if estimate.siteAddress?.nilIfEmpty == nil {
                 estimate.siteAddress = quickBooksEstimate.ShipAddr?.Line1
             }
-            if estimate.serviceCallID == nil,
-               let serviceCall = matchingServiceCall(
-                   for: quickBooksEstimate,
-                   importedEstimate: estimate,
-                   customer: customer,
-                   serviceCalls: existingServiceCalls,
-                   estimates: existingEstimates
-               ) {
-                estimate.serviceCallID = serviceCall.id
-                estimate.serviceLocationID = serviceCall.serviceLocationID
-                estimate.siteAddress = serviceCall.siteAddress ?? estimate.siteAddress
-                if serviceCall.linkedEstimateID == nil {
-                    serviceCall.linkedEstimateID = estimate.id
-                }
-            }
             estimatesByQBID[quickBooksEstimate.Id] = estimate
-            for duplicate in existingEstimates where duplicate !== estimate && isDuplicateEstimate(duplicate, of: quickBooksEstimate, customer: customer) {
-                mergeEstimate(estimate, withDuplicate: duplicate, serviceCalls: existingServiceCalls, modelContext: modelContext)
-            }
         }
 
         var refreshedInvoiceQuickBooksIDs: Set<String> = []
         for quickBooksInvoice in invoices {
-            let customer = resolveCustomer(ref: quickBooksInvoice.CustomerRef, cacheByQBID: &customersByQBID, cacheByName: &customersByName, modelContext: modelContext)
-            let existingInvoice = invoicesByQBID[quickBooksInvoice.Id]
-                ?? matchingUnlinkedInvoice(for: quickBooksInvoice, customer: customer, in: existingInvoices)
-            let invoice = existingInvoice ?? Invoice(customer: customer)
+            guard QuickBooksBillingIdentity.identifier(quickBooksInvoice.CustomerRef.value) != nil,
+                  !customerConflicts.contains(quickBooksInvoice.CustomerRef.value),
+                  !invoiceConflicts.contains(quickBooksInvoice.Id),
+                  !remoteInvoiceConflicts.contains(quickBooksInvoice.Id),
+                  !remoteInvoiceLineageConflicts.contains(QuickBooksInvoiceLineage.localInvoiceID(from: quickBooksInvoice.PrivateNote)?.uuidString ?? "") else {
+                QuickBooksBillingIdentity.markForReview(existingInvoices.filter {
+                    QuickBooksBillingIdentity.identifier($0.quickBooksID) == quickBooksInvoice.Id ||
+                    $0.id == QuickBooksInvoiceLineage.localInvoiceID(from: quickBooksInvoice.PrivateNote)
+                })
+                invoicesByQBID.removeValue(forKey: quickBooksInvoice.Id)
+                reviewReasons.insert("An invoice has an ambiguous customer or QuickBooks mapping.")
+                continue
+            }
+            let customer = resolveCustomer(ref: quickBooksInvoice.CustomerRef, cacheByQBID: &customersByQBID, modelContext: modelContext)
+            let lineageID = QuickBooksInvoiceLineage.localInvoiceID(from: quickBooksInvoice.PrivateNote)
+            let candidates = existingInvoices.filter {
+                QuickBooksBillingIdentity.identifier($0.quickBooksID) == quickBooksInvoice.Id ||
+                (lineageID != nil && $0.id == lineageID)
+            }
+            guard candidates.count <= 1,
+                  candidates.allSatisfy({
+                      !invoiceUUIDConflicts.contains($0.id.uuidString) &&
+                      QuickBooksBillingIdentity.customerMatches($0.customer, reference: quickBooksInvoice.CustomerRef) &&
+                      (QuickBooksBillingIdentity.identifier($0.quickBooksID) == nil || QuickBooksBillingIdentity.identifier($0.quickBooksID) == quickBooksInvoice.Id) &&
+                      (lineageID == nil || $0.id == lineageID)
+                  }) else {
+                QuickBooksBillingIdentity.markForReview(candidates)
+                invoicesByQBID.removeValue(forKey: quickBooksInvoice.Id)
+                reviewReasons.insert("An invoice's customer, local UUID, or QuickBooks ID disagrees.")
+                continue
+            }
+            let existingInvoice = candidates.first ?? invoicesByQBID[quickBooksInvoice.Id]
+            guard quickBooksInvoice.TotalAmt.isFinite, quickBooksInvoice.TotalAmt >= 0 else {
+                if let existingInvoice { QuickBooksBalanceReconciliation.markForRefresh(existingInvoice) }
+                reviewReasons.insert("An invoice response has an invalid total; its saved financial values were preserved.")
+                continue
+            }
+            let invoice = existingInvoice ?? Invoice(id: lineageID ?? UUID(), customer: customer)
             let isNewQuickBooksImport = existingInvoice == nil
             if invoice.modelContext == nil {
                 modelContext.insert(invoice)
             }
             invoice.quickBooksID = quickBooksInvoice.Id
-            invoice.quickBooksLastSyncedAt = Date()
             invoice.customer = customer
             let taxIssue = invoice.applyQuickBooksTaxResult(
                 total: quickBooksInvoice.TotalAmt,
@@ -245,77 +366,83 @@ enum QuickBooksLocalSync {
             if invoice.siteAddress?.nilIfEmpty == nil {
                 invoice.siteAddress = quickBooksInvoice.ShipAddr?.Line1
             }
-            let balance = quickBooksInvoice.Balance
-                ?? max(quickBooksInvoice.TotalAmt - (importedPaymentTotalsByInvoiceID[quickBooksInvoice.Id] ?? 0), 0)
-            invoice.quickBooksBalanceDue = balance
-            if balance <= 0.009 {
-                invoice.status = "paid"
-            } else if balance < quickBooksInvoice.TotalAmt - 0.009 {
-                invoice.status = "partial"
+            if QuickBooksBalanceReconciliation.apply(quickBooksInvoice, to: invoice) {
+                refreshedInvoiceQuickBooksIDs.insert(quickBooksInvoice.Id)
             } else {
-                invoice.status = "unpaid"
-            }
-            if invoice.serviceCallID == nil,
-               let serviceCall = matchingServiceCall(
-                   for: quickBooksInvoice,
-                   importedInvoice: invoice,
-                   customer: customer,
-                   serviceCalls: existingServiceCalls,
-                   estimates: existingEstimates,
-                   invoices: existingInvoices
-               ) {
-                invoice.serviceCallID = serviceCall.id
-                invoice.serviceLocationID = serviceCall.serviceLocationID
-                invoice.siteAddress = serviceCall.siteAddress ?? invoice.siteAddress
-                if serviceCall.linkedInvoiceID == nil {
-                    serviceCall.linkedInvoiceID = invoice.id
-                }
-                if serviceCall.status != .cancelled {
-                    serviceCall.status = .invoiced
-                }
+                reviewReasons.insert("An invoice response did not include a valid accounting balance. Refresh QuickBooks before collecting.")
             }
             invoicesByQBID[quickBooksInvoice.Id] = invoice
-            refreshedInvoiceQuickBooksIDs.insert(quickBooksInvoice.Id)
-            for duplicate in existingInvoices where duplicate !== invoice && isDuplicateInvoice(duplicate, of: quickBooksInvoice, customer: customer) {
-                mergeInvoice(invoice, withDuplicate: duplicate, payments: existingPayments, serviceCalls: existingServiceCalls, attachments: existingAttachments, modelContext: modelContext)
-            }
         }
 
+        for key in conflictingPaymentKeys {
+            let records = paymentGroups[key, default: []].map { $0.1 }
+            QuickBooksBillingIdentity.markForReview(records.compactMap(\.invoice))
+            for payment in records {
+                payment.quickBooksAccountingSyncStatus = "needs_attention"
+                payment.quickBooksAccountingSyncDetail = "Multiple saved payments claim the same QuickBooks invoice allocation. No payment history was changed."
+            }
+            reviewReasons.insert("Multiple saved payments claim one QuickBooks allocation.")
+        }
         var invoicesAffectedByImportedPayments: [UUID: Invoice] = [:]
         for quickBooksPayment in payments {
-            let linkedTransactions = quickBooksPayment.Line?
-                .flatMap { $0.LinkedTxn ?? [] } ?? []
-            guard let linkedInvoiceID = linkedTransactions
-                .first(where: { $0.TxnType.caseInsensitiveCompare("Invoice") == .orderedSame })?.TxnId,
-                  let invoice = invoicesByQBID[linkedInvoiceID] else {
+            guard !remotePaymentConflicts.contains(quickBooksPayment.Id) else {
+                let linkedIDs = Set(QuickBooksPaymentAllocation.amountsByInvoiceID(for: quickBooksPayment).keys)
+                let related = invoicesByQBID.filter { linkedIDs.contains($0.key) }.map { $0.value }
+                QuickBooksBillingIdentity.markForReview(related)
+                reviewReasons.insert("The payment snapshot repeats a QuickBooks payment identity; no repeated payment was imported.")
                 continue
             }
-            let existingPayment = paymentsByQBID[quickBooksPayment.Id]
-            let payment = existingPayment
-                ?? Payment(
-                    invoice: invoice,
-                    amount: quickBooksPayment.TotalAmt,
-                    method: defaultImportedPaymentMethod(for: quickBooksPayment)
+            for (linkedInvoiceID, appliedAmount) in QuickBooksPaymentAllocation
+                .amountsByInvoiceID(for: quickBooksPayment)
+                .sorted(by: { $0.key < $1.key }) {
+                guard appliedAmount > 0.009,
+                      let invoice = invoicesByQBID[linkedInvoiceID] else { continue }
+                guard invoice.quickBooksIdentityReviewMessage == nil,
+                      QuickBooksBillingIdentity.customerMatches(invoice.customer, reference: quickBooksPayment.CustomerRef) else {
+                    reviewReasons.insert("A payment's customer does not match its linked invoice.")
+                    continue
+                }
+                let key = paymentSyncKey(
+                    paymentID: quickBooksPayment.Id,
+                    invoiceID: linkedInvoiceID
                 )
-            if payment.modelContext == nil {
-                modelContext.insert(payment)
+                let existingPayment = paymentsBySyncKey[key]
+                if let existingPayment, existingPayment.hasNativeCollectionEvidence,
+                   abs(existingPayment.amount - appliedAmount) > 0.009 {
+                    existingPayment.quickBooksAccountingSyncStatus = "needs_attention"
+                    existingPayment.quickBooksAccountingSyncDetail = "QuickBooks allocation differs from the original collected amount. Review the payment without changing capture history."
+                    QuickBooksBillingIdentity.markForReview([invoice])
+                    reviewReasons.insert("An accounting payment amount differs from its original capture.")
+                    continue
+                }
+                let payment = existingPayment
+                    ?? Payment(
+                        invoice: invoice,
+                        amount: appliedAmount,
+                        method: defaultImportedPaymentMethod(for: quickBooksPayment)
+                    )
+                if payment.modelContext == nil {
+                    modelContext.insert(payment)
+                }
+                payment.quickBooksID = quickBooksPayment.Id
+                payment.invoice = invoice
+                if !payment.hasNativeCollectionEvidence {
+                    payment.amount = appliedAmount
+                    payment.date = parseQuickBooksDate(quickBooksPayment.TxnDate) ?? payment.date
+                }
+                payment.method = resolvedImportedPaymentMethod(existing: payment, quickBooksPayment: quickBooksPayment)
+                if payment.notes?.nilIfEmpty == nil {
+                    payment.notes = quickBooksPayment.PrivateNote
+                }
+                if payment.authorizationReference?.nilIfEmpty == nil {
+                    payment.authorizationReference = quickBooksPayment.PaymentRefNum
+                }
+                if let processor = resolvedImportedProcessor(existing: payment) {
+                    payment.processor = processor
+                }
+                paymentsBySyncKey[key] = payment
+                invoicesAffectedByImportedPayments[invoice.id] = invoice
             }
-            payment.quickBooksID = quickBooksPayment.Id
-            payment.invoice = invoice
-            payment.amount = quickBooksPayment.TotalAmt
-            payment.method = resolvedImportedPaymentMethod(existing: payment, quickBooksPayment: quickBooksPayment)
-            payment.date = parseQuickBooksDate(quickBooksPayment.TxnDate) ?? payment.date
-            if payment.notes?.nilIfEmpty == nil {
-                payment.notes = quickBooksPayment.PrivateNote
-            }
-            if payment.authorizationReference?.nilIfEmpty == nil {
-                payment.authorizationReference = quickBooksPayment.PaymentRefNum
-            }
-            if let processor = resolvedImportedProcessor(existing: payment) {
-                payment.processor = processor
-            }
-            paymentsByQBID[quickBooksPayment.Id] = payment
-            invoicesAffectedByImportedPayments[invoice.id] = invoice
         }
 
         for invoice in invoicesAffectedByImportedPayments.values {
@@ -323,13 +450,17 @@ enum QuickBooksLocalSync {
                   !refreshedInvoiceQuickBooksIDs.contains(quickBooksID) else {
                 continue
             }
-            let invoicePayments = paymentsByQBID.values.filter { $0.invoice.id == invoice.id }
-            invoice.quickBooksBalanceDue = localOutstandingBalance(for: invoice, payments: invoicePayments)
-            invoice.status = Invoice.resolvedStatus(for: invoice, payments: invoicePayments)
+            QuickBooksBalanceReconciliation.markForRefresh(invoice)
+            reviewReasons.insert("Payments refreshed without a current invoice balance. Refresh QuickBooks to finish reconciliation.")
         }
 
-        let reconciledEstimates = try modelContext.fetch(FetchDescriptor<Estimate>())
-        let reconciledInvoices = try modelContext.fetch(FetchDescriptor<Invoice>())
+        let reconciledEstimates = try modelContext.fetch(FetchDescriptor<Estimate>()).filter {
+            !estimateUUIDConflicts.contains($0.id.uuidString) &&
+            !estimateConflicts.contains(QuickBooksBillingIdentity.identifier($0.quickBooksID) ?? "")
+        }
+        let reconciledInvoices = try modelContext.fetch(FetchDescriptor<Invoice>()).filter {
+            $0.quickBooksIdentityReviewMessage == nil
+        }
         let reconciledServiceCalls = try modelContext.fetch(FetchDescriptor<ServiceCall>())
         let reconciledAttachments = try modelContext.fetch(FetchDescriptor<ServiceDocumentAttachment>())
         reconcileBillingServiceCallLinks(
@@ -341,17 +472,23 @@ enum QuickBooksLocalSync {
             estimates: reconciledEstimates,
             invoices: reconciledInvoices,
             serviceCalls: reconciledServiceCalls,
+            payments: try modelContext.fetch(FetchDescriptor<Payment>()),
             attachments: reconciledAttachments
         )
-        try? modelContext.save()
+        try saveSnapshot(modelContext)
+        snapshotSaved = true
+        if !reviewReasons.isEmpty {
+            throw QuickBooksBillingImportReview(reasons: reviewReasons.sorted())
+        }
         let syncedEstimates = try modelContext.fetch(FetchDescriptor<Estimate>())
         let syncedInvoices = try modelContext.fetch(FetchDescriptor<Invoice>())
         let syncedServiceCalls = try modelContext.fetch(FetchDescriptor<ServiceCall>())
         let serviceAttachments = try modelContext.fetch(FetchDescriptor<ServiceDocumentAttachment>())
-        QuickBooksInvoiceAttachmentSync.syncPendingServiceReports(
+        try QuickBooksInvoiceAttachmentSync.syncPendingServiceReports(
             estimates: syncedEstimates,
             invoices: syncedInvoices,
             serviceCalls: syncedServiceCalls,
+            payments: try modelContext.fetch(FetchDescriptor<Payment>()),
             attachments: serviceAttachments,
             modelContext: modelContext
         )
@@ -360,264 +497,16 @@ enum QuickBooksLocalSync {
     private static func resolveCustomer(
         ref: QuickBooksReference,
         cacheByQBID: inout [String: Customer],
-        cacheByName: inout [String: Customer],
         modelContext: ModelContext
     ) -> Customer {
-        if let existing = cacheByQBID[ref.value], !ref.value.isEmpty {
-            return existing
-        }
-        if let name = ref.name, let existing = cacheByName[normalized(name)] {
-            if existing.quickBooksID == nil, !ref.value.isEmpty {
-                existing.quickBooksID = ref.value
-                cacheByQBID[ref.value] = existing
-            }
-            return existing
-        }
+        if let existing = cacheByQBID[ref.value], !ref.value.isEmpty { return existing }
         let customer = Customer(
-            quickBooksID: ref.value.isEmpty ? nil : ref.value,
+            quickBooksID: QuickBooksBillingIdentity.identifier(ref.value),
             name: ref.displayName
         )
         modelContext.insert(customer)
-        if !ref.value.isEmpty {
-            cacheByQBID[ref.value] = customer
-        }
-        cacheByName[normalized(customer.name)] = customer
+        if !ref.value.isEmpty { cacheByQBID[ref.value] = customer }
         return customer
-    }
-
-    private static func matchingUnlinkedEstimate(
-        for quickBooksEstimate: QuickBooksEstimate,
-        customer: Customer,
-        in estimates: [Estimate]
-    ) -> Estimate? {
-        estimates.first { estimate in
-            estimate.quickBooksID?.nilIfEmpty == nil &&
-            isDuplicateEstimate(estimate, of: quickBooksEstimate, customer: customer)
-        }
-    }
-
-    private static func matchingUnlinkedInvoice(
-        for quickBooksInvoice: QuickBooksInvoice,
-        customer: Customer,
-        in invoices: [Invoice]
-    ) -> Invoice? {
-        invoices.first { invoice in
-            invoice.quickBooksID?.nilIfEmpty == nil &&
-            isDuplicateInvoice(invoice, of: quickBooksInvoice, customer: customer)
-        }
-    }
-
-    private static func isDuplicateEstimate(_ estimate: Estimate, of quickBooksEstimate: QuickBooksEstimate, customer: Customer) -> Bool {
-        guard estimate.quickBooksID?.nilIfEmpty == nil || estimate.quickBooksID == quickBooksEstimate.Id || estimate.quickBooksID == quickBooksEstimate.DocNumber else {
-            return false
-        }
-        if let lineageID = QuickBooksEstimateLineage.localEstimateID(from: quickBooksEstimate.PrivateNote) {
-            return estimate.id == lineageID
-        }
-        // Option sets and change orders are distinct immutable proposals. Never
-        // merge them by customer/amount/date heuristics when QBO lacks the
-        // GunnAire lineage marker.
-        if estimate.isProposalOption || estimate.isChangeOrder {
-            return false
-        }
-        return sameCustomer(estimate.customer, customer) &&
-            amountsMatch(estimate.amount, quickBooksEstimate.TotalAmt) &&
-            documentReferenceMatches(localSummary: estimate.lineItemSummary, localNotes: estimate.notes, quickBooksDocumentNumber: quickBooksEstimate.DocNumber, localDate: estimate.createdAt, quickBooksDate: quickBooksEstimate.TxnDate)
-    }
-
-    private static func isDuplicateInvoice(_ invoice: Invoice, of quickBooksInvoice: QuickBooksInvoice, customer: Customer) -> Bool {
-        guard invoice.quickBooksID?.nilIfEmpty == nil || invoice.quickBooksID == quickBooksInvoice.Id || invoice.quickBooksID == quickBooksInvoice.DocNumber else {
-            return false
-        }
-        return sameCustomer(invoice.customer, customer) &&
-            amountsMatch(invoice.amount, quickBooksInvoice.TotalAmt) &&
-            documentReferenceMatches(localSummary: invoice.lineItemSummary, localNotes: invoice.notes, quickBooksDocumentNumber: quickBooksInvoice.DocNumber, localDate: invoice.createdAt, quickBooksDate: quickBooksInvoice.TxnDate)
-    }
-
-    private static func matchingServiceCall(
-        for quickBooksInvoice: QuickBooksInvoice,
-        importedInvoice: Invoice,
-        customer: Customer,
-        serviceCalls: [ServiceCall],
-        estimates: [Estimate],
-        invoices: [Invoice]
-    ) -> ServiceCall? {
-        guard let invoiceDate = parseQuickBooksDate(quickBooksInvoice.TxnDate) else { return nil }
-        let eligibleCalls = serviceCalls.filter { call in
-            sameCustomer(call.customer, customer) &&
-                (call.linkedInvoiceID == nil || call.linkedInvoiceID == importedInvoice.id) &&
-                abs(call.scheduledDate.timeIntervalSince(invoiceDate)) <= 3 * 24 * 60 * 60
-        }
-        let scored = eligibleCalls.compactMap { call -> (call: ServiceCall, score: Int)? in
-            var score = 0
-            if Calendar.current.isDate(call.scheduledDate, inSameDayAs: invoiceDate) {
-                score += 3
-            } else {
-                score += 1
-            }
-            if let linkedEstimateID = call.linkedEstimateID,
-               let estimate = estimates.first(where: { $0.id == linkedEstimateID }),
-               amountsMatch(estimate.amount, quickBooksInvoice.TotalAmt) {
-                score += 3
-            }
-            if invoices.contains(where: { invoice in
-                invoice.serviceCallID == call.id && amountsMatch(invoice.amount, quickBooksInvoice.TotalAmt)
-            }) {
-                score += 2
-            }
-            if call.linkedInvoiceID == nil {
-                score += 1
-            }
-            return score >= 4 ? (call, score) : nil
-        }
-        let ranked = scored.sorted { lhs, rhs in
-            if lhs.score != rhs.score { return lhs.score > rhs.score }
-            let lhsDistance = abs(lhs.call.scheduledDate.timeIntervalSince(invoiceDate))
-            let rhsDistance = abs(rhs.call.scheduledDate.timeIntervalSince(invoiceDate))
-            return lhsDistance < rhsDistance
-        }
-        guard let best = ranked.first else { return nil }
-        if ranked.dropFirst().first?.score == best.score {
-            return nil
-        }
-        return best.call
-    }
-
-    private static func matchingServiceCall(
-        for quickBooksEstimate: QuickBooksEstimate,
-        importedEstimate: Estimate,
-        customer: Customer,
-        serviceCalls: [ServiceCall],
-        estimates: [Estimate]
-    ) -> ServiceCall? {
-        guard let estimateDate = parseQuickBooksDate(quickBooksEstimate.TxnDate) else { return nil }
-        let eligibleCalls = serviceCalls.filter { call in
-            sameCustomer(call.customer, customer) &&
-                (call.linkedEstimateID == nil || call.linkedEstimateID == importedEstimate.id) &&
-                abs(call.scheduledDate.timeIntervalSince(estimateDate)) <= 3 * 24 * 60 * 60
-        }
-        let scored = eligibleCalls.compactMap { call -> (call: ServiceCall, score: Int)? in
-            var score = 0
-            if Calendar.current.isDate(call.scheduledDate, inSameDayAs: estimateDate) {
-                score += 3
-            } else {
-                score += 1
-            }
-            if estimates.contains(where: { estimate in
-                estimate.serviceCallID == call.id && amountsMatch(estimate.amount, quickBooksEstimate.TotalAmt)
-            }) {
-                score += 2
-            }
-            if call.linkedEstimateID == nil {
-                score += 1
-            }
-            return score >= 4 ? (call, score) : nil
-        }
-        let ranked = scored.sorted { lhs, rhs in
-            if lhs.score != rhs.score { return lhs.score > rhs.score }
-            let lhsDistance = abs(lhs.call.scheduledDate.timeIntervalSince(estimateDate))
-            let rhsDistance = abs(rhs.call.scheduledDate.timeIntervalSince(estimateDate))
-            return lhsDistance < rhsDistance
-        }
-        guard let best = ranked.first else { return nil }
-        if ranked.dropFirst().first?.score == best.score {
-            return nil
-        }
-        return best.call
-    }
-
-    private static func mergeEstimate(_ estimate: Estimate, withDuplicate duplicate: Estimate, serviceCalls: [ServiceCall], modelContext: ModelContext) {
-        if estimate.serviceCallID == nil {
-            estimate.serviceCallID = duplicate.serviceCallID
-        }
-        if estimate.serviceLocationID == nil {
-            estimate.serviceLocationID = duplicate.serviceLocationID
-        }
-        if estimate.siteAddress?.nilIfEmpty == nil {
-            estimate.siteAddress = duplicate.siteAddress
-        }
-        if estimate.catalogSnapshotJSON?.nilIfEmpty == nil {
-            // A durable local snapshot is stronger operational evidence than a
-            // generic QuickBooks document number. Preserve the approved scope,
-            // price, and field notes together when consolidating a legacy pair.
-            estimate.catalogSnapshotJSON = duplicate.catalogSnapshotJSON
-            if duplicate.catalogSnapshotJSON?.nilIfEmpty != nil {
-                estimate.amount = duplicate.amount
-                estimate.lineItemSummary = duplicate.lineItemSummary
-                estimate.notes = duplicate.notes
-            }
-        }
-        if estimate.notes?.nilIfEmpty == nil {
-            estimate.notes = duplicate.notes
-        }
-        if estimate.lineItemSummary.nilIfEmpty == nil {
-            estimate.lineItemSummary = duplicate.lineItemSummary
-        }
-        estimate.parentEstimateID = estimate.parentEstimateID ?? duplicate.parentEstimateID
-        estimate.changeOrderReason = estimate.changeOrderReason ?? duplicate.changeOrderReason
-        estimate.proposalGroupID = estimate.proposalGroupID ?? duplicate.proposalGroupID
-        estimate.proposalOption = estimate.proposalOption ?? duplicate.proposalOption
-        estimate.proposalIsRecommended = estimate.proposalIsRecommended || duplicate.proposalIsRecommended
-        if !estimate.hasRecordedCustomerApproval && duplicate.hasRecordedCustomerApproval {
-            estimate.status = duplicate.status
-            estimate.customerApprovedByName = duplicate.customerApprovedByName
-            estimate.customerApprovedAt = duplicate.customerApprovedAt
-            estimate.customerApprovalMethodRaw = duplicate.customerApprovalMethodRaw
-            estimate.customerApprovalReference = duplicate.customerApprovalReference
-            estimate.customerApprovalRecordedByEmail = duplicate.customerApprovalRecordedByEmail
-            estimate.customerApprovalSignatureImageBase64 = duplicate.customerApprovalSignatureImageBase64
-        }
-        for call in serviceCalls where call.linkedEstimateID == duplicate.id {
-            call.linkedEstimateID = estimate.id
-        }
-        modelContext.delete(duplicate)
-    }
-
-    private static func mergeInvoice(
-        _ invoice: Invoice,
-        withDuplicate duplicate: Invoice,
-        payments: [Payment],
-        serviceCalls: [ServiceCall],
-        attachments: [ServiceDocumentAttachment],
-        modelContext: ModelContext
-    ) {
-        if invoice.serviceCallID == nil {
-            invoice.serviceCallID = duplicate.serviceCallID
-        }
-        if invoice.serviceLocationID == nil {
-            invoice.serviceLocationID = duplicate.serviceLocationID
-        }
-        if invoice.siteAddress?.nilIfEmpty == nil {
-            invoice.siteAddress = duplicate.siteAddress
-        }
-        if invoice.notes?.nilIfEmpty == nil {
-            invoice.notes = duplicate.notes
-        }
-        if invoice.lineItemSummary.nilIfEmpty == nil {
-            invoice.lineItemSummary = duplicate.lineItemSummary
-        }
-        if invoice.quickBooksBalanceDue == nil {
-            invoice.quickBooksBalanceDue = duplicate.quickBooksBalanceDue
-        }
-        if invoice.dueDate == nil {
-            invoice.dueDate = duplicate.dueDate
-        }
-        invoice.status = Invoice.mostResolvedStatus(invoice.status, duplicate.status)
-        invoice.customerSignatureName = invoice.customerSignatureName ?? duplicate.customerSignatureName
-        invoice.customerSignatureImageBase64 = invoice.customerSignatureImageBase64 ?? duplicate.customerSignatureImageBase64
-        invoice.customerSignedAt = invoice.customerSignedAt ?? duplicate.customerSignedAt
-        invoice.completionNotes = invoice.completionNotes ?? duplicate.completionNotes
-        invoice.finalizedAt = invoice.finalizedAt ?? duplicate.finalizedAt
-        for payment in payments where payment.invoice.id == duplicate.id {
-            payment.invoice = invoice
-        }
-        for call in serviceCalls where call.linkedInvoiceID == duplicate.id {
-            call.linkedInvoiceID = invoice.id
-        }
-        for attachment in attachments where attachment.invoiceID == duplicate.id {
-            attachment.invoiceID = invoice.id
-        }
-        modelContext.delete(duplicate)
     }
 
     private static func reconcileBillingServiceCallLinks(
@@ -625,9 +514,9 @@ enum QuickBooksLocalSync {
         invoices: [Invoice],
         serviceCalls: [ServiceCall]
     ) {
-        let estimatesByID = Dictionary(estimates.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let invoicesByID = Dictionary(invoices.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let serviceCallsByID = Dictionary(serviceCalls.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let estimatesByID = Dictionary(grouping: estimates, by: \.id).filter { $0.value.count == 1 }.mapValues { $0[0] }
+        let invoicesByID = Dictionary(grouping: invoices, by: \.id).filter { $0.value.count == 1 }.mapValues { $0[0] }
+        let serviceCallsByID = Dictionary(grouping: serviceCalls, by: \.id).filter { $0.value.count == 1 }.mapValues { $0[0] }
 
         for estimate in estimates {
             if let serviceCallID = estimate.serviceCallID,
@@ -656,12 +545,16 @@ enum QuickBooksLocalSync {
                sameCustomer(call.customer, estimate.customer),
                estimate.serviceCallID == nil {
                 estimate.serviceCallID = call.id
+                estimate.serviceLocationID = estimate.serviceLocationID ?? call.serviceLocationID
+                estimate.siteAddress = estimate.siteAddress ?? call.siteAddress
             }
             if let linkedInvoiceID = call.linkedInvoiceID,
                let invoice = invoicesByID[linkedInvoiceID],
                sameCustomer(call.customer, invoice.customer),
                invoice.serviceCallID == nil {
                 invoice.serviceCallID = call.id
+                invoice.serviceLocationID = invoice.serviceLocationID ?? call.serviceLocationID
+                invoice.siteAddress = invoice.siteAddress ?? call.siteAddress
             }
         }
     }
@@ -676,66 +569,16 @@ enum QuickBooksLocalSync {
         return invoicesByID[invoiceID] == nil
     }
 
-    private static func sameCustomer(_ lhs: Customer, _ rhs: Customer) -> Bool {
-        if let lhsID = lhs.quickBooksID?.nilIfEmpty,
-           let rhsID = rhs.quickBooksID?.nilIfEmpty {
-            return lhsID == rhsID
-        }
-        return normalized(lhs.name) == normalized(rhs.name)
-    }
-
-    private static func amountsMatch(_ lhs: Double, _ rhs: Double) -> Bool {
-        abs(lhs - rhs) <= 0.01
-    }
-
-    private static func localOutstandingBalance(for invoice: Invoice, payments: [Payment]) -> Double {
-        let netPaid = payments
-            .filter { $0.invoice.id == invoice.id }
-            .reduce(0) { partial, payment in
-                partial + (payment.isRefund ? -payment.amount : payment.amount)
-            }
-        return max(invoice.amount - netPaid, 0)
-    }
-
-    private static func documentReferenceMatches(
-        localSummary: String,
-        localNotes: String?,
-        quickBooksDocumentNumber: String?,
-        localDate: Date,
-        quickBooksDate: String?
-    ) -> Bool {
-        if let quickBooksDocumentNumber = quickBooksDocumentNumber?.nilIfEmpty {
-            let normalizedDocumentNumber = normalized(quickBooksDocumentNumber)
-            if normalized(localSummary).contains(normalizedDocumentNumber) ||
-                normalized(localNotes ?? "").contains(normalizedDocumentNumber) {
-                return true
-            }
-        }
-        guard let quickBooksDate = parseQuickBooksDate(quickBooksDate) else {
-            return true
-        }
-        return abs(localDate.timeIntervalSince(quickBooksDate)) <= 7 * 24 * 60 * 60
+    private static func sameCustomer(_ lhs: Customer?, _ rhs: Customer?) -> Bool {
+        QuickBooksBillingIdentity.sameCustomer(lhs, rhs)
     }
 
     private static func normalized(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
-    private static func paymentTotalsByInvoiceID(from payments: [QuickBooksPayment]) -> [String: Double] {
-        var totals: [String: Double] = [:]
-        for payment in payments {
-            for line in payment.Line ?? [] {
-                let invoiceIDs = (line.LinkedTxn ?? [])
-                    .filter { $0.TxnType.caseInsensitiveCompare("Invoice") == .orderedSame }
-                    .map(\.TxnId)
-                guard !invoiceIDs.isEmpty else { continue }
-                let amount = invoiceIDs.count == 1 ? line.Amount : line.Amount / Double(invoiceIDs.count)
-                for invoiceID in invoiceIDs {
-                    totals[invoiceID, default: 0] += amount
-                }
-            }
-        }
-        return totals
+    private static func paymentSyncKey(paymentID: String, invoiceID: String) -> String {
+        "\(paymentID)\u{1f}\(invoiceID)"
     }
 
     private static func defaultImportedPaymentMethod(for quickBooksPayment: QuickBooksPayment) -> String {
@@ -745,19 +588,16 @@ enum QuickBooksLocalSync {
         if isQuickBooksACHPayment(quickBooksPayment) {
             return "ach"
         }
+        let method = quickBooksPayment.PaymentMethodRef?.name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if method == "check" || method == "cheque" { return "check" }
+        if method == "cash" { return "cash" }
         return "quickbooks"
     }
 
     private static func resolvedImportedPaymentMethod(existing payment: Payment, quickBooksPayment: QuickBooksPayment) -> String {
-        if let processor = payment.processor,
-           processor == OnsitePaymentProcessor.quickBooksPayments.rawValue || payment.quickBooksChargeID?.nilIfEmpty != nil {
-            return "card"
-        }
-
-        if payment.method == "card" || payment.method.hasPrefix("card ") {
-            return payment.method
-        }
-        if payment.method == "ach" || payment.method.hasPrefix("ach ") {
+        // A processor/charge ID can describe card OR ACH. The original rail
+        // determines settlement and refund behavior and must not be relabeled.
+        if payment.hasNativeCollectionEvidence, payment.backendCollectionMethod != nil {
             return payment.method
         }
 
@@ -789,7 +629,7 @@ enum QuickBooksLocalSync {
         guard let methodName = quickBooksPayment.PaymentMethodRef?.name?.lowercased() else {
             return false
         }
-        return methodName.contains("ach") || methodName.contains("bank") || methodName.contains("echeck") || methodName.contains("check")
+        return methodName.contains("ach") || methodName.contains("bank") || methodName.contains("echeck")
     }
 
     private static func parseQuickBooksDate(_ value: String?) -> Date? {

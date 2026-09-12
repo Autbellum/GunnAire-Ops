@@ -1,4 +1,8 @@
-.PHONY: test validate checklist checklist-check syntax verify
+.PHONY: test validate checklist checklist-check syntax verify verify-release
+PYTHON ?= python3
+
+verify-release:
+	PYTHONDONTWRITEBYTECODE=1 $(PYTHON) Tools/verify_release.py $(if $(NATIVE_DESTINATION),--native-destination '$(NATIVE_DESTINATION)',)
 
 test:
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s LocalAI/tests -p 'test_*.py' -v

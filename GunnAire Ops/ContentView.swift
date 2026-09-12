@@ -14,18 +14,105 @@ import CloudKit
 
 // MARK: - SidebarItem moved to SidebarItem.swift
 
-/// Keeps repeatable App Store assets free of a signed-in person's identity
-/// without changing the account context shown during normal app use.
+/// Keeps the compact sidebar useful without exposing a staff member's account
+/// address in the interface or in screenshots. Settings remains the explicit
+/// place to review the connected identity.
 struct AppStoreScreenshotPrivacyPolicy: Equatable, Sendable {
     static let fixtureArgument = "-appStoreScreenshotFixtures"
 
     static func sidebarIdentity(
         email: String?,
-        processArguments: [String]
+        role: AppUserRole?
     ) -> String? {
-        guard !processArguments.contains(fixtureArgument) else { return nil }
         let normalized = email?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return normalized.isEmpty ? "Signed in" : normalized
+        guard !normalized.isEmpty, let role else { return nil }
+        return role == .admin ? "Administrator" : role.rawValue
+    }
+}
+
+/// Registers the numbered workspace shortcuts with UIKit on native iPadOS.
+/// SwiftUI scene commands render correctly in the Mac menu bar, but they are
+/// not consistently inserted into the responder chain for an iPad split view.
+struct GunnAireIPadKeyCommandBridge: UIViewRepresentable {
+    let onRoute: (GunnAireAppRoute) -> Void
+
+    func makeUIView(context: Context) -> KeyCommandResponderView {
+        let view = KeyCommandResponderView()
+        view.onRoute = onRoute
+        return view
+    }
+
+    func updateUIView(_ uiView: KeyCommandResponderView, context: Context) {
+        uiView.onRoute = onRoute
+        uiView.activateIfAvailable()
+    }
+
+    class KeyCommandResponderView: UIView {
+        var onRoute: ((GunnAireAppRoute) -> Void)?
+        private var activationRetryScheduled = false
+
+        override var canBecomeFirstResponder: Bool { true }
+
+        override var keyCommands: [UIKeyCommand]? {
+            let definitions = GunnAireNavigationCommandDefinition.primary.compactMap { definition -> (String, String)? in
+                guard let shortcutKey = definition.shortcutKey else { return nil }
+                return (shortcutKey.description, definition.title)
+            }
+            return definitions.map { input, title in
+                let command = UIKeyCommand(
+                    title: title,
+                    action: #selector(handleKeyCommand(_:)),
+                    input: input,
+                    modifierFlags: .command
+                )
+                command.wantsPriorityOverSystemBehavior = true
+                return command
+            }
+        }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            activateIfAvailable()
+        }
+
+        func activateIfAvailable() {
+            // SwiftUI updates this bridge while a field is being edited, too.
+            // A shortcut fallback must never evict that field's responder or
+            // intercept navigation while a sheet owns the interaction.
+            guard mayActivate, !becomeFirstResponder(), !activationRetryScheduled else { return }
+            activationRetryScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.activationRetryScheduled = false
+                // Focus/window/presentation may have changed since scheduling.
+                guard self.mayActivate else { return }
+                _ = self.becomeFirstResponder()
+            }
+        }
+
+        private var mayActivate: Bool {
+            guard let window, window.isKeyWindow, !isFirstResponder,
+                  !containsFirstResponder(window) else { return false }
+            return !hasPresentedController(window.rootViewController)
+        }
+
+        private func containsFirstResponder(_ view: UIView) -> Bool {
+            view.isFirstResponder || view.subviews.contains(where: containsFirstResponder)
+        }
+
+        private func hasPresentedController(_ controller: UIViewController?) -> Bool {
+            guard let controller else { return false }
+            return controller.presentedViewController != nil || controller.children.contains(where: hasPresentedController)
+        }
+
+        @objc private func handleKeyCommand(_ command: UIKeyCommand) {
+            guard let input = command.input else { return }
+            let route = GunnAireNavigationCommandDefinition.primary.first {
+                $0.shortcutKey?.description == input
+            }?.route
+            guard let route else { return }
+            onRoute?(route)
+        }
     }
 }
 
@@ -33,6 +120,7 @@ struct AppStoreScreenshotPrivacyPolicy: Equatable, Sendable {
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.gunnaireReduceMotion) private var reduceMotion
     @EnvironmentObject private var cloudKitEventMonitor: GunnAireCloudKitEventMonitor
     @AppStorage("hasAuthenticatedUser") private var hasAuthenticatedUser = false
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
@@ -53,6 +141,7 @@ struct ContentView: View {
     @State private var isRetryingCustomerCommunicationUploads = false
     @State private var cloudKitReadiness: GunnAireCloudKit.AccountReadiness?
     @State private var showingCloudKitContinuityDetails = false
+    @State private var isCheckingBusinessRole = false
     
     // Authentication states
     @State private var isQuickBooksAuthenticated = false
@@ -69,16 +158,26 @@ struct ContentView: View {
         AppIdentity.currentEmail
     }
 
+    private var currentUserRole: AppUserRole? {
+        AppAccess.activeRole(email: currentUserEmail, users: users)
+    }
+
     private var sidebarAccountIdentity: String? {
         AppStoreScreenshotPrivacyPolicy.sidebarIdentity(
             email: currentUserEmail,
-            processArguments: ProcessInfo.processInfo.arguments
+            role: currentUserRole
         )
     }
 
     @MainActor
     private var cloudKitContinuityNotice: CloudKitContinuityNotice? {
-        cloudKitReadiness.flatMap {
+        if let workspaceNotice = OperationalDataContinuity.workspaceNotice(
+            for: operationalWorkspaceAccess,
+            cloudKitReadiness: cloudKitReadiness
+        ) {
+            return workspaceNotice
+        }
+        return cloudKitReadiness.flatMap {
             OperationalDataContinuity.cloudKitNotice(
                 for: $0,
                 mirroringState: cloudKitEventMonitor.state
@@ -86,12 +185,30 @@ struct ContentView: View {
         }
     }
 
+    private var operationalWorkspaceAccess: OperationalWorkspaceAccess {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-uiTestSeedEmptyCompanyWorkspace") {
+            return .emptyReplica
+        }
+        if arguments.contains("-disableCloudKitForTesting") {
+            return .ready
+        }
+        #endif
+
+        return OperationalDataContinuity.workspaceAccess(
+            role: currentUserRole,
+            didCheckIdentity: true,
+            hasVerifiedCompanyStore: CompanyWorkspaceAccessController.shared.authorizedContainer != nil
+        )
+    }
+
     private var isAdminUser: Bool {
-        AppAccess.isAdmin(email: currentUserEmail, users: users)
+        currentUserRole == .admin
     }
 
     private var isFieldTechnician: Bool {
-        AppAccess.activeRole(email: currentUserEmail, users: users) == .fieldTechnician
+        currentUserRole == .fieldTechnician
     }
 
     private var fieldCollectionPromptPollingKey: String? {
@@ -149,6 +266,109 @@ struct ContentView: View {
         UIDevice.current.userInterfaceIdiom == .pad
         #endif
     }
+
+    /// Keep the split-view detail type shallow when switching workspaces.
+    /// Several back-office destinations contain large SwiftUI form trees. If
+    /// they all remain in one generic `ViewBuilder` switch, a physical device
+    /// can recursively resolve every branch while navigating and exhaust the
+    /// main-thread stack before the selected workspace appears.
+    private var selectedWorkspaceDetail: AnyView {
+        guard !visibleSidebarItems.isEmpty else {
+            return AnyView(
+                ContentUnavailableView {
+                    Label("Verify business access", systemImage: "person.badge.key")
+                } description: {
+                    Text("Your business permissions could not be confirmed. Your saved work is unchanged. Check again, or ask your administrator to review your access.")
+                } actions: {
+                    Button(isCheckingBusinessRole ? "Checking…" : "Check Again") {
+                        guard !isCheckingBusinessRole else { return }
+                        isCheckingBusinessRole = true
+                        Task {
+                            defer { isCheckingBusinessRole = false }
+                            await CompanyWorkspaceAccessController.shared.refresh()
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isCheckingBusinessRole)
+                    .accessibilityIdentifier("BusinessRoleCheckAgain")
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("BusinessRoleAccessGate")
+            )
+        }
+
+        switch operationalWorkspaceAccess {
+        case .checking:
+            return AnyView(
+                VStack(spacing: 12) {
+                    ProgressView()
+                    Text("Checking company workspace…")
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityIdentifier("CompanyWorkspaceAccessCheck")
+            )
+        case .emptyReplica:
+            return AnyView(
+                ContentUnavailableView {
+                    Label("Company workspace not loaded", systemImage: "person.icloud")
+                } description: {
+                    Text("This staff login has no company records on this device. Confirm the approved business iCloud account before entering work.")
+                } actions: {
+                    Button("Check Again") {
+                        Task {
+                            await refreshOperationalContinuityState()
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button("Review Status") {
+                        showingSettings = true
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .accessibilityIdentifier("CompanyWorkspaceAccessGate")
+            )
+        case .ready:
+            break
+        }
+
+        guard let selectedSidebarItem,
+              visibleSidebarItems.contains(selectedSidebarItem) else {
+            return AnyView(
+                Text("Select a menu item")
+                    .foregroundColor(.secondary)
+            )
+        }
+
+        switch selectedSidebarItem {
+        case .commandCenter:
+            return AnyView(OperationsDashboardView(showingCommandPalette: $showingAppWideFind))
+        case .timeClock:
+            return AnyView(TimeClockView())
+        case .scheduleAndJobs:
+            return AnyView(ScheduleView())
+        case .customers:
+            return AnyView(CustomersView())
+        case .mail:
+            return AnyView(GmailView())
+        case .estimates:
+            return AnyView(BillingDocumentsView(workspaceMode: .estimates))
+        case .invoices:
+            return AnyView(InvoiceWorkspaceTransitionHost())
+        case .payments:
+            return AnyView(PaymentsAndReceiptsView())
+        case .reports:
+            return AnyView(BusinessReportsView())
+        case .receiptsBills:
+            return AnyView(ReceiptsAndBillsView())
+        case .quickBooksManagement:
+            return AnyView(QuickBooksManagementView())
+        case .syncIntegrations:
+            return AnyView(SyncIntegrationsView())
+        case .onsiteDocumentation:
+            return AnyView(OnsiteDocumentationView())
+        }
+    }
     
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -204,14 +424,9 @@ struct ContentView: View {
                             .accessibilityIdentifier("SidebarAccountIdentity")
                     }
                     if visibleSidebarItems.isEmpty {
-                        Label("Account setup required", systemImage: "person.badge.key")
+                        Label("Verify business access", systemImage: "person.badge.key")
                             .font(.footnote)
                             .foregroundColor(.orange)
-                    }
-                    if isAdminUser {
-                        Label("Administrator", systemImage: "key.fill")
-                            .font(.footnote)
-                            .foregroundColor(Color.brandGold)
                     }
                 }
             }
@@ -243,51 +458,15 @@ struct ContentView: View {
         } detail: {
             ZStack {
                 WatermarkBackground()
-                Group {
-                    if visibleSidebarItems.isEmpty {
-                        ContentUnavailableView(
-                            "Account setup required",
-                            systemImage: "person.badge.key",
-                            description: Text("Your signed-in business account has not been assigned an active role. Ask an administrator to activate your access, then reopen GunnAire Ops.")
-                        )
-                    } else if let selectedSidebarItem, visibleSidebarItems.contains(selectedSidebarItem) {
-                        switch selectedSidebarItem {
-                        case .commandCenter:
-                            OperationsDashboardView(showingCommandPalette: $showingAppWideFind)
-                        case .timeClock:
-                            TimeClockView()
-                        case .scheduleAndJobs:
-                            ScheduleView()
-                        case .customers:
-                            CustomersView()
-                        case .mail:
-                            GmailView()
-                        case .estimates:
-                            BillingDocumentsView(workspaceMode: .estimates)
-                        case .invoices:
-                            BillingDocumentsView(workspaceMode: .invoices)
-                        case .payments:
-                            PaymentsAndReceiptsView()
-                        case .reports:
-                            BusinessReportsView()
-                        case .receiptsBills:
-                            ReceiptsAndBillsView()
-                        case .quickBooksManagement:
-                            QuickBooksManagementView()
-                        case .syncIntegrations:
-                            SyncIntegrationsView()
-                        case .onsiteDocumentation:
-                            OnsiteDocumentationView()
-                        }
-                    } else {
-                        Text("Select a menu item")
-                            .foregroundColor(.secondary)
-                    }
-                }
+                selectedWorkspaceDetail
+                .id(selectedSidebarItem)
                 .tint(Color.brandGold)
             }
         }
         .navigationSplitViewStyle(.balanced)
+        .background(alignment: .topLeading) {
+            nativeIPadNavigationShortcutHost
+        }
         .overlay(alignment: .top) {
             appWideFieldCollectionPromptBanner
         }
@@ -298,7 +477,6 @@ struct ContentView: View {
             QuickBooksDataAPI.shared.loadTokens()
             isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
             isGoogleAuthenticated = GoogleAuthManager.shared.isAuthenticated
-            ensurePrimaryAdminExists()
             collapseCloudKitUserDuplicatesIfNeeded()
             cleanupCalendarCreatedCustomersIfNeeded()
             refreshGoogleAccountIdentityIfNeeded()
@@ -316,7 +494,7 @@ struct ContentView: View {
                 visibleItems: updatedItems
             )
             guard resolvedSelection != selectedSidebarItem else { return }
-            withAnimation(.easeInOut(duration: 0.2)) {
+            withAnimation(GunnAireAccessibilityMotionPolicy.easeInOut(duration: 0.2, reduceMotion: reduceMotion)) {
                 selectedSidebarItem = resolvedSelection
             }
         }
@@ -332,7 +510,7 @@ struct ContentView: View {
             }
         }
         .task {
-            await refreshCloudKitContinuityReadiness()
+            await refreshOperationalContinuityState()
             await StaffPushNotificationManager.shared.activateForCurrentSessionIfNeeded()
         }
         .sheet(isPresented: $showingSettings) {
@@ -404,7 +582,7 @@ struct ContentView: View {
             applyPendingAppRouteIfNeeded()
             Task {
                 await refreshAppWideFieldCollectionPrompt()
-                await refreshCloudKitContinuityReadiness()
+                await refreshOperationalContinuityState()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .quickBooksAuthenticationDidChange)) { _ in
@@ -419,16 +597,12 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
             applyPendingAppRouteIfNeeded()
         }
-        .onContinueUserActivity(FieldPaymentHandoff.activityType) { activity in
-            let now = Date()
-            guard let invoiceID = FieldPaymentHandoff.invoiceID(from: activity, now: now) else { return }
-            GunnAireAppIntentRouter.storePaymentCollectionRoute(
-                invoiceID,
-                prefersContactlessGuide: true,
-                expiresAt: activity.expirationDate
+        .focusedSceneValue(
+            \.gunnaireNavigationCommandContext,
+            GunnAireNavigationCommandContext(
+                visibleSidebarItems: Set(visibleSidebarItems)
             )
-            applyPendingAppRouteIfNeeded()
-        }
+        )
         .tint(Color.brandGold)
     }
 
@@ -462,6 +636,11 @@ struct ContentView: View {
         #endif
 
         cloudKitReadiness = await GunnAireCloudKit.accountReadiness()
+    }
+
+    @MainActor
+    private func refreshOperationalContinuityState() async {
+        await refreshCloudKitContinuityReadiness()
     }
 
     @ViewBuilder
@@ -524,6 +703,29 @@ struct ContentView: View {
                 .listRowBackground(selectedSidebarItem == item ? Color.brandGold.opacity(0.12) : Color.clear)
         }
     }
+
+    /// Scene command menus remain the native Mac presentation. Native iPadOS
+    /// needs an in-view command responder for attached-keyboard shortcuts to
+    /// remain dependable while focus moves between split-view columns, forms,
+    /// and sheets. These buttons have no visual or accessibility footprint;
+    /// authorization still flows through the same central route resolver.
+    @ViewBuilder
+    private var nativeIPadNavigationShortcutHost: some View {
+        #if targetEnvironment(macCatalyst)
+        EmptyView()
+        #else
+        GunnAireIPadKeyCommandBridge(onRoute: openKeyboardRoute)
+        .frame(width: 1, height: 1)
+        .opacity(0.01)
+        .clipped()
+        .accessibilityHidden(true)
+        #endif
+    }
+
+    private func openKeyboardRoute(_ route: GunnAireAppRoute) {
+        GunnAireAppIntentRouter.store(route)
+        applyPendingAppRouteIfNeeded()
+    }
     
     private func iconName(for item: SidebarItem) -> String {
         switch item {
@@ -541,11 +743,6 @@ struct ContentView: View {
         case .syncIntegrations: return "arrow.triangle.2.circlepath"
         case .onsiteDocumentation: return "book"
         }
-    }
-
-    private func ensurePrimaryAdminExists() {
-        guard !users.contains(where: { $0.email == AppAccess.primaryAdminEmail }) else { return }
-        modelContext.insert(AppUser(email: AppAccess.primaryAdminEmail, role: .admin))
     }
 
     private func collapseCloudKitUserDuplicatesIfNeeded() {
@@ -691,7 +888,7 @@ struct ContentView: View {
     /// every iPad and Mac workspace without duplicating business queries here.
     private func openAppWideFind() {
         guard visibleSidebarItems.contains(.commandCenter) else { return }
-        withAnimation(.easeInOut(duration: 0.2)) {
+        withAnimation(GunnAireAccessibilityMotionPolicy.easeInOut(duration: 0.2, reduceMotion: reduceMotion)) {
             selectedSidebarItem = .commandCenter
             columnVisibility = prefersPersistentSidebar ? .doubleColumn : .detailOnly
         }
@@ -701,7 +898,13 @@ struct ContentView: View {
     private func applyPendingAppRouteIfNeeded() {
         guard let route = pendingAppRoute else { return }
         let targetItem = route.sidebarItem
-        withAnimation(.easeInOut(duration: 0.2)) {
+
+        #if DEBUG
+        // App Store capture launches directly into a requested fixture route.
+        // Present that initial route atomically: an animated split-view change
+        // can leave the system status bar or persistent iPad sidebar between
+        // frames even after the destination navigation bar already exists.
+        if ProcessInfo.processInfo.arguments.contains(AppStoreScreenshotPrivacyPolicy.fixtureArgument) {
             if visibleSidebarItems.contains(targetItem) {
                 selectedSidebarItem = targetItem
             } else {
@@ -713,6 +916,66 @@ struct ContentView: View {
                 restrictedRouteTitle = targetItem.rawValue
             }
             columnVisibility = prefersPersistentSidebar ? .doubleColumn : .detailOnly
+            return
+        }
+        #endif
+
+        withAnimation(GunnAireAccessibilityMotionPolicy.easeInOut(duration: 0.2, reduceMotion: reduceMotion)) {
+            if visibleSidebarItems.contains(targetItem) {
+                selectedSidebarItem = targetItem
+            } else {
+                GunnAireAppIntentRouter.discardPendingPayload(for: route)
+                selectedSidebarItem = SidebarNavigationPolicy.resolvedSelection(
+                    nil,
+                    visibleItems: visibleSidebarItems
+                )
+                restrictedRouteTitle = targetItem.rawValue
+            }
+            columnVisibility = prefersPersistentSidebar ? .doubleColumn : .detailOnly
+        }
+    }
+}
+
+/// Keeps the split-view selection transition shallow before constructing the
+/// full invoice workspace. The billing builder intentionally remains feature
+/// complete, but its large SwiftUI metadata tree must not be materialized in
+/// the same render pass that removes the previous sidebar destination on a
+/// physical iPad. Doing both at once can exhaust Swift's metadata-resolution
+/// stack before the first invoice row is presented.
+private struct InvoiceWorkspaceTransitionHost: View {
+    /// The production invoice store can hold hundreds of billing records and
+    /// related line items. Leave a complete render cycle between destinations
+    /// so the previous workspace is released before that graph is resolved.
+    private static let workspaceSettlementDelay = Duration.milliseconds(650)
+
+    @State private var isReady = false
+
+    var body: some View {
+        Group {
+            if isReady {
+                AnyView(BillingDocumentsView(workspaceMode: .invoices))
+            } else {
+                ProgressView("Loading invoices…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .navigationTitle("Invoices")
+                    .accessibilityIdentifier("InvoiceWorkspaceTransitionGuard")
+            }
+        }
+        .transition(.identity)
+        .task {
+            guard !isReady else { return }
+            await Task.yield()
+            do {
+                try await Task.sleep(for: Self.workspaceSettlementDelay)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                isReady = true
+            }
         }
     }
 }
@@ -729,11 +992,117 @@ struct ContentView: View {
 
 // ... rest of the file remains unchanged ...
 
-// MARK: - Service Call Detail View (unchanged except foregroundColor)
+private struct ServiceCallJobBriefView: View {
+    let customerName: String
+    let phone: String?
+    let email: String?
+    let technicianName: String?
+    let crewTechnicianNames: [String]
+    let scheduledDate: Date
+    let promisedArrivalWindowSummary: String?
+    let duration: TimeInterval
+    let statusDisplayName: String
+    let presenceDisplayName: String
+    let presenceSystemImage: String
+    let presenceIsEnRoute: Bool
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 185), spacing: 18, alignment: .topLeading)
+    ]
+
+    var body: some View {
+        GroupBox("Job Brief") {
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+                customerSummary
+                scheduleSummary
+                assignmentSummary
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityIdentifier("ServiceCallJobBrief")
+    }
+
+    private var customerSummary: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Label("Customer", systemImage: "person.crop.circle")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(customerName)
+                .font(.headline)
+                .accessibilityLabel("Customer: \(customerName)")
+            if let phone = normalized(phone) {
+                Label(phone, systemImage: "phone")
+                    .font(.subheadline)
+                    .accessibilityLabel("Phone: \(phone)")
+            }
+            if let email = normalized(email) {
+                Label(email, systemImage: "envelope")
+                    .font(.subheadline)
+                    .accessibilityLabel("Email: \(email)")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private var scheduleSummary: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Label("Schedule", systemImage: "calendar")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                .font(.headline)
+                .accessibilityLabel("Scheduled work: \(scheduledDate.formatted(date: .abbreviated, time: .shortened))")
+            if let promisedArrivalWindowSummary = normalized(promisedArrivalWindowSummary) {
+                Text(promisedArrivalWindowSummary)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Customer arrival window: \(promisedArrivalWindowSummary)")
+            }
+            Text("\(Int(duration / 60)) minutes")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Duration: \(Int(duration / 60)) minutes")
+            Text(statusDisplayName)
+                .font(.subheadline)
+                .accessibilityLabel("Status: \(statusDisplayName)")
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private var assignmentSummary: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Label("Assignment", systemImage: "person.2")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(technicianName ?? "Unassigned")
+                .font(.headline)
+                .accessibilityLabel("Technician: \(technicianName ?? "Unassigned")")
+            if !crewTechnicianNames.isEmpty {
+                Text(crewTechnicianNames.joined(separator: ", "))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Crew: \(crewTechnicianNames.joined(separator: ", "))")
+            }
+            Label(presenceDisplayName, systemImage: presenceSystemImage)
+                .font(.subheadline)
+                .foregroundColor(presenceIsEnRoute ? .orange : .secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private func normalized(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+// MARK: - Service Call Detail View
 
 struct ServiceCallDetailView: View {
     @Environment(\.openURL) private var openURL
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.gunnaireReduceMotion) private var reduceMotion
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
@@ -863,11 +1232,11 @@ struct ServiceCallDetailView: View {
     }
 
     private var availableFieldFormTemplates: [FieldFormTemplate] {
-        fieldFormTemplates.filter { $0.isActive && $0.applies(to: call.type) }
+        fieldFormTemplates.filter { $0.isActive && $0.isListed(for: call.type) }
     }
 
     private var completedFieldFormResponses: [FieldFormResponse] {
-        fieldFormResponses.filter { $0.serviceCallID == call.id }
+        FieldFormHistoryPolicy.responses(fieldFormResponses, for: call.id)
     }
 
     private var fieldFormCloseoutReadiness: FieldFormCloseoutReadiness {
@@ -979,13 +1348,12 @@ GunnAire
     }
 
     private var linkedPayments: [Payment] {
-        guard let invoiceID = call.linkedInvoiceID else { return [] }
+        guard let invoiceID = linkedInvoice?.id else { return [] }
         return payments.filter { $0.invoice.id == invoiceID }
     }
 
     private var linkedInvoice: Invoice? {
-        guard let invoiceID = call.linkedInvoiceID else { return nil }
-        return invoices.first { $0.id == invoiceID }
+        BillingMilestoneReconciliation.linkedInvoice(for: call, in: invoices, payments: payments)
     }
 
     private var linkedEstimate: Estimate? {
@@ -998,6 +1366,18 @@ GunnAire
         return estimates
             .filter { $0.serviceCallID == call.id && $0.proposalGroupID == groupID }
             .sorted { ($0.proposalOptionKind?.comparisonRank ?? Int.max) < ($1.proposalOptionKind?.comparisonRank ?? Int.max) }
+    }
+
+    private var portalApprovalEstimate: Estimate? {
+        guard let estimate = linkedEstimate,
+              estimate.serviceCallID == call.id,
+              !estimate.proposalIsFinalized,
+              !["rejected", "not-selected"].contains(estimate.status.lowercased()),
+              estimate.customerApprovalBlockedMessage == nil,
+              EstimateProposalPolicy.selectionIssue(for: estimate, in: estimates) == nil else {
+            return nil
+        }
+        return estimate
     }
 
     private var totalPaid: Double {
@@ -2020,33 +2400,20 @@ GunnAire
                         .font(.largeTitle)
                         .foregroundColor(Color.brandGold)
 
-                    Group {
-                        Text("Customer: \(call.customer.name)")
-                        if let phone = call.customer.phone, !phone.isEmpty {
-                            Text("Phone: \(phone)")
-                        }
-                        if let email = call.customer.email, !email.isEmpty {
-                            Text("Email: \(email)")
-                        }
-                        if let tech = call.assignedTechnician {
-                            Text("Technician: \(tech.name)")
-                        } else {
-                            Text("Technician: Unassigned")
-                        }
-                        if !crewTechnicianNames.isEmpty {
-                            Text("Crew: \(crewTechnicianNames.joined(separator: ", "))")
-                        }
-                        Text("Scheduled work: \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))")
-                        if let promisedArrivalWindowSummary = call.promisedArrivalWindowSummary {
-                            Text("Customer arrival window: \(promisedArrivalWindowSummary)")
-                                .foregroundColor(.secondary)
-                        }
-                        Text("Duration: \(Int(call.duration / 60)) minutes")
-                        Text("Status: \(call.status.rawValue.capitalized)")
-                        Label(call.technicianJobPresence.displayName, systemImage: presenceSystemImage)
-                            .foregroundColor(call.technicianJobPresence == .enRoute ? .orange : .secondary)
-                    }
-                    .foregroundColor(.primary)
+                    ServiceCallJobBriefView(
+                        customerName: call.customer.name,
+                        phone: call.customer.phone,
+                        email: call.customer.email,
+                        technicianName: call.assignedTechnician?.name,
+                        crewTechnicianNames: crewTechnicianNames,
+                        scheduledDate: call.scheduledDate,
+                        promisedArrivalWindowSummary: call.promisedArrivalWindowSummary,
+                        duration: call.duration,
+                        statusDisplayName: call.status == .inProgress ? "In Progress" : call.status.rawValue.capitalized,
+                        presenceDisplayName: call.technicianJobPresence.displayName,
+                        presenceSystemImage: presenceSystemImage,
+                        presenceIsEnRoute: call.technicianJobPresence == .enRoute
+                    )
 
                     GroupBox("Job Workspace") {
                         VStack(alignment: .leading, spacing: 8) {
@@ -2066,6 +2433,10 @@ GunnAire
 
                     if hasJobStatusAction {
                         jobActionsSection
+                    }
+
+                    if selectedWorkspace == .overview && canScheduleApprovedWork {
+                        JobBillingAccessRow(call: call)
                     }
 
                     if selectedWorkspace == .overview {
@@ -2347,18 +2718,21 @@ GunnAire
                                     let isCompleted = FieldFormCloseoutPolicy.responseCompletes(
                                         template,
                                         serviceCallID: call.id,
-                                        responses: fieldFormResponses
+                                        responses: fieldFormResponses,
+                                        originalTemplates: fieldFormTemplates
                                     )
-                                    NavigationLink {
-                                        FieldFormResponseEditor(template: template, serviceCall: call, actorEmail: currentActivityActor)
-                                    } label: {
+                                    FieldFormDraftNavigationLink(template: template, serviceCall: call, actorEmail: currentActivityActor) {
                                         HStack {
                                             Label(
                                                 template.title,
                                                 systemImage: isCompleted ? "checkmark.circle.fill" : "checklist"
                                             )
                                             Spacer()
-                                            if template.requiresCompletionForCloseout {
+                                            if template.dataReviewIssue != nil {
+                                                Text("Needs review")
+                                                    .font(.caption2.weight(.semibold))
+                                                    .foregroundStyle(.orange)
+                                            } else if template.requiresCompletionForCloseout {
                                                 Text(isCompleted ? "Complete" : "Required")
                                                     .font(.caption2.weight(.semibold))
                                                     .foregroundStyle(isCompleted ? Color.green : Color.orange)
@@ -2368,13 +2742,14 @@ GunnAire
                                     .buttonStyle(.bordered)
                                 }
                             }
+                            FieldFormDraftLinks(serviceCallID: call.id, actorEmail: currentActivityActor)
                             if completedFieldFormResponses.isEmpty {
                                 Text("No reusable field forms completed for this job yet.")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             } else {
                                 Divider()
-                                Text("Completed")
+                                Text("Saved forms")
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(.secondary)
                                 ForEach(completedFieldFormResponses.prefix(3)) { response in
@@ -2392,8 +2767,13 @@ GunnAire
                                             Text(response.completedAt.formatted(date: .abbreviated, time: .shortened))
                                                 .font(.caption2)
                                                 .foregroundStyle(.secondary)
+                                            if response.completionReviewIssue(resolving: fieldFormTemplates.first { $0.id == response.templateID }) != nil {
+                                                Label("Needs review", systemImage: "exclamationmark.triangle")
+                                                    .font(.caption2)
+                                            }
                                         }
                                     }
+                                    .accessibilityIdentifier("SavedFieldFormResponse-\(response.id.uuidString)")
                                 }
                                 if completedFieldFormResponses.count > 3 {
                                     NavigationLink {
@@ -2414,77 +2794,6 @@ GunnAire
 
                     GroupBox("Work Performed") {
                         VStack(alignment: .leading, spacing: 10) {
-                            if workPerformedEntries.isEmpty {
-                                Label(
-                                    requireWorkPerformedLogForCloseout && call.requiresTechnicalServiceReportCompletion
-                                        ? "A work log is required before this job can be completed."
-                                        : "No work-performed entries have been added yet.",
-                                    systemImage: requireWorkPerformedLogForCloseout && call.requiresTechnicalServiceReportCompletion
-                                        ? "exclamationmark.triangle.fill"
-                                        : "text.badge.plus"
-                                )
-                                .font(.caption)
-                                .foregroundStyle(
-                                    requireWorkPerformedLogForCloseout && call.requiresTechnicalServiceReportCompletion
-                                        ? Color.orange
-                                        : Color.secondary
-                                )
-                                .accessibilityIdentifier("WorkPerformedEmptyState")
-                            } else {
-                                let visibleEntries = expandedWorkLogHistory
-                                    ? workPerformedEntries
-                                    : Array(workPerformedEntries.prefix(3))
-                                ForEach(visibleEntries) { entry in
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        HStack(alignment: .firstTextBaseline) {
-                                            Text(ServiceWorkLogPolicy.actorDisplayName(entry.actorEmail) ?? "GunnAire staff")
-                                                .font(.caption.weight(.semibold))
-                                            Spacer()
-                                            Text(entry.occurredAt.formatted(date: .abbreviated, time: .shortened))
-                                                .font(.caption2)
-                                                .foregroundStyle(.secondary)
-                                        }
-                                        Text(entry.detail)
-                                            .font(.caption)
-                                            .textSelection(.enabled)
-                                    }
-                                    .padding(9)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                    .accessibilityElement(children: .combine)
-                                }
-                                if workPerformedEntries.count > 3 {
-                                    Button(expandedWorkLogHistory ? "Show Recent Entries" : "Show All \(workPerformedEntries.count) Entries") {
-                                        withAnimation { expandedWorkLogHistory.toggle() }
-                                    }
-                                    .font(.caption.weight(.semibold))
-                                    .accessibilityIdentifier("ToggleFullWorkLog")
-                                }
-                            }
-
-                            Divider()
-
-                            if let currentCustomerWorkSummary {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Label("Customer work summary ready", systemImage: "doc.text.fill")
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundStyle(.green)
-                                    Text(currentCustomerWorkSummary)
-                                        .font(.caption)
-                                        .lineLimit(4)
-                                    if !customerWorkSummaryRevisions.isEmpty {
-                                        Text("\(customerWorkSummaryRevisions.count) retained summary revision\(customerWorkSummaryRevisions.count == 1 ? "" : "s")")
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                                .accessibilityIdentifier("CurrentCustomerWorkSummary")
-                            } else {
-                                Text("The customer-facing service report summary has not been prepared yet.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-
                             if canUpdateCurrentJob {
                                 ViewThatFits(in: .horizontal) {
                                     HStack(spacing: 8) {
@@ -2532,6 +2841,79 @@ GunnAire
                                         .accessibilityIdentifier("ReviewCustomerWorkSummary")
                                     }
                                 }
+                            }
+
+                            if workPerformedEntries.isEmpty {
+                                Label(
+                                    requireWorkPerformedLogForCloseout && call.requiresTechnicalServiceReportCompletion
+                                        ? "A work log is required before this job can be completed."
+                                        : "No work-performed entries have been added yet.",
+                                    systemImage: requireWorkPerformedLogForCloseout && call.requiresTechnicalServiceReportCompletion
+                                        ? "exclamationmark.triangle.fill"
+                                        : "text.badge.plus"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(
+                                    requireWorkPerformedLogForCloseout && call.requiresTechnicalServiceReportCompletion
+                                        ? Color.orange
+                                        : Color.secondary
+                                )
+                                .accessibilityIdentifier("WorkPerformedEmptyState")
+                            } else {
+                                let visibleEntries = expandedWorkLogHistory
+                                    ? workPerformedEntries
+                                    : Array(workPerformedEntries.prefix(3))
+                                ForEach(visibleEntries) { entry in
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        HStack(alignment: .firstTextBaseline) {
+                                            Text(ServiceWorkLogPolicy.actorDisplayName(entry.actorEmail) ?? "GunnAire staff")
+                                                .font(.caption.weight(.semibold))
+                                            Spacer()
+                                            Text(entry.occurredAt.formatted(date: .abbreviated, time: .shortened))
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        Text(entry.detail)
+                                            .font(.caption)
+                                            .textSelection(.enabled)
+                                    }
+                                    .padding(9)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                    .accessibilityElement(children: .combine)
+                                }
+                                if workPerformedEntries.count > 3 {
+                                    Button(expandedWorkLogHistory ? "Show Recent Entries" : "Show All \(workPerformedEntries.count) Entries") {
+                                        withAnimation(GunnAireAccessibilityMotionPolicy.standardAnimation(reduceMotion: reduceMotion)) {
+                                            expandedWorkLogHistory.toggle()
+                                        }
+                                    }
+                                    .font(.caption.weight(.semibold))
+                                    .accessibilityIdentifier("ToggleFullWorkLog")
+                                }
+                            }
+
+                            Divider()
+
+                            if let currentCustomerWorkSummary {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Label("Customer work summary ready", systemImage: "doc.text.fill")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.green)
+                                    Text(currentCustomerWorkSummary)
+                                        .font(.caption)
+                                        .lineLimit(4)
+                                    if !customerWorkSummaryRevisions.isEmpty {
+                                        Text("\(customerWorkSummaryRevisions.count) retained summary revision\(customerWorkSummaryRevisions.count == 1 ? "" : "s")")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .accessibilityIdentifier("CurrentCustomerWorkSummary")
+                            } else {
+                                Text("The customer-facing service report summary has not been prepared yet.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
 
                             Text("Entries are append-only and remain available offline. The reviewed summary feeds the existing service report and customer-document workflow.")
@@ -3180,8 +3562,8 @@ GunnAire
                     if selectedWorkspace == .billing && canViewFinancials && hasOpenInvoiceBalance {
                         VStack(spacing: 10) {
                             Button {
-                                if let linkedInvoiceID = call.linkedInvoiceID {
-                                    GunnAireAppIntentRouter.storePaymentCollectionRoute(linkedInvoiceID)
+                                if let linkedInvoiceID = linkedInvoice?.id {
+                                    GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(linkedInvoiceID)
                                 } else {
                                     GunnAireAppIntentRouter.storeDocumentationRoute(call.id)
                                 }
@@ -3229,6 +3611,7 @@ GunnAire
             CustomerPortalLinkComposer(
                 call: call,
                 invoice: linkedInvoice,
+                estimate: portalApprovalEstimate,
                 balanceDue: linkedInvoice == nil ? nil : invoiceBalanceDue
             )
             .tint(Color.brandGold)
@@ -3573,6 +3956,7 @@ private struct CustomerPortalLinkComposer: View {
     @Environment(\.dismiss) private var dismiss
     let call: ServiceCall
     let invoice: Invoice?
+    let estimate: Estimate?
     let balanceDue: Double?
 
     @State private var expiryDays = 14
@@ -3591,9 +3975,25 @@ private struct CustomerPortalLinkComposer: View {
                     Text(call.customer.name)
                     Text(call.customer.email ?? "No email")
                         .foregroundStyle(.secondary)
-                    Text("This link only shows this appointment and its linked invoice summary. It cannot be used to browse customer records, edit a job, or take a payment.")
+                    Text(estimate == nil
+                         ? "This link only shows this appointment and its linked invoice summary. It cannot browse customer records, edit a job, or take a payment."
+                         : "This link shows this appointment and the exact selected estimate. The customer can approve that estimate; scheduling, job edits, and payment remain separate.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+
+                if let estimate {
+                    Section("Estimate Approval") {
+                        LabeledContent {
+                            Text(estimate.amount.formatted(.currency(code: "USD")))
+                                .accessibilityIdentifier("PortalEstimateAmount")
+                        } label: {
+                            Text(estimate.proposalLabel)
+                        }
+                        Text("Approval is bound to this exact amount and line-item revision. If the estimate changes, the response will require administrator review instead of applying automatically.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 Section("Link Expiry") {
@@ -3651,6 +4051,7 @@ private struct CustomerPortalLinkComposer: View {
                     customer: call.customer,
                     serviceCall: call,
                     invoice: invoice,
+                    estimate: estimate,
                     balanceDue: balanceDue,
                     expiresInDays: expiryDays
                 )
@@ -3778,6 +4179,7 @@ struct AddServiceCallView: View {
     @AppStorage("defaultJobDurationMinutes") private var defaultJobDurationMinutes = 90
     
     @State private var callType: ServiceCallType = .service
+    @State private var jobSaveMessage: String?
     @State private var dispatchUrgency: ServiceRequestUrgency = .normal
     @State private var eventTitle = ""
     @State private var customer: Customer?
@@ -4303,6 +4705,9 @@ struct AddServiceCallView: View {
             }
         }
         .tint(Color.brandGold) // Accent color gold for form controls using Color
+        .alert("Job not saved", isPresented: Binding(get: { jobSaveMessage != nil }, set: { if !$0 { jobSaveMessage = nil } })) {
+            Button("Keep Editing", role: .cancel) { jobSaveMessage = nil }
+        } message: { Text(jobSaveMessage ?? "Keep this form open and try Save again.") }
         .sheet(isPresented: $showingEquipmentNameplateCapture) {
             EquipmentNameplateCaptureSheet { draft in
                 applyEquipmentNameplateDraft(draft)
@@ -4407,6 +4812,15 @@ struct AddServiceCallView: View {
             equipment.applyTechnicalBaselines(to: call)
         }
         modelContext.insert(call)
+        do {
+            try JobBillingDispatch.shared.save(call, original: nil, context: modelContext)
+        } catch {
+            // Only the just-inserted unsaved job is removed; form values and
+            // unrelated model changes are retained. Never dismiss on failure.
+            modelContext.delete(call)
+            jobSaveMessage = (error as? JobBillingDispatchError)?.localizedDescription ?? JobBillingDispatchError.save.localizedDescription
+            return
+        }
         publishToGoogleCalendar(call)
         dismiss()
         if openDocumentationAfterSave {
@@ -4499,8 +4913,6 @@ struct AddServiceCallView: View {
     }
 
     private func publishToGoogleCalendar(_ call: ServiceCall) {
-        guard googleAuth.isAuthenticated else { return }
-        try? modelContext.save()
         let signedInEmail = AppIdentity.currentEmail
         GoogleCalendarScheduleSync.exportImmediately(
             call: call,
@@ -4559,6 +4971,9 @@ struct EditServiceCallView: View {
 
     let call: ServiceCall
 
+    @State private var jobSaveMessage: String?
+    @State private var billingEditRevision: JobBillingLocalRevision
+
     @State private var callType: ServiceCallType
     @State private var dispatchUrgency: ServiceRequestUrgency
     @State private var eventTitle: String
@@ -4602,6 +5017,7 @@ struct EditServiceCallView: View {
 
     init(call: ServiceCall) {
         self.call = call
+        _billingEditRevision = State(initialValue: JobBillingLocalRevision(call))
         let storedEventTitle = call.eventTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
         let recoveredEventTitle = GoogleCalendarScheduleSync.calendarEventSummary(from: call.notes)
         let initialEventTitle: String
@@ -5027,6 +5443,9 @@ struct EditServiceCallView: View {
             }
             .disabled(!canManageDispatch)
             .navigationTitle("Edit Service Call")
+            .alert("Job not saved", isPresented: Binding(get: { jobSaveMessage != nil }, set: { if !$0 { jobSaveMessage = nil } })) {
+                Button("Keep Editing", role: .cancel) { jobSaveMessage = nil }
+            } message: { Text(jobSaveMessage ?? "Keep this form open and try Save again.") }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -5171,6 +5590,17 @@ struct EditServiceCallView: View {
         guard !workLogBlocksRequestedStatus else { return }
         guard let customer else { return }
         guard !serviceRestrictionBlocksSave else { return }
+        let originalBillingTarget: JobBillingTarget
+        let restoreFailedEdit: () -> Void
+        do {
+            let (revision, target) = try JobBillingTarget.capture(call, context: modelContext)
+            guard revision == billingEditRevision else { throw JobBillingDispatchError.changed }
+            originalBillingTarget = target
+            restoreFailedEdit = try ServiceCallEditRollback.capture(call, context: modelContext)
+        } catch {
+            jobSaveMessage = JobBillingDispatchError.changed.localizedDescription
+            return
+        }
         let originalStart = call.scheduledDate
         let originalArrivalWindow = call.promisedArrivalWindowSummary
         let originalStatus = call.status
@@ -5269,10 +5699,18 @@ struct EditServiceCallView: View {
             ServiceCallActivity.record(for: call, action: "Dispatch priority updated", detail: "Priority changed from \(originalDispatchUrgency.displayName) to \(dispatchUrgency.displayName).", actorEmail: actorEmail, in: modelContext)
         }
         let shouldPublishCalendarChanges = GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call)
+        billingEditRevision = JobBillingLocalRevision(call)
+        do {
+            try JobBillingDispatch.shared.save(call, original: originalBillingTarget, context: modelContext)
+        } catch {
+            restoreFailedEdit()
+            billingEditRevision = JobBillingLocalRevision(call)
+            jobSaveMessage = (error as? JobBillingDispatchError)?.localizedDescription ?? JobBillingDispatchError.save.localizedDescription
+            return
+        }
         if shouldPublishCalendarChanges {
             GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(call)
         }
-        try? modelContext.save()
         if status == .cancelled {
             cancelManagedGoogleCalendarEvent(for: call)
         } else if shouldPublishCalendarChanges {
@@ -5282,7 +5720,6 @@ struct EditServiceCallView: View {
     }
 
     private func publishToGoogleCalendar(_ call: ServiceCall) {
-        guard googleAuth.isAuthenticated else { return }
         let signedInEmail = AppIdentity.currentEmail
         GoogleCalendarScheduleSync.exportImmediately(
             call: call,
@@ -5294,7 +5731,6 @@ struct EditServiceCallView: View {
     }
 
     private func cancelManagedGoogleCalendarEvent(for call: ServiceCall) {
-        guard googleAuth.isAuthenticated else { return }
         GoogleCalendarScheduleSync.cancelManagedEventImmediately(
             for: call,
             auth: googleAuth,

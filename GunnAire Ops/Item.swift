@@ -11,13 +11,31 @@ import SwiftData
 enum CatalogItemType: String, Codable, CaseIterable, Identifiable {
     case service = "Service"
     case nonInventory = "NonInventory"
+    case inventory = "Inventory"
+    case group = "Group"
+    case category = "Category"
+    case unknown = "Unknown"
 
     var id: String { rawValue }
+    static var creatableCases: [Self] { [.service, .nonInventory, .inventory] }
+    var isDirectSalesItem: Bool { Self.creatableCases.contains(self) }
+    var isMaterial: Bool { self == .nonInventory || self == .inventory }
+    var label: String {
+        switch self {
+        case .service: "Service"
+        case .nonInventory: "Non-inventory"
+        case .inventory: "Inventory"
+        case .group: "Bundle"
+        case .category: "Category"
+        case .unknown: "Needs type review"
+        }
+    }
 }
 
 enum PricebookReviewStatus: String, Codable, CaseIterable {
     case approved
     case needsReview = "needs_review"
+    case archived
 }
 
 /// A reusable service package can either remain one customer-facing flat-rate
@@ -161,21 +179,24 @@ struct AuthorizedDocumentDiscount: Codable, Equatable {
     let authorizedAt: Date
 
     func amount(for grossSubtotal: Double) -> Double? {
-        guard grossSubtotal.isFinite,
-              grossSubtotal >= 0,
-              BillingDocumentDiscountPolicy.currencyCents(grossSubtotal) ==
-                BillingDocumentDiscountPolicy.currencyCents(grossSubtotalAtAuthorization) else {
+        guard let cents = BillingDocumentDiscountPolicy.currencyCents(grossSubtotal),
+              cents == BillingDocumentDiscountPolicy.currencyCents(grossSubtotalAtAuthorization),
+              value.isFinite, value >= 0,
+              let decimalValue = Decimal(string: String(value), locale: Locale(identifier: "en_US_POSIX")) else {
             return nil
         }
-        let rawAmount: Double
+        // The saved subtotal is currency, and percentage multiplication must
+        // stay decimal through the half-cent boundary (346.75 × 10% = 34.68).
+        let gross = Decimal(cents) / 100
+        let rawAmount: Decimal
         switch kind {
         case .percentage:
-            rawAmount = grossSubtotal * value / 100
+            rawAmount = gross * decimalValue / 100
         case .fixedAmount:
-            rawAmount = value
+            rawAmount = decimalValue
         }
-        guard rawAmount.isFinite, rawAmount >= 0 else { return nil }
-        return min(BillingDocumentDiscountPolicy.roundCurrency(rawAmount), grossSubtotal)
+        guard !rawAmount.isNaN, rawAmount >= 0 else { return nil }
+        return QuickBooksSalesLineContract.double(min(QuickBooksSalesLineContract.rounded(rawAmount), gross))
     }
 
     var valueDisplayName: String {
@@ -271,7 +292,7 @@ enum BillingDocumentDiscountPolicy {
     static func netSubtotal(snapshotJSON: String?) -> Double? {
         let lines = CatalogLineItemSnapshot.decoded(from: snapshotJSON)
         guard !lines.isEmpty else { return nil }
-        let grossSubtotal = lines.reduce(0) { $0 + ($1.unitPrice * $1.quantity) }
+        let grossSubtotal = lines.reduce(0) { $0 + $1.extendedAmount }
         guard grossSubtotal.isFinite, grossSubtotal >= 0 else { return nil }
         if let discount = CatalogLineItemSnapshot.documentDiscount(from: snapshotJSON) {
             guard let discountAmount = discount.amount(for: grossSubtotal) else { return nil }
@@ -283,19 +304,21 @@ enum BillingDocumentDiscountPolicy {
     static func grossSubtotal(snapshotJSON: String?) -> Double? {
         let lines = CatalogLineItemSnapshot.decoded(from: snapshotJSON)
         guard !lines.isEmpty else { return nil }
-        let total = lines.reduce(0) { $0 + ($1.unitPrice * $1.quantity) }
+        let total = lines.reduce(0) { $0 + $1.extendedAmount }
         return total.isFinite && total >= 0 ? roundCurrency(total) : nil
     }
 
     static func roundCurrency(_ value: Double) -> Double {
-        Double((value * 100).rounded()) / 100
+        guard value.isFinite, let decimal = Decimal(string: String(value), locale: Locale(identifier: "en_US_POSIX")) else { return value }
+        return QuickBooksSalesLineContract.double(QuickBooksSalesLineContract.rounded(decimal))
     }
 
     static func currencyCents(_ value: Double) -> Int64? {
-        guard value.isFinite,
-              value >= 0,
-              value <= Double(Int64.max) / 100 else { return nil }
-        return Int64((value * 100).rounded())
+        guard value.isFinite, value >= 0,
+              let decimal = Decimal(string: String(value), locale: Locale(identifier: "en_US_POSIX")) else { return nil }
+        let cents = QuickBooksSalesLineContract.rounded(decimal) * 100
+        guard !cents.isNaN, cents >= 0, cents <= Decimal(Int64.max) else { return nil }
+        return NSDecimalNumber(decimal: cents).int64Value
     }
 }
 
@@ -395,6 +418,7 @@ enum BillingPriceAdjustmentAudit {
             entries.append(existing)
         }
         let adjustmentEntries = CatalogLineItemSnapshot.decoded(from: snapshotJSON)
+            .flatMap(\.soldLeaves)
             .filter(\.hasAuthorizedPriceAdjustment)
             .compactMap { snapshot -> String? in
                 guard let reason = normalized(snapshot.priceAdjustmentReason),
@@ -411,6 +435,7 @@ enum BillingPriceAdjustmentAudit {
 
     static func customerDocumentSummary(snapshotJSON: String?) -> String? {
         let summaries = CatalogLineItemSnapshot.decoded(from: snapshotJSON)
+            .flatMap(\.soldLeaves)
             .filter(\.hasAuthorizedPriceAdjustment)
             .compactMap { snapshot -> String? in
                 guard let reason = normalized(snapshot.priceAdjustmentReason) else { return nil }
@@ -544,6 +569,10 @@ enum CatalogLineEquipmentAssignmentPolicy {
 /// price, cost, tax treatment, part identity, and serviced system that were approved.
 struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
     let catalogItemID: UUID
+    /// New documents retain accounting meaning as well as price. Legacy lines
+    /// without these fields still require the current approved mapping.
+    let itemTypeRawValue: String?
+    let quickBooksItemID: String?
     let name: String
     let description: String?
     let sku: String?
@@ -561,6 +590,9 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
     let priceAdjustmentAuthorizedAt: Date?
     let servicedEquipment: CatalogLineEquipmentSnapshot?
     let assembly: CatalogLineAssemblySnapshot?
+    /// Ordered sold QBO members. Unlike service assemblies, repeated item IDs
+    /// remain separate rows with their own stable position identity.
+    let bundle: CatalogBundleSnapshot?
 
     var id: UUID { catalogItemID }
 
@@ -569,9 +601,15 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
         quantity: Double = 1,
         priceAdjustment: AuthorizedLinePriceAdjustment? = nil,
         servicedEquipment: CatalogLineEquipmentSnapshot? = nil,
-        assembly: CatalogLineAssemblySnapshot? = nil
+        assembly: CatalogLineAssemblySnapshot? = nil,
+        bundle: CatalogBundleSnapshot? = nil
     ) {
         catalogItemID = item.id
+        itemTypeRawValue = item.itemTypeRawValue
+        quickBooksItemID = item.quickBooksID.flatMap {
+            let value = $0.trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : value
+        }
         name = item.name
         description = item.itemDescription
         sku = item.sku
@@ -581,17 +619,20 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
             ? (assembly?.unitPurchaseCost ?? item.purchaseCost)
             : item.purchaseCost
         isTaxable = item.isTaxable
-        self.quantity = max(quantity, 0.0001)
+        self.quantity = quantity
         catalogUpdatedAt = item.timestamp
         priceAdjustmentReason = priceAdjustment?.reason
         priceAdjustmentAuthorizedByEmail = priceAdjustment?.authorizedByEmail
         priceAdjustmentAuthorizedAt = priceAdjustment?.authorizedAt
         self.servicedEquipment = servicedEquipment
         self.assembly = assembly
+        self.bundle = bundle
     }
 
     private init(
         catalogItemID: UUID,
+        itemTypeRawValue: String?,
+        quickBooksItemID: String?,
         name: String,
         description: String?,
         sku: String?,
@@ -605,9 +646,12 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
         priceAdjustmentAuthorizedByEmail: String?,
         priceAdjustmentAuthorizedAt: Date?,
         servicedEquipment: CatalogLineEquipmentSnapshot?,
-        assembly: CatalogLineAssemblySnapshot?
+        assembly: CatalogLineAssemblySnapshot?,
+        bundle: CatalogBundleSnapshot? = nil
     ) {
         self.catalogItemID = catalogItemID
+        self.itemTypeRawValue = itemTypeRawValue
+        self.quickBooksItemID = quickBooksItemID
         self.name = name
         self.description = description
         self.sku = sku
@@ -615,13 +659,14 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
         self.unitPrice = unitPrice
         self.purchaseCost = purchaseCost
         self.isTaxable = isTaxable
-        self.quantity = max(quantity, 0.0001)
+        self.quantity = quantity
         self.catalogUpdatedAt = catalogUpdatedAt
         self.priceAdjustmentReason = priceAdjustmentReason
         self.priceAdjustmentAuthorizedByEmail = priceAdjustmentAuthorizedByEmail
         self.priceAdjustmentAuthorizedAt = priceAdjustmentAuthorizedAt
         self.servicedEquipment = servicedEquipment
         self.assembly = assembly
+        self.bundle = bundle
     }
 
     var hasAuthorizedPriceAdjustment: Bool {
@@ -664,11 +709,12 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
         priceAdjustments: [UUID: AuthorizedLinePriceAdjustment] = [:],
         servicedEquipment: [UUID: CatalogLineEquipmentSnapshot] = [:],
         assemblies: [UUID: CatalogLineAssemblySnapshot] = [:],
+        bundles: [UUID: CatalogLineItemSnapshot] = [:],
         documentDiscount: AuthorizedDocumentDiscount? = nil
     ) -> String? {
         let snapshots = items
             .map {
-                CatalogLineItemSnapshot(
+                bundles[$0.id] ?? CatalogLineItemSnapshot(
                     item: $0,
                     quantity: quantities[$0.id] ?? 1,
                     priceAdjustment: priceAdjustments[$0.id],
@@ -704,6 +750,8 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
     func replacingQuantity(with quantity: Double) -> CatalogLineItemSnapshot {
         CatalogLineItemSnapshot(
             catalogItemID: catalogItemID,
+            itemTypeRawValue: itemTypeRawValue,
+            quickBooksItemID: quickBooksItemID,
             name: name,
             description: description,
             sku: sku,
@@ -717,8 +765,64 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
             priceAdjustmentAuthorizedByEmail: priceAdjustmentAuthorizedByEmail,
             priceAdjustmentAuthorizedAt: priceAdjustmentAuthorizedAt,
             servicedEquipment: servicedEquipment,
-            assembly: assembly
+            assembly: assembly,
+            bundle: bundle
         )
+    }
+
+    func replacingBundle(_ bundle: CatalogBundleSnapshot, quantity: Double? = nil) -> Self {
+        Self(catalogItemID: catalogItemID, itemTypeRawValue: itemTypeRawValue,
+             quickBooksItemID: quickBooksItemID, name: name, description: description, sku: sku,
+             pricebookUnitPrice: pricebookUnitPrice, unitPrice: unitPrice, purchaseCost: purchaseCost,
+             isTaxable: isTaxable, quantity: quantity ?? self.quantity, catalogUpdatedAt: catalogUpdatedAt,
+             priceAdjustmentReason: priceAdjustmentReason,
+             priceAdjustmentAuthorizedByEmail: priceAdjustmentAuthorizedByEmail,
+             priceAdjustmentAuthorizedAt: priceAdjustmentAuthorizedAt, servicedEquipment: servicedEquipment,
+             assembly: assembly, bundle: bundle)
+    }
+
+    func replacingSale(quantity: Double, adjustment: AuthorizedLinePriceAdjustment?, taxable: Bool) -> Self {
+        Self(catalogItemID: catalogItemID, itemTypeRawValue: itemTypeRawValue,
+             quickBooksItemID: quickBooksItemID, name: name, description: description, sku: sku,
+             pricebookUnitPrice: pricebookUnitPrice, unitPrice: adjustment?.unitPrice ?? unitPrice,
+             purchaseCost: purchaseCost, isTaxable: taxable, quantity: quantity, catalogUpdatedAt: catalogUpdatedAt,
+             priceAdjustmentReason: adjustment?.reason ?? priceAdjustmentReason,
+             priceAdjustmentAuthorizedByEmail: adjustment?.authorizedByEmail ?? priceAdjustmentAuthorizedByEmail,
+             priceAdjustmentAuthorizedAt: adjustment?.authorizedAt ?? priceAdjustmentAuthorizedAt,
+             servicedEquipment: servicedEquipment, assembly: assembly, bundle: bundle)
+    }
+
+    func replacingEquipment(_ equipment: CatalogLineEquipmentSnapshot?) -> Self {
+        Self(catalogItemID: catalogItemID, itemTypeRawValue: itemTypeRawValue,
+             quickBooksItemID: quickBooksItemID, name: name, description: description, sku: sku,
+             pricebookUnitPrice: pricebookUnitPrice, unitPrice: unitPrice, purchaseCost: purchaseCost,
+             isTaxable: isTaxable, quantity: quantity, catalogUpdatedAt: catalogUpdatedAt,
+             priceAdjustmentReason: priceAdjustmentReason, priceAdjustmentAuthorizedByEmail: priceAdjustmentAuthorizedByEmail,
+             priceAdjustmentAuthorizedAt: priceAdjustmentAuthorizedAt, servicedEquipment: equipment,
+             assembly: assembly, bundle: bundle)
+    }
+
+    /// The same sold leaves drive tax, cost, stock and audit. Never count a
+    /// zero-price bundle header or multiply already-extended members again.
+    var soldLeaves: [Self] { bundle?.members.map(\.line) ?? [self] }
+    var extendedAmount: Double {
+        if let bundle {
+            var total = Decimal.zero
+            for member in bundle.members {
+                guard let amount = QuickBooksSalesLineContract.decimal(member.line.extendedAmount, places: 2) else { return .nan }
+                total += amount
+            }
+            return QuickBooksSalesLineContract.double(total)
+        }
+        guard let qty = QuickBooksSalesLineContract.decimal(quantity, places: 5, maximum: 999_999),
+              let price = QuickBooksSalesLineContract.decimal(unitPrice, places: 5) else { return .nan }
+        return QuickBooksSalesLineContract.double(QuickBooksSalesLineContract.rounded(qty * price))
+    }
+    var customerSummary: String {
+        let base = "\(name) - \(extendedAmount.formatted(.currency(code: "USD"))) • Qty \(quantity.formatted(.number.precision(.fractionLength(0...5))))"
+        let equipment = servicedEquipment.map { " • System: \($0.customerLabel)" } ?? ""
+        guard let bundle, bundle.printGroupedItems else { return base + equipment }
+        return ([base + equipment] + bundle.members.map { "  " + $0.line.customerSummary }).joined(separator: "\n")
     }
 
     static func decoded(from json: String?) -> [CatalogLineItemSnapshot] {
@@ -744,12 +848,15 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
     private enum CodingKeys: String, CodingKey {
         case catalogItemID, name, description, sku, pricebookUnitPrice, unitPrice, purchaseCost, isTaxable, quantity, catalogUpdatedAt
         case priceAdjustmentReason, priceAdjustmentAuthorizedByEmail, priceAdjustmentAuthorizedAt
-        case servicedEquipment, assembly
+        case servicedEquipment, assembly, bundle
+        case itemTypeRawValue, quickBooksItemID
     }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         catalogItemID = try values.decode(UUID.self, forKey: .catalogItemID)
+        itemTypeRawValue = try values.decodeIfPresent(String.self, forKey: .itemTypeRawValue)
+        quickBooksItemID = try values.decodeIfPresent(String.self, forKey: .quickBooksItemID)
         name = try values.decode(String.self, forKey: .name)
         description = try values.decodeIfPresent(String.self, forKey: .description)
         sku = try values.decodeIfPresent(String.self, forKey: .sku)
@@ -757,13 +864,19 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
         pricebookUnitPrice = try values.decodeIfPresent(Double.self, forKey: .pricebookUnitPrice) ?? unitPrice
         purchaseCost = try values.decodeIfPresent(Double.self, forKey: .purchaseCost)
         isTaxable = try values.decode(Bool.self, forKey: .isTaxable)
-        quantity = max(try values.decodeIfPresent(Double.self, forKey: .quantity) ?? 1, 0.0001)
+        quantity = try values.decodeIfPresent(Double.self, forKey: .quantity) ?? 1
         catalogUpdatedAt = try values.decode(Date.self, forKey: .catalogUpdatedAt)
         priceAdjustmentReason = try values.decodeIfPresent(String.self, forKey: .priceAdjustmentReason)
         priceAdjustmentAuthorizedByEmail = try values.decodeIfPresent(String.self, forKey: .priceAdjustmentAuthorizedByEmail)
         priceAdjustmentAuthorizedAt = try values.decodeIfPresent(Date.self, forKey: .priceAdjustmentAuthorizedAt)
         servicedEquipment = try values.decodeIfPresent(CatalogLineEquipmentSnapshot.self, forKey: .servicedEquipment)
         assembly = try values.decodeIfPresent(CatalogLineAssemblySnapshot.self, forKey: .assembly)
+        // Reject recursive bundle evidence before decoding another member tree.
+        if values.contains(.bundle), !((try? values.decodeNil(forKey: .bundle)) ?? false),
+           decoder.codingPath.contains(where: { $0.stringValue == "bundle" }) {
+            throw DecodingError.dataCorruptedError(forKey: .bundle, in: values, debugDescription: "Nested bundles are unsupported")
+        }
+        bundle = try values.decodeIfPresent(CatalogBundleSnapshot.self, forKey: .bundle)
     }
 }
 
@@ -775,14 +888,22 @@ private struct CatalogDocumentSnapshotEnvelope: Codable {
 
 @Model
 final class Item {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var quickBooksID: String?
-    /// `pending`, `synced`, or `needs_attention`. This is intentionally stored
-    /// with the pricebook item so an offline-created line can be retried after
-    /// the originating invoice screen has been dismissed.
+    /// `pending`, `pending_update`, `synced`, `needs_review`, `archived`, or
+    /// `needs_attention`. This is intentionally stored with the pricebook item
+    /// so offline creation and administrator-staged changes remain recoverable
+    /// after the originating screen has been dismissed.
     var quickBooksSyncStatus: String = "pending"
     var quickBooksSyncDetail: String?
     var quickBooksLastSyncedAt: Date?
+    /// Evidence for the last applied catalog projection, not an all-fields or
+    /// webhook acknowledgement. Optional for existing local/CloudKit records.
+    var quickBooksCatalogReceiptJSON: String?
+    /// Original-business opening proposal, never a stock-adjustment queue.
+    var quickBooksInventorySetupJSON: String?
+    /// Read-only provider balances, account identities, hierarchy and bundles.
+    var quickBooksCatalogDetailsJSON: String?
     /// Field-created items remain usable on their originating job, but cannot
     /// become global QBO products/services until an administrator reviews the
     /// price, tax treatment, purchasing identity, and description.
@@ -870,7 +991,7 @@ final class Item {
     }
 
     var itemType: CatalogItemType {
-        get { CatalogItemType(rawValue: itemTypeRawValue) ?? .service }
+        get { CatalogItemType(rawValue: itemTypeRawValue) ?? .unknown }
         set { itemTypeRawValue = newValue.rawValue }
     }
 
@@ -884,6 +1005,21 @@ final class Item {
 
     var requiresPricebookReview: Bool {
         pricebookReviewStatus == .needsReview
+    }
+
+    /// Archived items remain available to historical documents, inventory
+    /// movements, purchasing evidence, and service history, but cannot be
+    /// selected for new customer work or recurring billing.
+    var isCatalogArchived: Bool {
+        pricebookReviewStatus == .archived
+    }
+
+    /// Only an administrator-approved record is part of the reusable company
+    /// pricebook. A field-created draft stays usable on the document where it
+    /// originated through `CatalogItemSelectionPolicy`, but cannot leak into a
+    /// different job, agreement, purchase order, or replenishment suggestion.
+    var isAvailableForNewWork: Bool {
+        pricebookReviewStatus == .approved
     }
 
     var assemblyDefinition: CatalogAssemblyDefinition? {
@@ -908,10 +1044,47 @@ final class Item {
         pricebookReviewStatus = .approved
         pricebookReviewedByEmail = Self.normalizedOptionalValue(reviewerEmail)
         pricebookReviewedAt = date
-        if quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+        if quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            quickBooksSyncStatus = "pending_update"
+            quickBooksSyncDetail = "Pricebook review approved; load the linked QuickBooks version and review any differences before publishing."
+        } else {
             quickBooksSyncStatus = "pending"
             quickBooksSyncDetail = "Pricebook review approved; QuickBooks publication is pending."
         }
+        timestamp = date
+    }
+
+    func archiveFromPricebook(by reviewerEmail: String?, at date: Date = Date()) {
+        pricebookReviewStatus = .archived
+        pricebookReviewedByEmail = Self.normalizedOptionalValue(reviewerEmail)
+        pricebookReviewedAt = date
+        if quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            quickBooksSyncStatus = "pending_update"
+            quickBooksSyncDetail = "Pricebook archive is saved locally and waiting for explicit QuickBooks publication."
+        } else {
+            quickBooksSyncStatus = "archived"
+            quickBooksSyncDetail = nil
+        }
+        timestamp = date
+    }
+
+    func restoreToPricebook(by reviewerEmail: String?, at date: Date = Date()) {
+        pricebookReviewStatus = .approved
+        pricebookReviewedByEmail = Self.normalizedOptionalValue(reviewerEmail)
+        pricebookReviewedAt = date
+        if quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            quickBooksSyncStatus = "pending_update"
+            quickBooksSyncDetail = "Pricebook restoration is saved locally and waiting for explicit QuickBooks publication."
+        } else {
+            quickBooksSyncStatus = "pending"
+            quickBooksSyncDetail = "Pricebook restoration is saved locally; QuickBooks publication is pending."
+        }
+        timestamp = date
+    }
+
+    func applyQuickBooksCatalogAvailability(_ active: Bool?) {
+        guard let active else { return }
+        pricebookReviewStatus = active ? .approved : .archived
     }
 
     var hasPendingQuickBooksCatalogUpdate: Bool {
@@ -932,14 +1105,51 @@ final class Item {
     }
 
     var needsQuickBooksAttention: Bool {
-        quickBooksSyncStatus == "needs_attention"
+        quickBooksCatalogSyncState == "needs_attention"
     }
 
+    /// Operational catalog state shown outside the provider reconciliation
+    /// console. A durable staged update must never look synced merely because
+    /// the item already owns a QuickBooks ID. Creation and update recovery stay
+    /// separate: callers that create missing QBO items must still require an
+    /// empty `quickBooksID` explicitly.
     var quickBooksCatalogSyncState: String {
-        if quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-            return "synced"
+        let status = quickBooksSyncStatus
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let hasQuickBooksID = quickBooksID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty == false
+
+        if requiresPricebookReview || status == "needs_review" {
+            return "needs_review"
         }
-        return quickBooksSyncStatus
+        if status == "needs_attention" {
+            return "needs_attention"
+        }
+        if isCatalogArchived {
+            if hasQuickBooksID && status == "pending_update" {
+                return "pending_update"
+            }
+            return "archived"
+        }
+        if !hasQuickBooksID {
+            switch status {
+            case "", "pending", "pending_update", "synced":
+                return "pending"
+            default:
+                return "needs_attention"
+            }
+        }
+
+        switch status {
+        case "", "synced":
+            return "synced"
+        case "pending", "pending_update":
+            return "pending_update"
+        default:
+            return "needs_attention"
+        }
     }
 
     /// Finds the one local catalog record that can safely be reconciled with a
@@ -966,6 +1176,7 @@ final class Item {
         guard !normalizedName.isEmpty else { return nil }
         let candidates = items.filter {
             normalizedCatalogValue($0.quickBooksID ?? "").isEmpty &&
+            !$0.isCatalogArchived &&
             normalizedCatalogValue($0.name) == normalizedName &&
             normalizedCatalogValuesAreCompatible($0.sku, sku)
         }
@@ -986,6 +1197,28 @@ final class Item {
         guard let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
               !normalized.isEmpty else { return nil }
         return normalized
+    }
+}
+
+/// Keeps a field-created pricebook draft scoped to the estimate or invoice
+/// where it originated until an administrator approves it. Selected archived
+/// or draft lines remain visible only so staff can review or remove historical
+/// document content; they are never silently reusable as new company work.
+enum CatalogItemSelectionPolicy {
+    static func canAdd(
+        _ item: Item,
+        documentScopedReviewItemIDs: Set<UUID>
+    ) -> Bool {
+        item.itemType.isDirectSalesItem && (item.isAvailableForNewWork ||
+            (item.requiresPricebookReview && documentScopedReviewItemIDs.contains(item.id)))
+    }
+
+    static func canDisplay(
+        _ item: Item,
+        isSelected: Bool,
+        documentScopedReviewItemIDs: Set<UUID>
+    ) -> Bool {
+        isSelected || canAdd(item, documentScopedReviewItemIDs: documentScopedReviewItemIDs)
     }
 }
 
@@ -1105,6 +1338,7 @@ enum CatalogAssemblyPolicy {
             guard let item = catalogByID[component.itemID] else {
                 throw CatalogAssemblyValidationError.missingComponent(itemID: component.itemID)
             }
+            guard item.itemType.isDirectSalesItem else { throw QuickBooksInventoryError.unsupportedType }
             guard item.assemblyDefinition == nil else {
                 throw CatalogAssemblyValidationError.nestedAssembly(name: item.name)
             }
@@ -1138,6 +1372,7 @@ enum CatalogAssemblyPolicy {
     }
 
     static func selection(root: Item, catalogItems: [Item]) throws -> CatalogAssemblySelection {
+        guard root.itemType.isDirectSalesItem else { throw QuickBooksInventoryError.unsupportedType }
         guard root.assemblyDefinition != nil else {
             return CatalogAssemblySelection(
                 lineItems: [root],

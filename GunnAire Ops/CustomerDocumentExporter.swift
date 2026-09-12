@@ -4,6 +4,9 @@ import UIKit
 enum CustomerDocumentExportError: LocalizedError {
     case documentsDirectoryUnavailable
     case authoritativeTaxRequired(String)
+    case statementNeedsReview(String)
+    case fieldFormNeedsReview(String)
+    case textLayoutUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -11,7 +14,89 @@ enum CustomerDocumentExportError: LocalizedError {
             return "The app documents folder is unavailable."
         case .authoritativeTaxRequired(let message):
             return message
+        case .statementNeedsReview(let message):
+            return message
+        case .fieldFormNeedsReview(let message):
+            return message
+        case .textLayoutUnavailable:
+            return "The complete document could not be laid out. Your saved records and any previous PDF are unchanged. Please try again."
         }
+    }
+}
+
+enum CustomerAccountStatementAgingBucket: String, CaseIterable, Equatable {
+    case current
+    case days1To30
+    case days31To60
+    case days61To90
+    case days91Plus
+
+    var displayName: String {
+        switch self {
+        case .current: "Current"
+        case .days1To30: "1–30 days"
+        case .days31To60: "31–60 days"
+        case .days61To90: "61–90 days"
+        case .days91Plus: "91+ days"
+        }
+    }
+}
+
+struct CustomerAccountStatementPaymentEntry: Equatable {
+    let date: Date
+    let amount: Double
+    let isRefund: Bool
+    let method: String
+    let isSettlementPending: Bool
+}
+
+struct CustomerAccountStatementInvoiceEntry: Equatable {
+    let invoiceID: UUID
+    let reference: String
+    let quickBooksReference: String?
+    let quickBooksBalanceUpdatedAt: Date?
+    let issuedAt: Date
+    let dueAt: Date
+    let workType: InvoiceWorkType
+    let serviceAddress: String?
+    let invoiceTotal: Double
+    let balanceDue: Double
+    let netRecordedPayments: Double
+    let dueStatus: String
+    let daysPastDue: Int
+    let agingBucket: CustomerAccountStatementAgingBucket
+    let paymentActivity: [CustomerAccountStatementPaymentEntry]
+    let usesQuickBooksBalance: Bool
+}
+
+struct CustomerAccountStatementSnapshot: Equatable {
+    let customerID: UUID
+    let asOf: Date
+    let entries: [CustomerAccountStatementInvoiceEntry]
+    let preparedAt: Date
+    let calendar: Calendar
+    let isHistoricalProjection: Bool
+    let reviewMessages: [String]
+
+    var timeZoneIdentifier: String { calendar.timeZone.identifier }
+    var exportBlockingMessage: String? { reviewMessages.first }
+    var balanceSourceSummary: String {
+        isHistoricalProjection
+            ? "Dated app activity only; historical invoice and accounting values are not verified."
+            : "Saved QuickBooks-linked balances and locally recorded invoice activity. This is not a live accounting refresh."
+    }
+
+    var openInvoiceCount: Int { entries.count }
+    var totalBalance: Double { entries.reduce(0) { $0 + $1.balanceDue } }
+
+    func balance(in bucket: CustomerAccountStatementAgingBucket) -> Double {
+        entries.filter { $0.agingBucket == bucket }.reduce(0) { $0 + $1.balanceDue }
+    }
+
+    var agingSummary: String {
+        CustomerAccountStatementAgingBucket.allCases
+            .map { "\($0.displayName): \(balance(in: $0).formatted(.currency(code: "USD")))" }
+            .joined(separator: " • ")
     }
 }
 
@@ -134,6 +219,12 @@ enum CustomerDocumentExporter {
         serviceCall: ServiceCall,
         template: FieldFormTemplate?
     ) throws -> URL {
+        guard response.serviceCallID == serviceCall.id else {
+            throw CustomerDocumentExportError.fieldFormNeedsReview("Open this form from its original job before creating a completion PDF.")
+        }
+        if let issue = response.completionReviewIssue(resolving: template) {
+            throw CustomerDocumentExportError.fieldFormNeedsReview(issue)
+        }
         let answerRows = response.answerRows(resolving: template)
         let fileName = makeFileName(
             prefix: "GunnAire-Field-Form",
@@ -345,6 +436,124 @@ enum CustomerDocumentExporter {
         )
     }
 
+    @MainActor
+    static func accountStatementSnapshot(
+        for customer: Customer,
+        invoices: [Invoice],
+        payments: [Payment],
+        asOf: Date? = nil,
+        calendar: Calendar = .current,
+        now: Date = Date()
+    ) -> CustomerAccountStatementSnapshot {
+        CustomerAccountStatementPolicy.snapshot(customer: customer, invoices: invoices,
+            payments: payments, asOf: asOf, calendar: calendar, now: now)
+    }
+
+    @MainActor
+    static func exportAccountStatement(
+        customer: Customer,
+        invoices: [Invoice],
+        payments: [Payment],
+        asOf: Date? = nil,
+        calendar: Calendar = .current,
+        now: Date = Date()
+    ) throws -> URL {
+        let snapshot = accountStatementSnapshot(
+            for: customer,
+            invoices: invoices,
+            payments: payments,
+            asOf: asOf,
+            calendar: calendar,
+            now: now
+        )
+        return try exportAccountStatement(customer: customer, snapshot: snapshot)
+    }
+
+    @MainActor
+    static func exportAccountStatement(
+        customer: Customer,
+        snapshot: CustomerAccountStatementSnapshot
+    ) throws -> URL {
+        guard snapshot.customerID == customer.id else {
+            throw CustomerDocumentExportError.statementNeedsReview("This statement belongs to a different customer.")
+        }
+        if let message = snapshot.exportBlockingMessage {
+            throw CustomerDocumentExportError.statementNeedsReview(message)
+        }
+        func statementDate(_ date: Date, includesTime: Bool = false) -> String {
+            let formatter = DateFormatter()
+            formatter.calendar = snapshot.calendar
+            formatter.timeZone = snapshot.calendar.timeZone
+            formatter.dateStyle = .medium
+            formatter.timeStyle = includesTime ? .short : .none
+            return formatter.string(from: date)
+        }
+        var summaryRows = [
+            row("Statement Date", statementDate(snapshot.asOf)),
+            row("Activity Through", statementDate(snapshot.asOf, includesTime: true)),
+            row("Time Zone", snapshot.timeZoneIdentifier),
+            row("Open Invoices", String(snapshot.openInvoiceCount)),
+            row("Current", currency(snapshot.balance(in: .current))),
+            row("1–30 Days", currency(snapshot.balance(in: .days1To30))),
+            row("31–60 Days", currency(snapshot.balance(in: .days31To60))),
+            row("61–90 Days", currency(snapshot.balance(in: .days61To90))),
+            row("91+ Days", currency(snapshot.balance(in: .days91Plus))),
+            row("Total Balance Due", currency(snapshot.totalBalance))
+        ]
+        if snapshot.entries.isEmpty {
+            summaryRows.append(row("Account Status", "No open invoice balance as of this statement date."))
+        } else {
+            summaryRows.append(row(
+                "Balance Source",
+                snapshot.balanceSourceSummary
+            ))
+        }
+        summaryRows.append(row("Scope",
+            "Open invoices recorded in GunnAire. Unapplied customer credits and transactions not imported from accounting are not included."))
+
+        var sections = [DocumentSection(title: "Account Summary", rows: summaryRows)]
+        sections.append(contentsOf: snapshot.entries.map { entry in
+            let activityRows = entry.paymentActivity.map { payment in
+                row(
+                    payment.isSettlementPending
+                        ? (payment.isRefund ? "Bank Refund Pending" : "Bank Payment Pending")
+                        : (payment.isRefund ? "Refund" : "Payment"),
+                    "\(statementDate(payment.date)) - \(currency(payment.amount)) via \(payment.method)"
+                )
+            }
+            return DocumentSection(
+                title: "Invoice \(entry.reference)",
+                rows: [
+                    row("Issued", statementDate(entry.issuedAt)),
+                    row("Due", statementDate(entry.dueAt)),
+                    row("Status", entry.dueStatus),
+                    row("Aging", entry.agingBucket.displayName),
+                    row("Work Type", entry.workType.displayName),
+                    row("Service Address", entry.serviceAddress),
+                    row("Invoice Total", currency(entry.invoiceTotal)),
+                    row("App-recorded Payments", currency(entry.netRecordedPayments)),
+                    row("Balance Due", currency(entry.balanceDue)),
+                    row("Accounting Last Refreshed", entry.quickBooksBalanceUpdatedAt.map { statementDate($0, includesTime: true) }),
+                    row("Balance Source", entry.usesQuickBooksBalance ? "Saved QuickBooks-linked balance" : "Recorded invoice payments and refunds"),
+                    row("Payment Activity", entry.paymentActivity.isEmpty ? "No payment activity recorded." : nil)
+                ] + activityRows,
+                keepsTogether: true
+            )
+        })
+
+        let fileName = makeFileName(
+            prefix: "GunnAire-Account-Statement",
+            customerName: customer.name,
+            descriptor: "\(formattedStatementFileDate(snapshot.asOf))-\(String(UUID().uuidString.prefix(8)).uppercased())"
+        )
+        return try renderPDF(
+            title: "Account Statement",
+            customer: customer,
+            sections: sections,
+            fileName: fileName
+        )
+    }
+
     private static func onsiteReportSections(
         serviceCall: ServiceCall,
         estimate: Estimate?,
@@ -418,7 +627,8 @@ enum CustomerDocumentExporter {
         sections.append(contentsOf: technicalReportSections(for: serviceCall))
         sections.append(contentsOf: fieldFormSections(
             for: serviceCall,
-            responses: fieldFormResponses
+            responses: fieldFormResponses,
+            templates: fieldFormTemplates
         ))
         sections.append(contentsOf: photoEvidenceSections(
             for: attachments,
@@ -455,17 +665,23 @@ enum CustomerDocumentExporter {
 
     private static func fieldFormSections(
         for serviceCall: ServiceCall,
-        responses: [FieldFormResponse]
+        responses: [FieldFormResponse],
+        templates: [FieldFormTemplate]
     ) -> [DocumentSection] {
         responses
             .filter { $0.serviceCallID == serviceCall.id }
             .sorted { $0.completedAt < $1.completedAt }
             .map { response in
+                let original = templates.first { $0.id == response.templateID }
+                let needsReview = response.completionReviewIssue(resolving: original) != nil
                 var rows = [
-                    row("Completed", formattedDateTime(response.completedAt)),
-                    row("Completed By", response.completedByEmail)
+                    row(needsReview ? "Recorded" : "Completed", formattedDateTime(response.completedAt)),
+                    row(needsReview ? "Recorded By" : "Completed By", response.completedByEmail)
                 ]
-                rows.append(contentsOf: response.answerRows(resolving: nil).map { answer in
+                if needsReview {
+                    rows.append(row("Status", "Needs review. Original record retained; completion is not verified."))
+                }
+                rows.append(contentsOf: response.answerRows(resolving: original).map { answer in
                     row(answer.required ? "\(answer.label) (Required)" : answer.label, answer.displayAnswer)
                 })
                 return DocumentSection(title: "Field Form — \(response.templateTitle)", rows: rows)
@@ -1449,10 +1665,16 @@ enum CustomerDocumentExporter {
         let pageBounds = CGRect(x: 0, y: 0, width: 612, height: 792)
         let renderer = UIGraphicsPDFRenderer(bounds: pageBounds)
 
-        try renderer.writePDF(to: url) { context in
+        var layoutError: Error?
+        let data = renderer.pdfData { context in
             var y = startPage(context: context, bounds: pageBounds, title: title, customer: customer)
-            for section in sections {
-                y = drawSection(section, at: y, in: pageBounds, context: context, title: title, customer: customer)
+            do {
+                for section in sections {
+                    y = try drawSection(section, at: y, in: pageBounds, context: context, title: title, customer: customer)
+                }
+            } catch {
+                layoutError = error
+                return
             }
             y = drawApprovalSignature(
                 approvalSignatureImageBase64,
@@ -1474,7 +1696,9 @@ enum CustomerDocumentExporter {
             )
             drawFooter(in: pageBounds)
         }
-
+        if let layoutError { throw layoutError }
+        // A layout failure must not replace an existing, complete customer PDF.
+        try data.write(to: url, options: .atomic)
         return url
     }
 
@@ -1552,52 +1776,73 @@ enum CustomerDocumentExporter {
         context: UIGraphicsPDFRendererContext,
         title: String,
         customer: Customer
-    ) -> CGFloat {
+    ) throws -> CGFloat {
+        let rows = section.rows.filter { !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard !rows.isEmpty else { return initialY }
         let margin: CGFloat = 42
         let contentWidth = bounds.width - margin * 2
+        let labelWidth: CGFloat = 138
+        let valueWidth = contentWidth - labelWidth - 14
+        let bottom = bounds.height - 70
+        let headingHeight: CGFloat = 24
+        let minimumFragmentHeight: CGFloat = 30
+        let rowCapacity = bottom - 216 - headingHeight
+        let layouts = rows.map { row in
+            (label: BusinessDocumentTextLayout(row.label, font: .systemFont(ofSize: 10, weight: .semibold), color: .darkGray),
+             value: BusinessDocumentTextLayout(row.value, font: .systemFont(ofSize: 11), color: .black))
+        }
+        let heights = layouts.map { max(22, max($0.label.height(width: labelWidth) + 2, $0.value.height(width: valueWidth)) + 8) }
         var y = initialY
-        if y > bounds.height - 140 {
+        func nextPage() -> CGFloat {
             drawFooter(in: bounds)
-            y = startPage(context: context, bounds: bounds, title: title, customer: customer)
+            return startPage(context: context, bounds: bounds, title: title, customer: customer)
         }
+        func heading(at position: CGFloat, continued: Bool) {
+            (continued ? "\(section.title) (continued)" : section.title).draw(
+                at: CGPoint(x: margin, y: position), withAttributes: [
+                    .font: UIFont.systemFont(ofSize: 15, weight: .semibold),
+                    .foregroundColor: UIColor.black
+                ])
+        }
+        // Use the same safe frame minimum when reserving a heading/group as
+        // when drawing it, so a boundary cannot strand a heading or final row.
+        let finalRowReserve = max(0, minimumFragmentHeight - (heights.last ?? 0))
+        let sectionHeight = headingHeight + heights.reduce(0, +) + finalRowReserve
+        let firstHeight = max(minimumFragmentHeight, heights[0] <= rowCapacity ? heights[0] : minimumFragmentHeight)
+        if y + headingHeight + firstHeight > bottom ||
+            (section.keepsTogether && sectionHeight <= bottom - 216 && y + sectionHeight > bottom) {
+            y = nextPage()
+        }
+        heading(at: y, continued: false)
+        y += headingHeight
 
-        section.title.draw(at: CGPoint(x: margin, y: y), withAttributes: [
-            .font: UIFont.systemFont(ofSize: 15, weight: .semibold),
-            .foregroundColor: UIColor.black
-        ])
-        y += 24
-
-        for row in section.rows where !row.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let labelWidth: CGFloat = 138
-            let valueX = margin + labelWidth + 14
-            let valueWidth = contentWidth - labelWidth - 14
-            let labelFont = UIFont.systemFont(ofSize: 10, weight: .semibold)
-            let valueFont = UIFont.systemFont(ofSize: 11)
-            let labelHeight = measuredHeight(row.label, width: labelWidth, font: labelFont)
-            let valueHeight = measuredHeight(row.value, width: valueWidth, font: valueFont)
-            let rowHeight = max(22, max(labelHeight, valueHeight) + 8)
-            let textHeight = rowHeight - 4
-
-            if y + rowHeight > bounds.height - 70 {
-                drawFooter(in: bounds)
-                y = startPage(context: context, bounds: bounds, title: title, customer: customer)
+        for (index, pair) in layouts.enumerated() {
+            var label = pair.label
+            var value = pair.value
+            // Keep an ordinary row intact. Only a row taller than a fresh page
+            // needs to consume multiple frames, with each column tracked alone.
+            if heights[index] <= rowCapacity && y + heights[index] > bottom {
+                y = nextPage()
+                heading(at: y, continued: true)
+                y += headingHeight
             }
-
-            drawWrapped(
-                row.label,
-                in: CGRect(x: margin, y: y + 2, width: labelWidth, height: textHeight),
-                font: labelFont,
-                color: .darkGray
-            )
-            drawWrapped(row.value, in: CGRect(x: valueX, y: y, width: valueWidth, height: textHeight), font: valueFont, color: .black)
-            y += rowHeight
-
-            if y > bounds.height - 80 {
-                drawFooter(in: bounds)
-                y = startPage(context: context, bounds: bounds, title: title, customer: customer)
+            while !label.isComplete || !value.isComplete {
+                if bottom - y < minimumFragmentHeight {
+                    y = nextPage()
+                    heading(at: y, continued: true)
+                    y += headingHeight
+                }
+                let available = bottom - y - 8
+                let labelHeight = try label.draw(in: CGRect(x: margin, y: y + 2, width: labelWidth, height: available - 2), context: context.cgContext)
+                let valueHeight = try value.draw(in: CGRect(x: margin + labelWidth + 14, y: y, width: valueWidth, height: available), context: context.cgContext)
+                y += max(22, max(labelHeight + 2, valueHeight) + 8)
+                if !label.isComplete || !value.isComplete {
+                    y = nextPage()
+                    heading(at: y, continued: true)
+                    y += headingHeight
+                }
             }
         }
-
         return y + 12
     }
 
@@ -1773,9 +2018,19 @@ enum CustomerDocumentExporter {
         date.formatted(date: .abbreviated, time: .shortened)
     }
 
+    private static func formattedStatementFileDate(_ date: Date) -> String {
+        statementFileDateFormatter.string(from: date)
+    }
+
     private static let fileDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd-HHmm"
+        return formatter
+    }()
+
+    private static let statementFileDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
         return formatter
     }()
 }
@@ -1783,6 +2038,7 @@ enum CustomerDocumentExporter {
 private struct DocumentSection {
     let title: String
     let rows: [DocumentRow]
+    var keepsTogether: Bool = false
 }
 
 private struct DocumentRow {

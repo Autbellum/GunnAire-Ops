@@ -97,7 +97,7 @@ enum TechnicianWorkShiftValidationError: LocalizedError, Equatable {
 /// old rule and creates a new one, preserving who changed capacity and when.
 @Model
 final class TechnicianWorkShift {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var creationOperationID: UUID = UUID()
     var technicianID: UUID = UUID()
     var technicianNameSnapshot: String = ""
@@ -442,7 +442,7 @@ enum TechnicianAvailabilityKind: String, Codable, CaseIterable, Identifiable {
 /// breaks stay visible without becoming billable customer work.
 @Model
 final class TechnicianAvailabilityBlock {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var creationOperationID: UUID = UUID()
     var technicianID: UUID = UUID()
     var startsAt: Date = Date()
@@ -645,6 +645,7 @@ struct TechnicianAvailabilityView: View {
                                         Text(technician.name).tag(technician.id)
                                     }
                                 }
+                                .accessibilityIdentifier("TechnicianAvailabilityPicker")
 
                                 Button {
                                     selectedTechnicianID = selectedTechnician?.id

@@ -3,10 +3,6 @@ import SwiftData
 import AuthenticationServices
 
 struct LoginView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
-    @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
-
     @Binding var hasAuthenticatedUser: Bool
 
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
@@ -118,19 +114,12 @@ struct LoginView: View {
     private func completeAppleSignIn(_ result: Result<ASAuthorization, Error>) async {
         do {
             let remoteUser = try await appleAuth.complete(result)
-            let authorizationUsers = GunnAireBackendService.applyVerifiedUser(
-                remoteUser,
-                into: modelContext,
-                currentUsers: users,
-                technicians: technicians
-            )
             isAuthenticating = false
-            guard AppAccess.isAuthorized(email: remoteUser.email, users: authorizationUsers) else {
+            guard remoteUser.isActive, AppUserRole(rawValue: remoteUser.role) != nil else {
                 appleAuth.signOut()
                 authErrorMessage = "Your GunnAire account has not been added to this app by an administrator."
                 return
             }
-            ensurePrimaryAdminExists()
             hasAuthenticatedUser = true
         } catch {
             isAuthenticating = false
@@ -175,54 +164,20 @@ struct LoginView: View {
 
     @MainActor
     private func completeValidatedSignIn(for profile: GoogleUserProfile) async {
-        var authorizationUsers = users
-        var sharedUserError: Error?
-
-        if GunnAireBackendService.isConfigured {
-            do {
-                if Config.Backend.usesBusinessIdentity {
-                    let remoteUser = try await googleAuth.establishBusinessApplicationSession(for: profile)
-                    authorizationUsers = GunnAireBackendService.applyVerifiedUser(
-                        remoteUser,
-                        into: modelContext,
-                        currentUsers: users,
-                        technicians: technicians
-                    )
-                } else {
-                    authorizationUsers = try await GunnAireBackendService.refreshUsers(
-                        into: modelContext,
-                        currentUsers: users,
-                        technicians: technicians
-                    )
-                }
-            } catch {
-                sharedUserError = error
+        defer { isAuthenticating = false }
+        do {
+            guard Config.Backend.isProductionReady else { throw GunnAireBackendError.notConfigured }
+            let remoteUser = try await googleAuth.establishBusinessApplicationSession(for: profile)
+            guard remoteUser.isActive, AppUserRole(rawValue: remoteUser.role) != nil else {
+                throw CompanyWorkspaceFailure.signIn
             }
-        }
-
-        isAuthenticating = false
-        if Config.Backend.usesBusinessIdentity, let sharedUserError {
+            // Model-backed user and technician writes occur only after the
+            // workspace controller proves this device's operational store.
+            hasAuthenticatedUser = true
+        } catch {
             googleAuth.signOut()
-            authErrorMessage = "Could not establish the verified GunnAire business session: \(sharedUserError.localizedDescription)"
-            return
+            authErrorMessage = "Could not verify business access: \(error.localizedDescription)"
         }
-        guard AppAccess.isAuthorized(email: profile.email, users: authorizationUsers) else {
-            googleAuth.signOut()
-            if let sharedUserError, GunnAireBackendService.isConfigured {
-                authErrorMessage = "Could not verify shared user access from the Mac Studio backend: \(sharedUserError.localizedDescription)"
-            } else {
-                authErrorMessage = "Your GunnAire account has not been added to this app by an administrator."
-            }
-            return
-        }
-
-        ensurePrimaryAdminExists()
-        hasAuthenticatedUser = true
-    }
-
-    private func ensurePrimaryAdminExists() {
-        guard !users.contains(where: { $0.email == AppAccess.primaryAdminEmail }) else { return }
-        modelContext.insert(AppUser(email: AppAccess.primaryAdminEmail, role: .admin))
     }
 }
 

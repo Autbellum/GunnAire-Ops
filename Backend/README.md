@@ -2,6 +2,82 @@
 
 This is a small backend for sharing app users, roles, uploaded field receipts, and field payment records across iPads.
 
+Candidate **2026.09.08.39** adds shared, read-only field-payment review: actual
+invoice numbers, exact linked-payment observations, current staff/assignment and
+original mapping checks, a pinned connection, and explicit collection holds.
+It sends no payment and makes no accounting or CloudKit schema change. See
+[shared field-payment review](../FIELD_PAYMENT_SHARED_REVIEW.md) for the contract,
+native handoff, qualification, rollback boundaries and remaining payment work.
+It is not deployed.
+
+Candidate **2026.09.08.37** adds shared milestone-invoice identity, an additive
+index of encrypted original proposals, concurrent dispatch exclusion, immutable
+issued allocations and read-only original-invoice lookup. The native app derives
+stable new invoice IDs and offers an in-place recovery handoff without deleting
+offline drafts. See [shared milestone billing](../SHARED_MILESTONE_BILLING.md)
+for qualification, older-client limitations and safe rollout/rollback boundaries.
+This candidate is not deployed and does not establish physical CloudKit acceptance.
+
+Candidate **2026.09.08.34** adds the native change-history consumption contract:
+original-grant and capture-revision pins, exact history counts and canonical
+record bytes/digests with bounded wire pages. The existing Management refresh
+uses this contract and keeps webhook alerts pending until actual reconciliation.
+Read [native history consumption](../NATIVE_QBO_CHANGE_HISTORY.md) before rollout.
+This source checkpoint is not deployed and does not complete per-event
+application receipts, financial lifecycle handling or shared-device sync.
+
+Candidate **2026.09.07.33** adds company-scoped, read-only QuickBooks initial
+collection/CDC capture with encrypted version history, deletion/merge metadata,
+late-event recovery and fixed-upper-bound history pages. Final local acceptance
+passes 488 Backend tests and 37 Tools tests. This is not a completed native
+reconciliation cutover: the old all-ID acknowledgement path still needs actual
+application receipts. See [the change-capture contract](../QBO_SERVER_CHANGE_CAPTURE.md)
+for supported collections, recovery limits, evidence and remaining rollout work.
+No deployment, accounting mutation or native/CloudKit schema change is implied.
+
+Candidate **2026.09.07.30** implements user/company-bound server Google OAuth,
+encrypted offline credentials, single-use code exchanges, coordinated refresh,
+partial-scope handling and metadata-only connection APIs. This is the server
+foundation, not native Google credential cutover or a shared Mail outbox.
+Existing native sign-in is unchanged. Read [the connection contract](../GOOGLE_SERVER_CONNECTION.md)
+for separate web-client/key configuration, rollback/backup, verification and
+remaining rollout requirements. No deployment or live authorization is implied.
+
+Candidate **2026.09.07.28** adds administrator-reviewed adoption of existing
+Customer/Item/Invoice/Estimate links. The native QuickBooks setup page reads
+exact provider records, retains the original review, and requires explicit
+confirmation for atomic shared mappings. It never writes QBO entities or changes
+sold prices. Reconnection permits scoped historical recovery/cancellation but
+never confirmation of stale evidence. Backend acceptance passes 349 tests;
+Tools passes 37. See [existing-link adoption](../QBO_EXISTING_LINK_ADOPTION.md)
+for API contracts, native evidence, backup/rollback and remaining billing
+cutover requirements. This candidate is not deployed.
+
+Prior candidate **2026.09.07.27** adds an opaque connection epoch to job-assignment
+reads and writes, rejecting offline edits after a new authorization grant.
+Native Add/Edit Job and dispatch-board assignment now use an encrypted durable
+queue with in-job conflict and recovery navigation. Current full Backend
+acceptance passes 319 tests; Tools passes 37. Deployment, invoice/estimate
+button cutover and signed-device acceptance remain separate requirements:
+[native job authority](../NATIVE_JOB_BILLING_AUTHORITY.md).
+
+Prior candidate **2026.09.07.26** exposes shared billing publication/recovery/approval
+HTTP routes and revisioned dispatcher-owned job authority. Assigned technicians
+can publish ordinary catalog-priced lines through the server; price exceptions
+retain exact office review. The typed native client is implemented, but
+**existing invoice/estimate buttons and schedule edits are not migrated yet**.
+The complete local Backend suite passes 316 tests; Tools passes 37. Read
+[the billing HTTP contract](../QBO_BILLING_HTTP_CONTRACT.md) for permissions,
+native migration, tax/legacy prerequisites, evidence and backup requirements.
+The [initial engine stage](../QBO_SERVER_BILLING_ENGINE.md) retains earlier
+design evidence. No deployment or full-suite readiness is implied.
+
+Candidate **2026.09.07.24** adds the administrator-only, encrypted shared customer
+publication journal and scoped customer mappings. The native customer publisher
+requires these routes; it never falls back to direct QBO creation. Review
+[the customer publication contract](../QBO_SERVER_CUSTOMER_PUBLICATION.md) and
+the backup/rollback requirements before deployment. No deployment is implied.
+
 ## Start It On The Mac Studio
 
 ```sh
@@ -56,6 +132,43 @@ Then set `GUNNAIRE_BACKEND_AUTH_MODE = google-id-token` in the app build configu
 Apple identity exchange is available at `POST /api/auth/apple`. The token is verified against Apple's current RS256 public keys, issuer, app audience, expiry, issue time, nonce, subject, and verified email. Google identity exchange is available at `POST /api/auth/google`. The token is verified through Google's supported verifier for the exact configured iOS client audience, hosted business domain, verified email, and subject. Provider identity tokens are used only for exchange and are not stored. The backend persists only a SHA-256 hash of each random application-session token, rechecks the user's active state and current role on every protected request, and supports immediate revocation at `POST /api/auth/logout`. The app stores only the opaque application session in Keychain; Apple additionally checks the credential state on relaunch and responds immediately to Apple's native credential-revocation notification.
 
 After source `2026.08.28.13` is deployed, configure the primary App ID's Sign in with Apple server-to-server notification URL as `https://gunnaire-api.onrender.com/api/auth/apple/notifications`. The public endpoint accepts only Apple's exact JSON envelope, verifies the signed JWS against Apple's RS256 keys plus issuer, app audience, issue/event times, event ID, type, and subject, and idempotently processes `email-enabled`, `email-disabled`, `consent-revoked`, and `account-deleted`. Consent and deletion events revoke only Apple application sessions and their push registrations; delayed events older than a fresh Apple reauthorization cannot revoke that newer session. The raw JWS and private-relay address are not retained in the event ledger. Do not enter the URL in Apple Developer before the reviewed backend version is live and the endpoint is reachable over TLS 1.2 or later.
+
+## Durable payment coordination
+
+Candidate `2026.09.06.22` adds a company/realm-scoped payment-attempt journal,
+one-time native dispatch permission, server-side provider/accounting verification,
+technician assignment limits and recovery after interrupted collection. It requires
+current application sessions and persistent SQLite storage. The matching native
+candidate will not collect through an older backend that lacks this contract.
+See [the coordination checkpoint](../PAYMENT_ATTEMPT_COORDINATION.md) for its API
+semantics, test evidence, backup/rollback rules and remaining correctness gates.
+No deployment or complete payment-safety claim is implied.
+
+## Payment workflow and grant-persistence follow-up
+
+Candidate `2026.09.06.21` preserves a replacement QBO grant when a stale refresh
+or revocation returns. Successful grant changes and their audit events are
+atomic; a mismatched snapshot returns HTTP 409 without returning the old access
+token. This does not serialize provider OAuth operations or revalidate an
+administrator's cached session after a network wait. See
+[the payment lifecycle checkpoint](../PAYMENT_WORKFLOW_LIFECYCLE.md) for evidence
+and remaining payment/authorization requirements. No deployment is implied.
+
+## Company and CloudKit workspace identity
+
+Candidate `2026.09.06.20` adds a durable, server-owned company identity and
+`GET /api/workspace` / `POST /api/workspace/bind`. Both require current Apple or
+Google application sessions. Binding requires explicit ownership confirmation
+and an administrator authenticated within ten minutes; conflicting bindings
+cannot replace the original approval. Approval and its audit are atomic.
+The new company/binding tables must remain in database backups and code rollbacks.
+
+This is the server/native API contract stage, **not completed app-level tenant
+isolation**. Startup, legacy-store onboarding, Shortcuts and offline authorization
+must still be connected to the boundary before release. See
+[`CLOUDKIT_WORKSPACE_IDENTITY.md`](../CLOUDKIT_WORKSPACE_IDENTITY.md) for the exact
+contract, storage risks and required acceptance. No existing device or data set
+is automatically approved by this migration.
 
 ## Render deployment
 
@@ -151,11 +264,11 @@ export GUNNAIRE_CUSTOMER_PORTAL_BASE_URL="https://portal.gunnaire.com"
 export GUNNAIRE_CUSTOMER_PORTAL_MAX_DAYS=30
 ```
 
-An administrator can then create an expiring, revocable link from a job in GunnAire Ops. The link shows only the escaped appointment and linked-invoice snapshot provided at creation time. It cannot browse customer data, change scheduling, download files, or take a payment. The server requires valid customer email and UUID business references, rejects malformed/negative/non-finite amounts and non-integral expiry values, and accepts one normalized HTTPS origin without credentials, path, query, or fragment.
+An administrator can then create an expiring, revocable link from a job in GunnAire Ops. The link shows only the escaped appointment, linked-invoice summary, and—when explicitly selected—the exact pending-estimate label and amount provided at creation time. It cannot browse customer data, change scheduling, download files, or take a payment. The estimate option is all-or-none and is bound to the estimate UUID plus a SHA-256 revision digest created from the local customer/job/amount/line-item snapshot. The server requires valid customer email and UUID business references, rejects malformed/negative/non-finite amounts and non-integral expiry values, and accepts one normalized HTTPS origin without credentials, path, query, or fragment.
 
-Tokens are random, only their SHA-256 hashes are retained, capability URLs are redacted from access logs, and create/revoke actions enter the audit log. Public responses are non-cacheable and use CSP, frame, referrer, MIME, permissions, and cross-origin isolation headers. Successful opens increment non-sensitive management metadata; this is deliberately labeled **Opened**, not **Viewed** or **Read**, because email and security scanners may follow a link. Staff must still explicitly share the link; no email is sent automatically.
+Tokens are random, only their SHA-256 hashes are retained, capability URLs are redacted from access logs, and create/revoke actions enter the audit log. Public responses are non-cacheable and use CSP, frame, referrer, MIME, permissions, and cross-origin isolation headers. Successful opens increment non-sensitive management metadata; this is deliberately labeled **Opened**, not **Viewed** or **Read**, because email and security scanners may follow a link. A linked estimate may accept one named confirmation only; replay returns the original receipt rather than changing its identity. An administrator then imports that response into the exact CloudKit-backed estimate. The app revalidates the customer/job relationship, amount, option label, revision digest, link/response timestamps, and any existing approval evidence before applying it, and reports the server response as `applied` or `needs_attention`. An applied response cannot be downgraded. Staff must still explicitly share the link; no email is sent automatically.
 
-Before enabling it for customers, deploy the reviewed backend version, host the route on the exact configured HTTPS origin, publish a customer-facing privacy notice, add edge abuse/rate controls, and verify create/open/expiry/revocation from approved production accounts. Backend readiness reports the portal as needing attention while disabled, error for an unsafe origin, and ready only for a valid enabled HTTPS origin.
+Before enabling it for customers, deploy reviewed backend `2026.09.06.19` or newer, host the route on the exact configured HTTPS origin, publish a customer-facing privacy notice, add edge abuse/rate controls, and verify create/open/approval/reconciliation/expiry/revocation from approved production accounts. This candidate makes applied resolutions immutable across concurrent requests, commits their audit evidence atomically, and rechecks approval-link expiry and revocation. See `PORTAL_APPROVAL_REVIEW.md` for regression evidence. Backend readiness reports the portal as needing attention while disabled, error for an unsafe origin, and ready only for a valid enabled HTTPS origin.
 
 ## Customer financing handoff
 

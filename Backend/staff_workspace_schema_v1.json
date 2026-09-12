@@ -1,0 +1,2340 @@
+{
+  "activity": {
+    "action": {
+      "nullable": false,
+      "type": "text"
+    },
+    "actorEmail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "detail": {
+      "nullable": false,
+      "type": "text"
+    },
+    "occurredAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "serviceCallID": {
+      "nullable": false,
+      "type": "identifier"
+    }
+  },
+  "agreement": {
+    "active": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "coveredEquipmentIDsJSON": {
+      "nullable": true,
+      "type": "text"
+    },
+    "customer": {
+      "nullable": false,
+      "reference": "customer",
+      "type": "identifier"
+    },
+    "includedVisitsPerTerm": {
+      "nullable": true,
+      "type": "integer"
+    },
+    "lifecycleJSON": {
+      "nullable": true,
+      "type": "text"
+    },
+    "nextDate": {
+      "nullable": false,
+      "type": "date"
+    },
+    "planName": {
+      "nullable": true,
+      "type": "text"
+    },
+    "pricePerVisit": {
+      "nullable": true,
+      "type": "number"
+    },
+    "renewalReminderDays": {
+      "nullable": false,
+      "type": "integer"
+    },
+    "schedulePattern": {
+      "nullable": false,
+      "type": "text"
+    },
+    "termEndsOn": {
+      "nullable": true,
+      "type": "date"
+    }
+  },
+  "alert": {
+    "createdAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "createdByEmail": {
+      "nullable": false,
+      "type": "text"
+    },
+    "creationOperationID": {
+      "nullable": false,
+      "type": "identifier"
+    },
+    "customerID": {
+      "nullable": false,
+      "type": "identifier"
+    },
+    "customerName": {
+      "nullable": false,
+      "type": "text"
+    },
+    "detail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "kindRaw": {
+      "nullable": false,
+      "type": "text"
+    },
+    "resolutionNote": {
+      "nullable": true,
+      "type": "text"
+    },
+    "resolutionOperationID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "resolvedAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "resolvedByEmail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "serviceLocationID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "serviceLocationName": {
+      "nullable": true,
+      "type": "text"
+    },
+    "title": {
+      "nullable": false,
+      "type": "text"
+    },
+    "updatedAt": {
+      "nullable": false,
+      "type": "date"
+    }
+  },
+  "attachment": {
+    "backendDocumentID": {
+      "nullable": true,
+      "type": "text"
+    },
+    "caption": {
+      "nullable": true,
+      "type": "text"
+    },
+    "contentType": {
+      "nullable": false,
+      "type": "text"
+    },
+    "createdAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "customer": {
+      "nullable": true,
+      "reference": "customer",
+      "type": "identifier"
+    },
+    "customerEquipmentID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "displayName": {
+      "nullable": false,
+      "type": "text"
+    },
+    "estimateID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "expenseClaimID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "fileSizeBytes": {
+      "nullable": false,
+      "type": "integer"
+    },
+    "fleetVehicleEventID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "fleetVehicleID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "googleDriveArchivedByEmail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "googleDriveFileID": {
+      "nullable": true,
+      "type": "text"
+    },
+    "googleDriveLastSyncedAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "googleDriveSyncDetail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "googleDriveSyncStatus": {
+      "nullable": true,
+      "type": "text"
+    },
+    "googleDriveWebViewLink": {
+      "nullable": true,
+      "type": "text"
+    },
+    "invoiceID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "kindRaw": {
+      "nullable": false,
+      "type": "text"
+    },
+    "maintenanceContractID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "quickBooksAttachableID": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksAttachedEntityKeysRaw": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksSyncError": {
+      "nullable": true,
+      "type": "text"
+    },
+    "serviceCallID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "sharedCompanySyncDetail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "sharedCompanySyncStatus": {
+      "nullable": true,
+      "type": "text"
+    }
+  },
+  "availability": {
+    "cancellationOperationID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "cancellationReason": {
+      "nullable": true,
+      "type": "text"
+    },
+    "cancelledAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "cancelledByEmail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "createdAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "createdByEmail": {
+      "nullable": false,
+      "type": "text"
+    },
+    "creationOperationID": {
+      "nullable": false,
+      "type": "identifier"
+    },
+    "endsAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "kindRawValue": {
+      "nullable": false,
+      "type": "text"
+    },
+    "reason": {
+      "nullable": true,
+      "type": "text"
+    },
+    "sourceTimeOffRequestID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "startsAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "technicianID": {
+      "nullable": false,
+      "type": "identifier"
+    }
+  },
+  "availabilityEvent": {
+    "actorEmail": {
+      "nullable": false,
+      "type": "text"
+    },
+    "availabilityBlockID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "endsAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "kindRawValue": {
+      "nullable": false,
+      "type": "text"
+    },
+    "occurredAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "operationID": {
+      "nullable": false,
+      "type": "identifier"
+    },
+    "privateDetail": {
+      "nullable": false,
+      "type": "text"
+    },
+    "requestID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "requestStatusRawSnapshot": {
+      "nullable": true,
+      "type": "text"
+    },
+    "startsAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "technicianID": {
+      "nullable": false,
+      "type": "identifier"
+    },
+    "technicianNameSnapshot": {
+      "nullable": false,
+      "type": "text"
+    }
+  },
+  "communication": {
+    "actorEmail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "attachmentFileNamesJSON": {
+      "nullable": true,
+      "type": "text"
+    },
+    "backendCommunicationID": {
+      "nullable": true,
+      "type": "text"
+    },
+    "backendSyncError": {
+      "nullable": true,
+      "type": "text"
+    },
+    "channel": {
+      "nullable": false,
+      "type": "text"
+    },
+    "consentSnapshotJSON": {
+      "nullable": true,
+      "type": "text"
+    },
+    "createdAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "customer": {
+      "nullable": false,
+      "reference": "customer",
+      "type": "identifier"
+    },
+    "deliveredAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "deliveryStatus": {
+      "nullable": false,
+      "type": "text"
+    },
+    "direction": {
+      "nullable": false,
+      "type": "text"
+    },
+    "estimateID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "invoiceID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "maintenanceContractID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "providerMessageID": {
+      "nullable": true,
+      "type": "text"
+    },
+    "providerStatusDetail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "recipient": {
+      "nullable": false,
+      "type": "text"
+    },
+    "serviceCallID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "subject": {
+      "nullable": false,
+      "type": "text"
+    },
+    "templateVersion": {
+      "nullable": false,
+      "type": "text"
+    },
+    "workflowRawValue": {
+      "nullable": false,
+      "type": "text"
+    }
+  },
+  "customer": {
+    "address": {
+      "nullable": true,
+      "type": "text"
+    },
+    "allowsMarketing": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "allowsServiceText": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "allowsTransactionalEmail": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "communicationConsentUpdatedAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "email": {
+      "nullable": true,
+      "type": "text"
+    },
+    "name": {
+      "nullable": false,
+      "type": "text"
+    },
+    "phone": {
+      "nullable": true,
+      "type": "text"
+    },
+    "preferredContactMethodRaw": {
+      "nullable": false,
+      "type": "text"
+    },
+    "quickBooksID": {
+      "nullable": true,
+      "type": "text"
+    }
+  },
+  "equipment": {
+    "createdAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "customer": {
+      "nullable": false,
+      "reference": "customer",
+      "type": "identifier"
+    },
+    "equipmentTypeRaw": {
+      "nullable": true,
+      "type": "text"
+    },
+    "filterSize": {
+      "nullable": true,
+      "type": "text"
+    },
+    "installDate": {
+      "nullable": true,
+      "type": "date"
+    },
+    "isActive": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "location": {
+      "nullable": true,
+      "type": "text"
+    },
+    "manufacturer": {
+      "nullable": true,
+      "type": "text"
+    },
+    "modelNumber": {
+      "nullable": true,
+      "type": "text"
+    },
+    "name": {
+      "nullable": false,
+      "type": "text"
+    },
+    "notes": {
+      "nullable": true,
+      "type": "text"
+    },
+    "serialNumber": {
+      "nullable": true,
+      "type": "text"
+    },
+    "serviceLocationID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "technicalBaselineReadingsJSON": {
+      "nullable": true,
+      "type": "text"
+    },
+    "warrantyExpiration": {
+      "nullable": true,
+      "type": "date"
+    }
+  },
+  "estimate": {
+    "amount": {
+      "nullable": false,
+      "type": "number"
+    },
+    "catalogSnapshotJSON": {
+      "nullable": true,
+      "type": "text"
+    },
+    "changeOrderReason": {
+      "nullable": true,
+      "type": "text"
+    },
+    "createdAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "customer": {
+      "nullable": false,
+      "reference": "customer",
+      "type": "identifier"
+    },
+    "customerApprovalMethodRaw": {
+      "nullable": true,
+      "type": "text"
+    },
+    "customerApprovalRecordedByEmail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "customerApprovalReference": {
+      "nullable": true,
+      "type": "text"
+    },
+    "customerApprovalSignatureImageBase64": {
+      "nullable": true,
+      "type": "text"
+    },
+    "customerApprovedAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "customerApprovedByName": {
+      "nullable": true,
+      "type": "text"
+    },
+    "lineItemSummary": {
+      "nullable": false,
+      "type": "text"
+    },
+    "notes": {
+      "nullable": true,
+      "type": "text"
+    },
+    "parentEstimateID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "proposalGroupID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "proposalIsRecommended": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "proposalOption": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksID": {
+      "nullable": true,
+      "type": "text"
+    },
+    "salesTaxAmount": {
+      "nullable": false,
+      "type": "number"
+    },
+    "scheduledServiceCallID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "serviceCallID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "serviceLocationID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "siteAddress": {
+      "nullable": true,
+      "type": "text"
+    },
+    "status": {
+      "nullable": false,
+      "type": "text"
+    },
+    "taxCalculatedAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "taxCalculationStatusRawValue": {
+      "nullable": true,
+      "type": "text"
+    }
+  },
+  "expense": {
+    "amount": {
+      "nullable": false,
+      "type": "number"
+    },
+    "auditJSON": {
+      "nullable": true,
+      "type": "text"
+    },
+    "businessPurpose": {
+      "nullable": false,
+      "type": "text"
+    },
+    "categoryRaw": {
+      "nullable": false,
+      "type": "text"
+    },
+    "claimTypeRaw": {
+      "nullable": false,
+      "type": "text"
+    },
+    "claimantEmail": {
+      "nullable": false,
+      "type": "text"
+    },
+    "claimantName": {
+      "nullable": false,
+      "type": "text"
+    },
+    "createdAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "customerID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "customerName": {
+      "nullable": true,
+      "type": "text"
+    },
+    "expenseDate": {
+      "nullable": false,
+      "type": "date"
+    },
+    "jobSummary": {
+      "nullable": true,
+      "type": "text"
+    },
+    "merchant": {
+      "nullable": false,
+      "type": "text"
+    },
+    "mileageDestination": {
+      "nullable": true,
+      "type": "text"
+    },
+    "mileageMiles": {
+      "nullable": true,
+      "type": "number"
+    },
+    "mileageOrigin": {
+      "nullable": true,
+      "type": "text"
+    },
+    "mileageRatePerMile": {
+      "nullable": true,
+      "type": "number"
+    },
+    "receiptAttachmentID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "reimbursable": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "reimbursedAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "reimbursedByEmail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "reimbursementReference": {
+      "nullable": true,
+      "type": "text"
+    },
+    "reviewNote": {
+      "nullable": true,
+      "type": "text"
+    },
+    "reviewedAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "reviewedByEmail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "serviceCallID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "statusRaw": {
+      "nullable": false,
+      "type": "text"
+    },
+    "submittedAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "updatedAt": {
+      "nullable": false,
+      "type": "date"
+    }
+  },
+  "formResponse": {
+    "answersJSON": {
+      "nullable": false,
+      "type": "text"
+    },
+    "completedAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "completedByEmail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "serviceCallID": {
+      "nullable": false,
+      "type": "identifier"
+    },
+    "templateID": {
+      "nullable": false,
+      "type": "identifier"
+    },
+    "templateTitle": {
+      "nullable": false,
+      "type": "text"
+    }
+  },
+  "formTemplate": {
+    "applicableServiceTypesJSON": {
+      "nullable": true,
+      "type": "text"
+    },
+    "createdAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "isActive": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "questionsJSON": {
+      "nullable": false,
+      "type": "text"
+    },
+    "title": {
+      "nullable": false,
+      "type": "text"
+    }
+  },
+  "invoice": {
+    "amount": {
+      "nullable": false,
+      "type": "number"
+    },
+    "catalogSnapshotJSON": {
+      "nullable": true,
+      "type": "text"
+    },
+    "completionNotes": {
+      "nullable": true,
+      "type": "text"
+    },
+    "createdAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "customer": {
+      "nullable": false,
+      "reference": "customer",
+      "type": "identifier"
+    },
+    "customerSignatureImageBase64": {
+      "nullable": true,
+      "type": "text"
+    },
+    "customerSignatureName": {
+      "nullable": true,
+      "type": "text"
+    },
+    "customerSignedAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "dueDate": {
+      "nullable": true,
+      "type": "date"
+    },
+    "finalizedAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "lineItemSummary": {
+      "nullable": false,
+      "type": "text"
+    },
+    "milestoneDraftReceiptJSON": {
+      "nullable": true,
+      "type": "text"
+    },
+    "notes": {
+      "nullable": true,
+      "type": "text"
+    },
+    "projectBillingPercent": {
+      "nullable": true,
+      "type": "number"
+    },
+    "projectContractAmount": {
+      "nullable": true,
+      "type": "number"
+    },
+    "projectMilestoneID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "projectMilestoneSequence": {
+      "nullable": true,
+      "type": "integer"
+    },
+    "projectMilestoneTitle": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksBalanceDue": {
+      "nullable": true,
+      "type": "number"
+    },
+    "quickBooksID": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksLastSyncedAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "quickBooksPaymentReviewJSON": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksSyncDetail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksSyncStatus": {
+      "nullable": false,
+      "type": "text"
+    },
+    "salesTaxAmount": {
+      "nullable": false,
+      "type": "number"
+    },
+    "serviceCallID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "serviceLocationID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "siteAddress": {
+      "nullable": true,
+      "type": "text"
+    },
+    "status": {
+      "nullable": false,
+      "type": "text"
+    },
+    "taxCalculatedAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "taxCalculationStatusRawValue": {
+      "nullable": true,
+      "type": "text"
+    },
+    "workTypeRaw": {
+      "nullable": false,
+      "type": "text"
+    }
+  },
+  "item": {
+    "createdAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "defaultInventoryLocation": {
+      "nullable": true,
+      "type": "text"
+    },
+    "flatRateAssemblyJSON": {
+      "nullable": true,
+      "type": "text"
+    },
+    "isTaxable": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "itemDescription": {
+      "nullable": true,
+      "type": "text"
+    },
+    "itemTypeRawValue": {
+      "nullable": false,
+      "type": "text"
+    },
+    "name": {
+      "nullable": false,
+      "type": "text"
+    },
+    "preferredVendorName": {
+      "nullable": true,
+      "type": "text"
+    },
+    "preferredVendorQuickBooksID": {
+      "nullable": true,
+      "type": "text"
+    },
+    "pricebookCreatedByEmail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "pricebookReviewStatusRawValue": {
+      "nullable": true,
+      "type": "text"
+    },
+    "pricebookReviewedAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "pricebookReviewedByEmail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "purchaseCost": {
+      "nullable": true,
+      "type": "number"
+    },
+    "purchaseDescription": {
+      "nullable": true,
+      "type": "text"
+    },
+    "purchaseURL": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksCatalogDetailsJSON": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksCatalogReceiptJSON": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksID": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksInventorySetupJSON": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksLastSyncedAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "quickBooksSyncDetail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksSyncStatus": {
+      "nullable": false,
+      "type": "text"
+    },
+    "reorderPoint": {
+      "nullable": true,
+      "type": "number"
+    },
+    "sku": {
+      "nullable": true,
+      "type": "text"
+    },
+    "timestamp": {
+      "nullable": false,
+      "type": "date"
+    },
+    "tracksInventory": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "unitPrice": {
+      "nullable": false,
+      "type": "number"
+    },
+    "vendorPartNumber": {
+      "nullable": true,
+      "type": "text"
+    }
+  },
+  "job": {
+    "additionalTechnicianIDsJSON": {
+      "nullable": true,
+      "type": "text"
+    },
+    "afterPhotoCount": {
+      "nullable": false,
+      "type": "integer"
+    },
+    "arrivalConfirmed": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "assignedTechnician": {
+      "nullable": true,
+      "reference": "technician",
+      "type": "identifier"
+    },
+    "beforePhotoCount": {
+      "nullable": false,
+      "type": "integer"
+    },
+    "cancellationReason": {
+      "nullable": true,
+      "type": "text"
+    },
+    "cancelledAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "correctiveWorkReasonRaw": {
+      "nullable": true,
+      "type": "text"
+    },
+    "customer": {
+      "nullable": false,
+      "reference": "customer",
+      "type": "identifier"
+    },
+    "customerEquipmentID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "customerNotified": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "diagnosticsCaptured": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "dispatchUrgencyRaw": {
+      "nullable": false,
+      "type": "text"
+    },
+    "documentationChecklist": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "documentationCompletedAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "documentationStartedAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "drainLineCondition": {
+      "nullable": true,
+      "type": "text"
+    },
+    "duration": {
+      "nullable": false,
+      "type": "number"
+    },
+    "equipmentInstallDate": {
+      "nullable": true,
+      "type": "date"
+    },
+    "equipmentLocation": {
+      "nullable": true,
+      "type": "text"
+    },
+    "equipmentManufacturer": {
+      "nullable": true,
+      "type": "text"
+    },
+    "equipmentModel": {
+      "nullable": true,
+      "type": "text"
+    },
+    "equipmentName": {
+      "nullable": true,
+      "type": "text"
+    },
+    "equipmentNotes": {
+      "nullable": true,
+      "type": "text"
+    },
+    "equipmentSerialNumber": {
+      "nullable": true,
+      "type": "text"
+    },
+    "equipmentTypeRaw": {
+      "nullable": true,
+      "type": "text"
+    },
+    "equipmentVerifiedChecklist": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "equipmentWarrantyExpiration": {
+      "nullable": true,
+      "type": "date"
+    },
+    "eventTitle": {
+      "nullable": true,
+      "type": "text"
+    },
+    "filterCondition": {
+      "nullable": true,
+      "type": "text"
+    },
+    "filterSize": {
+      "nullable": true,
+      "type": "text"
+    },
+    "findingsSummary": {
+      "nullable": true,
+      "type": "text"
+    },
+    "followUpAction": {
+      "nullable": true,
+      "type": "text"
+    },
+    "followUpDueDate": {
+      "nullable": true,
+      "type": "date"
+    },
+    "followUpRequired": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "googleCalendarID": {
+      "nullable": true,
+      "type": "text"
+    },
+    "googleEventID": {
+      "nullable": true,
+      "type": "text"
+    },
+    "googleEventManagedByApp": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "indoorCoilCondition": {
+      "nullable": true,
+      "type": "text"
+    },
+    "linkedEstimateID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "linkedInvoiceID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "maintenanceAgreementDueDate": {
+      "nullable": true,
+      "type": "date"
+    },
+    "maintenanceAgreementID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "maintenanceChecklistComplete": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "notes": {
+      "nullable": true,
+      "type": "text"
+    },
+    "originatingServiceCallID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "outdoorCoilCondition": {
+      "nullable": true,
+      "type": "text"
+    },
+    "paymentCollectedChecklist": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "promisedArrivalWindowEnd": {
+      "nullable": true,
+      "type": "date"
+    },
+    "promisedArrivalWindowStart": {
+      "nullable": true,
+      "type": "date"
+    },
+    "quoteReviewedWithCustomer": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "recommendedWorkSummary": {
+      "nullable": true,
+      "type": "text"
+    },
+    "safetyChecklistComplete": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "scheduledDate": {
+      "nullable": false,
+      "type": "date"
+    },
+    "scheduledFollowUpServiceCallID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "serviceActionChecklistJSON": {
+      "nullable": true,
+      "type": "text"
+    },
+    "serviceLocationID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "serviceReportReadingsJSON": {
+      "nullable": true,
+      "type": "text"
+    },
+    "serviceReportSummary": {
+      "nullable": true,
+      "type": "text"
+    },
+    "siteAddress": {
+      "nullable": true,
+      "type": "text"
+    },
+    "startupChecklistComplete": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "status": {
+      "enumeration": [
+        "cancelled",
+        "completed",
+        "inProgress",
+        "invoiced",
+        "scheduled"
+      ],
+      "nullable": false,
+      "type": "text"
+    },
+    "technicianArrivedAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "technicianEnRouteAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "thermostatOperation": {
+      "nullable": true,
+      "type": "text"
+    },
+    "type": {
+      "enumeration": [
+        "estimate",
+        "install",
+        "maintenance",
+        "meeting",
+        "other",
+        "reminder",
+        "repair",
+        "replacement",
+        "service",
+        "site visit"
+      ],
+      "nullable": false,
+      "type": "text"
+    },
+    "visitDispositionNotes": {
+      "nullable": true,
+      "type": "text"
+    },
+    "visitDispositionRaw": {
+      "nullable": false,
+      "type": "text"
+    },
+    "workCompletedChecklist": {
+      "nullable": false,
+      "type": "flag"
+    }
+  },
+  "location": {
+    "accessNotes": {
+      "nullable": true,
+      "type": "text"
+    },
+    "address": {
+      "nullable": false,
+      "type": "text"
+    },
+    "contactName": {
+      "nullable": true,
+      "type": "text"
+    },
+    "contactPhone": {
+      "nullable": true,
+      "type": "text"
+    },
+    "createdAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "customer": {
+      "nullable": false,
+      "reference": "customer",
+      "type": "identifier"
+    },
+    "isActive": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "isPrimary": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "name": {
+      "nullable": false,
+      "type": "text"
+    },
+    "updatedAt": {
+      "nullable": false,
+      "type": "date"
+    }
+  },
+  "milestone": {
+    "billingPercent": {
+      "nullable": false,
+      "type": "number"
+    },
+    "billingTriggerRaw": {
+      "nullable": false,
+      "type": "text"
+    },
+    "completedAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "completedByEmail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "createdAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "createdByEmail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "estimateID": {
+      "nullable": false,
+      "type": "identifier"
+    },
+    "invoiceID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "milestoneDescription": {
+      "nullable": true,
+      "type": "text"
+    },
+    "plannedAmount": {
+      "nullable": false,
+      "type": "number"
+    },
+    "plannedDate": {
+      "nullable": false,
+      "type": "date"
+    },
+    "projectServiceCallID": {
+      "nullable": false,
+      "type": "identifier"
+    },
+    "scheduledVisitID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "sequence": {
+      "nullable": false,
+      "type": "integer"
+    },
+    "statusRaw": {
+      "nullable": false,
+      "type": "text"
+    },
+    "title": {
+      "nullable": false,
+      "type": "text"
+    },
+    "updatedAt": {
+      "nullable": false,
+      "type": "date"
+    }
+  },
+  "movement": {
+    "createdAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "createdByEmail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "destinationLocation": {
+      "nullable": true,
+      "type": "text"
+    },
+    "itemID": {
+      "nullable": false,
+      "type": "identifier"
+    },
+    "itemName": {
+      "nullable": false,
+      "type": "text"
+    },
+    "itemSKU": {
+      "nullable": true,
+      "type": "text"
+    },
+    "movementTypeRaw": {
+      "nullable": false,
+      "type": "text"
+    },
+    "notes": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quantity": {
+      "nullable": false,
+      "type": "number"
+    },
+    "serviceCallID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "sourceLocation": {
+      "nullable": true,
+      "type": "text"
+    }
+  },
+  "payment": {
+    "amount": {
+      "nullable": false,
+      "type": "number"
+    },
+    "authorizationReference": {
+      "nullable": true,
+      "type": "text"
+    },
+    "cardLast4": {
+      "nullable": true,
+      "type": "text"
+    },
+    "collectionAttemptID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "date": {
+      "nullable": false,
+      "type": "date"
+    },
+    "invoice": {
+      "nullable": false,
+      "reference": "invoice",
+      "type": "identifier"
+    },
+    "isRefund": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "method": {
+      "nullable": false,
+      "type": "text"
+    },
+    "notes": {
+      "nullable": true,
+      "type": "text"
+    },
+    "processor": {
+      "nullable": true,
+      "type": "text"
+    },
+    "processorSyncDetail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "processorSyncStatus": {
+      "nullable": true,
+      "type": "text"
+    },
+    "providerPaymentStatus": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksAccountingSyncDetail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksAccountingSyncStatus": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksChargeID": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksClientTransID": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksDepositID": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksID": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksRefundReceiptID": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksSalesReceiptID": {
+      "nullable": true,
+      "type": "text"
+    },
+    "refundedPaymentID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "settlementBatchID": {
+      "nullable": true,
+      "type": "text"
+    }
+  },
+  "purchaseOrder": {
+    "createdAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "createdByEmail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "itemName": {
+      "nullable": false,
+      "type": "text"
+    },
+    "itemSKU": {
+      "nullable": true,
+      "type": "text"
+    },
+    "notes": {
+      "nullable": true,
+      "type": "text"
+    },
+    "number": {
+      "nullable": false,
+      "type": "text"
+    },
+    "orderedAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "quantity": {
+      "nullable": false,
+      "type": "number"
+    },
+    "receivedAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "receivedToLocation": {
+      "nullable": true,
+      "type": "text"
+    },
+    "serviceCallID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "shippingCost": {
+      "nullable": false,
+      "type": "number"
+    },
+    "statusRaw": {
+      "nullable": false,
+      "type": "text"
+    },
+    "unitCost": {
+      "nullable": false,
+      "type": "number"
+    },
+    "updatedAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "vendorName": {
+      "nullable": false,
+      "type": "text"
+    },
+    "vendorPartNumber": {
+      "nullable": true,
+      "type": "text"
+    },
+    "vendorQuickBooksID": {
+      "nullable": true,
+      "type": "text"
+    }
+  },
+  "request": {
+    "address": {
+      "nullable": true,
+      "type": "text"
+    },
+    "backendRequestID": {
+      "nullable": true,
+      "type": "text"
+    },
+    "convertedCustomerID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "convertedServiceCallID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "createdAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "createdByEmail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "customerName": {
+      "nullable": false,
+      "type": "text"
+    },
+    "email": {
+      "nullable": true,
+      "type": "text"
+    },
+    "phone": {
+      "nullable": true,
+      "type": "text"
+    },
+    "preferredDate": {
+      "nullable": true,
+      "type": "date"
+    },
+    "qualificationNotes": {
+      "nullable": true,
+      "type": "text"
+    },
+    "qualifiedAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "requestedServiceTypeRaw": {
+      "nullable": false,
+      "type": "text"
+    },
+    "statusRaw": {
+      "nullable": false,
+      "type": "text"
+    },
+    "summary": {
+      "nullable": false,
+      "type": "text"
+    },
+    "urgencyRaw": {
+      "nullable": false,
+      "type": "text"
+    }
+  },
+  "shift": {
+    "createdAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "createdByEmail": {
+      "nullable": false,
+      "type": "text"
+    },
+    "creationOperationID": {
+      "nullable": false,
+      "type": "identifier"
+    },
+    "durationMinutes": {
+      "nullable": false,
+      "type": "integer"
+    },
+    "effectiveFrom": {
+      "nullable": false,
+      "type": "date"
+    },
+    "effectiveUntil": {
+      "nullable": true,
+      "type": "date"
+    },
+    "kindRawValue": {
+      "nullable": false,
+      "type": "text"
+    },
+    "note": {
+      "nullable": true,
+      "type": "text"
+    },
+    "retiredAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "retiredByEmail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "retirementOperationID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "retirementReason": {
+      "nullable": true,
+      "type": "text"
+    },
+    "startMinute": {
+      "nullable": false,
+      "type": "integer"
+    },
+    "technicianID": {
+      "nullable": false,
+      "type": "identifier"
+    },
+    "technicianNameSnapshot": {
+      "nullable": false,
+      "type": "text"
+    },
+    "timeZoneIdentifier": {
+      "nullable": false,
+      "type": "text"
+    },
+    "weekdayRawValue": {
+      "nullable": false,
+      "type": "integer"
+    }
+  },
+  "task": {
+    "assignedToEmail": {
+      "nullable": false,
+      "type": "text"
+    },
+    "cancellationOperationID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "cancellationReason": {
+      "nullable": true,
+      "type": "text"
+    },
+    "cancelledAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "cancelledByEmail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "completedAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "completedByEmail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "completionNote": {
+      "nullable": true,
+      "type": "text"
+    },
+    "completionOperationID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "createdAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "createdByEmail": {
+      "nullable": false,
+      "type": "text"
+    },
+    "creationOperationID": {
+      "nullable": false,
+      "type": "identifier"
+    },
+    "customerID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "customerName": {
+      "nullable": true,
+      "type": "text"
+    },
+    "dueAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "estimateID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "estimateSummary": {
+      "nullable": true,
+      "type": "text"
+    },
+    "priorityRaw": {
+      "nullable": false,
+      "type": "text"
+    },
+    "serviceCallID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "serviceCallSummary": {
+      "nullable": true,
+      "type": "text"
+    },
+    "serviceLocationID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "serviceLocationName": {
+      "nullable": true,
+      "type": "text"
+    },
+    "taskDescription": {
+      "nullable": true,
+      "type": "text"
+    },
+    "title": {
+      "nullable": false,
+      "type": "text"
+    },
+    "updatedAt": {
+      "nullable": false,
+      "type": "date"
+    }
+  },
+  "taskEvent": {
+    "actorEmail": {
+      "nullable": false,
+      "type": "text"
+    },
+    "assignedToEmailSnapshot": {
+      "nullable": false,
+      "type": "text"
+    },
+    "detail": {
+      "nullable": false,
+      "type": "text"
+    },
+    "dueAtSnapshot": {
+      "nullable": false,
+      "type": "date"
+    },
+    "kindRaw": {
+      "nullable": false,
+      "type": "text"
+    },
+    "occurredAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "operationID": {
+      "nullable": false,
+      "type": "identifier"
+    },
+    "priorityRawSnapshot": {
+      "nullable": false,
+      "type": "text"
+    },
+    "taskID": {
+      "nullable": false,
+      "type": "identifier"
+    },
+    "titleSnapshot": {
+      "nullable": false,
+      "type": "text"
+    }
+  },
+  "technician": {
+    "contactInfo": {
+      "nullable": true,
+      "type": "text"
+    },
+    "laborCostPerHour": {
+      "nullable": true,
+      "type": "number"
+    },
+    "name": {
+      "nullable": false,
+      "type": "text"
+    },
+    "qualificationNotes": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksTimeEntityKindRawValue": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksTimeEntityRef": {
+      "nullable": true,
+      "type": "text"
+    },
+    "serviceAreasJSON": {
+      "nullable": true,
+      "type": "text"
+    },
+    "supportedEquipmentTypesJSON": {
+      "nullable": true,
+      "type": "text"
+    }
+  },
+  "timeEntry": {
+    "clockIn": {
+      "nullable": false,
+      "type": "date"
+    },
+    "clockOut": {
+      "nullable": true,
+      "type": "date"
+    },
+    "notes": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksTimeActivityID": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksTimeActivitySyncError": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksTimeActivitySyncToken": {
+      "nullable": true,
+      "type": "text"
+    },
+    "quickBooksTimeActivitySyncedAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "reviewAuditJSON": {
+      "nullable": true,
+      "type": "text"
+    },
+    "reviewNote": {
+      "nullable": true,
+      "type": "text"
+    },
+    "reviewStatusRawValue": {
+      "nullable": false,
+      "type": "text"
+    },
+    "reviewedAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "reviewedByEmail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "serviceCall": {
+      "nullable": true,
+      "reference": "job",
+      "type": "identifier"
+    },
+    "userEmail": {
+      "nullable": false,
+      "type": "text"
+    }
+  },
+  "timeOff": {
+    "approvedAvailabilityBlockID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "cancellationOperationID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "cancellationReason": {
+      "nullable": true,
+      "type": "text"
+    },
+    "cancelledAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "cancelledByEmail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "createdAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "creationOperationID": {
+      "nullable": false,
+      "type": "identifier"
+    },
+    "endsAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "privateReason": {
+      "nullable": true,
+      "type": "text"
+    },
+    "privateReviewNote": {
+      "nullable": true,
+      "type": "text"
+    },
+    "requestedByEmail": {
+      "nullable": false,
+      "type": "text"
+    },
+    "reviewOperationID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "reviewedAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "reviewedByEmail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "startsAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "statusRawValue": {
+      "nullable": false,
+      "type": "text"
+    },
+    "technicianID": {
+      "nullable": false,
+      "type": "identifier"
+    },
+    "technicianNameSnapshot": {
+      "nullable": false,
+      "type": "text"
+    },
+    "updatedAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "withdrawalOperationID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "withdrawnAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "withdrawnByEmail": {
+      "nullable": true,
+      "type": "text"
+    }
+  },
+  "user": {
+    "createdAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "email": {
+      "nullable": false,
+      "type": "text"
+    },
+    "isActive": {
+      "nullable": false,
+      "type": "flag"
+    },
+    "roleRawValue": {
+      "nullable": false,
+      "type": "text"
+    }
+  },
+  "vehicle": {
+    "administrativeStatusRaw": {
+      "nullable": false,
+      "type": "text"
+    },
+    "assignedTechnicianID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "assignedTechnicianName": {
+      "nullable": true,
+      "type": "text"
+    },
+    "createdAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "latestInspectionAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "licensePlate": {
+      "nullable": true,
+      "type": "text"
+    },
+    "make": {
+      "nullable": true,
+      "type": "text"
+    },
+    "model": {
+      "nullable": true,
+      "type": "text"
+    },
+    "nextInspectionDueAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "nextServiceDueAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "nextServiceDueOdometer": {
+      "nullable": true,
+      "type": "number"
+    },
+    "notes": {
+      "nullable": true,
+      "type": "text"
+    },
+    "odometer": {
+      "nullable": true,
+      "type": "number"
+    },
+    "odometerUpdatedAt": {
+      "nullable": true,
+      "type": "date"
+    },
+    "stockLocation": {
+      "nullable": false,
+      "type": "text"
+    },
+    "unitNumber": {
+      "nullable": false,
+      "type": "text"
+    },
+    "updatedAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "updatedByEmail": {
+      "nullable": true,
+      "type": "text"
+    },
+    "vehicleYear": {
+      "nullable": true,
+      "type": "integer"
+    },
+    "vin": {
+      "nullable": true,
+      "type": "text"
+    }
+  },
+  "vehicleEvent": {
+    "actorEmail": {
+      "nullable": false,
+      "type": "text"
+    },
+    "assignmentTechnicianID": {
+      "nullable": true,
+      "type": "identifier"
+    },
+    "assignmentTechnicianName": {
+      "nullable": true,
+      "type": "text"
+    },
+    "detail": {
+      "nullable": false,
+      "type": "text"
+    },
+    "failedInspectionItemsRaw": {
+      "nullable": true,
+      "type": "text"
+    },
+    "inspectionResultsJSON": {
+      "nullable": true,
+      "type": "text"
+    },
+    "invoiceNumber": {
+      "nullable": true,
+      "type": "text"
+    },
+    "kindRaw": {
+      "nullable": false,
+      "type": "text"
+    },
+    "newStatusRaw": {
+      "nullable": true,
+      "type": "text"
+    },
+    "occurredAt": {
+      "nullable": false,
+      "type": "date"
+    },
+    "odometer": {
+      "nullable": true,
+      "type": "number"
+    },
+    "priorStatusRaw": {
+      "nullable": true,
+      "type": "text"
+    },
+    "resolvesOutOfService": {
+      "nullable": true,
+      "type": "flag"
+    },
+    "serviceCategoryRaw": {
+      "nullable": true,
+      "type": "text"
+    },
+    "serviceCenter": {
+      "nullable": true,
+      "type": "text"
+    },
+    "serviceCost": {
+      "nullable": true,
+      "type": "number"
+    },
+    "vehicleID": {
+      "nullable": false,
+      "type": "identifier"
+    },
+    "vehicleUnitNumber": {
+      "nullable": false,
+      "type": "text"
+    }
+  },
+  "vendor": {
+    "contactInfo": {
+      "nullable": true,
+      "type": "text"
+    },
+    "name": {
+      "nullable": false,
+      "type": "text"
+    },
+    "quickBooksID": {
+      "nullable": true,
+      "type": "text"
+    }
+  }
+}

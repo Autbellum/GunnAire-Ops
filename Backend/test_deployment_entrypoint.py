@@ -11,10 +11,11 @@ BACKEND_ROOT = REPOSITORY_ROOT / "Backend"
 sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from Backend import gunnaire_backend as canonical_backend
+from Backend import gunnaire_local_ai_backend as deployment_backend
 
 
 class DeploymentEntrypointTests(unittest.TestCase):
-    def test_render_launcher_uses_the_canonical_backend_main(self) -> None:
+    def test_render_launcher_uses_the_guarded_local_ai_backend_main(self) -> None:
         launcher_path = REPOSITORY_ROOT / "gunnaire_backend.py"
         spec = importlib.util.spec_from_file_location("gunnaire_render_launcher", launcher_path)
         self.assertIsNotNone(spec)
@@ -22,7 +23,13 @@ class DeploymentEntrypointTests(unittest.TestCase):
         launcher = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(launcher)
 
-        self.assertIs(launcher.main, canonical_backend.main)
+        self.assertIs(launcher.main, deployment_backend.main)
+        self.assertTrue(
+            issubclass(
+                deployment_backend.GunnAireLocalAIBackendHandler,
+                canonical_backend.GunnAireBackendHandler,
+            )
+        )
         self.assertFalse(hasattr(launcher, "qbo_request"))
 
     def test_render_requirements_delegate_to_the_canonical_dependency_set(self) -> None:

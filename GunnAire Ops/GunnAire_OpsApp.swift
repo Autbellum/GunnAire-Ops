@@ -11,15 +11,26 @@ import SwiftUI
 import SwiftData
 import os
 import AppIntents
+import UIKit
 
 @main
 struct GunnAire_OpsApp: App {
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "GunnAireOps", category: "AppStartup")
     @UIApplicationDelegateAdaptor(GunnAireApplicationDelegate.self) private var applicationDelegate
+    @Environment(\.scenePhase) private var scenePhase
     private let startupState: StartupState
     @StateObject private var cloudKitEventMonitor: GunnAireCloudKitEventMonitor
 
     init() {
+        #if DEBUG
+        // Retained App Store screenshots must represent a complete frame, not
+        // an in-flight route, split-view, tab, or sheet transition. This flag
+        // is supplied only by the isolated screenshot fixture process.
+        if ProcessInfo.processInfo.arguments.contains(AppStoreScreenshotPrivacyPolicy.fixtureArgument) {
+            UIView.setAnimationsEnabled(false)
+        }
+        #endif
+
         let cloudKitEventMonitor = GunnAireCloudKitEventMonitor()
         _cloudKitEventMonitor = StateObject(wrappedValue: cloudKitEventMonitor)
         self.startupState = Self.buildStartupState()
@@ -30,32 +41,88 @@ struct GunnAire_OpsApp: App {
 
     var body: some Scene {
         WindowGroup {
-            switch startupState {
-            case .ready(let sharedModelContainer):
-                AppRootView()
-                    .modelContainer(sharedModelContainer)
-                    .environmentObject(cloudKitEventMonitor)
-            case .failed(let message):
-                StartupFailureView(message: message)
+            #if DEBUG
+            if GunnAireCloudKitRoundTripProbe.isRequested {
+                switch startupState {
+                case .ready(let sharedModelContainer):
+                    GunnAireCloudKitRoundTripProbeHostView()
+                        .modelContainer(sharedModelContainer)
+                case .failed(let message):
+                    StartupFailureView(message: message)
+                case .requiresAuthorization:
+                    StartupFailureView(message: "The isolated acceptance store was not prepared.")
+                }
+            } else {
+                appRoot
             }
+            #else
+            appRoot
+            #endif
+        }
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            // App-level phase is active while ANY window is active. Never use
+            // one scene's inactivity to clear another scene's staff workspace.
+            StaffReplicaReceiveController.shared.applicationActivityChanged(phase == .active)
         }
         .commands {
             GunnAireNavigationCommands()
         }
     }
 
+    @ViewBuilder
+    private var appRoot: some View {
+        switch startupState {
+        case .ready(let sharedModelContainer):
+            AppRootView()
+                .modelContainer(sharedModelContainer)
+                .environmentObject(cloudKitEventMonitor)
+        case .failed(let message):
+            StartupFailureView(message: message)
+        case .requiresAuthorization:
+            AppRootView()
+                .environmentObject(cloudKitEventMonitor)
+        }
+    }
+
     private static func buildStartupState() -> StartupState {
+        // Production startup must not attach a private CloudKit store before
+        // validating business identity, the current account, and local data.
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-uiTestWorkspaceProofMismatch") {
+            return .requiresAuthorization
+        }
+        if !GunnAireCloudKit.usesTestDatabase &&
+            !GunnAireCloudKitRoundTripProbe.isRequested &&
+            !GunnAireCloudKitSchemaBootstrap.isRequested {
+            return .requiresAuthorization
+        }
+        #else
+        return .requiresAuthorization
+        #endif
+        #if DEBUG
         let schema = GunnAireModelSchema.schema
+        do {
+            try GunnAireCloudKitRoundTripProbe.prepareBeforeContainerIfRequested()
+        } catch {
+            logger.error("CloudKit round-trip probe preparation failed: \(error.localizedDescription, privacy: .public)")
+            return .failed("The Development CloudKit acceptance probe could not prepare its isolated local store.")
+        }
         let modelConfiguration = GunnAireCloudKit.modelConfiguration(for: schema)
 
         do {
             let modelContainer = try ModelContainer(for: schema, configurations: [modelConfiguration])
-            FieldFormTemplate.ensureStarterTemplates(in: modelContainer.mainContext)
-            try modelContainer.mainContext.save()
-            #if DEBUG
+            if !GunnAireCloudKitRoundTripProbe.isRequested &&
+                !GunnAireCloudKitSchemaBootstrap.isRequested {
+                FieldFormTemplate.ensureStarterTemplates(in: modelContainer.mainContext)
+                try modelContainer.mainContext.save()
+            }
+            try GunnAireCloudKitRoundTripProbe.runIfRequested(in: modelContainer.mainContext)
             try GunnAireCloudKitSchemaBootstrap.runIfRequested(in: modelContainer.mainContext)
             try GunnAireUITestFixtures.prepareIfRequested(in: modelContainer.mainContext)
-            #endif
+            try SharedTimeUIFixture.seedIfRequested(in: modelContainer.mainContext)
+            try FieldFormHistoryUIFixture.seedIfRequested(in: modelContainer.mainContext)
+            try FieldFormDraftUIFixture.seedIfRequested(in: modelContainer.mainContext)
+            CompanyWorkspaceAccessController.shared.installTestContainer(modelContainer)
             return .ready(modelContainer)
         } catch {
             logger.error("Persistent SwiftData store load failed: \(error.localizedDescription, privacy: .public)")
@@ -63,51 +130,140 @@ struct GunnAire_OpsApp: App {
                 "The app could not access its local data store. Your existing data was not changed. Restart the app, check available device storage, and contact GunnAire support before reinstalling."
             )
         }
+        #endif
     }
 
     private enum StartupState {
+        case requiresAuthorization
         case ready(ModelContainer)
         case failed(String)
     }
 }
 
-/// A deliberately short list of the destinations used repeatedly from an
-/// attached iPad keyboard or a Mac. Route authorization remains centralized in
-/// `ContentView`, so a shortcut never bypasses the signed-in business role.
+#if DEBUG
+private struct GunnAireCloudKitRoundTripProbeHostView: View {
+    var body: some View {
+        ZStack {
+            Color(uiColor: .systemBackground)
+                .ignoresSafeArea()
+
+            VStack(spacing: 16) {
+                ProgressView()
+                Text("CloudKit acceptance in progress")
+                    .font(.headline)
+                Text("This Development-only check contains no customer data.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding()
+        }
+        .accessibilityIdentifier("cloudkit.roundtrip.probe")
+        .onAppear {
+            UIApplication.shared.isIdleTimerDisabled = true
+        }
+        .onDisappear {
+            UIApplication.shared.isIdleTimerDisabled = false
+        }
+    }
+}
+#endif
+
+enum GunnAireNavigationCommandSection: Int, CaseIterable {
+    case operations
+    case backOffice
+    case integrations
+    case administrator
+}
+
+/// Mirrors the role-scoped sidebar in the native Mac Navigate menu while
+/// retaining shortcuts only for the most frequent iPad/Mac destinations.
+/// Route authorization remains centralized in `ContentView`, so neither a menu
+/// item nor a shortcut can bypass the signed-in business role.
 struct GunnAireNavigationCommandDefinition: Equatable, Identifiable {
     let route: GunnAireAppRoute
     let title: String
     let systemImage: String
-    let key: Character
+    let section: GunnAireNavigationCommandSection
+    let shortcutKey: Character?
 
     var id: String { route.rawValue }
 
-    static let primary: [Self] = [
-        .init(route: .commandCenter, title: "Command Center", systemImage: "rectangle.3.group", key: "1"),
-        .init(route: .schedule, title: "Schedule & Jobs", systemImage: "calendar", key: "2"),
-        .init(route: .customers, title: "Customers", systemImage: "person.3", key: "3"),
-        .init(route: .documentation, title: "Onsite Documentation", systemImage: "book", key: "4"),
-        .init(route: .invoices, title: "Invoices", systemImage: "doc.text", key: "5"),
-        .init(route: .payments, title: "Payments", systemImage: "creditcard", key: "6")
+    static let all: [Self] = [
+        .init(route: .commandCenter, title: "Command Center", systemImage: "rectangle.3.group", section: .operations, shortcutKey: "1"),
+        .init(route: .timeClock, title: "Clock In/Out", systemImage: "clock", section: .operations, shortcutKey: nil),
+        .init(route: .schedule, title: "Schedule & Jobs", systemImage: "calendar", section: .operations, shortcutKey: "2"),
+        .init(route: .customers, title: "Customers", systemImage: "person.3", section: .operations, shortcutKey: "3"),
+        .init(route: .documentation, title: "Onsite Documentation", systemImage: "book", section: .operations, shortcutKey: "4"),
+        .init(route: .mail, title: "Mail", systemImage: "envelope", section: .backOffice, shortcutKey: nil),
+        .init(route: .estimates, title: "Estimates", systemImage: "doc.text.magnifyingglass", section: .backOffice, shortcutKey: nil),
+        .init(route: .invoices, title: "Invoices", systemImage: "doc.text", section: .backOffice, shortcutKey: "5"),
+        .init(route: .payments, title: "Payments", systemImage: "creditcard", section: .backOffice, shortcutKey: "6"),
+        .init(route: .reports, title: "Business Reports", systemImage: "chart.bar.xaxis", section: .backOffice, shortcutKey: "7"),
+        .init(route: .receiptsBills, title: "Receipts & Bills", systemImage: "tray.and.arrow.up", section: .backOffice, shortcutKey: nil),
+        .init(route: .sync, title: "Sync & Integrations", systemImage: "arrow.triangle.2.circlepath", section: .integrations, shortcutKey: nil),
+        .init(route: .quickBooks, title: "QuickBooks Management", systemImage: "banknote", section: .administrator, shortcutKey: nil)
     ]
+
+    static var primary: [Self] {
+        all.filter { $0.shortcutKey != nil }
+    }
+
+    static func commands(in section: GunnAireNavigationCommandSection) -> [Self] {
+        all.filter { $0.section == section }
+    }
+}
+
+struct GunnAireNavigationCommandContext {
+    let visibleSidebarItems: Set<SidebarItem>
+
+    func canOpen(_ route: GunnAireAppRoute) -> Bool {
+        visibleSidebarItems.contains(route.sidebarItem)
+    }
+}
+
+private struct GunnAireNavigationCommandContextKey: FocusedValueKey {
+    typealias Value = GunnAireNavigationCommandContext
+}
+
+extension FocusedValues {
+    var gunnaireNavigationCommandContext: GunnAireNavigationCommandContext? {
+        get { self[GunnAireNavigationCommandContextKey.self] }
+        set { self[GunnAireNavigationCommandContextKey.self] = newValue }
+    }
+}
+
+private struct GunnAireOptionalKeyboardShortcut: ViewModifier {
+    let key: Character?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let key {
+            content.keyboardShortcut(KeyEquivalent(key), modifiers: .command)
+        } else {
+            content
+        }
+    }
 }
 
 struct GunnAireNavigationCommands: Commands {
+    @FocusedValue(\.gunnaireNavigationCommandContext) private var navigationContext
+
     var body: some Commands {
         CommandMenu("Navigate") {
-            ForEach(GunnAireNavigationCommandDefinition.primary) { command in
-                Button(command.title, systemImage: command.systemImage) {
-                    GunnAireAppIntentRouter.store(command.route)
+            ForEach(GunnAireNavigationCommandSection.allCases, id: \.rawValue) { section in
+                if section != .operations {
+                    Divider()
                 }
-                .keyboardShortcut(KeyEquivalent(command.key), modifiers: .command)
-            }
 
-            Divider()
-
-            Button("Business Reports", systemImage: "chart.bar.xaxis") {
-                GunnAireAppIntentRouter.store(.reports)
+                ForEach(GunnAireNavigationCommandDefinition.commands(in: section)) { command in
+                    Button(command.title, systemImage: command.systemImage) {
+                        GunnAireAppIntentRouter.store(command.route)
+                    }
+                    .modifier(GunnAireOptionalKeyboardShortcut(key: command.shortcutKey))
+                    .disabled(!(navigationContext?.canOpen(command.route) ?? false))
+                }
             }
-            .keyboardShortcut("7", modifiers: .command)
         }
     }
 }
@@ -162,6 +318,8 @@ private enum GunnAireUITestFixtures {
     private static let timeOffOperationID = UUID(uuidString: "A1000000-0000-4000-8000-000000000046")!
     private static let timeOffTechnicianID = UUID(uuidString: "A1000000-0000-4000-8000-000000000047")!
     private static let routeServiceCallID = UUID(uuidString: "A1000000-0000-4000-8000-000000000048")!
+    private static let archivedCatalogItemID = UUID(uuidString: "A1000000-0000-4000-8000-000000000049")!
+    private static let photoMarkupAttachmentID = UUID(uuidString: "A1000000-0000-4000-8000-000000000050")!
 
     static func prepareIfRequested(in context: ModelContext) throws {
         let arguments = ProcessInfo.processInfo.arguments
@@ -177,9 +335,13 @@ private enum GunnAireUITestFixtures {
         let isInventoryFixture = arguments.contains("-uiTestSeedInventoryJob") || isInventoryShortageFixture || isPurchaseOrderDraftFixture || isWarrantyClaimFixture
         let isPendingEstimateFixture = arguments.contains("-uiTestSeedPendingEstimate")
         let isAcceptedStandaloneEstimateFixture = arguments.contains("-uiTestSeedAcceptedStandaloneEstimate")
-        let isPricebookReviewFixture = arguments.contains("-uiTestSeedPricebookReview")
+        let isLinkedPricebookReviewFixture = arguments.contains("-uiTestSeedLinkedPricebookReview")
+        let isOfflineCompanyPricebookFixture = arguments.contains("-uiTestSeedOfflineCompanyPricebook")
+        let isPricebookReviewFixture = arguments.contains("-uiTestSeedPricebookReview") ||
+            isLinkedPricebookReviewFixture
         let isCatalogReconciliationFixture = arguments.contains("-uiTestSeedCatalogReconciliation")
         let isCatalogMappingConflictFixture = arguments.contains("-uiTestSeedCatalogMappingConflict")
+        let isArchivedCatalogFixture = arguments.contains("-uiTestSeedArchivedCatalog")
         let isSyncRecoveryFixture = arguments.contains("-uiTestSeedSyncRecovery")
         let isServiceRequestFixture = arguments.contains("-uiTestSeedServiceRequest")
         let isProjectMilestoneFixture = arguments.contains("-uiTestSeedProjectMilestones")
@@ -201,8 +363,17 @@ private enum GunnAireUITestFixtures {
         let isBusinessTaskFixture = arguments.contains("-uiTestSeedBusinessTask")
         let isTimeOffRequestFixture = arguments.contains("-uiTestSeedTimeOffRequest")
         let isTechnicianRouteFixture = arguments.contains("-uiTestSeedTechnicianRoute")
+        let isPhotoMarkupFixture = arguments.contains("-uiTestSeedPhotoMarkup")
 
         let appUsers = try context.fetch(FetchDescriptor<AppUser>())
+        if arguments.contains("-uiTestAuthenticatedAdmin") || isScreenshotFixture {
+            let administrators = appUsers.filter { AppAccess.normalizedEmail($0.email) == AppAccess.primaryAdminEmail }
+            if administrators.isEmpty {
+                context.insert(AppUser(email: AppAccess.primaryAdminEmail, role: .admin))
+            } else {
+                for user in administrators { user.role = .admin; user.isActive = true }
+            }
+        }
         for user in appUsers where
             user.id == standardUserID ||
             user.id == technicianUserID ||
@@ -215,19 +386,53 @@ private enum GunnAireUITestFixtures {
         if arguments.contains("-uiTestAuthenticatedStandard") {
             context.insert(AppUser(id: standardUserID, email: GunnAireUITestIdentity.standardEmail, role: .standard))
         }
-        if arguments.contains("-uiTestAuthenticatedTechnician") {
+        if arguments.contains("-uiTestAuthenticatedTechnician") || arguments.contains("-uiTestJobBillingReview") {
             context.insert(AppUser(id: technicianUserID, email: GunnAireUITestIdentity.technicianEmail, role: .fieldTechnician))
         }
         if arguments.contains("-uiTestAuthenticatedAccounting") {
             context.insert(AppUser(id: accountingUserID, email: GunnAireUITestIdentity.accountingEmail, role: .accounting))
         }
+        if arguments.contains("-uiTestUnverifiedBusinessRole") {
+            for user in try context.fetch(FetchDescriptor<AppUser>())
+                where AppAccess.normalizedEmail(user.email) == AppAccess.primaryAdminEmail {
+                user.isActive = false
+            }
+        }
 
+        let customers = try context.fetch(FetchDescriptor<Customer>())
+        let existingFixtureCustomer = customers.first { $0.id == customerID }
+        // Relaunch acceptance must exercise the real saved graph, not rebuild
+        // its jobs and erase the very attachment whose recovery is under test.
+        // This exception requires the dedicated draft flag and isolated store.
+        if FieldFormDraftWorkflow.fixtureStoreName != nil, existingFixtureCustomer != nil,
+           try context.fetch(FetchDescriptor<ServiceCall>()).filter({ $0.id == serviceCallID }).count == 1 {
+            try context.save()
+            return
+        }
+        for customer in customers where customer.name == "Offline QBO Customer" {
+            context.delete(customer)
+        }
+        let vendors = try context.fetch(FetchDescriptor<Vendor>())
+        for vendor in vendors where vendor.name == "Offline QBO Vendor" {
+            context.delete(vendor)
+        }
+
+        // Every UI-test launch shares the simulator's local SwiftData store. A
+        // prior workflow can create additional invoices, estimates, calls, or
+        // communications for the fixture customer. Deleting and recreating the
+        // customer while any of those records survive leaves invalid required
+        // relationships that trap as soon as a later view reads them. Remove
+        // the full dependent graph first, then reuse the stable customer object
+        // for seeded runs below.
         let payments = try context.fetch(FetchDescriptor<Payment>())
-        for payment in payments where payment.invoice?.id == invoiceID {
+        for payment in payments where
+            payment.invoice?.id == invoiceID ||
+            payment.invoice?.customer?.id == customerID {
             context.delete(payment)
         }
         let invoices = try context.fetch(FetchDescriptor<Invoice>())
         for invoice in invoices where
+            invoice.customer?.id == customerID ||
             invoice.id == invoiceID ||
             invoice.serviceCallID == projectServiceCallID ||
             invoice.projectMilestoneID == projectDepositMilestoneID ||
@@ -239,6 +444,7 @@ private enum GunnAireUITestFixtures {
         }
         let estimates = try context.fetch(FetchDescriptor<Estimate>())
         for estimate in estimates where
+            estimate.customer?.id == customerID ||
             estimate.id == estimateID ||
             estimate.id == projectEstimateID ||
             (isPricebookReviewFixture && CatalogLineItemSnapshot.decoded(from: estimate.catalogSnapshotJSON).contains { $0.catalogItemID == catalogItemID }) {
@@ -246,6 +452,7 @@ private enum GunnAireUITestFixtures {
         }
         let calls = try context.fetch(FetchDescriptor<ServiceCall>())
         let fixtureCallIDs = Set(calls.compactMap { call in
+            call.customer?.id == customerID ||
             call.id == serviceCallID ||
             call.id == correctiveSourceCallID ||
             call.id == correctiveFollowUpCallID ||
@@ -262,6 +469,7 @@ private enum GunnAireUITestFixtures {
         let timeEntries = try context.fetch(FetchDescriptor<TimeEntry>())
         for entry in timeEntries where entry.id == submittedTimeEntryID ||
             entry.id == openJobTimeEntryID ||
+            entry.serviceCall?.customer?.id == customerID ||
             (isTimeClassificationFixture && AppAccess.normalizedEmail(entry.userEmail) == GunnAireUITestIdentity.technicianEmail) {
             context.delete(entry)
         }
@@ -278,21 +486,29 @@ private enum GunnAireUITestFixtures {
             context.delete(milestone)
         }
         let maintenanceAgreements = try context.fetch(FetchDescriptor<RecurringMaintenanceContract>())
-        for agreement in maintenanceAgreements where agreement.id == maintenanceAgreementID {
+        for agreement in maintenanceAgreements where
+            agreement.id == maintenanceAgreementID ||
+            agreement.customer?.id == customerID {
             context.delete(agreement)
         }
         let equipmentProfiles = try context.fetch(FetchDescriptor<CustomerEquipment>())
-        for equipment in equipmentProfiles where equipment.id == equipmentID {
+        for equipment in equipmentProfiles where
+            equipment.id == equipmentID ||
+            equipment.customer?.id == customerID ||
+            equipment.serialNumber == "LEN-UI-9000" {
             context.delete(equipment)
         }
         let documentAttachments = try context.fetch(FetchDescriptor<ServiceDocumentAttachment>())
         for attachment in documentAttachments where attachment.id == warrantyEvidenceID ||
+            attachment.id == photoMarkupAttachmentID ||
+            attachment.customer?.id == customerID ||
             attachment.fleetVehicleID == fleetVehicleID ||
             attachment.expenseClaimID == fieldExpenseClaimID {
             context.delete(attachment)
         }
         let fieldExpenseClaims = try context.fetch(FetchDescriptor<FieldExpenseClaim>())
         for claim in fieldExpenseClaims where claim.id == fieldExpenseClaimID ||
+            claim.customerID == customerID ||
             (arguments.contains("-uiTestSeedCollectibleJob") && claim.serviceCallID == serviceCallID) {
             context.delete(claim)
         }
@@ -305,15 +521,21 @@ private enum GunnAireUITestFixtures {
             context.delete(vehicle)
         }
         let serviceLocations = try context.fetch(FetchDescriptor<CustomerServiceLocation>())
-        for location in serviceLocations where location.id == serviceLocationID {
+        for location in serviceLocations where
+            location.id == serviceLocationID ||
+            location.customer?.id == customerID {
             context.delete(location)
         }
         let communications = try context.fetch(FetchDescriptor<CustomerCommunication>())
-        for communication in communications where communication.id == communicationID {
+        for communication in communications where
+            communication.id == communicationID ||
+            communication.customer?.id == customerID {
             context.delete(communication)
         }
         let operationalAlerts = try context.fetch(FetchDescriptor<CustomerOperationalAlert>())
-        for alert in operationalAlerts where alert.id == operationalAlertID {
+        for alert in operationalAlerts where
+            alert.id == operationalAlertID ||
+            alert.customerID == customerID {
             context.delete(alert)
         }
         let businessTaskEvents = try context.fetch(FetchDescriptor<BusinessTaskEvent>())
@@ -321,7 +543,7 @@ private enum GunnAireUITestFixtures {
             context.delete(event)
         }
         let businessTasks = try context.fetch(FetchDescriptor<BusinessTask>())
-        for task in businessTasks where task.id == businessTaskID {
+        for task in businessTasks where task.id == businessTaskID || task.customerID == customerID {
             context.delete(task)
         }
         let availabilityEvents = try context.fetch(FetchDescriptor<TechnicianAvailabilityEvent>())
@@ -337,12 +559,12 @@ private enum GunnAireUITestFixtures {
             context.delete(block)
         }
         let workShifts = try context.fetch(FetchDescriptor<TechnicianWorkShift>())
-        for shift in workShifts where shift.technicianID == technicianID || shift.technicianID == timeOffTechnicianID {
+        // Work-shift IDs and, in older fixture builds, technician IDs were
+        // generated dynamically. This persistent store is used only after the
+        // explicit Debug UI-test switch above, so clear every shift before a
+        // seeded launch rather than allowing an old random ID to alter capacity.
+        for shift in workShifts {
             context.delete(shift)
-        }
-        let customers = try context.fetch(FetchDescriptor<Customer>())
-        for customer in customers where customer.id == customerID {
-            context.delete(customer)
         }
         let technicians = try context.fetch(FetchDescriptor<Technician>())
         for technician in technicians where
@@ -367,7 +589,15 @@ private enum GunnAireUITestFixtures {
             item.id == duplicateCatalogMappingItemID ||
             item.id == servicePackageComponentItemID ||
             item.id == servicePackageItemID ||
-            item.name == "UI Test Added Repair" {
+            item.id == archivedCatalogItemID ||
+            item.name == "UI Test Added Repair" ||
+            item.name == "Invoice Workspace Added Part" ||
+            item.name == "Offline Taxable Capacitor" ||
+            // Both bundle-composer and milestone fixtures create these records.
+            // Reset their isolated test identities on every fixture launch so
+            // another journey cannot inherit duplicate provider/local mappings.
+            item.quickBooksID?.hasPrefix("BC-") == true ||
+            item.name.hasPrefix("Scoped Draft ") {
             context.delete(item)
         }
         let serviceRequests = try context.fetch(FetchDescriptor<ServiceRequest>())
@@ -423,9 +653,28 @@ private enum GunnAireUITestFixtures {
             context.insert(vehicle)
             context.insert(event)
         }
+        if isArchivedCatalogFixture {
+            context.insert(
+                Item(
+                    id: archivedCatalogItemID,
+                    quickBooksID: "QBO-UI-ARCHIVED-CATALOG",
+                    quickBooksSyncStatus: "synced",
+                    pricebookReviewStatus: .archived,
+                    pricebookCreatedByEmail: AppAccess.primaryAdminEmail,
+                    pricebookReviewedByEmail: AppAccess.primaryAdminEmail,
+                    pricebookReviewedAt: Date(),
+                    name: "Archived Blower Motor",
+                    itemType: .nonInventory,
+                    unitPrice: 875,
+                    purchaseCost: 310,
+                    itemDescription: "Historical blower motor replacement",
+                    sku: "MOTOR-ARCHIVED"
+                )
+            )
+        }
         try context.save()
 
-        guard arguments.contains("-uiTestSeedCollectibleJob") ||
+        let shouldSeedOperationalFixture = arguments.contains("-uiTestSeedCollectibleJob") ||
             isPendingTaxFixture ||
             isScreenshotFixture ||
             isSyncRecoveryFixture ||
@@ -440,27 +689,53 @@ private enum GunnAireUITestFixtures {
             isFieldExpenseFixture ||
             isOperationalAlertFixture ||
             isTimeOffRequestFixture ||
-            isTechnicianRouteFixture else { return }
+            isTechnicianRouteFixture ||
+            isPhotoMarkupFixture ||
+            isOfflineCompanyPricebookFixture
+        guard shouldSeedOperationalFixture else {
+            if let existingFixtureCustomer {
+                context.delete(existingFixtureCustomer)
+                try context.save()
+            }
+            return
+        }
 
-        let customer = Customer(
-            id: customerID,
-            quickBooksID: "QBO-UI-CUSTOMER",
-            name: isScreenshotFixture ? "Blue Ridge Dental" : "UI Test Collectible Customer",
-            phone: isScreenshotFixture ? "(336) 555-0148" : "555-0100",
-            email: isScreenshotFixture ? "office@example.com" : "uitest@gunnaire.com",
-            address: isScreenshotFixture ? "2450 Robinhood Rd, Winston-Salem, NC" : "100 Test Air Way",
-            storedPaymentMethods: [
-                StoredPaymentMethodReference(
-                    id: "QBO-UI-CARD",
-                    providerCustomerID: "QBO-UI-CUSTOMER",
-                    cardholderName: isScreenshotFixture ? "Blue Ridge Dental" : "UI Test Collectible Customer",
-                    cardBrand: "Visa",
-                    lastFour: "4242",
-                    expirationMonth: "12",
-                    expirationYear: "2030"
-                )
-            ]
+        let customerName = isScreenshotFixture ? "Blue Ridge Dental" : "UI Test Collectible Customer"
+        let storedPaymentMethod = StoredPaymentMethodReference(
+            id: "QBO-UI-CARD",
+            providerCustomerID: "QBO-UI-CUSTOMER",
+            cardholderName: customerName,
+            cardBrand: "Visa",
+            lastFour: "4242",
+            expirationMonth: "12",
+            expirationYear: "2030"
         )
+        let customer: Customer
+        if let existingFixtureCustomer {
+            customer = existingFixtureCustomer
+            customer.quickBooksID = "QBO-UI-CUSTOMER"
+            customer.name = customerName
+            customer.phone = isScreenshotFixture ? "(336) 555-0148" : "555-0100"
+            customer.email = isScreenshotFixture ? "office@example.com" : "uitest@gunnaire.com"
+            customer.address = isScreenshotFixture ? "2450 Robinhood Rd, Winston-Salem, NC" : "100 Test Air Way"
+            customer.allowsTransactionalEmail = true
+            customer.allowsServiceText = false
+            customer.allowsMarketing = false
+            customer.preferredContactMethod = .email
+            customer.communicationConsentUpdatedAt = nil
+            customer.storedPaymentMethodsJSON = nil
+            customer.upsertStoredPaymentMethod(storedPaymentMethod)
+        } else {
+            customer = Customer(
+                id: customerID,
+                quickBooksID: "QBO-UI-CUSTOMER",
+                name: customerName,
+                phone: isScreenshotFixture ? "(336) 555-0148" : "555-0100",
+                email: isScreenshotFixture ? "office@example.com" : "uitest@gunnaire.com",
+                address: isScreenshotFixture ? "2450 Robinhood Rd, Winston-Salem, NC" : "100 Test Air Way",
+                storedPaymentMethods: [storedPaymentMethod]
+            )
+        }
         let technician = Technician(
             id: technicianID,
             name: isScreenshotFixture ? "Jordan Lee" : "UI Test Technician",
@@ -478,7 +753,11 @@ private enum GunnAireUITestFixtures {
         )
         let catalogItem = Item(
             id: catalogItemID,
-            quickBooksID: (isCatalogReconciliationFixture || isCatalogMappingConflictFixture) ? "QBO-UI-CATALOG-RECONCILE" : nil,
+            quickBooksID: isLinkedPricebookReviewFixture
+                ? "QBO-UI-PRICEBOOK-REVIEW"
+                : ((isCatalogReconciliationFixture || isCatalogMappingConflictFixture)
+                    ? "QBO-UI-CATALOG-RECONCILE"
+                    : (isOfflineCompanyPricebookFixture ? "QBO-UI-OFFLINE-PRICEBOOK" : nil)),
             quickBooksSyncStatus: isPricebookReviewFixture
                 ? "needs_review"
                 : (isCatalogReconciliationFixture ? "pending_update" : (isSyncRecoveryFixture ? "needs_attention" : nil)),
@@ -593,6 +872,8 @@ private enum GunnAireUITestFixtures {
             ) ?? fixtureNow
         let call = ServiceCall(
             id: serviceCallID,
+            googleCalendarID: isSyncRecoveryFixture ? GunnAireUITestIdentity.technicianEmail : nil,
+            googleEventID: isSyncRecoveryFixture ? "google-ui-sync-recovery" : nil,
             googleEventManagedByApp: true,
             eventTitle: isScreenshotFixture ? "Cooling system diagnostic" : "Collectible HVAC service",
             siteAddress: customer.address,
@@ -673,6 +954,25 @@ private enum GunnAireUITestFixtures {
             status: "unpaid",
             dueDate: Calendar.current.date(byAdding: .day, value: 7, to: scheduledDate)
         )
+        if arguments.contains("-uiTestStatementNeedsReview") {
+            invoice.quickBooksID = nil
+            invoice.quickBooksBalanceDue = nil
+            invoice.status = "paid"
+        }
+        if arguments.contains("-uiTestUnreadableBillingSnapshot"), arguments.contains("-uiTestSeedCollectibleJob"),
+           let original = invoice.catalogSnapshotJSON {
+            invoice.catalogSnapshotJSON = "{\"version\":999,\"lines\":" + original + "}"
+        }
+        if arguments.contains("-uiTestBillingIdentityConflict") {
+            invoice.quickBooksID = "FIXTURE-IDENTITY-REVIEW"
+            QuickBooksBillingIdentity.markForReview([invoice])
+        }
+        if arguments.contains("-uiTestUnconfirmedInvoiceBalance") {
+            invoice.quickBooksID = "FIXTURE-BALANCE-REVIEW"
+            invoice.quickBooksBalanceDue = 0
+            invoice.status = "paid"
+            QuickBooksBalanceReconciliation.markForRefresh(invoice)
+        }
         let maintenanceDueDate = isScheduleAuthorizationFixture
             ? scheduledDate.addingTimeInterval(60 * 60)
             : ((isMaintenanceReportingFixture || isAgreementBillingFixture)
@@ -692,6 +992,8 @@ private enum GunnAireUITestFixtures {
         )
         let maintenanceCall = ServiceCall(
             id: maintenanceServiceCallID,
+            googleCalendarID: isSyncRecoveryFixture ? GunnAireUITestIdentity.technicianEmail : nil,
+            googleEventID: isSyncRecoveryFixture ? "google-ui-sync-recovery-maintenance" : nil,
             googleEventManagedByApp: true,
             eventTitle: "Comfort Care maintenance",
             siteAddress: customer.address,
@@ -737,7 +1039,9 @@ private enum GunnAireUITestFixtures {
                 approvedAt: Date().addingTimeInterval(-2_400)
             )
         }
-        context.insert(customer)
+        if existingFixtureCustomer == nil {
+            context.insert(customer)
+        }
         context.insert(technician)
         context.insert(catalogItem)
         if isCatalogMappingConflictFixture {
@@ -768,12 +1072,38 @@ private enum GunnAireUITestFixtures {
         if isServicePackageFixture || isMultiLinePurchaseOrderFixture {
             context.insert(servicePackageComponent)
         }
+        try CatalogBundleFixture.seed(context)
         if isServicePackageFixture {
             context.insert(servicePackage)
         }
         context.insert(equipment)
         context.insert(serviceLocation)
         context.insert(call)
+        if isPhotoMarkupFixture {
+            let renderer = UIGraphicsImageRenderer(size: CGSize(width: 640, height: 480))
+            let data = renderer.pngData { rendererContext in
+                UIColor(red: 0.08, green: 0.16, blue: 0.23, alpha: 1).setFill()
+                rendererContext.fill(CGRect(x: 0, y: 0, width: 640, height: 480))
+                UIColor(red: 0.95, green: 0.68, blue: 0.18, alpha: 1).setFill()
+                rendererContext.fill(CGRect(x: 72, y: 88, width: 496, height: 304))
+            }
+            let fixtureURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("UI-Diagnostic-Photo.png")
+            try data.write(to: fixtureURL, options: .atomic)
+            context.insert(ServiceDocumentAttachment(
+                id: photoMarkupAttachmentID,
+                customer: customer,
+                serviceCallID: serviceCallID,
+                customerEquipmentID: equipmentID,
+                invoiceID: invoiceID,
+                kind: .diagnosticPhoto,
+                displayName: fixtureURL.lastPathComponent,
+                caption: "Control-board wiring before repair",
+                localFilePath: fixtureURL.path,
+                contentType: "image/png",
+                fileSizeBytes: data.count
+            ))
+        }
         if isTechnicianRouteFixture {
             context.insert(ServiceCall(
                 id: routeServiceCallID,
@@ -884,13 +1214,19 @@ private enum GunnAireUITestFixtures {
             context.insert(equipmentDecisionHistoryCall)
         }
         if isScheduleAuthorizationFixture {
+            // This regression needs its removable job in the three-row preview
+            // regardless of runner timezone or earlier tests' persisted records.
+            // The branch is inside DEBUG + the explicit test-database fixture.
+            let deletionPreviewDate = arguments.contains("-uiTestUpcomingDeletionTarget")
+                ? Calendar.current.date(bySettingHour: 23, minute: 59, second: 59, of: fixtureNow) ?? scheduledDate
+                : scheduledDate.addingTimeInterval(2 * 60 * 60)
             context.insert(ServiceCall(
                 id: unassignedScheduleServiceCallID,
                 googleEventManagedByApp: true,
                 eventTitle: "Unassigned confidential dispatch job",
                 siteAddress: "299 Dispatch Only Drive",
                 type: .estimate,
-                scheduledDate: scheduledDate.addingTimeInterval(2 * 60 * 60),
+                scheduledDate: deletionPreviewDate,
                 customer: customer,
                 status: .scheduled
             ))
@@ -1070,6 +1406,16 @@ private enum GunnAireUITestFixtures {
                 customerApprovalRecordedByEmail: AppAccess.primaryAdminEmail,
                 notes: "Customer approved the replacement proposal and 30/50/20 billing schedule."
             )
+            if arguments.contains("-uiTestProjectBundleMilestones") {
+                let catalog = try CatalogBundleFixture.makeCatalog(overrides: [
+                    "BC-L1": ["UnitPrice": 9_250],
+                    "BC-G1": ["Name": "Heat Pump Replacement Bundle"]])
+                let bundle = try CatalogBundlePolicy.resolve(root: catalog[3], catalog: catalog,
+                    scope: CatalogBundleFixture.scope)
+                projectEstimate.catalogSnapshotJSON = CatalogLineItemSnapshot.encoded(snapshots: [bundle])
+                projectEstimate.lineItemSummary = bundle.customerSummary
+                for item in catalog { context.insert(item) }
+            }
             let projectDates = [
                 scheduledDate,
                 Calendar.current.date(byAdding: .day, value: 1, to: scheduledDate) ?? scheduledDate,
@@ -1171,6 +1517,27 @@ private enum GunnAireUITestFixtures {
             )
             context.insert(source)
             context.insert(followUp)
+        }
+        if arguments.contains("-uiTestDocumentLinkTargets") {
+            invoice.quickBooksID = "100"
+            call.linkedInvoiceID = invoice.id
+            maintenanceCall.type = .estimate
+            maintenanceCall.linkedEstimateID = estimate.id
+            estimate.serviceCallID = maintenanceCall.id
+            estimate.quickBooksID = "QBO-UI-DOCUMENT-ESTIMATE"
+            if arguments.contains("-uiTestScheduledEstimateJobMismatch") {
+                call.linkedInvoiceID = nil
+                call.linkedEstimateID = estimate.id
+                estimate.serviceCallID = nil
+                estimate.scheduledServiceCallID = maintenanceCall.id
+            }
+        }
+        if arguments.contains("-uiTestDocumentationCustomerPending") {
+            call.linkedInvoiceID = invoice.id
+            invoice.customer = nil
+        }
+        if arguments.contains("-uiTestDocumentationJobPending") {
+            call.customer = nil
         }
         try context.save()
     }

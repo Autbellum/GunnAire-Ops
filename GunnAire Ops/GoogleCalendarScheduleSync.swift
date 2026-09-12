@@ -3,7 +3,7 @@ import SwiftData
 
 @MainActor
 enum GoogleCalendarScheduleSync {
-    private struct ImportSummary {
+    struct ImportSummary {
         let importedCount: Int
         let restrictedReviewCount: Int
     }
@@ -40,9 +40,6 @@ enum GoogleCalendarScheduleSync {
 
     static func markCalendarCallLocallyEdited(_ call: ServiceCall) {
         guard shouldAllowGoogleCalendarWrite(for: call) else { return }
-        let hasCalendarLink = call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ||
-            call.googleCalendarID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-        guard hasCalendarLink else { return }
         var callIDs = Set(UserDefaults.standard.stringArray(forKey: locallyEditedCalendarCallIDsStorageKey) ?? [])
         callIDs.insert(call.id.uuidString)
         UserDefaults.standard.set(Array(callIDs), forKey: locallyEditedCalendarCallIDsStorageKey)
@@ -60,669 +57,613 @@ enum GoogleCalendarScheduleSync {
     }
 
     private static func calendarEventStorageKey(calendarID: String?, eventID: String) -> String {
-        "\(normalized(calendarID ?? "primary"))|\(normalized(eventID))"
+        "\((calendarID ?? "primary").trimmingCharacters(in: .whitespacesAndNewlines))|\(eventID)"
     }
 
     static func sync(
-        auth: GoogleAuthManager,
-        modelContext: ModelContext,
-        signedInEmail: String?,
-        isAdminUser: Bool,
+        auth: GoogleAuthManager, modelContext: ModelContext, signedInEmail: String?, isAdminUser: Bool,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
-        let now = Date()
-        let calendar = Calendar.current
-        let syncStart = calendar.date(byAdding: .day, value: -30, to: now) ?? now
-        let horizon = calendar.date(byAdding: .day, value: 90, to: now) ?? now
-        auth.fetchCalendars { calendarsResult in
-            switch calendarsResult {
-            case .failure(let error):
-                completion(.failure(error))
-            case .success(let calendars):
-                let filteredCalendars = calendars.filter { !isExcludedCalendarID($0.id) }
-                let availableCalendarIDs = Set(["primary"] + filteredCalendars.map(\.id))
-                fetchEvents(
-                    auth: auth,
-                    calendarIDs: Array(availableCalendarIDs),
-                    timeMin: syncStart,
-                    timeMax: horizon
-                ) { fetchResult in
-                    switch fetchResult {
-                    case .failure(let error):
-                        completion(.failure(error))
-                    case .success(let calendarEvents):
-                        Task { @MainActor in
-                            do {
-                                let summary = try importEvents(
-                                    calendarEvents,
-                                    into: modelContext,
-                                    signedInEmail: signedInEmail
-                                )
-                                let restrictionNotice = summary.restrictedReviewCount == 0
-                                    ? ""
-                                    : " \(summary.restrictedReviewCount) new event\(summary.restrictedReviewCount == 1 ? "" : "s") matched an active Do Not Service hold and remained unassigned for office review."
-                                completion(.success("Imported \(summary.importedCount) Google Calendar events. Existing Google events are read-only in GunnAire Ops, so sync will not overwrite titles, locations, descriptions, attendees, or reminders.\(restrictionNotice)"))
-                            } catch {
-                                completion(.failure(error))
-                            }
-                        }
-                    }
-                }
-            }
+        startWorkflow(auth: auth, context: modelContext, email: signedInEmail, completion: completion) {
+            try await synchronize(workflow: $0)
         }
     }
 
     static func exportImmediately(
-        call: ServiceCall,
-        auth: GoogleAuthManager,
-        modelContext: ModelContext,
-        signedInEmail: String?,
-        isAdminUser: Bool,
+        call: ServiceCall, auth: GoogleAuthManager, modelContext: ModelContext,
+        signedInEmail: String?, isAdminUser: Bool,
         completion: ((Result<String, Error>) -> Void)? = nil
     ) {
-        guard shouldAllowGoogleCalendarWrite(for: call) else {
-            completion?(.success("Skipped externally managed Google event."))
-            return
+        guard (try? modelContext.fetch(FetchDescriptor<ServiceCall>()).contains(where: { $0 === call })) == true else {
+            completion?(.failure(GoogleCalendarWorkflowError.changed)); return
         }
-        let calendar = Calendar.current
-        let start = calendar.date(byAdding: .day, value: -1, to: call.scheduledDate) ?? call.scheduledDate
-        let end = calendar.date(byAdding: .day, value: 1, to: call.scheduledDate) ?? call.scheduledDate
-        auth.fetchCalendars { calendarsResult in
-            switch calendarsResult {
-            case .failure(let error):
-                completion?(.failure(error))
-            case .success(let calendars):
-                let filteredCalendars = calendars.filter { !isExcludedCalendarID($0.id) }
-                let availableCalendarIDs = Set(["primary"] + filteredCalendars.map(\.id))
-                let writableCalendarIDs = Set(["primary"] + filteredCalendars.filter(\.isWritable).map(\.id))
-                fetchEvents(
-                    auth: auth,
-                    calendarIDs: Array(availableCalendarIDs),
-                    timeMin: start,
-                    timeMax: end
-                ) { fetchResult in
-                    switch fetchResult {
-                    case .failure(let error):
-                        completion?(.failure(error))
-                    case .success(let calendarEvents):
-                        Task { @MainActor in
-                            do {
-                                _ = try importEvents(
-                                    calendarEvents,
-                                    into: modelContext,
-                                    signedInEmail: signedInEmail
-                                )
-                            } catch {
-                                completion?(.failure(error))
-                                return
-                            }
-                            guard shouldAllowGoogleCalendarWrite(for: call) else {
-                                completion?(.success("Skipped externally managed Google event."))
-                                return
-                            }
-                            exportNext(
-                                index: 0,
-                                exportedCount: 0,
-                                skippedCount: 0,
-                                calls: [call],
-                                auth: auth,
-                                modelContext: modelContext,
-                                remoteEventsByKey: remoteEventsByKey(from: calendarEvents),
-                                remoteEventsByFingerprint: remoteEventsByFingerprint(from: calendarEvents, writableCalendarIDs: writableCalendarIDs),
-                                remoteEventsByCollisionKey: remoteEventsByCollisionKey(from: calendarEvents, writableCalendarIDs: writableCalendarIDs),
-                                availableCalendarIDs: availableCalendarIDs,
-                                writableCalendarIDs: writableCalendarIDs,
-                                completion: { result in
-                                    completion?(result)
-                                }
-                            )
-                        }
-                    }
-                }
-            }
+        markCalendarCallLocallyEdited(call)
+        startWorkflow(auth: auth, context: modelContext, email: signedInEmail, completion: completion) {
+            try await publish(call: call, workflow: $0)
         }
     }
 
-    /// Removes only an event the app can prove it created. Imported or manually-created
-    /// Google events are never deleted when a local HVAC job is cancelled.
     static func cancelManagedEventImmediately(
-        for call: ServiceCall,
-        auth: GoogleAuthManager,
-        modelContext: ModelContext,
+        for call: ServiceCall, auth: GoogleAuthManager, modelContext: ModelContext,
         completion: ((Result<String, Error>) -> Void)? = nil
     ) {
-        guard shouldAttemptManagedCalendarDeletion(for: call),
-              let eventID = call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !eventID.isEmpty else {
-            completion?(.success("No app-managed Google Calendar event to cancel."))
-            return
+        guard (try? modelContext.fetch(FetchDescriptor<ServiceCall>()).contains(where: { $0 === call })) == true else {
+            completion?(.failure(GoogleCalendarWorkflowError.changed)); return
         }
-        let requestedCalendarID = call.googleCalendarID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let calendarID = requestedCalendarID.isEmpty ? "primary" : requestedCalendarID
-        auth.fetchCalendarEvent(calendarID: calendarID, eventID: eventID) { fetchResult in
-            switch fetchResult {
-            case .failure(let error):
-                completion?(.failure(error))
-            case .success(let remoteEvent):
-                guard shouldDeleteExistingGoogleCalendarEvent(
-                    hasGoogleEventID: true,
-                    isLocallyMarkedManagedByApp: call.googleEventManagedByApp,
-                    remoteEvent: remoteEvent
-                ) else {
-                    completion?(.success("The linked Google Calendar event is not app-managed, so it was left unchanged."))
-                    return
-                }
-                auth.deleteCalendarEvent(calendarID: calendarID, eventID: eventID) { result in
-                    Task { @MainActor in
-                        switch result {
-                        case .success:
-                            markCalendarEventDeleted(calendarID: calendarID, eventID: eventID)
-                            try? modelContext.save()
-                            completion?(.success("Cancelled the app-managed Google Calendar event."))
-                        case .failure(let error):
-                            completion?(.failure(error))
-                        }
-                    }
-                }
-            }
+        markCalendarCallLocallyEdited(call)
+        startWorkflow(auth: auth, context: modelContext, email: AppIdentity.currentEmail, completion: completion) {
+            try await cancel(call: call, workflow: $0)
         }
     }
 
-    private static func importEvents(
+    private static func startWorkflow(
+        auth: GoogleAuthManager, context: ModelContext, email: String?,
+        completion: ((Result<String, Error>) -> Void)?,
+        action: @escaping (GoogleCalendarWorkflow) async throws -> String
+    ) {
+        let requestID = UUID()
+        auth.calendarSyncRequestID = requestID
+        auth.calendarSyncMessage = "Saved locally. Sending calendar changes to Google…"
+        let report: (Result<String, Error>) -> Void = { result in
+            // An older successful operation must not hide a newer pending/busy
+            // failure, nor update the status of a replacement Google account.
+            if auth.calendarSyncRequestID == requestID {
+                switch result {
+                case .success(let message): auth.calendarSyncMessage = message
+                case .failure(let error):
+                    auth.calendarSyncMessage = "Calendar update is not confirmed. Your saved appointment is retained. \(error.localizedDescription) Use Sync Google to retry."
+                }
+            }
+            completion?(result)
+        }
+        do {
+            // Capture before Task scheduling; a later callback cannot capture a
+            // replacement provider for an old retained job.
+            let workflow = try GoogleCalendarWorkflow(auth: auth, context: context, signedInEmail: email)
+            Task { @MainActor in
+                let result = await workflow.run(action)
+                report(result)
+            }
+        } catch { report(.failure(error)) }
+    }
+
+    /// Retry only explicitly edited app-owned jobs and upcoming never-linked
+    /// app-owned appointments. Imports and completed history are not an outbox.
+    static func needsOutboundSync(_ call: ServiceCall, now: Date = Date()) -> Bool {
+        guard call.googleEventManagedByApp,
+              !isCalendarEventDeleted(calendarID: call.googleCalendarID, eventID: call.googleEventID) else { return false }
+        if call.status == .cancelled { return isCalendarCallLocallyEdited(call) }
+        guard call.status == .scheduled || call.status == .inProgress else { return false }
+        return isCalendarCallLocallyEdited(call) ||
+            (normalizedOptional(call.googleEventID) == nil && call.scheduledDate >= Calendar.current.startOfDay(for: now))
+    }
+
+    static func synchronize(workflow: GoogleCalendarWorkflow) async throws -> String {
+        try workflow.check()
+        let pending = try workflow.context.fetch(FetchDescriptor<ServiceCall>())
+            .filter { needsOutboundSync($0) }.sorted { $0.scheduledDate < $1.scheduledDate }
+        var published = 0
+        var reviewErrors: [String] = []
+        for call in pending {
+            // Keep the same company/provider operation throughout the batch.
+            // Any failed/uncertain write stops this run; its pending marker stays.
+            markCalendarCallLocallyEdited(call)
+            do {
+                if call.status == .cancelled { _ = try await cancel(call: call, workflow: workflow) }
+                else { _ = try await publish(call: call, workflow: workflow) }
+                published += 1
+            } catch {
+                // A stale route or legacy guest review must not starve unrelated
+                // pending jobs. Session changes and uncertain transport stop all.
+                try workflow.check()
+                let issue = error as? GoogleCalendarWorkflowError
+                guard error is GoogleCalendarStaffDeliveryError || issue == .readOnly || issue == .needsReview || issue == .invalidDates else { throw error }
+                reviewErrors.append(error.localizedDescription)
+            }
+        }
+        let imported = try await importSchedule(workflow: workflow)
+        let review = reviewErrors.first.map { " \(reviewErrors.count) update(s) still need review. \($0)" } ?? ""
+        return "Published \(published) pending calendar update(s).\(review) \(imported)"
+    }
+
+    static func deleteImmediately(call: ServiceCall, auth: GoogleAuthManager, modelContext: ModelContext,
+                                  completion: @escaping (Result<String, Error>) -> Void) {
+        startWorkflow(auth: auth, context: modelContext, email: AppIdentity.currentEmail, completion: completion) {
+            try await remove(call: call, workflow: $0)
+        }
+    }
+
+    static func validateRemoval(_ call: ServiceCall, context: ModelContext) throws {
+        let calls = try context.fetch(FetchDescriptor<ServiceCall>())
+        guard calls.contains(where: { $0 === call }) else { throw GoogleCalendarWorkflowError.changed }
+        let id = call.id
+        guard call.status == .scheduled, call.linkedInvoiceID == nil, call.linkedEstimateID == nil,
+              call.maintenanceAgreementID == nil, call.originatingServiceCallID == nil,
+              call.scheduledFollowUpServiceCallID == nil,
+              !calls.contains(where: { $0.originatingServiceCallID == id || $0.scheduledFollowUpServiceCallID == id }),
+              try !context.fetch(FetchDescriptor<Invoice>()).contains(where: { $0.serviceCallID == id }),
+              try !context.fetch(FetchDescriptor<Estimate>()).contains(where: { $0.serviceCallID == id }),
+              try !context.fetch(FetchDescriptor<TimeEntry>()).contains(where: { $0.serviceCall?.id == id }),
+              try !context.fetch(FetchDescriptor<ServiceDocumentAttachment>()).contains(where: { $0.serviceCallID == id }),
+              try !context.fetch(FetchDescriptor<InventoryMovement>()).contains(where: { $0.serviceCallID == id }),
+              try !context.fetch(FetchDescriptor<PurchaseOrder>()).contains(where: { $0.serviceCallID == id }),
+              try !context.fetch(FetchDescriptor<FieldFormResponse>()).contains(where: { $0.serviceCallID == id }),
+              try !context.fetch(FetchDescriptor<FieldExpenseClaim>()).contains(where: { $0.serviceCallID == id }),
+              try !context.fetch(FetchDescriptor<CustomerCommunication>()).contains(where: { $0.serviceCallID == id }),
+              try !context.fetch(FetchDescriptor<BusinessTask>()).contains(where: { $0.serviceCallID == id }),
+              try !context.fetch(FetchDescriptor<ServiceRequest>()).contains(where: { $0.convertedServiceCallID == id }),
+              try !context.fetch(FetchDescriptor<RecurringMaintenanceContract>()).contains(where: { $0.lifecycle?.sourceServiceCallID == id }),
+              try !context.fetch(FetchDescriptor<ServiceCallActivity>()).contains(where: { $0.serviceCallID == id }) else {
+            throw GoogleCalendarWorkflowError.hasJobHistory
+        }
+    }
+
+    static func removeLocalEntry(_ call: ServiceCall, context: ModelContext,
+                                 save: (() throws -> Void)? = nil) throws {
+        try validateRemoval(call, context: context)
+        // The narrowly scoped rollback below is allowed only with no preexisting
+        // unsaved work, and no await between this check, deletion and save.
+        guard !context.hasChanges else { throw GoogleCalendarWorkflowError.changed }
+        let calendarID = call.googleCalendarID, eventID = call.googleEventID
+        context.delete(call)
+        do {
+            if let save { try save() } else { try context.save() }
+        } catch {
+            context.rollback()
+            throw GoogleCalendarWorkflowError.saveFailed
+        }
+        markCalendarEventDeleted(calendarID: calendarID, eventID: eventID)
+    }
+
+    static func remove(call: ServiceCall, workflow: GoogleCalendarWorkflow) async throws -> String {
+        try requireCall(call, workflow: workflow)
+        try validateRemoval(call, context: workflow.context)
+        guard !workflow.context.hasChanges else { throw GoogleCalendarWorkflowError.changed }
+        workflow.setAdditionalValidation {
+            try validateRemoval(call, context: workflow.context)
+            guard !workflow.context.hasChanges else { throw GoogleCalendarWorkflowError.changed }
+        }
+        defer { workflow.setAdditionalValidation(nil) }
+        guard shouldAttemptManagedCalendarDeletion(for: call), let id = normalizedOptional(call.googleEventID) else {
+            throw GoogleCalendarWorkflowError.needsReview
+        }
+        let list = try await calendars(workflow: workflow)
+        let calendar = try canonicalCalendar(call.googleCalendarID, in: list, email: workflow.signedInEmail)
+        guard calendar.isWritable else { throw GoogleCalendarWorkflowError.readOnly }
+        let remote: GoogleCalendarEvent?
+        do {
+            remote = try await workflow.receive {
+                workflow.auth.fetchCalendarEvent(calendarID: calendar.id, eventID: id,
+                    operation: workflow.operation, completion: $0)
+            }
+        } catch GoogleAuthError.http(statusCode: 404) { remote = nil }
+        if let remote {
+            try validateRemote(remote, id: id, call: call)
+            let version = try etag(remote)
+            let _: Void = try await workflow.receive {
+                workflow.auth.deleteCalendarEvent(calendarID: calendar.id, eventID: id,
+                    ifMatch: version, operation: workflow.operation, completion: $0)
+            }
+        }
+        try requireCall(call, workflow: workflow)
+        workflow.setAdditionalValidation(nil)
+        try removeLocalEntry(call, context: workflow.context, save: { try workflow.saveChanges() })
+        return remote == nil ? "Removed the local entry. The original calendar no longer returned this event." :
+            "Deleted the event from the app and its original Google Calendar."
+    }
+
+    private static func calendars(workflow: GoogleCalendarWorkflow) async throws -> [GoogleCalendar] {
+        let values: [GoogleCalendar] = try await workflow.receive {
+            workflow.auth.fetchCalendars(operation: workflow.operation, completion: $0)
+        }
+        let filtered = values.filter { !isExcludedCalendarID($0.id) }
+        guard filtered.allSatisfy({ !$0.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+              Set(filtered.map(\.id)).count == filtered.count,
+              filtered.filter({ $0.primary == true }).count <= 1 else {
+            throw GoogleCalendarWorkflowError.identity
+        }
+        return filtered
+    }
+
+    private static func canonicalCalendar(_ requested: String?, in calendars: [GoogleCalendar],
+                                          email: String?) throws -> GoogleCalendar {
+        let requested = normalizedOptional(requested) ?? "primary"
+        let matches: [GoogleCalendar]
+        if requested == "primary" {
+            let primary = calendars.filter { $0.primary == true }
+            matches = primary.isEmpty ? calendars.filter { $0.normalizedID == normalized(email ?? "") } : primary
+        } else {
+            matches = calendars.filter { $0.id == requested }
+        }
+        guard matches.count == 1, let calendar = matches.first else { throw GoogleCalendarWorkflowError.readOnly }
+        return calendar
+    }
+
+    static func importSchedule(workflow: GoogleCalendarWorkflow) async throws -> String {
+        let calendars = try await calendars(workflow: workflow)
+        let now = Date()
+        let start = Calendar.current.date(byAdding: .day, value: -30, to: now) ?? now
+        let end = Calendar.current.date(byAdding: .day, value: 90, to: now) ?? now
+        var events: [(calendarID: String, event: GoogleCalendarEvent)] = []
+        // A single retained operation covers every calendar and every page.
+        // Do not enumerate "primary" again as an alias of an actual calendar.
+        for calendar in calendars.sorted(by: { $0.id < $1.id }) {
+            let values: [GoogleCalendarEvent] = try await workflow.receive {
+                workflow.auth.fetchCalendarEvents(calendarID: calendar.id, timeMin: start, timeMax: end,
+                    operation: workflow.operation, completion: $0)
+            }
+            events += values.map { (calendar.id, $0) }
+        }
+        try workflow.check()
+        let primaryID = try? canonicalCalendar("primary", in: calendars, email: workflow.signedInEmail).id
+        let summary = try importEvents(events, into: workflow.context,
+            signedInEmail: workflow.signedInEmail, primaryCalendarID: primaryID, save: { try workflow.saveChanges() })
+        let review = summary.restrictedReviewCount == 0 ? "" :
+            " \(summary.restrictedReviewCount) event(s) need office review; existing jobs and restricted customers were not reassigned."
+        return "Imported \(summary.importedCount) Google Calendar events. Existing job details and local schedule edits were retained.\(review)"
+    }
+
+    private static func requireCall(_ call: ServiceCall, workflow: GoogleCalendarWorkflow) throws {
+        try workflow.check()
+        let calls = try workflow.context.fetch(FetchDescriptor<ServiceCall>())
+        guard calls.contains(where: { $0 === call }) else { throw GoogleCalendarWorkflowError.changed }
+        guard calls.filter({ $0.id == call.id }).count == 1,
+              let customer = call.customer,
+              try workflow.context.fetch(FetchDescriptor<Customer>()).contains(where: { $0 === customer }) else {
+            throw GoogleCalendarWorkflowError.identity
+        }
+    }
+
+    static func eventID(for callID: UUID) -> String {
+        "ga" + callID.uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+    }
+
+    private static func validateRemote(_ event: GoogleCalendarEvent, id: String, call: ServiceCall) throws {
+        guard event.id == id, event.status != "cancelled", event.isManagedByGunnAire else {
+            throw GoogleCalendarWorkflowError.needsReview
+        }
+        if let marker = event.extendedProperties?.privateProperties?["gunnaireServiceCallID"] {
+            guard marker == call.id.uuidString else { throw GoogleCalendarWorkflowError.identity }
+        } else if id == eventID(for: call.id) {
+            throw GoogleCalendarWorkflowError.identity
+        }
+    }
+
+    private static func etag(_ event: GoogleCalendarEvent) throws -> String {
+        guard let value = event.etag, !value.isEmpty, value != "*",
+              !value.contains("\r"), !value.contains("\n") else { throw GoogleCalendarWorkflowError.needsReview }
+        return value
+    }
+
+    static func publish(call: ServiceCall, workflow: GoogleCalendarWorkflow) async throws -> String {
+        try requireCall(call, workflow: workflow)
+        guard shouldAllowGoogleCalendarWrite(for: call) else { return "Skipped externally managed Google event." }
+        guard call.status == .scheduled || call.status == .inProgress,
+              call.scheduledDate.timeIntervalSince1970.isFinite, call.duration.isFinite, call.duration > 0,
+              call.scheduledDate.addingTimeInterval(call.duration).timeIntervalSince1970.isFinite else {
+            throw GoogleCalendarWorkflowError.invalidDates
+        }
+        // Validate staff before reserving an event ID. A missing email must not
+        // leave an unsent proposal looking like an uncertain Google write.
+        let recipients = try staffAttendees(for: call, workflow: workflow)
+        let list = try await calendars(workflow: workflow)
+        let calendar = try canonicalCalendar(call.googleCalendarID, in: list, email: workflow.signedInEmail)
+        guard calendar.isWritable else { throw GoogleCalendarWorkflowError.readOnly }
+        try requireCall(call, workflow: workflow)
+        let originalID = normalizedOptional(call.googleEventID)
+        let id = originalID ?? eventID(for: call.id)
+        let remote: GoogleCalendarEvent?
+        do {
+            remote = try await workflow.receive {
+                workflow.auth.fetchCalendarEvent(calendarID: calendar.id, eventID: id,
+                    operation: workflow.operation, completion: $0)
+            }
+        } catch GoogleAuthError.http(statusCode: 404) {
+            // Only a never-linked proposal may reserve a first create. A
+            // reserved/previously linked missing event is NOT safe to resend.
+            guard originalID == nil else { throw GoogleCalendarWorkflowError.needsReview }
+            remote = nil
+        }
+        try requireCall(call, workflow: workflow)
+        let saved: GoogleCalendarEvent
+        if let remote {
+            try validateRemote(remote, id: id, call: call)
+            if remoteEventMatchesExactSchedule(call: call, remoteEvent: remote) {
+                saved = remote
+            } else {
+                // Recovery of a previously reserved create must not reprice or
+                // move an older uncertain proposal from changed local values.
+                if originalID == nil { throw GoogleCalendarWorkflowError.needsReview }
+                let version = try etag(remote)
+                saved = try await workflow.receive {
+                    workflow.auth.patchCalendarEvent(calendarID: calendar.id, eventID: id,
+                        patch: makeManagedEventPatch(for: call, remoteEvent: remote), ifMatch: version,
+                        notifyAttendees: canNotifyStaff(remote, workflow: workflow),
+                        operation: workflow.operation, completion: $0)
+                }
+            }
+        } else {
+            // Persist the exact route/identity before POST. Restart, a lost
+            // response or local confirmation failure retains the original ID.
+            let previousCalendar = call.googleCalendarID
+            call.googleCalendarID = calendar.id
+            call.googleEventID = id
+            do { try workflow.saveChanges() }
+            catch { call.googleCalendarID = previousCalendar; call.googleEventID = originalID; throw error }
+            var proposal = makeCalendarCreateEvent(for: call)
+            proposal.attendees = recipients
+                .filter { $0.email != GoogleCalendarStaffDelivery.email(calendar.id) }
+            var properties = proposal.extendedProperties?.privateProperties ?? [:]
+            properties[GoogleCalendarStaffDelivery.managedEmailsKey] = (proposal.attendees ?? []).map(\.email).sorted().joined(separator: ",")
+            proposal.extendedProperties = .init(privateProperties: properties)
+            proposal.id = id
+            saved = try await workflow.receive {
+                workflow.auth.createCalendarEvent(calendarID: calendar.id, event: proposal,
+                    operation: workflow.operation, completion: $0)
+            }
+        }
+        try requireCall(call, workflow: workflow)
+        try validateRemote(saved, id: id, call: call)
+        guard remoteEventMatchesExactSchedule(call: call, remoteEvent: saved) else {
+            throw GoogleCalendarWorkflowError.needsReview
+        }
+        _ = try await deliverToStaff(call: call, remote: saved, calendarID: calendar.id, workflow: workflow)
+        try requireCall(call, workflow: workflow)
+        let previousCalendar = call.googleCalendarID, previousID = call.googleEventID
+        call.googleCalendarID = calendar.id
+        call.googleEventID = id
+        do { try workflow.saveChanges() }
+        catch { call.googleCalendarID = previousCalendar; call.googleEventID = previousID; throw error }
+        clearCalendarCallLocallyEdited(call)
+        return "Saved in Google Calendar. Staff invitations use their Google Calendar notification settings; enable this calendar and alerts in your calendar app."
+    }
+
+    static func cancel(call: ServiceCall, workflow: GoogleCalendarWorkflow) async throws -> String {
+        try requireCall(call, workflow: workflow)
+        guard call.status == .cancelled else { throw GoogleCalendarWorkflowError.changed }
+        guard shouldAttemptManagedCalendarDeletion(for: call), let id = normalizedOptional(call.googleEventID) else {
+            clearCalendarCallLocallyEdited(call)
+            return "No app-managed Google Calendar event to cancel."
+        }
+        let list = try await calendars(workflow: workflow)
+        let calendar = try canonicalCalendar(call.googleCalendarID, in: list, email: workflow.signedInEmail)
+        guard calendar.isWritable else { throw GoogleCalendarWorkflowError.readOnly }
+        let remote: GoogleCalendarEvent = try await workflow.receive {
+            workflow.auth.fetchCalendarEvent(calendarID: calendar.id, eventID: id,
+                operation: workflow.operation, completion: $0)
+        }
+        try requireCall(call, workflow: workflow)
+        try validateRemote(remote, id: id, call: call)
+        let version = try etag(remote)
+        let _: Void = try await workflow.receive {
+            workflow.auth.deleteCalendarEvent(calendarID: calendar.id, eventID: id,
+                ifMatch: version, notifyAttendees: canNotifyStaff(remote, workflow: workflow),
+                operation: workflow.operation, completion: $0)
+        }
+        try requireCall(call, workflow: workflow)
+        markCalendarEventDeleted(calendarID: calendar.id, eventID: id)
+        clearCalendarCallLocallyEdited(call)
+        return "Cancelled the app-managed Google Calendar event."
+    }
+
+    private static func staffAttendees(for call: ServiceCall, workflow: GoogleCalendarWorkflow) throws -> [GoogleWritableCalendarAttendee] {
+        let technicians = try workflow.context.fetch(FetchDescriptor<Technician>())
+        var ids = call.additionalTechnicianIDs
+        if let assigned = call.assignedTechnician { ids.insert(assigned.id) }
+        var emails = Set<String>()
+        return try ids.sorted(by: { $0.uuidString < $1.uuidString }).map { id in
+            let matches = technicians.filter { $0.id == id }
+            guard matches.count == 1, let technician = matches.first,
+                  let email = GoogleCalendarStaffDelivery.email(technician.contactInfo), emails.insert(email).inserted else {
+                throw GoogleCalendarStaffDeliveryError.staffEmail
+            }
+            return GoogleWritableCalendarAttendee(email: email, displayName: technician.name)
+        }
+    }
+
+    private static func knownStaff(workflow: GoogleCalendarWorkflow) -> Set<String> {
+        let technicians = (try? workflow.context.fetch(FetchDescriptor<Technician>())) ?? []
+        return Set(technicians.compactMap { GoogleCalendarStaffDelivery.email($0.contactInfo) } +
+                   [GoogleCalendarStaffDelivery.email(workflow.signedInEmail)].compactMap { $0 })
+    }
+
+    private static func canNotifyStaff(_ remote: GoogleCalendarEvent, workflow: GoogleCalendarWorkflow) -> Bool {
+        GoogleCalendarStaffDelivery.canNotify(remote, knownStaff: knownStaff(workflow: workflow))
+    }
+
+    private static func deliverToStaff(call: ServiceCall, remote: GoogleCalendarEvent, calendarID: String,
+                                       workflow: GoogleCalendarWorkflow) async throws -> GoogleCalendarEvent {
+        let desired = try staffAttendees(for: call, workflow: workflow)
+            .filter { $0.email != GoogleCalendarStaffDelivery.email(calendarID) }
+        guard let patch = try GoogleCalendarStaffDelivery.patch(remote: remote, desired: desired,
+            knownStaff: knownStaff(workflow: workflow), restoreReminder: isCalendarCallLocallyEdited(call)) else { return remote }
+        let version = try etag(remote)
+        let result: GoogleCalendarEvent = try await workflow.receive {
+            workflow.auth.patchCalendarStaffDelivery(calendarID: calendarID, eventID: remote.id,
+                patch: patch, ifMatch: version, operation: workflow.operation, completion: $0)
+        }
+        try validateRemote(result, id: remote.id, call: call)
+        guard remoteEventMatchesExactSchedule(call: call, remoteEvent: result),
+              try GoogleCalendarStaffDelivery.patch(remote: result, desired: desired,
+                  knownStaff: knownStaff(workflow: workflow), restoreReminder: isCalendarCallLocallyEdited(call)) == nil else {
+            throw GoogleCalendarWorkflowError.needsReview
+        }
+        return result
+    }
+
+    private static func remoteEventMatchesExactSchedule(call: ServiceCall, remoteEvent: GoogleCalendarEvent) -> Bool {
+        guard let start = parseEventDate(remoteEvent.start), let end = parseEventDate(remoteEvent.end) else { return false }
+        return abs(start.timeIntervalSince(call.scheduledDate)) < 0.001 &&
+            abs(end.timeIntervalSince(call.scheduledDate.addingTimeInterval(call.duration))) < 0.001
+    }
+
+    private struct CalendarImportPlan {
+        let calendarID: String
+        let event: GoogleCalendarEvent
+        let existing: ServiceCall?
+        let customer: Customer?
+        let technician: Technician?
+        let start: Date
+        let duration: TimeInterval
+        let notes: String?
+    }
+
+    static func importEvents(
         _ calendarEvents: [(calendarID: String, event: GoogleCalendarEvent)],
         into modelContext: ModelContext,
-        signedInEmail: String?
-    ) throws -> ImportSummary {
-        let existingCalls = try modelContext.fetch(FetchDescriptor<ServiceCall>())
-        let existingCustomers = try modelContext.fetch(FetchDescriptor<Customer>())
-        let existingTechnicians = try modelContext.fetch(FetchDescriptor<Technician>())
-        let serviceLocations = try modelContext.fetch(FetchDescriptor<CustomerServiceLocation>())
-        let operationalAlerts = try modelContext.fetch(FetchDescriptor<CustomerOperationalAlert>())
-
-        var callsByGoogleEventKey: [String: ServiceCall] = [:]
-        var callsByGoogleEventID: [String: ServiceCall] = [:]
-        var callsByFingerprint: [String: ServiceCall] = [:]
-        for call in existingCalls {
-            if let eventID = call.googleEventID, !eventID.isEmpty {
-                let eventKey = calendarEventStorageKey(calendarID: call.googleCalendarID, eventID: eventID)
-                callsByGoogleEventKey[eventKey] = callsByGoogleEventKey[eventKey] ?? call
-                callsByGoogleEventID[eventID] = callsByGoogleEventID[eventID] ?? call
-            }
-            let fingerprint = eventFingerprint(for: call)
-            callsByFingerprint[fingerprint] = callsByFingerprint[fingerprint] ?? call
-        }
-        var importedEventKeys: Set<String> = []
-        var importedEventFingerprints: Set<String> = []
-        var customersByName: [String: Customer] = [:]
-        for customer in existingCustomers {
-            let nameKey = normalized(customer.name)
-            if !nameKey.isEmpty, customersByName[nameKey] == nil {
-                customersByName[nameKey] = customer
-            }
-        }
-        var customersByEmail: [String: Customer] = [:]
-        for customer in existingCustomers {
-            guard let email = customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
-                  !email.isEmpty,
-                  customersByEmail[email] == nil else { continue }
-            customersByEmail[email] = customer
-        }
-        var unassignedCalendarCustomer = existingCustomers.first(where: CustomerDataMaintenance.isSystemCalendarCustomer)
-        var techniciansByEmail: [String: Technician] = [:]
-        for technician in existingTechnicians {
-            guard let email = technician.contactInfo?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
-                  !email.isEmpty,
-                  techniciansByEmail[email] == nil else { continue }
-            techniciansByEmail[email] = technician
-        }
-
-        let technician = resolveTechnician(signedInEmail: signedInEmail, techniciansByEmail: &techniciansByEmail, modelContext: modelContext)
-        var imported = 0
-        var restrictedReviewCount = 0
-
-        for calendarEvent in calendarEvents {
-            let event = calendarEvent.event
-            let eventKey = calendarEventStorageKey(calendarID: calendarEvent.calendarID, eventID: event.id)
-            guard !isCalendarEventDeleted(calendarID: calendarEvent.calendarID, eventID: event.id),
-                  importedEventKeys.insert(eventKey).inserted else {
-                continue
-            }
-            guard let startDate = parseEventDate(event.start), let endDate = parseEventDate(event.end) else {
-                continue
-            }
-            let fingerprint = eventFingerprint(
-                summary: event.summary,
-                location: event.location,
-                startDate: startDate,
-                endDate: endDate
-            )
-            guard importedEventFingerprints.insert(fingerprint).inserted else {
-                continue
-            }
-            let duration = max(endDate.timeIntervalSince(startDate), 1800)
-            let customerCandidate = inferCustomer(
-                from: event,
-                signedInEmail: signedInEmail,
-                technicianEmails: Set(techniciansByEmail.keys)
-            )
-            let existingCall = callsByGoogleEventKey[eventKey] ?? callsByGoogleEventID[event.id] ?? callsByFingerprint[fingerprint]
-            let matchedCustomer = resolveExistingCustomer(
-                for: customerCandidate,
-                customersByEmail: &customersByEmail,
-                customersByName: &customersByName
-            )
-            let operationalCustomer = operationalCustomerForCalendarImport(
-                existingCall: existingCall,
-                matchedCustomer: matchedCustomer
-            )
-            let matchedLocationID = existingCall?.serviceLocationID ?? operationalCustomer.flatMap { operationalCustomer in
-                CustomerServiceLocationPolicy.matchingLocation(
-                    address: event.location,
-                    customerID: operationalCustomer.id,
-                    in: serviceLocations
-                )?.id
-            }
-            let schedulingBlocker = operationalCustomer.flatMap { operationalCustomer in
-                CustomerOperationalAlertPolicy.schedulingBlocker(
-                    customerID: operationalCustomer.id,
-                    serviceLocationID: matchedLocationID,
-                    in: operationalAlerts
-                )
-            }
-            let mustRemainUnassigned = shouldQuarantineImportedCalendarEvent(
-                existingCallFound: existingCall != nil,
-                hasSchedulingBlocker: schedulingBlocker != nil
-            )
-            let importedTechnician = mustRemainUnassigned
-                ? nil
-                : resolveTechnician(
-                    calendarID: calendarEvent.calendarID,
-                    signedInEmail: signedInEmail,
-                    techniciansByEmail: &techniciansByEmail,
-                    modelContext: modelContext
-                ) ?? technician
-            let customer = mustRemainUnassigned
-                ? resolveUnassignedCalendarCustomer(
-                    existing: &unassignedCalendarCustomer,
-                    modelContext: modelContext
-                )
-                : operationalCustomer ?? resolveUnassignedCalendarCustomer(
-                    existing: &unassignedCalendarCustomer,
-                    modelContext: modelContext
-                )
-            if mustRemainUnassigned {
-                restrictedReviewCount += 1
-            }
-            if let customerCandidate,
-               !CustomerDataMaintenance.isSystemCalendarCustomer(customer) {
-                if customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
-                    customer.email = customerCandidate.email
-                }
-                if customer.address?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
-                   let address = customerCandidate.address,
-                   !address.isEmpty {
-                    customer.address = address
-                }
-                customersByName[normalized(customer.name)] = customer
-                customersByName[normalized(customerCandidate.name)] = customer
-                if let email = customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
-                   !email.isEmpty {
-                    customersByEmail[email] = customer
-                }
-            }
-            var eventNotes = calendarNotes(description: event.description)
-            if mustRemainUnassigned {
-                let notice = "Operational review required: this new Google Calendar event matched a customer with an active Do Not Service hold and was not attached to that customer. Resolve the hold in the customer record before creating app-managed work."
-                eventNotes = [eventNotes, notice]
-                    .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-                    .filter { !$0.isEmpty }
-                    .joined(separator: "\n\n")
-            }
-            let isManagedByApp = isImportedEventManagedByApp(event)
-
-            let call = existingCall ?? ServiceCall(
-                googleCalendarID: calendarEvent.calendarID,
-                googleEventID: event.id,
-                googleEventManagedByApp: isManagedByApp,
-                eventTitle: normalizedOptional(event.summary),
-                siteAddress: event.location,
-                type: inferCallType(from: event.summary, description: event.description),
-                scheduledDate: startDate,
-                duration: duration,
-                assignedTechnician: importedTechnician,
-                customer: customer,
-                status: .scheduled,
-                notes: eventNotes
-            )
-            if call.modelContext == nil {
-                modelContext.insert(call)
-            }
-            call.googleCalendarID = calendarEvent.calendarID
-            call.googleEventID = event.id
-            call.googleEventManagedByApp = isManagedByApp
-            clearCalendarCallLocallyEdited(call)
-            call.eventTitle = mergedImportedCalendarTitle(
-                remoteValue: event.summary,
-                existingValue: call.eventTitle,
-                isManagedByApp: isManagedByApp
-            )
-            call.type = inferCallType(from: event.summary, description: event.description)
-            call.scheduledDate = startDate
-            call.duration = duration
-            call.assignedTechnician = importedTechnician
-            call.customer = customer
-            call.siteAddress = mergedImportedCalendarText(
-                remoteValue: event.location,
-                existingValue: call.siteAddress,
-                isManagedByApp: isManagedByApp
-            )
-            call.notes = mergedImportedCalendarBody(
-                remoteValue: eventNotes,
-                existingValue: call.notes,
-                isManagedByApp: isManagedByApp
-            )
-            callsByGoogleEventKey[eventKey] = call
-            callsByGoogleEventID[event.id] = call
-            callsByFingerprint[fingerprint] = call
-            imported += 1
-        }
-
-        try? modelContext.save()
-        return ImportSummary(importedCount: imported, restrictedReviewCount: restrictedReviewCount)
-    }
-
-    private static func exportCalls(
-        auth: GoogleAuthManager,
-        modelContext: ModelContext,
-        calendarEvents: [(calendarID: String, event: GoogleCalendarEvent)],
         signedInEmail: String?,
-        isAdminUser: Bool,
-        availableCalendarIDs: Set<String>,
-        writableCalendarIDs: Set<String>,
-        completion: @escaping (Result<String, Error>) -> Void
-    ) {
-        do {
-            let calls = try modelContext.fetch(FetchDescriptor<ServiceCall>())
-                .filter { call in
-                    guard shouldExportDuringCalendarSync(call) else {
-                        return false
-                    }
-                    if CustomerDataMaintenance.isSystemCalendarCustomer(call.customer) {
-                        return shouldExportSystemCalendarCall(call)
-                    }
-                    if isAdminUser {
-                        return true
-                    }
-                    if let email = signedInEmail?.lowercased(),
-                       let technicianEmail = call.assignedTechnician?.contactInfo?.lowercased(),
-                       technicianEmail != email {
-                        return false
-                    }
-                    return true
-                }
-                .sorted { $0.scheduledDate < $1.scheduledDate }
-
-            exportNext(
-                index: 0,
-                exportedCount: 0,
-                skippedCount: 0,
-                calls: calls,
-                auth: auth,
-                modelContext: modelContext,
-                remoteEventsByKey: remoteEventsByKey(from: calendarEvents),
-                remoteEventsByFingerprint: remoteEventsByFingerprint(from: calendarEvents, writableCalendarIDs: writableCalendarIDs),
-                remoteEventsByCollisionKey: remoteEventsByCollisionKey(from: calendarEvents, writableCalendarIDs: writableCalendarIDs),
-                availableCalendarIDs: availableCalendarIDs,
-                writableCalendarIDs: writableCalendarIDs,
-                completion: completion
-            )
-        } catch {
-            completion(.failure(error))
+        primaryCalendarID: String? = nil,
+        save: (() throws -> Void)? = nil
+    ) throws -> ImportSummary {
+        let calls = try modelContext.fetch(FetchDescriptor<ServiceCall>())
+        let customers = try modelContext.fetch(FetchDescriptor<Customer>())
+        let technicians = try modelContext.fetch(FetchDescriptor<Technician>())
+        let locations = try modelContext.fetch(FetchDescriptor<CustomerServiceLocation>())
+        let alerts = try modelContext.fetch(FetchDescriptor<CustomerOperationalAlert>())
+        let placeholders = customers.filter(CustomerDataMaintenance.isSystemCalendarCustomer)
+        guard placeholders.count <= 1 else { throw GoogleCalendarWorkflowError.identity }
+        var placeholder = placeholders.first
+        func canonicalID(_ id: String?) -> String {
+            let id = normalizedOptional(id) ?? "primary"
+            return id == "primary" ? primaryCalendarID ?? id : id
         }
+        let linkedCalls = Dictionary(grouping: calls.filter { normalizedOptional($0.googleEventID) != nil }) {
+            calendarEventStorageKey(calendarID: canonicalID($0.googleCalendarID), eventID: $0.googleEventID!)
+        }
+        let customersByEmail = Dictionary(grouping: customers.filter { normalizedOptional($0.email) != nil }) {
+            normalized($0.email!)
+        }
+        let techniciansByEmail = Dictionary(grouping: technicians.filter { normalizedOptional($0.contactInfo) != nil }) {
+            normalized($0.contactInfo!)
+        }
+        var keys: Set<String> = []
+        var plans: [CalendarImportPlan] = []
+        var reviews = 0
+        for entry in calendarEvents {
+            let event = entry.event
+            let calendarID = canonicalID(entry.calendarID)
+            let key = calendarEventStorageKey(calendarID: calendarID, eventID: event.id)
+            guard !event.id.isEmpty, keys.insert(key).inserted else { throw GoogleCalendarWorkflowError.identity }
+            guard !isCalendarEventDeleted(calendarID: calendarID, eventID: event.id) else { continue }
+            guard let start = parseEventDate(event.start), let end = parseEventDate(event.end),
+                  start.timeIntervalSince1970.isFinite, end.timeIntervalSince1970.isFinite,
+                  end > start, event.status != "cancelled" else { reviews += 1; continue }
+            let matches = linkedCalls[key] ?? []
+            guard matches.count <= 1 else { throw GoogleCalendarWorkflowError.identity }
+            let existing = matches.first
+            if existing == nil, event.isManagedByGunnAire,
+               let marker = event.extendedProperties?.privateProperties?["gunnaireServiceCallID"],
+               let callID = UUID(uuidString: marker), calls.contains(where: { $0.id == callID }) {
+                throw GoogleCalendarWorkflowError.needsReview
+            }
+            if let existing {
+                // A Google refresh must not move a committed HVAC job, replace
+                // its customer/crew, or erase a pending dispatcher edit.
+                let protected = existing.googleEventManagedByApp ||
+                    isCalendarCallLocallyEdited(existing) || existing.status != .scheduled ||
+                    !CustomerDataMaintenance.isSystemCalendarCustomer(existing.customer)
+                if protected {
+                    if !remoteEventMatchesExactSchedule(call: existing, remoteEvent: event) ||
+                        normalizedOptional(existing.eventTitle) != normalizedOptional(event.summary) ||
+                        normalizedOptional(existing.siteAddress) != normalizedOptional(event.location) {
+                        reviews += 1
+                    }
+                    continue
+                }
+            }
+            let candidate = inferCustomer(from: event, signedInEmail: signedInEmail,
+                technicianEmails: Set(techniciansByEmail.keys))
+            // Names, titles and appointment times are not customer identity.
+            let customerMatches = candidate?.email.flatMap { customersByEmail[normalized($0)] } ?? []
+            let matched = customerMatches.count == 1 ? customerMatches.first : nil
+            let locationID = matched.flatMap {
+                CustomerServiceLocationPolicy.matchingLocation(address: event.location, customerID: $0.id, in: locations)?.id
+            }
+            let hold = matched.flatMap {
+                CustomerOperationalAlertPolicy.schedulingBlocker(customerID: $0.id, serviceLocationID: locationID, in: alerts)
+            }
+            let assignedMatches = techniciansByEmail[normalized(calendarID)] ?? []
+            let assigned = assignedMatches.count == 1 ? assignedMatches.first : nil
+            let review = hold != nil || matched == nil
+            if review { reviews += 1 }
+            var notes = calendarNotes(description: event.description)
+            if let hold {
+                notes = [notes, "Office review required. " + CustomerOperationalAlertPolicy.bookingRestrictionMessage(for: hold)]
+                    .compactMap { $0 }.joined(separator: "\n\n")
+            }
+            plans.append(CalendarImportPlan(calendarID: calendarID, event: event, existing: existing,
+                customer: hold == nil ? matched : nil, technician: hold == nil ? assigned : nil,
+                start: start, duration: end.timeIntervalSince(start), notes: notes))
+        }
+
+        var restorations: [() -> Void] = []
+        var insertedCalls: [ServiceCall] = []
+        var insertedPlaceholder: Customer?
+        do {
+            for plan in plans {
+                let customer: Customer
+                if let matched = plan.customer {
+                    customer = matched
+                } else if let existing = placeholder {
+                    customer = existing
+                } else {
+                    let created = Customer(quickBooksID: CustomerDataMaintenance.unassignedCalendarCustomerMarker,
+                        name: CustomerDataMaintenance.unassignedCalendarCustomerName)
+                    modelContext.insert(created)
+                    placeholder = created
+                    insertedPlaceholder = created
+                    customer = created
+                }
+                let call: ServiceCall
+                if let existing = plan.existing {
+                    call = existing
+                    restorations.append(importRestoration(for: existing))
+                } else {
+                    call = ServiceCall(type: .service, scheduledDate: plan.start, customer: customer)
+                    modelContext.insert(call)
+                    insertedCalls.append(call)
+                }
+                call.googleCalendarID = plan.calendarID
+                call.googleEventID = plan.event.id
+                call.googleEventManagedByApp = plan.event.isManagedByGunnAire
+                call.eventTitle = mergedImportedCalendarTitle(remoteValue: plan.event.summary,
+                    existingValue: call.eventTitle, isManagedByApp: call.googleEventManagedByApp)
+                call.type = inferCallType(from: plan.event.summary, description: plan.event.description)
+                call.scheduledDate = plan.start
+                call.duration = plan.duration
+                call.customer = customer
+                call.assignedTechnician = plan.technician
+                call.siteAddress = mergedImportedCalendarText(remoteValue: plan.event.location,
+                    existingValue: call.siteAddress, isManagedByApp: call.googleEventManagedByApp)
+                call.notes = mergedImportedCalendarBody(remoteValue: plan.notes,
+                    existingValue: call.notes, isManagedByApp: call.googleEventManagedByApp)
+            }
+            if !plans.isEmpty {
+                if let save { try save() } else { try modelContext.save() }
+            }
+        } catch {
+            // Restore only this batch. Never roll back unrelated unsaved work.
+            for restore in restorations.reversed() { restore() }
+            for call in insertedCalls { modelContext.delete(call) }
+            if let insertedPlaceholder { modelContext.delete(insertedPlaceholder) }
+            throw GoogleCalendarWorkflowError.saveFailed
+        }
+        return ImportSummary(importedCount: plans.count, restrictedReviewCount: reviews)
     }
 
-    private static func shouldConsiderForGoogleCalendarExport(_ call: ServiceCall) -> Bool {
-        shouldCreateGoogleCalendarEvent(for: call)
+    private static func importRestoration(for call: ServiceCall) -> () -> Void {
+        let calendar = call.googleCalendarID, event = call.googleEventID, managed = call.googleEventManagedByApp
+        let title = call.eventTitle, type = call.type, start = call.scheduledDate, duration = call.duration
+        let customer = call.customer, technician = call.assignedTechnician, site = call.siteAddress, notes = call.notes
+        return {
+            call.googleCalendarID = calendar; call.googleEventID = event; call.googleEventManagedByApp = managed
+            call.eventTitle = title; call.type = type; call.scheduledDate = start; call.duration = duration
+            call.customer = customer; call.assignedTechnician = technician; call.siteAddress = site; call.notes = notes
+        }
     }
 
     static func shouldExportDuringCalendarSync(_ call: ServiceCall) -> Bool {
         call.status != .cancelled && shouldAllowGoogleCalendarWrite(for: call)
-    }
-
-    private static func shouldExportSystemCalendarCall(_ call: ServiceCall) -> Bool {
-        guard shouldConsiderForGoogleCalendarExport(call) else {
-            return false
-        }
-        if call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-            return true
-        }
-        if call.eventTitle?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-            return true
-        }
-        switch call.type {
-        case .meeting, .reminder, .siteVisit, .other:
-            return true
-        case .service, .repair, .estimate, .replacement, .install, .maintenance:
-            return false
-        }
-    }
-
-    private static func exportNext(
-        index: Int,
-        exportedCount: Int,
-        skippedCount: Int,
-        calls: [ServiceCall],
-        auth: GoogleAuthManager,
-        modelContext: ModelContext,
-        remoteEventsByKey: [String: (calendarID: String, event: GoogleCalendarEvent)],
-        remoteEventsByFingerprint: [String: (calendarID: String, event: GoogleCalendarEvent)],
-        remoteEventsByCollisionKey: [String: (calendarID: String, event: GoogleCalendarEvent)],
-        availableCalendarIDs: Set<String>,
-        writableCalendarIDs: Set<String>,
-        completion: @escaping (Result<String, Error>) -> Void
-    ) {
-        guard index < calls.count else {
-            try? modelContext.save()
-            let message: String
-            if skippedCount > 0 {
-                message = "Exported \(exportedCount) service calls and skipped \(skippedCount) read-only or externally managed Google events."
-            } else {
-                message = "Exported \(exportedCount) service calls."
-            }
-            completion(.success(message))
-            return
-        }
-
-        let call = calls[index]
-        if !shouldAllowGoogleCalendarWrite(for: call) {
-            exportNext(
-                index: index + 1,
-                exportedCount: exportedCount,
-                skippedCount: skippedCount + 1,
-                calls: calls,
-                auth: auth,
-                modelContext: modelContext,
-                remoteEventsByKey: remoteEventsByKey,
-                remoteEventsByFingerprint: remoteEventsByFingerprint,
-                remoteEventsByCollisionKey: remoteEventsByCollisionKey,
-                availableCalendarIDs: availableCalendarIDs,
-                writableCalendarIDs: writableCalendarIDs,
-                completion: completion
-            )
-            return
-        }
-
-        if let eventID = call.googleEventID,
-           !eventID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           let currentCalendarID = call.googleCalendarID,
-           !contains(currentCalendarID, in: writableCalendarIDs) {
-            exportNext(
-                index: index + 1,
-                exportedCount: exportedCount,
-                skippedCount: skippedCount + 1,
-                calls: calls,
-                auth: auth,
-                modelContext: modelContext,
-                remoteEventsByKey: remoteEventsByKey,
-                remoteEventsByFingerprint: remoteEventsByFingerprint,
-                remoteEventsByCollisionKey: remoteEventsByCollisionKey,
-                availableCalendarIDs: availableCalendarIDs,
-                writableCalendarIDs: writableCalendarIDs,
-                completion: completion
-            )
-            return
-        }
-
-        let targetCalendarID = preferredCalendarID(
-            for: call,
-            availableCalendarIDs: availableCalendarIDs,
-            writableCalendarIDs: writableCalendarIDs
-        )
-
-        guard let targetCalendarID else {
-            exportNext(
-                index: index + 1,
-                exportedCount: exportedCount,
-                skippedCount: skippedCount + 1,
-                calls: calls,
-                auth: auth,
-                modelContext: modelContext,
-                remoteEventsByKey: remoteEventsByKey,
-                remoteEventsByFingerprint: remoteEventsByFingerprint,
-                remoteEventsByCollisionKey: remoteEventsByCollisionKey,
-                availableCalendarIDs: availableCalendarIDs,
-                writableCalendarIDs: writableCalendarIDs,
-                completion: completion
-            )
-            return
-        }
-
-        let finish: (String, Result<GoogleCalendarEvent, Error>) -> Void = { savedCalendarID, result in
-            Task { @MainActor in
-                switch result {
-                case .failure(let error):
-                    completion(.failure(error))
-                case .success(let saved):
-                    call.googleCalendarID = savedCalendarID
-                    call.googleEventID = saved.id
-                    call.googleEventManagedByApp = call.googleEventManagedByApp || saved.isManagedByGunnAire
-                    clearCalendarCallLocallyEdited(call)
-                    exportNext(
-                        index: index + 1,
-                        exportedCount: exportedCount + 1,
-                        skippedCount: skippedCount,
-                        calls: calls,
-                        auth: auth,
-                        modelContext: modelContext,
-                        remoteEventsByKey: remoteEventsByKey,
-                        remoteEventsByFingerprint: remoteEventsByFingerprint,
-                        remoteEventsByCollisionKey: remoteEventsByCollisionKey,
-                        availableCalendarIDs: availableCalendarIDs,
-                        writableCalendarIDs: writableCalendarIDs,
-                        completion: completion
-                    )
-                }
-            }
-        }
-
-        let currentCalendarID = call.googleCalendarID ?? targetCalendarID
-
-        if let eventID = call.googleEventID,
-           !eventID.isEmpty {
-            guard contains(currentCalendarID, in: writableCalendarIDs) else {
-                exportNext(
-                    index: index + 1,
-                    exportedCount: exportedCount,
-                    skippedCount: skippedCount + 1,
-                    calls: calls,
-                    auth: auth,
-                    modelContext: modelContext,
-                    remoteEventsByKey: remoteEventsByKey,
-                    remoteEventsByFingerprint: remoteEventsByFingerprint,
-                    remoteEventsByCollisionKey: remoteEventsByCollisionKey,
-                    availableCalendarIDs: availableCalendarIDs,
-                    writableCalendarIDs: writableCalendarIDs,
-                    completion: completion
-                )
-                return
-            }
-            let eventKey = calendarEventStorageKey(calendarID: currentCalendarID, eventID: eventID)
-            let remoteEvent = remoteEventsByKey[eventKey]?.event
-            guard shouldPatchExistingGoogleCalendarEvent(
-                for: call,
-                remoteEvent: remoteEvent
-            ) else {
-                call.googleEventManagedByApp = false
-                clearCalendarCallLocallyEdited(call)
-                exportNext(
-                    index: index + 1,
-                    exportedCount: exportedCount,
-                    skippedCount: skippedCount + 1,
-                    calls: calls,
-                    auth: auth,
-                    modelContext: modelContext,
-                    remoteEventsByKey: remoteEventsByKey,
-                    remoteEventsByFingerprint: remoteEventsByFingerprint,
-                    remoteEventsByCollisionKey: remoteEventsByCollisionKey,
-                    availableCalendarIDs: availableCalendarIDs,
-                    writableCalendarIDs: writableCalendarIDs,
-                    completion: completion
-                )
-                return
-            }
-            guard isCalendarCallLocallyEdited(call) else {
-                exportNext(
-                    index: index + 1,
-                    exportedCount: exportedCount,
-                    skippedCount: skippedCount,
-                    calls: calls,
-                    auth: auth,
-                    modelContext: modelContext,
-                    remoteEventsByKey: remoteEventsByKey,
-                    remoteEventsByFingerprint: remoteEventsByFingerprint,
-                    remoteEventsByCollisionKey: remoteEventsByCollisionKey,
-                    availableCalendarIDs: availableCalendarIDs,
-                    writableCalendarIDs: writableCalendarIDs,
-                    completion: completion
-                )
-                return
-            }
-            let patch = makeManagedEventPatch(for: call, remoteEvent: remoteEvent)
-            auth.patchCalendarEvent(calendarID: currentCalendarID, eventID: eventID, patch: patch) { result in
-                finish(currentCalendarID, result)
-            }
-        } else if let remote = existingRemoteEventMatch(
-            for: call,
-            remoteEventsByFingerprint: remoteEventsByFingerprint,
-            remoteEventsByCollisionKey: remoteEventsByCollisionKey
-        ) {
-            call.googleCalendarID = remote.calendarID
-            call.googleEventID = remote.event.id
-            call.googleEventManagedByApp = remote.event.isManagedByGunnAire
-            clearCalendarCallLocallyEdited(call)
-            exportNext(
-                index: index + 1,
-                exportedCount: exportedCount,
-                skippedCount: skippedCount,
-                calls: calls,
-                auth: auth,
-                modelContext: modelContext,
-                remoteEventsByKey: remoteEventsByKey,
-                remoteEventsByFingerprint: remoteEventsByFingerprint,
-                remoteEventsByCollisionKey: remoteEventsByCollisionKey,
-                availableCalendarIDs: availableCalendarIDs,
-                writableCalendarIDs: writableCalendarIDs,
-                completion: completion
-            )
-        } else {
-            let event = makeCalendarCreateEvent(for: call)
-            auth.createCalendarEvent(calendarID: targetCalendarID, event: event) { result in
-                if case .success = result {
-                    call.googleEventManagedByApp = true
-                }
-                finish(targetCalendarID, result)
-            }
-        }
     }
 
     static func shouldAllowGoogleCalendarWrite(for call: ServiceCall) -> Bool {
@@ -791,11 +732,11 @@ enum GoogleCalendarScheduleSync {
         let endDate = call.scheduledDate.addingTimeInterval(call.duration)
         return GoogleCalendarEventPatch(
             start: GoogleWritableCalendarEventDate(
-                dateTime: ISO8601DateFormatter().string(from: call.scheduledDate),
+                dateTime: calendarDateString(call.scheduledDate),
                 timeZone: timeZone
             ),
             end: GoogleWritableCalendarEventDate(
-                dateTime: ISO8601DateFormatter().string(from: endDate),
+                dateTime: calendarDateString(endDate),
                 timeZone: timeZone
             )
         )
@@ -817,13 +758,6 @@ enum GoogleCalendarScheduleSync {
         let timeZone = TimeZone.current.identifier
         let endDate = call.scheduledDate.addingTimeInterval(call.duration)
         let summary = calendarEventTitle(for: call, existingSummary: existingSummary)
-        let customerEmail = call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let attendees: [GoogleWritableCalendarAttendee]?
-        if !preserveExternalDetails, let customerEmail, !customerEmail.isEmpty {
-            attendees = [GoogleWritableCalendarAttendee(email: customerEmail, displayName: call.customer.name)]
-        } else {
-            attendees = nil
-        }
         let eventDescription = preserveExternalDetails ? nil : calendarEventUserDescription(for: call)
         let eventLocation = preserveExternalDetails ? nil : calendarEventLocation(for: call)
         return GoogleWritableCalendarEvent(
@@ -831,19 +765,23 @@ enum GoogleCalendarScheduleSync {
             description: eventDescription,
             location: eventLocation,
             start: GoogleWritableCalendarEventDate(
-                dateTime: ISO8601DateFormatter().string(from: call.scheduledDate),
+                dateTime: calendarDateString(call.scheduledDate),
                 timeZone: timeZone
             ),
             end: GoogleWritableCalendarEventDate(
-                dateTime: ISO8601DateFormatter().string(from: endDate),
+                dateTime: calendarDateString(endDate),
                 timeZone: timeZone
             ),
-            attendees: attendees,
+            // Dispatch is an internal staff notification. Customer messages
+            // require their separate consent-aware communication workflow.
+            attendees: nil,
             extendedProperties: GoogleCalendarExtendedProperties(privateProperties: [
                 "gunnaireManaged": "true",
                 "gunnaireManagedVersion": "4",
+                "gunnaireServiceCallID": call.id.uuidString,
                 "gunnaireOrigin": "ios-app"
-            ])
+            ]),
+            reminders: .appointmentDefault
         )
     }
 
@@ -901,110 +839,6 @@ enum GoogleCalendarScheduleSync {
         return call.type.displayName
     }
 
-    private static func remoteEventsByKey(
-        from calendarEvents: [(calendarID: String, event: GoogleCalendarEvent)]
-    ) -> [String: (calendarID: String, event: GoogleCalendarEvent)] {
-        var indexed: [String: (calendarID: String, event: GoogleCalendarEvent)] = [:]
-        for calendarEvent in calendarEvents {
-            guard !isCalendarEventDeleted(calendarID: calendarEvent.calendarID, eventID: calendarEvent.event.id) else {
-                continue
-            }
-            let eventKey = calendarEventStorageKey(calendarID: calendarEvent.calendarID, eventID: calendarEvent.event.id)
-            indexed[eventKey] = indexed[eventKey] ?? calendarEvent
-        }
-        return indexed
-    }
-
-    private static func remoteEventsByFingerprint(
-        from calendarEvents: [(calendarID: String, event: GoogleCalendarEvent)],
-        writableCalendarIDs: Set<String>
-    ) -> [String: (calendarID: String, event: GoogleCalendarEvent)] {
-        var indexed: [String: (calendarID: String, event: GoogleCalendarEvent)] = [:]
-        var indexedEventKeys: Set<String> = []
-        for calendarEvent in calendarEvents {
-            let eventKey = calendarEventStorageKey(calendarID: calendarEvent.calendarID, eventID: calendarEvent.event.id)
-            guard !isCalendarEventDeleted(calendarID: calendarEvent.calendarID, eventID: calendarEvent.event.id),
-                  indexedEventKeys.insert(eventKey).inserted else {
-                continue
-            }
-            guard let startDate = parseEventDate(calendarEvent.event.start),
-                  let endDate = parseEventDate(calendarEvent.event.end) else {
-                continue
-            }
-            let fingerprint = eventFingerprint(
-                summary: calendarEvent.event.summary,
-                location: calendarEvent.event.location,
-                startDate: startDate,
-                endDate: endDate
-            )
-            if let existing = indexed[fingerprint] {
-                let existingWritable = contains(existing.calendarID, in: writableCalendarIDs)
-                let newWritable = contains(calendarEvent.calendarID, in: writableCalendarIDs)
-                // Prefer writable calendars over read-only; if equal, prefer primary as a stable tie-breaker.
-                if (!existingWritable && newWritable) || (existingWritable == newWritable && calendarEvent.calendarID == "primary") {
-                    indexed[fingerprint] = calendarEvent
-                }
-            } else {
-                indexed[fingerprint] = calendarEvent
-            }
-        }
-        return indexed
-    }
-
-    private static func remoteEventsByCollisionKey(
-        from calendarEvents: [(calendarID: String, event: GoogleCalendarEvent)],
-        writableCalendarIDs: Set<String>
-    ) -> [String: (calendarID: String, event: GoogleCalendarEvent)] {
-        var indexed: [String: (calendarID: String, event: GoogleCalendarEvent)] = [:]
-        var indexedEventKeys: Set<String> = []
-        for calendarEvent in calendarEvents {
-            let eventKey = calendarEventStorageKey(calendarID: calendarEvent.calendarID, eventID: calendarEvent.event.id)
-            guard !isCalendarEventDeleted(calendarID: calendarEvent.calendarID, eventID: calendarEvent.event.id),
-                  indexedEventKeys.insert(eventKey).inserted,
-                  let startDate = parseEventDate(calendarEvent.event.start),
-                  let endDate = parseEventDate(calendarEvent.event.end) else {
-                continue
-            }
-            let collisionKey = eventCollisionKey(
-                summary: calendarEvent.event.summary,
-                startDate: startDate,
-                endDate: endDate
-            )
-            if let existing = indexed[collisionKey] {
-                if shouldPreferRemoteCalendarEvent(calendarEvent, over: existing, writableCalendarIDs: writableCalendarIDs) {
-                    indexed[collisionKey] = calendarEvent
-                }
-            } else {
-                indexed[collisionKey] = calendarEvent
-            }
-        }
-        return indexed
-    }
-
-    private static func existingRemoteEventMatch(
-        for call: ServiceCall,
-        remoteEventsByFingerprint: [String: (calendarID: String, event: GoogleCalendarEvent)],
-        remoteEventsByCollisionKey: [String: (calendarID: String, event: GoogleCalendarEvent)]
-    ) -> (calendarID: String, event: GoogleCalendarEvent)? {
-        if let exactMatch = remoteEventsByFingerprint[eventFingerprint(for: call)] {
-            return exactMatch
-        }
-        if let titleAndTimeMatch = remoteEventsByCollisionKey[eventCollisionKey(for: call)] {
-            return titleAndTimeMatch
-        }
-
-        let scheduleSlotMatches = remoteEventsByCollisionKey.values.filter { remote in
-            remoteEventMatchesScheduleSlot(call: call, remoteEvent: remote.event)
-        }
-        let uniqueMatches = Dictionary(
-            scheduleSlotMatches.map { remote in
-                (calendarEventStorageKey(calendarID: remote.calendarID, eventID: remote.event.id), remote)
-            },
-            uniquingKeysWith: { first, _ in first }
-        )
-        return uniqueMatches.count == 1 ? uniqueMatches.values.first : nil
-    }
-
     static func remoteEventMatchesScheduleSlot(call: ServiceCall, remoteEvent: GoogleCalendarEvent) -> Bool {
         guard let remoteStart = parseEventDate(remoteEvent.start),
               let remoteEnd = parseEventDate(remoteEvent.end) else {
@@ -1015,31 +849,6 @@ enum GoogleCalendarScheduleSync {
         let remoteStartMinute = Int(remoteStart.timeIntervalSince1970 / 60)
         let remoteEndMinute = Int(remoteEnd.timeIntervalSince1970 / 60)
         return callStartMinute == remoteStartMinute && callEndMinute == remoteEndMinute
-    }
-
-    private static func shouldPreferRemoteCalendarEvent(
-        _ candidate: (calendarID: String, event: GoogleCalendarEvent),
-        over existing: (calendarID: String, event: GoogleCalendarEvent),
-        writableCalendarIDs: Set<String>
-    ) -> Bool {
-        if candidate.event.isManagedByGunnAire != existing.event.isManagedByGunnAire {
-            return candidate.event.isManagedByGunnAire
-        }
-        let existingWritable = contains(existing.calendarID, in: writableCalendarIDs)
-        let candidateWritable = contains(candidate.calendarID, in: writableCalendarIDs)
-        if existingWritable != candidateWritable {
-            return candidateWritable
-        }
-        return candidate.calendarID == "primary" && existing.calendarID != "primary"
-    }
-
-    private static func eventFingerprint(for call: ServiceCall) -> String {
-        eventFingerprint(
-            summary: calendarEventTitle(for: call, existingSummary: nil),
-            location: call.siteAddress ?? call.customer.address,
-            startDate: call.scheduledDate,
-            endDate: call.scheduledDate.addingTimeInterval(call.duration)
-        )
     }
 
     private static func resolveExistingCustomer(
@@ -1193,9 +1002,19 @@ enum GoogleCalendarScheduleSync {
         ].joined(separator: "|")
     }
 
+    private static func calendarDateString(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        if date.timeIntervalSince1970.truncatingRemainder(dividingBy: 1) != 0 {
+            formatter.formatOptions.insert(.withFractionalSeconds)
+        }
+        return formatter.string(from: date)
+    }
+
     private static func parseEventDate(_ value: GoogleCalendarEventDate) -> Date? {
         if let dateTime = value.dateTime {
-            return ISO8601DateFormatter().date(from: dateTime)
+            let fractional = ISO8601DateFormatter()
+            fractional.formatOptions.insert(.withFractionalSeconds)
+            return fractional.date(from: dateTime) ?? ISO8601DateFormatter().date(from: dateTime)
         }
         if let date = value.date {
             let formatter = DateFormatter()
@@ -1417,6 +1236,9 @@ enum GoogleCalendarScheduleSync {
         availableCalendarIDs: Set<String>,
         writableCalendarIDs: Set<String>
     ) -> String? {
+        if let existingCalendarID = normalizedOptional(call.googleCalendarID) {
+            return contains(existingCalendarID, in: writableCalendarIDs) ? existingCalendarID : nil
+        }
         if let technicianCalendarID = call.assignedTechnician?.contactInfo?.trimmingCharacters(in: .whitespacesAndNewlines),
            !technicianCalendarID.isEmpty {
             if contains(technicianCalendarID, in: writableCalendarIDs) {
@@ -1425,10 +1247,6 @@ enum GoogleCalendarScheduleSync {
             if contains(technicianCalendarID.lowercased(), in: writableCalendarIDs) {
                 return technicianCalendarID.lowercased()
             }
-        }
-        if let existingCalendarID = call.googleCalendarID,
-           contains(existingCalendarID, in: writableCalendarIDs) {
-            return existingCalendarID
         }
         if contains("primary", in: writableCalendarIDs) {
             return "primary"
@@ -1450,41 +1268,4 @@ enum GoogleCalendarScheduleSync {
         calendarIDs.contains(calendarID) || calendarIDs.contains(calendarID.lowercased())
     }
 
-    private static func fetchEvents(
-        auth: GoogleAuthManager,
-        calendarIDs: [String],
-        timeMin: Date,
-        timeMax: Date,
-        completion: @escaping (Result<[(calendarID: String, event: GoogleCalendarEvent)], Error>) -> Void
-    ) {
-        let group = DispatchGroup()
-        let queue = DispatchQueue(label: "GoogleCalendarBatchFetch")
-        var collected: [(calendarID: String, event: GoogleCalendarEvent)] = []
-        var firstError: Error?
-
-        for calendarID in calendarIDs {
-            group.enter()
-            auth.fetchCalendarEvents(calendarID: calendarID, timeMin: timeMin, timeMax: timeMax) { result in
-                queue.async {
-                    switch result {
-                    case .success(let events):
-                        collected.append(contentsOf: events.map { (calendarID: calendarID, event: $0) })
-                    case .failure(let error):
-                        if firstError == nil {
-                            firstError = error
-                        }
-                    }
-                    group.leave()
-                }
-            }
-        }
-
-        group.notify(queue: .main) {
-            if let firstError {
-                completion(.failure(firstError))
-            } else {
-                completion(.success(collected))
-            }
-        }
-    }
 }

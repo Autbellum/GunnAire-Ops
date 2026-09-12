@@ -57,6 +57,7 @@
     "rotate_production_secret"
   ],
   "high_risk_domains": [
+    "security",
     "authentication",
     "authorization",
     "payments",

@@ -109,7 +109,7 @@ final class ServiceRequest {
 
     private static let workflowEnvelopePrefix = "GUNNAIRE_REQUEST_METADATA_V1:"
 
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var backendRequestID: String?
     var customerName: String = ""
     var phone: String?

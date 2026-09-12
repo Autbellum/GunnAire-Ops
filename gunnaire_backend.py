@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""Render-compatible launcher for the canonical GunnAire backend.
+"""Render-compatible launcher for the GunnAire backend and local-first AI routes.
 
-Keep all service implementation in ``Backend/gunnaire_backend.py``. Render's
-existing start command runs this root file, so importing the canonical module
-here prevents the deployed API from drifting behind the implementation tested
-with the Xcode application.
+The canonical business API remains in ``Backend/gunnaire_backend.py``. The
+selected deployment entrypoint subclasses that handler only to add authenticated
+local-AI status and assist routes. All other routes retain canonical behavior.
 """
 
-from Backend.gunnaire_backend import main
+from Backend.gunnaire_local_ai_backend import main
 
 
 if __name__ == "__main__":

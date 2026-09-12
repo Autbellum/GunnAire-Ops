@@ -1,6 +1,7 @@
 // Estimate.swift
 // Model for service estimates
 import Foundation
+import CryptoKit
 import SwiftData
 
 enum EstimateProposalOption: String, CaseIterable, Identifiable, Codable {
@@ -61,7 +62,7 @@ enum EstimateApprovalMethod: String, CaseIterable, Identifiable, Codable {
 
 @Model
 final class Estimate {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var serviceCallID: UUID?
     /// Stable property identity plus the address snapshot shown to the customer.
     /// Standalone estimates need this before any work order exists.
@@ -189,7 +190,8 @@ final class Estimate {
     }
 
     var customerApprovalBlockedMessage: String? {
-        BillingTaxPolicy.customerCommitmentBlockedMessage(
+        if let message = CatalogSnapshotPayload.reviewMessage(catalogSnapshotJSON) { return message }
+        return BillingTaxPolicy.customerCommitmentBlockedMessage(
             status: taxCalculationStatus,
             documentName: "estimate"
         )
@@ -264,6 +266,34 @@ final class Estimate {
         return proposalOptionKind?.displayName ?? "Estimate"
     }
 
+    /// Privacy-safe immutable snapshot identifier used when a customer approves
+    /// an estimate through an expiring portal capability. The portal receives
+    /// only this digest, not the line-item snapshot used to produce it.
+    var customerPortalRevision: String {
+        let amountCents = Int64((amount * 100).rounded())
+        let createdMilliseconds = Int64((createdAt.timeIntervalSince1970 * 1_000).rounded())
+        let components = [
+            "portal-estimate-v1",
+            id.uuidString.lowercased(),
+            customer?.id.uuidString.lowercased() ?? "",
+            String(amountCents),
+            String(createdMilliseconds),
+            serviceCallID?.uuidString.lowercased() ?? "",
+            serviceLocationID?.uuidString.lowercased() ?? "",
+            parentEstimateID?.uuidString.lowercased() ?? "",
+            proposalGroupID?.uuidString.lowercased() ?? "",
+            proposalOption ?? "",
+            lineItemSummary,
+            catalogSnapshotJSON ?? "",
+        ]
+        let canonical = components
+            .map { "\($0.utf8.count):\($0)" }
+            .joined(separator: "|")
+        return SHA256.hash(data: Data(canonical.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
     var proposalIsFinalized: Bool {
         hasRecordedCustomerApproval || ["accepted", "invoiced"].contains(status.lowercased())
     }
@@ -320,29 +350,7 @@ final class Estimate {
     }
 
     private static func displayDedupeKey(for estimate: Estimate) -> String {
-        if let proposalGroupID = estimate.proposalGroupID,
-           let proposalOption = estimate.proposalOptionKind,
-           proposalOption != .standalone {
-            return "proposal:\(proposalGroupID.uuidString.lowercased()):\(proposalOption.rawValue)"
-        }
-        if estimate.parentEstimateID != nil {
-            // Change orders are immutable revisions. Equal totals on the same
-            // job are not evidence that two revisions are duplicates.
-            return "change-order:\(estimate.id.uuidString.lowercased())"
-        }
-        if let serviceCallID = estimate.serviceCallID {
-            return "call:\(serviceCallID.uuidString.lowercased()):\(String(format: "%.2f", estimate.amount))"
-        }
-        if let quickBooksID = estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !quickBooksID.isEmpty {
-            return "qb:\(quickBooksID.lowercased())"
-        }
-        guard let customer = estimate.customer else {
-            return "unresolved-customer:\(estimate.id.uuidString.lowercased())"
-        }
-        let customerKey = customer.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let day = Calendar.current.startOfDay(for: estimate.createdAt).timeIntervalSince1970
-        return "local:\(customerKey):\(String(format: "%.2f", estimate.amount)):\(Int(day))"
+        "customer:\(estimate.customer?.id.uuidString ?? "unresolved"):estimate:\(estimate.id.uuidString)"
     }
 
     private static func preferredDisplayEstimate(_ lhs: Estimate, _ rhs: Estimate) -> Estimate {
@@ -438,7 +446,8 @@ enum EstimateProposalPolicy {
         method: EstimateApprovalMethod,
         reference: String?,
         signatureImageBase64: String?,
-        recordedByEmail: String?
+        recordedByEmail: String?,
+        at date: Date = Date()
     ) -> Bool {
         guard select(estimate, in: estimates) else { return false }
         guard estimate.recordCustomerApproval(
@@ -446,7 +455,8 @@ enum EstimateProposalPolicy {
             method: method,
             reference: reference,
             signatureImageBase64: signatureImageBase64,
-            recordedByEmail: recordedByEmail
+            recordedByEmail: recordedByEmail,
+            at: date
         ) else {
             return false
         }

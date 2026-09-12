@@ -135,7 +135,7 @@ final class Technician {
 
     private static let qualificationProfileVersion = 2
 
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var name: String = ""
     var contactInfo: String?
     var supportedEquipmentTypesJSON: String?

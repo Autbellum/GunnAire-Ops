@@ -21,9 +21,9 @@ Options:
   --repo PATH              GunnAire repository root
   -h, --help               Show help
 
-The script never exposes Ollama to the LAN, requests credentials, or changes a
-production service. It writes only to the user's Application Support/Logs folders
-and, when requested, the user's LaunchAgents folder.
+The script never exposes Ollama to the LAN, requests production credentials, or
+changes a production service. It writes to the user's Application Support, Logs,
+and optionally LaunchAgents folders.
 EOF
 }
 
@@ -45,55 +45,34 @@ done
 REPO="$(cd "$REPO" && pwd)"
 [[ -d "$REPO" ]] || { echo "Repository not found: $REPO" >&2; exit 2; }
 
-if [[ "$(uname -s)" != "Darwin" ]]; then
-  echo "This installer is intended for macOS." >&2
-  exit 2
-fi
+[[ "$(uname -s)" == "Darwin" ]] || { echo "This installer is intended for macOS." >&2; exit 2; }
 if [[ "$(uname -m)" != "arm64" ]]; then
   echo "Warning: this plan was sized for Apple silicon; detected $(uname -m)." >&2
 fi
 
-mkdir -p "$APP_SUPPORT/bin" "$APP_SUPPORT/config" "$LOG_ROOT/runs"
-
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "python3 is required." >&2
-  exit 2
-fi
+for command in python3 ollama; do
+  command -v "$command" >/dev/null 2>&1 || { echo "$command is required and was not found on PATH." >&2; exit 2; }
+done
 PYTHON_BIN="$(command -v python3)"
-if ! command -v codex >/dev/null 2>&1; then
-  echo "Codex CLI is required to create the guarded local Codex launcher." >&2
-  exit 2
-fi
-if ! command -v ollama >/dev/null 2>&1; then
-  echo "Ollama is not installed or not on PATH. Install the current official Ollama release first." >&2
-  exit 2
-fi
 
-# Devstral Small 2 currently requires Ollama 0.13.3 or later.
 version_text="$(ollama --version 2>&1 || true)"
 version="$(printf '%s' "$version_text" | sed -E 's/[^0-9]*([0-9]+\.[0-9]+\.[0-9]+).*/\1/' | head -1)"
-if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "Unable to parse Ollama version from: $version_text" >&2
-  exit 2
-fi
-python3 - "$version" <<'PY'
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Unable to parse Ollama version: $version_text" >&2; exit 2; }
+"$PYTHON_BIN" - "$version" <<'PY'
 import sys
-from itertools import zip_longest
 
-def parse(value):
+def parsed(value: str) -> tuple[int, ...]:
     return tuple(int(part) for part in value.split('.'))
 
-installed = parse(sys.argv[1])
-required = parse('0.13.3')
-if installed < required:
+if parsed(sys.argv[1]) < parsed('0.13.3'):
     raise SystemExit(f'Ollama {sys.argv[1]} is too old; 0.13.3 or newer is required.')
 PY
 
-# Do not permit an installer session that intentionally binds Ollama to a non-loopback address.
+# Refuse sessions explicitly configured to expose Ollama beyond loopback.
 if [[ -n "${OLLAMA_HOST:-}" ]]; then
   case "$OLLAMA_HOST" in
     127.0.0.1:*|localhost:*|http://127.0.0.1:*|http://localhost:*|\[::1\]:*|http://\[::1\]:*) ;;
-    *) echo "Refusing because OLLAMA_HOST is not loopback-only: $OLLAMA_HOST" >&2; exit 2 ;;
+    *) echo "Refusing non-loopback OLLAMA_HOST: $OLLAMA_HOST" >&2; exit 2 ;;
   esac
 fi
 
@@ -102,41 +81,48 @@ if ! /usr/bin/curl --silent --fail --max-time 3 http://127.0.0.1:11434/api/tags 
     /usr/bin/open -gja Ollama
     for _ in {1..20}; do
       sleep 1
-      if /usr/bin/curl --silent --fail --max-time 2 http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
-        break
-      fi
+      /usr/bin/curl --silent --fail --max-time 2 http://127.0.0.1:11434/api/tags >/dev/null 2>&1 && break
     done
   fi
 fi
 /usr/bin/curl --silent --fail --max-time 3 http://127.0.0.1:11434/api/tags >/dev/null \
   || { echo "Ollama is not responding on loopback port 11434." >&2; exit 2; }
 
+# Verify the running listener, not just this shell's OLLAMA_HOST setting.
+"$PYTHON_BIN" - <<'PY'
+import subprocess
+result = subprocess.run(['/usr/sbin/lsof', '-nP', '-iTCP:11434', '-sTCP:LISTEN', '-Fn'],
+                        capture_output=True, text=True, check=False)
+listeners = [line[1:] for line in result.stdout.splitlines() if line.startswith('n')]
+if result.returncode or not listeners or any(value not in ('127.0.0.1:11434', '[::1]:11434') for value in listeners):
+    raise SystemExit('Cannot verify an exclusively loopback Ollama listener; installation stopped.')
+PY
+
 required_gib=42
-if [[ "$INSTALL_MODE" == "all" ]]; then
-  required_gib=66
-fi
-available_kib="$(df -Pk "$HOME" | awk 'NR==2 {print $4}')"
+[[ "$INSTALL_MODE" == "all" ]] && required_gib=66
+model_storage="${OLLAMA_MODELS:-$HOME/.ollama/models}"
+[[ -d "$model_storage" ]] || model_storage="$HOME/.ollama"
+available_kib="$(df -Pk "$model_storage" | awk 'NR==2 {print $4}')"
 available_gib=$(( available_kib / 1024 / 1024 ))
-if (( available_gib < required_gib )); then
+(( available_gib >= required_gib )) || {
   echo "Insufficient free space: ${available_gib} GiB available; ${required_gib} GiB required with safety margin." >&2
   exit 2
-fi
+}
 
-cp "$SCRIPT_DIR/config/models.json" "$APP_SUPPORT/config/models.json"
-cp "$SCRIPT_DIR/config/policy.json" "$APP_SUPPORT/config/policy.json"
-cp "$SCRIPT_DIR/config/suites.json" "$APP_SUPPORT/config/suites.json"
-cp "$SCRIPT_DIR/config/benchmark_cases.json" "$APP_SUPPORT/config/benchmark_cases.json"
-cp "$SCRIPT_DIR/local_ai.py" "$APP_SUPPORT/local_ai.py"
-cp "$SCRIPT_DIR/qa_runner.py" "$APP_SUPPORT/qa_runner.py"
-cp "$SCRIPT_DIR/benchmark.py" "$APP_SUPPORT/benchmark.py"
+mkdir -p "$APP_SUPPORT/bin" "$APP_SUPPORT/config" "$LOG_ROOT/runs"
+for file in models.json policy.json suites.json benchmark_cases.json; do
+  cp "$SCRIPT_DIR/config/$file" "$APP_SUPPORT/config/$file"
+done
+for file in local_ai.py qa_runner.py benchmark.py; do
+  cp "$SCRIPT_DIR/$file" "$APP_SUPPORT/$file"
+done
 
 models=("devstral-small-2:24b" "gpt-oss:20b")
 if [[ "$INSTALL_MODE" == "all" ]]; then
   models+=("qwen3-coder:30b" "qwen2.5-coder:7b")
 fi
-
 for model in "${models[@]}"; do
-  safe_name="${model//[:\/]/_}"
+  safe_name="${model//[:\//]/_}"
   echo "Pulling $model"
   ollama pull "$model" 2>&1 | tee "$LOG_ROOT/pull-${safe_name}.log"
 done
@@ -144,18 +130,17 @@ done
 cat > "$APP_SUPPORT/bin/codex-local" <<'EOF'
 #!/bin/bash
 set -euo pipefail
-workspace="${1:-$PWD}"
-if [[ $# -gt 0 ]]; then shift; fi
-exec codex --oss --local-provider ollama --model devstral-small-2:24b \
-  --sandbox read-only --ask-for-approval on-request --cd "$workspace" "$@"
+# Compatibility name only: requests must pass the same redaction and file guards.
+# For autonomous edits use the separately sandboxed local worker, not direct Codex.
+exec "$HOME/Library/Application Support/GunnAireLocalAI/bin/gunnaire-local-ai" ask --role coder "$@"
 EOF
 chmod 700 "$APP_SUPPORT/bin/codex-local"
 
 cat > "$APP_SUPPORT/bin/gunnaire-local-ai" <<EOF
 #!/bin/bash
 set -euo pipefail
-exec "$PYTHON_BIN" "$APP_SUPPORT/local_ai.py" \
-  --models "$APP_SUPPORT/config/models.json" \
+exec "$PYTHON_BIN" "$APP_SUPPORT/local_ai.py" \\
+  --models "$APP_SUPPORT/config/models.json" \\
   --policy "$APP_SUPPORT/config/policy.json" "\$@"
 EOF
 chmod 700 "$APP_SUPPORT/bin/gunnaire-local-ai"
@@ -163,20 +148,20 @@ chmod 700 "$APP_SUPPORT/bin/gunnaire-local-ai"
 cat > "$APP_SUPPORT/bin/gunnaire-local-qa" <<EOF
 #!/bin/bash
 set -euo pipefail
-exec "$PYTHON_BIN" "$APP_SUPPORT/qa_runner.py" \
-  --models "$APP_SUPPORT/config/models.json" \
-  --policy "$APP_SUPPORT/config/policy.json" \
+exec "$PYTHON_BIN" "$APP_SUPPORT/qa_runner.py" \\
+  --models "$APP_SUPPORT/config/models.json" \\
+  --policy "$APP_SUPPORT/config/policy.json" \\
   --suites "$APP_SUPPORT/config/suites.json" "\$@"
 EOF
 chmod 700 "$APP_SUPPORT/bin/gunnaire-local-qa"
 
-python3 -m unittest discover -s "$SCRIPT_DIR/tests" -p 'test_*.py' -v
-python3 "$SCRIPT_DIR/local_ai.py" doctor --output "$LOG_ROOT/doctor-latest.json"
+PYTHONDONTWRITEBYTECODE=1 "$PYTHON_BIN" -m unittest discover -s "$SCRIPT_DIR/tests" -p 'test_*.py' -v
+"$PYTHON_BIN" "$SCRIPT_DIR/local_ai.py" doctor --output "$LOG_ROOT/doctor-latest.json"
 
 if (( RUN_BENCHMARK == 1 )); then
   roles=(coder reviewer)
-  if [[ "$INSTALL_MODE" == "all" ]]; then roles+=(challenger); fi
-  python3 "$SCRIPT_DIR/benchmark.py" --roles "${roles[@]}" --output "$LOG_ROOT/benchmark-latest.json"
+  [[ "$INSTALL_MODE" == "all" ]] && roles+=(challenger)
+  "$PYTHON_BIN" "$SCRIPT_DIR/benchmark.py" --roles "${roles[@]}" --output "$LOG_ROOT/benchmark-latest.json"
 fi
 
 if (( INSTALL_LAUNCH_AGENT == 1 )); then
@@ -197,20 +182,23 @@ if (( INSTALL_LAUNCH_AGENT == 1 )); then
   launchctl bootstrap "gui/$(id -u)" "$launch_path"
 fi
 
-cat > "$LOG_ROOT/setup-status.json" <<EOF
-{
-  "status": "completed",
-  "repository": $(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$REPO"),
-  "install_mode": "$INSTALL_MODE",
-  "benchmark_requested": $RUN_BENCHMARK,
-  "launch_agent_requested": $INSTALL_LAUNCH_AGENT,
-  "ollama_version": "$version",
-  "endpoint": "http://127.0.0.1:11434",
-  "note": "No production deployment or network change was performed."
+"$PYTHON_BIN" - "$LOG_ROOT/setup-status.json" "$REPO" "$INSTALL_MODE" "$RUN_BENCHMARK" "$INSTALL_LAUNCH_AGENT" "$version" <<'PY'
+import json, pathlib, sys
+path, repo, mode, benchmark, agent, version = sys.argv[1:]
+payload = {
+    'status': 'completed',
+    'repository': repo,
+    'install_mode': mode,
+    'benchmark_requested': benchmark == '1',
+    'launch_agent_requested': agent == '1',
+    'ollama_version': version,
+    'endpoint': 'http://127.0.0.1:11434',
+    'note': 'No production deployment or network change was performed.'
 }
-EOF
+pathlib.Path(path).write_text(json.dumps(payload, indent=2) + '\n', encoding='utf-8')
+PY
 
 echo "Local AI setup completed."
 echo "Doctor report: $LOG_ROOT/doctor-latest.json"
-if (( RUN_BENCHMARK == 1 )); then echo "Benchmark report: $LOG_ROOT/benchmark-latest.json"; fi
+(( RUN_BENCHMARK == 1 )) && echo "Benchmark report: $LOG_ROOT/benchmark-latest.json"
 echo "Guarded Codex launcher: $APP_SUPPORT/bin/codex-local"

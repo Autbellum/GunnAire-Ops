@@ -89,7 +89,7 @@ enum CustomerOperationalAlertValidationError: LocalizedError, Equatable {
 
 @Model
 final class CustomerOperationalAlert {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var creationOperationID: UUID = UUID()
     var customerID: UUID = UUID()
     var customerName: String = ""

@@ -1,6 +1,6 @@
 # GunnAire backend operations runbook
 
-Last verified: 2026-08-30
+Last source verification: 2026-09-07 (production observations below retain their original dates)
 
 This runbook covers the shared GunnAire service at
 `https://gunnaire-api.onrender.com`. It does not authorize accounting changes,
@@ -16,6 +16,140 @@ credential rotation, production restores, or customer communications.
 - Proposed recovery time objective: 4 hours. This is not proven until a timed
   restore drill is completed by the deployment owner.
 
+## 2026-09-07 billing HTTP and job authority
+
+Candidate **2026.09.07.27** requires a server-returned opaque
+`connectionRevision` for each assignment POST. A reconnect invalidates the old
+epoch, including never-sent offline creates. Deploy/verify the reviewed server
+before distributing the updated native client; old v26 assignment clients will
+receive a validation error rather than unsafe compatibility fallback. Existing
+native invoice/estimate buttons have not switched to the server publisher.
+
+Native queue files under Application Support/JobBillingDispatch-v1 are
+encrypted with a device-only Keychain key and excluded from backup. Do not
+clear them, reset keys or rebind them to another account to resolve a sync
+problem. First inspect the original job's Field Billing review. A lost reply
+can be resolved by reading current server authority; a newer assignment or
+connection requires explicit office review. Offline changes are not effective
+on other devices until confirmed. See
+[native job authority](NATIVE_JOB_BILLING_AUTHORITY.md) for exact boundaries.
+Current backend fixture acceptance is 319 Backend and 37 Tools tests.
+
+Candidate **2026.09.07.26** exposes the shared publisher/recovery engine over
+authenticated HTTP and adds revisioned dispatcher/admin job assignments.
+Preserve `billing_job_assignments`, `billing_assignment_mutations` and
+`billing_job_documents` along with all earlier billing/payment tables and the
+original encryption key. Roster changes/revocations use compare-and-set,
+stable operation identities and atomic audits. Never erase a revocation or
+replay a stale offline assignment over a newer dispatcher decision.
+
+Current local backend acceptance: 316 Backend and 37 Tools tests. Typed native
+requests are implemented, but native billing/schedule buttons have not switched.
+Read `QBO_BILLING_HTTP_CONTRACT.md` before any deployment or native cutover;
+structured tax addresses, legacy mappings and natural recovery/offline handoffs
+remain required. No live QBO request, customer send, merge or deployment occurred.
+
+## Prior 2026-09-07 staged billing engine
+
+Candidate **2026.09.07.25** adds `billing_publications`,
+`billing_entity_mappings`, `billing_draft_grants` and indexes. The engine/adapter
+are not exposed over HTTP or connected to native billing yet. The existing
+payment journal checks billing reservations before reserving/dispatching a
+payment. Current local acceptance: 276 Backend tests and 37 Tools tests.
+See `QBO_SERVER_BILLING_ENGINE.md` for the exact stage and remaining integration.
+
+Preserve these tables and the encryption key in backups; fixture backup/restore
+recovery retains the original attempt and never resends. Do not remove uncertain
+attempts or restore older data to enable a retry. Once billing intents are in
+use, older code ignoring their locks is not a safe financial rollback. Suspend
+publishing/collection and resolve original outcomes before rolling back that
+boundary. One authoritative transactional store is required. No deployment,
+native cutover, provider write or customer delivery occurred in this checkpoint.
+
+## 2026-09-07 customer publication candidate
+
+Candidate **2026.09.07.24** adds `customer_publications`,
+`customer_publication_keys`, `customer_entity_mappings` and indexes. Preserve
+all of them and the existing QBO encryption key in off-host backups, restore
+tests and code rollback. One authoritative transactional database is required;
+independent SQLite replicas do not coordinate customer dispatch.
+
+Use **Customers → customer record → Overview → Customer sync review** to recover
+the original provider result or explicitly cancel a never-sent proposal. Never
+clear sending/unknown attempts to force another create. Reconnected grants and
+unresolved outcomes still require further administrator-resolution tooling.
+This native candidate requires the new backend before distribution. Current
+local backend verification passes 216 tests; full native/release acceptance and
+remaining limits are tracked in `QBO_SERVER_CUSTOMER_PUBLICATION.md`. No live
+provider mutation or deployment is included. Render still follows `main`.
+
+## 2026-09-07 catalog publication candidate
+
+Candidate `2026.09.07.23` adds the server-owned catalog publisher required by
+the current native approval/retry workflow. Backend 173/173 and Tools 37/37
+tests pass; native acceptance is tracked separately in
+`QBO_SERVER_CATALOG_PUBLICATION.md`. This does not represent a deployment.
+
+Back up the entire SQLite database and preserve its existing encryption key
+before promotion. The three additive catalog tables and indexes hold immutable
+encrypted proposals, open publication locks and durable item mappings. Keep
+them during code rollback. Do not delete an unknown/sending attempt or restore
+an older database to make a retry available: the provider may have accepted it.
+Use one persistent authoritative database; independent per-instance SQLite
+copies do not coordinate dispatch and are not an approved scale-out configuration.
+Use the application's **Catalog publication review** for read-only recovery or
+explicit cancellation of an unsent proposal. Replaced-grant/unknown-outcome
+resolution still requires further implementation and approved evidence.
+
+This native candidate must not be distributed against an older backend lacking
+these routes. Provider requests in local tests are fixtures only. Older clients
+and externally issued accounting credentials remain a bypass boundary until
+broader server-authority migration is complete. Review PR #17 overlap before
+any merge; Render follows `main`.
+
+## 2026-09-06 source review follow-up
+
+Candidate `2026.09.06.20` in PR #18 includes portal approval concurrency,
+revocation/expiry, and oversized-amount fixes from `.19`, plus the company and
+CloudKit workspace API contract. The original `.19` verification passed 77/77
+Backend and 37/37 Tools tests. The `.20` suite adds ten workspace tests; current
+local verification passes the complete 87/87 Backend and 37/37 Tools suites. See
+`PORTAL_APPROVAL_REVIEW.md` and `CLOUDKIT_WORKSPACE_IDENTITY.md` for evidence and
+the native storage-boundary work still required before company isolation is fixed.
+The older PR #17 overlaps this branch and lacks these follow-up fixes; reconcile
+the overlap before selecting a deployment candidate.
+
+## 2026-09-05 production pre-deployment reconciliation
+
+- Production is healthy on `2026.09.02.17`; reviewed candidate
+  `2026.09.03.18` remains undeployed.
+- Pull request [#17](https://github.com/Autbellum/GunnAire-Ops/pull/17) is open,
+  mergeable, and clean at exact head
+  `4273294dc3e0bf0ab71ddd2fa2e286965a3fdbc3`. Its two commits change exactly
+  four reviewed files. GitHub **Backend regression** run
+  [34001403596](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34001403596)
+  passed the complete Backend and Tools suites on Python 3.13 and 3.14.
+- Render follows `main`; merging PR #17 is the production deployment trigger
+  and remains paused for deployment-owner confirmation.
+- The production SQLite file is present and `PRAGMA quick_check` returns `ok`.
+- `/var/data/backup_status.json` records a manifest-verified backup at
+  `2026-09-04T15:57:54.482894+00:00`: database 229,376 bytes, two document
+  artifacts, and 272,103 total bytes. Only the first 12 characters of its
+  artifact ID (`70b8b21eef4f`) were retained in release evidence.
+- Render also shows a daily provider snapshot from 2026-09-04, seven-day
+  snapshot retention, and prior-code deployment rollback.
+- The backup marker proves local verification, not off-host custody. No
+  independent encrypted off-host copy or completed restore drill has yet been
+  demonstrated, so the proposed RPO/RTO remain unapproved.
+- Candidate `.18` adds eleven nullable columns to `customer_portal_links`; it
+  does not delete a table, column, or existing row. If code rollback is needed,
+  leave those additive columns in place. Database restore is not part of a
+  routine rollback for this candidate.
+- Exact evidence is
+  `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-05/backend-deployment-preflight-2026090503.json`
+  (SHA-256
+  `463fdd8bdb5ae17da363a213854e8c059205655b027b3af303c05c4d855865d0`).
+
 ## Release verification
 
 1. Run the read-only local release preflight against the exact current-source
@@ -23,9 +157,9 @@ credential rotation, production restores, or customer communications.
 
    ```sh
    python3 Tools/release_preflight.py \
-     --archive "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/GunnAire Ops 1.0 (2026083012 Current Source).xcarchive" \
-     --mac-app "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/GunnAire Ops 1.0 (2026083012 Current Source Mac Catalyst).app" \
-     --mac-result "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/Verification/GunnAire Ops 1.0 (2026083012 Current Source Mac Catalyst).xcresult" \
+     --archive "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/GunnAire Ops 1.0 (2026083101 Current Source).xcarchive" \
+     --mac-app "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/GunnAire Ops 1.0 (2026083101 Current Source Mac Catalyst).app" \
+     --mac-result "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/GunnAire Ops 1.0 (2026083101 Current Source Mac Catalyst).xcresult" \
      --cloudkit-development-export /Users/gunnaire/Downloads/cloudkit-development-11.ckdb \
      --cloudkit-production-export /Users/gunnaire/Downloads/cloudkit-production-7.ckdb
    ```
@@ -36,7 +170,7 @@ credential rotation, production restores, or customer communications.
    login scope, the exact universal Mac Catalyst Release app/result, privacy
    manifests, hardened runtime, release configuration, QBO/Google OAuth
    identifiers, app/dSYM UUIDs, binary hygiene, and the exact additive CloudKit
-   delta including record system fields and security grants. Build 3012's exact
+   delta including record system fields and security grants. Build 3101's exact
    local run passes 61 checks with four expected warnings and zero failures.
    Development-signing warnings are expected until the Apple
    Distribution private key is installed. Use
@@ -48,24 +182,38 @@ credential rotation, production restores, or customer communications.
    python3 -m unittest discover -s Backend -p 'test_*.py' -v
    ```
 
-   Source `2026.08.30.15` has 69 expected tests. A different count requires
-   review before deployment even when the discovered subset is green.
-   The same suite must pass in the **Backend regression** GitHub workflow on
-   Python 3.13 and the production-aligned Python 3.14 job. A green workflow is
-   evidence for the reviewed commit; it does not itself authorize Render to
-   deploy that commit.
+   Then run the CloudKit, release, and signed-device tooling regression:
+
+   ```sh
+   python3 -m unittest discover -s Tools -p 'test_*.py' -v
+   ```
+
+   Source `2026.09.06.20` has 87 expected backend tests. A different count
+   requires review before deployment even when the discovered subset is green.
+   The complete Tools suite has 37 tests. Both suites must pass in the
+   **Backend regression** GitHub workflow on Python 3.13 and the
+   production-aligned Python 3.14 job. The established status-check names remain
+   unchanged even though each job now runs both suites. The workflow has
+   read-only repository contents permission and performs no online probe,
+   CloudKit promotion, accounting/payment mutation, device installation, or
+   provider call. A green workflow is evidence for the reviewed commit; it does
+   not itself authorize Render to deploy that commit.
 4. Record the current GitHub commit, `/health` response, and deployment ID.
    Confirm a recent verified off-host backup exists before a release that adds
    database tables. The `.12` Apple identity tables, `.13` supplier-attempt
    table/indexes, and `.15` Accounts Payable configuration columns are additive;
-   rolling code back does not require deleting them or restoring the database.
+   `.18` adds eleven nullable customer-portal columns; `.20` adds
+   `company_identity` and `cloudkit_workspace_bindings`. Preserve these identity
+   tables and approvals in backups and during code rollback. Rolling code back
+   does not require deleting them or restoring the database.
 5. Do not push release source directly to `main`. The repository's secret-free
    **Backend regression / Python 3.13** and **Backend regression / Python
    3.14** checks have unfiltered pull-request and push-to-`main` triggers.
    Ref-scoped concurrency intentionally cancels an older in-progress run when
    a newer commit supersedes it, so completed checks prove the exact current
-   ref head rather than every superseded commit. Merge commit `3df24b5` proves
-   both jobs succeed on that exact `main` head. The main branch should also have
+   ref head rather than every superseded commit. Reviewed PR 15 merged as
+   `9f5636116c304f307e81980f095d70045d213c7e` after both jobs passed on source
+   head `71ac9490cd89808c5a70a29d7e0c9dae520238a3`. The main branch should also have
    an active GitHub ruleset requiring a pull
    request, resolved review conversations, an up-to-date branch, and both
    successful GitHub Actions checks, with deletion and force pushes blocked and
@@ -78,7 +226,7 @@ credential rotation, production restores, or customer communications.
    part of a routine code deploy.
 6. After the authorized deployment, rerun the same preflight with `--online`.
    Confirm `/health` returns HTTP 200 and exact `serviceVersion`
-   `2026.08.30.15`.
+   `2026.09.06.20`.
 7. Confirm the new public Apple route is present without fabricating an Apple
    event or storing data:
 

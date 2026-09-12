@@ -60,7 +60,7 @@ enum InventoryMovementType: String, Codable, CaseIterable, Identifiable {
 
 @Model
 final class InventoryMovement {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var itemID: UUID = UUID()
     var itemName: String = ""
     var itemSKU: String?
@@ -314,7 +314,7 @@ enum JobMaterialCloseoutPolicy {
             projectMilestones: projectMilestones
         )
         var snapshots = source.snapshots
-        let snapshotIDs = Set(snapshots.map(\.catalogItemID))
+        let snapshotIDs = Set(snapshots.flatMap { [$0.catalogItemID] + $0.soldLeaves.map(\.catalogItemID) })
         let normalizedSummary = source.legacySummary.lowercased()
         let legacyTrackedItems = items.filter {
             itemHasInventoryLedger($0, movements: movements) &&
@@ -327,7 +327,14 @@ enum JobMaterialCloseoutPolicy {
 
         var quantitiesByItemID: [UUID: Double] = [:]
         for snapshot in snapshots {
-            if let assembly = snapshot.assembly,
+            if let bundle = snapshot.bundle {
+                for member in bundle.members {
+                    let localTracksStock = items.first(where: { $0.id == member.line.catalogItemID })
+                        .map { itemHasInventoryLedger($0, movements: movements) } == true
+                    guard member.tracksInventory || localTracksStock else { continue }
+                    quantitiesByItemID[member.line.catalogItemID, default: 0] += member.line.quantity
+                }
+            } else if let assembly = snapshot.assembly,
                assembly.presentation == .flatRate,
                snapshot.catalogItemID == assembly.assemblyItemID {
                 for component in assembly.components {
@@ -414,7 +421,7 @@ enum JobMaterialCloseoutPolicy {
         _ item: Item,
         movements: [InventoryMovement]
     ) -> Bool {
-        item.itemType == .nonInventory ||
+        item.itemType.isMaterial ||
             item.tracksInventory ||
             movements.contains { $0.itemID == item.id }
     }

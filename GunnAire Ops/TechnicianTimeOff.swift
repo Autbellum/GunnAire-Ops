@@ -70,7 +70,7 @@ enum TechnicianTimeOffValidationError: LocalizedError, Equatable {
 
 @Model
 final class TechnicianTimeOffRequest {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var creationOperationID: UUID = UUID()
     var technicianID: UUID = UUID()
     var technicianNameSnapshot: String = ""
@@ -132,7 +132,7 @@ final class TechnicianTimeOffRequest {
 
 @Model
 final class TechnicianAvailabilityEvent {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var operationID: UUID = UUID()
     var requestID: UUID?
     var availabilityBlockID: UUID?

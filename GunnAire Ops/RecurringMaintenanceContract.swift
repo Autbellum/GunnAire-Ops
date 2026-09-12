@@ -321,7 +321,7 @@ enum MaintenanceAgreementBillingPolicy {
 
 @Model
 final class RecurringMaintenanceContract {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var customer: Customer!
     var planName: String?
     var schedulePattern: String = "every 6 months" // e.g., 'every 6 months'

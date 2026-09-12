@@ -173,7 +173,7 @@ enum TimeEntryReviewAudit {
 
 @Model
 final class TimeEntry {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var userEmail: String = ""
     var clockIn: Date = Date()
     var clockOut: Date?
@@ -794,6 +794,37 @@ enum TimeEntryReviewError: LocalizedError, Equatable {
 
 enum TimeEntryReviewPolicy {
     static let maximumShiftDuration: TimeInterval = 24 * 60 * 60
+
+    /// Roll back only the affected time fields, never unrelated edits in the
+    /// shared model context. No suspension is allowed between mutation and save.
+    @MainActor static func savingChanges(
+        to entries: [TimeEntry],
+        save: () throws -> Void,
+        update: () throws -> Void
+    ) throws {
+        let restore = entries.map { entry -> () -> Void in
+            let start = entry.clockIn, end = entry.clockOut, call = entry.serviceCall, notes = entry.notes
+            let status = entry.reviewStatusRawValue, reviewer = entry.reviewedByEmail, reviewed = entry.reviewedAt
+            let note = entry.reviewNote, audit = entry.reviewAuditJSON, syncError = entry.quickBooksTimeActivitySyncError
+            return {
+                entry.clockIn = start; entry.clockOut = end; entry.serviceCall = call; entry.notes = notes
+                entry.reviewStatusRawValue = status; entry.reviewedByEmail = reviewer; entry.reviewedAt = reviewed
+                entry.reviewNote = note; entry.reviewAuditJSON = audit; entry.quickBooksTimeActivitySyncError = syncError
+            }
+        }
+        do { try update(); try save() }
+        catch { restore.forEach { $0() }; throw error }
+    }
+
+    @MainActor static func approveAndSave(
+        _ entries: [TimeEntry], actorEmail: String?, users: [AppUser],
+        at date: Date = Date(), save: () throws -> Void
+    ) throws {
+        guard !entries.isEmpty else { return }
+        try savingChanges(to: entries, save: save) {
+            for entry in entries { try approve(entry, actorEmail: actorEmail, users: users, at: date) }
+        }
+    }
 
     static func submitAfterClockOut(
         _ entry: TimeEntry,

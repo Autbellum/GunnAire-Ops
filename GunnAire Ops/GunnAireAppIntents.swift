@@ -212,7 +212,7 @@ enum GunnAireAppIntentAccessPolicy {
     }
 }
 
-enum GunnAireMailWorkflow: String, Codable, Sendable {
+enum GunnAireMailWorkflow: String, Codable, Sendable, CaseIterable {
     case general
     case estimateFollowUp
     case paymentReminder
@@ -226,6 +226,7 @@ enum GunnAireMailWorkflow: String, Codable, Sendable {
     case postJobReview
     case receipt
     case customerDocument
+    case accountStatement
 
     var displayName: String {
         switch self {
@@ -242,6 +243,7 @@ enum GunnAireMailWorkflow: String, Codable, Sendable {
         case .postJobReview: "Review request"
         case .receipt: "Payment receipt"
         case .customerDocument: "Customer document"
+        case .accountStatement: "Account statement"
         }
     }
 
@@ -397,6 +399,12 @@ enum GunnAireAppIntentRouter {
         }
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingScheduleServiceCallID")
         return id
+    }
+
+    /// Explicit field collection intent. Ordinary accounting/invoice links keep
+    /// the general route's default instead of unexpectedly opening the guide.
+    nonisolated static func storeFieldPaymentCollectionRoute(_ id: UUID) {
+        storePaymentCollectionRoute(id, prefersContactlessGuide: true)
     }
 
     nonisolated static func storePaymentCollectionRoute(
@@ -576,12 +584,8 @@ enum GunnAireAppIntentRouter {
 }
 
 private enum GunnAireIntentStore {
-    static let schema = GunnAireModelSchema.schema
-
-    static let container: ModelContainer? = try? ModelContainer(
-        for: schema,
-        configurations: [GunnAireCloudKit.modelConfiguration(for: schema)]
-    )
+    @MainActor
+    static var container: ModelContainer? { CompanyWorkspaceAccessController.shared.authorizedContainer }
 
     private struct AccessSnapshot {
         let email: String?
@@ -591,7 +595,8 @@ private enum GunnAireIntentStore {
     }
 
     @MainActor
-    private static func accessSnapshot() throws -> AccessSnapshot {
+    private static func accessSnapshot() async throws -> AccessSnapshot {
+        await CompanyWorkspaceAccessController.shared.prepareForIntent()
         guard let container else {
             return AccessSnapshot(
                 email: nil,
@@ -616,8 +621,8 @@ private enum GunnAireIntentStore {
     }
 
     @MainActor
-    static func canOpen(_ route: GunnAireAppRoute) throws -> Bool {
-        let access = try accessSnapshot()
+    static func canOpen(_ route: GunnAireAppRoute) async throws -> Bool {
+        let access = try await accessSnapshot()
         return GunnAireAppIntentAccessPolicy.canOpen(
             route,
             email: access.email,
@@ -627,12 +632,13 @@ private enum GunnAireIntentStore {
     }
 
     @MainActor
-    static func customers() throws -> [Customer] {
+    static func customers() async throws -> [Customer] {
+        await CompanyWorkspaceAccessController.shared.prepareForIntent()
         guard let container else { return [] }
         let context = ModelContext(container)
         let descriptor = FetchDescriptor<Customer>(sortBy: [SortDescriptor(\.name, order: .forward)])
         let customers = try context.fetch(descriptor)
-        let access = try accessSnapshot()
+        let access = try await accessSnapshot()
         let visibleIDs = GunnAireAppIntentAccessPolicy.visibleCustomerIDs(
             email: access.email,
             users: access.users,
@@ -643,12 +649,13 @@ private enum GunnAireIntentStore {
     }
 
     @MainActor
-    static func serviceCalls() throws -> [ServiceCall] {
+    static func serviceCalls() async throws -> [ServiceCall] {
+        await CompanyWorkspaceAccessController.shared.prepareForIntent()
         guard let container else { return [] }
         let context = ModelContext(container)
         let descriptor = FetchDescriptor<ServiceCall>(sortBy: [SortDescriptor(\.scheduledDate, order: .forward)])
         let calls = try context.fetch(descriptor)
-        let access = try accessSnapshot()
+        let access = try await accessSnapshot()
         let visibleIDs = GunnAireAppIntentAccessPolicy.visibleServiceCallIDs(
             email: access.email,
             users: access.users,
@@ -660,13 +667,14 @@ private enum GunnAireIntentStore {
     }
 
     @MainActor
-    static func invoices() throws -> [Invoice] {
+    static func invoices() async throws -> [Invoice] {
+        await CompanyWorkspaceAccessController.shared.prepareForIntent()
         guard let container else { return [] }
         let context = ModelContext(container)
         let descriptor = FetchDescriptor<Invoice>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
         let invoices = try context.fetch(descriptor)
         let calls = try context.fetch(FetchDescriptor<ServiceCall>())
-        let access = try accessSnapshot()
+        let access = try await accessSnapshot()
         let visibleIDs = GunnAireAppIntentAccessPolicy.visibleInvoiceIDs(
             email: access.email,
             users: access.users,
@@ -679,9 +687,10 @@ private enum GunnAireIntentStore {
     }
 
     @MainActor
-    static func payments() throws -> [Payment] {
+    static func payments() async throws -> [Payment] {
+        await CompanyWorkspaceAccessController.shared.prepareForIntent()
         guard let container else { return [] }
-        let access = try accessSnapshot()
+        let access = try await accessSnapshot()
         let canReviewBilling = GunnAireAppIntentAccessPolicy.canOpen(
             .payments,
             email: access.email,
@@ -700,23 +709,23 @@ private enum GunnAireIntentStore {
     }
 
     @MainActor
-    static func canOpenCustomerRecord(_ id: UUID) throws -> Bool {
-        try customers().contains { $0.id == id }
+    static func canOpenCustomerRecord(_ id: UUID) async throws -> Bool {
+        try await customers().contains { $0.id == id }
     }
 
     @MainActor
-    static func canOpenServiceCall(_ id: UUID) throws -> Bool {
-        try serviceCalls().contains { $0.id == id }
+    static func canOpenServiceCall(_ id: UUID) async throws -> Bool {
+        try await serviceCalls().contains { $0.id == id }
     }
 
     @MainActor
-    static func canOpenInvoice(_ id: UUID) throws -> Bool {
-        try invoices().contains { $0.id == id }
+    static func canOpenInvoice(_ id: UUID) async throws -> Bool {
+        try await invoices().contains { $0.id == id }
     }
 
     @MainActor
-    static func nextActionableServiceCall() throws -> ServiceCall? {
-        let calls = try serviceCalls()
+    static func nextActionableServiceCall() async throws -> ServiceCall? {
+        let calls = try await serviceCalls()
         let now = Date()
         return calls
             .filter { $0.status != .completed && $0.status != .cancelled }
@@ -738,9 +747,9 @@ private enum GunnAireIntentStore {
     }
 
     @MainActor
-    static func nextScheduledServiceCall() throws -> ServiceCall? {
+    static func nextScheduledServiceCall() async throws -> ServiceCall? {
         let now = Date()
-        return try serviceCalls()
+        return try await serviceCalls()
             .filter { $0.status != .cancelled && $0.scheduledDate >= now }
             .sorted { lhs, rhs in
                 if lhs.scheduledDate != rhs.scheduledDate { return lhs.scheduledDate < rhs.scheduledDate }
@@ -750,9 +759,9 @@ private enum GunnAireIntentStore {
     }
 
     @MainActor
-    static func nextCollectibleInvoice() throws -> Invoice? {
-        let invoices = try invoices()
-        let payments = try payments()
+    static func nextCollectibleInvoice() async throws -> Invoice? {
+        let invoices = try await invoices()
+        let payments = try await payments()
         return invoices
             .sorted { lhs, rhs in
                 let lhsBalance = outstandingBalance(for: lhs, payments: payments)
@@ -767,10 +776,10 @@ private enum GunnAireIntentStore {
     }
 
     @MainActor
-    static func nextOverdueInvoice() throws -> Invoice? {
+    static func nextOverdueInvoice() async throws -> Invoice? {
         let now = Date()
-        let invoices = try invoices()
-        let payments = try payments()
+        let invoices = try await invoices()
+        let payments = try await payments()
         return invoices
             .filter { Invoice.isOverdue($0, payments: payments, now: now) }
             .sorted { lhs, rhs in
@@ -785,14 +794,14 @@ private enum GunnAireIntentStore {
     }
 
     @MainActor
-    static func nextCustomerNeedingAttention() throws -> Customer? {
-        if let nextJobCustomer = try nextActionableServiceCall()?.customer {
+    static func nextCustomerNeedingAttention() async throws -> Customer? {
+        if let nextJobCustomer = try await nextActionableServiceCall()?.customer {
             return nextJobCustomer
         }
-        if let collectionsCustomer = try nextCollectibleInvoice()?.customer {
+        if let collectionsCustomer = try await nextCollectibleInvoice()?.customer {
             return collectionsCustomer
         }
-        return try customers().first
+        return try await customers().first
     }
 
     nonisolated static func outstandingBalance(for invoice: Invoice, payments: [Payment]) -> Double {
@@ -1276,7 +1285,7 @@ struct CollectInvoicePaymentIntent: AppIntent {
         guard try await GunnAireIntentStore.canOpenInvoice(invoice.id) else {
             return .result(dialog: "That invoice is not available to the signed-in business account.")
         }
-        GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
+        GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(invoice.id)
         return .result(dialog: "Opening payment collection for \(invoice.customerName).")
     }
 }
@@ -1310,7 +1319,7 @@ struct CollectNextOutstandingInvoiceIntent: AppIntent {
         guard let invoice = try await GunnAireIntentStore.nextCollectibleInvoice() else {
             return .result(dialog: "There are no collectible invoices right now.")
         }
-        GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
+        GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(invoice.id)
         return .result(dialog: "Opening payment collection for \(invoice.customer.name).")
     }
 }
@@ -1327,7 +1336,7 @@ struct CollectNextOverdueInvoiceIntent: AppIntent {
         guard let invoice = try await GunnAireIntentStore.nextOverdueInvoice() else {
             return .result(dialog: "There are no overdue invoices right now.")
         }
-        GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
+        GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(invoice.id)
         return .result(dialog: "Opening overdue collection for \(invoice.customer.name).")
     }
 }

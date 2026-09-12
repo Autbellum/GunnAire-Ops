@@ -30,6 +30,7 @@ private struct BusinessReportCSVDocument: FileDocument {
 
 struct BusinessReportsView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.gunnaireReduceMotion) private var reduceMotion
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
@@ -79,14 +80,30 @@ struct BusinessReportsView: View {
                     .accessibilityIdentifier("BusinessReportWorkspacePicker")
 
                     Group {
-                        switch workspace {
-                        case .overview: overviewWorkspace
-                        case .sales: salesWorkspace
-                        case .operations: operationsWorkspace
-                        case .team: teamWorkspace
+                        if let message = snapshot.billingIdentityReviewMessage, workspace != .operations {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Label("Billing needs review", systemImage: "exclamationmark.triangle")
+                                    .font(.headline)
+                                Text(message).foregroundStyle(.secondary)
+                                Button("Review Invoices") { GunnAireAppIntentRouter.store(.invoices) }
+                            }
+                            .accessibilityIdentifier("BusinessReportBillingIdentityReview")
+                        } else {
+                            switch workspace {
+                            case .overview: overviewWorkspace
+                            case .sales: salesWorkspace
+                            case .operations: operationsWorkspace
+                            case .team: teamWorkspace
+                            }
                         }
                     }
-                    .animation(.easeInOut(duration: 0.18), value: workspace)
+                    .animation(
+                        GunnAireAccessibilityMotionPolicy.easeInOut(
+                            duration: 0.18,
+                            reduceMotion: reduceMotion
+                        ),
+                        value: workspace
+                    )
                 }
                 .padding()
                 .frame(maxWidth: 1120, alignment: .leading)
@@ -101,9 +118,10 @@ struct BusinessReportsView: View {
                         Label("Export CSV", systemImage: "square.and.arrow.up")
                     }
                     .disabled(
-                        !snapshot.hasFinancialActivity &&
+                        snapshot.billingIdentityReviewMessage != nil ||
+                        (!snapshot.hasFinancialActivity &&
                             !snapshot.hasOperationalActivity &&
-                            !snapshot.hasLeadSourceActivity
+                            !snapshot.hasLeadSourceActivity)
                     )
                 }
             }
@@ -712,7 +730,10 @@ private struct JobProfitabilityReportRowView: View {
                 }
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 3) {
-                    Text(currency(row.invoicedRevenue))
+                    Text("Gross profit")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(row.knownGrossProfit.map(currency) ?? "Incomplete")
                         .font(.subheadline.weight(.semibold))
                     Text(row.knownGrossMargin.map(percent) ?? "Cost review")
                         .font(.caption)
