@@ -268,12 +268,16 @@ enum GoogleCalendarScheduleSync {
     private static func canonicalCalendar(_ requested: String?, in calendars: [GoogleCalendar],
                                           email: String?) throws -> GoogleCalendar {
         let requested = normalizedOptional(requested) ?? "primary"
+        let normalizedRequest = normalized(requested)
         let matches: [GoogleCalendar]
         if requested == "primary" {
             let primary = calendars.filter { $0.primary == true }
             matches = primary.isEmpty ? calendars.filter { $0.normalizedID == normalized(email ?? "") } : primary
         } else {
-            matches = calendars.filter { $0.id == requested }
+            matches = calendars.filter {
+                normalized($0.id) == normalizedRequest || normalized($0.summary ?? "") == normalizedRequest
+                || $0.matchesTechnicianEmail(requested)
+            }
         }
         guard matches.count == 1, let calendar = matches.first else { throw GoogleCalendarWorkflowError.readOnly }
         return calendar

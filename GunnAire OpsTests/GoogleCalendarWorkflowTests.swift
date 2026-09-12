@@ -546,6 +546,32 @@ struct GoogleCalendarWorkflowTests {
         }
     }
 
+    @Test func selectedCalendarIDMatchingSummaryOrCaseDoesNotFallbackToPrimary() async throws {
+        let f = try Fixture()
+        f.call.scheduledDate = Date().addingTimeInterval(3600)
+        f.call.googleCalendarID = "TEAM@GUNNAIRE.EXAMPLE.COM"
+        f.calendarList = [
+            ["id": "team-calendar-id", "summary": "team@gunnaire.example.com", "accessRole": "owner"],
+            ["id": f.email, "primary": true, "accessRole": "owner"]
+        ]
+        _ = try await f.publish().get()
+        #expect(f.requests.contains { request in
+            request.httpMethod == "POST" && request.url?.path == "/calendar/v3/calendars/team-calendar-id/events"
+        })
+    }
+
+    @Test func requestedCalendarIDIsCaseInsensitiveIfNoPrimaryMatch() async throws {
+        let f = try Fixture()
+        f.call.scheduledDate = Date().addingTimeInterval(3600)
+        f.call.googleCalendarID = "Primary@GUNNAIRE.EXAMPLE.COM"
+        f.calendarList.append(["id": "primary@gunnaire.example.com", "accessRole": "owner", "summary": "Primary GunnAire Calendar"])
+        f.calendarList.append(["id": "secondary@gunnaire.example.com", "accessRole": "owner", "summary": "Secondary"])
+        _ = try await f.publish().get()
+        #expect(f.requests.contains { request in
+            request.httpMethod == "POST" && request.url?.path == "/calendar/v3/calendars/primary@gunnaire.example.com/events"
+        })
+    }
+
     @Test func foreignRemoteIdentityCannotBeSavedAsTheOriginalEvent() async throws {
         let f = try Fixture(linked: true)
         f.remote[f.key(f.email, "fixture-event")] = f.event(id: "different-event")
