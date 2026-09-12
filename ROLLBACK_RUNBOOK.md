@@ -17,6 +17,12 @@ After replacement, verify listener, authenticated positive/negative request, and
 restart persistence. On failure, stop only the newly installed service, restore its
 recorded files, bootstrap the original agent, and repeat its known health check.
 
+The actual workbench and Synology bridge interpreter migration retained original
+LaunchAgent plists under `~/.gunnaire-local-ai/service-rollback-20260912.Cymefu/`.
+Both now use `~/.gunnaire-local-ai/production-venv/bin/python`; both restarted and
+the workbench returned HTTP 200. The original Documents QA environment remains intact.
+This interpreter migration has restart evidence, not an executed rollback or reboot.
+
 NAS model storage currently has a retained local rollback directory named
 `models-local-rollback-20260912` under the owner's `.ollama` directory. It has not been
 deleted. Repointing models requires stopping inference first and verifying the

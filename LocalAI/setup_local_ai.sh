@@ -98,10 +98,23 @@ if result.returncode or not listeners or any(value not in ('127.0.0.1:11434', '[
     raise SystemExit('Cannot verify an exclusively loopback Ollama listener; installation stopped.')
 PY
 
-required_gib=42
-[[ "$INSTALL_MODE" == "all" ]] && required_gib=66
 model_storage="${OLLAMA_MODELS:-$HOME/.ollama/models}"
+if [[ -L "$model_storage" && ! -d "$model_storage" ]]; then
+  echo "Model storage is unavailable; mount its existing volume before installation." >&2
+  exit 2
+fi
 [[ -d "$model_storage" ]] || model_storage="$HOME/.ollama"
+required_gib="$("$PYTHON_BIN" - "$INSTALL_MODE" <<'PY'
+import json, sys, urllib.request
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+with opener.open('http://127.0.0.1:11434/api/tags', timeout=5) as response:
+    installed = {item['name'] for item in json.load(response)['models']}
+candidates = {'devstral-small-2:24b': 15, 'gpt-oss:20b': 14}
+if sys.argv[1] == 'all':
+    candidates.update({'qwen3-coder:30b': 19, 'qwen2.5-coder:7b': 5})
+print(8 + sum(size for name, size in candidates.items() if name not in installed))
+PY
+)"
 available_kib="$(df -Pk "$model_storage" | awk 'NR==2 {print $4}')"
 available_gib=$(( available_kib / 1024 / 1024 ))
 (( available_gib >= required_gib )) || {
@@ -122,6 +135,10 @@ if [[ "$INSTALL_MODE" == "all" ]]; then
   models+=("qwen3-coder:30b" "qwen2.5-coder:7b")
 fi
 for model in "${models[@]}"; do
+  if ollama show "$model" >/dev/null 2>&1; then
+    echo "Retaining installed candidate $model (no unmeasured tag refresh)"
+    continue
+  fi
   safe_name="${model//[:\//]/_}"
   echo "Pulling $model"
   ollama pull "$model" 2>&1 | tee "$LOG_ROOT/pull-${safe_name}.log"

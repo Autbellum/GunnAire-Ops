@@ -206,6 +206,14 @@ class LocalAIGatewayTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "prohibited_sensitive_data")
         self.assertEqual(client.chat_calls, [])
 
+    def test_quoted_and_short_secret_assignments_rejected_before_model(self):
+        for value in ('{"refresh_token":"synthetic-value"}', "'password': 'abc'", 'api_key=x'):
+            client = FakeClient()
+            subject = make_gateway(client)
+            with self.subTest(value=value), self.assertRaises(gateway.InvalidRequest):
+                subject.assist({'task': 'customer_email_draft', 'input': value}, actor_role='Admin')
+            self.assertEqual(client.chat_calls, [])
+
     def test_sensitive_context_key_is_rejected(self):
         subject = make_gateway(FakeClient())
         with self.assertRaises(gateway.InvalidRequest) as caught:

@@ -351,6 +351,7 @@ class OllamaClient:
         return sorted(
             entry["name"] for entry in raw_models
             if isinstance(entry, dict) and isinstance(entry.get("name"), str)
+            and not entry.get("remote_host") and not entry.get("remote_model")
         )
 
     def chat(
@@ -361,6 +362,8 @@ class OllamaClient:
         user_prompt: str,
         generation: Mapping[str, Any],
     ) -> tuple[dict[str, Any], dict[str, Any]]:
+        if model not in self.tags():
+            raise PolicyError("Selected model is not installed locally; remote model forwarding is forbidden")
         started = time.monotonic()
         response = self._request(
             "/api/chat",

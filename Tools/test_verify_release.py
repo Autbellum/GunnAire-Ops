@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -10,6 +11,13 @@ import verify_release as release
 
 
 class ReleaseVerificationTests(unittest.TestCase):
+    def test_source_drift_fails_closed(self):
+        for values in ((b'b' * 40, b''), (b'a' * 40, b' M changed.py')):
+            with patch.object(release, 'git', side_effect=values):
+                self.assertFalse(release.source_unchanged('a' * 40))
+        with patch.object(release, 'git', side_effect=(b'a' * 40, b'')):
+            self.assertTrue(release.source_unchanged('a' * 40))
+
     def test_relative_paths_reject_escape_and_ambiguous_separators(self):
         for name in ('/mnt/data/package', '../secret', 'a/../secret', 'a\\b', 'a\nb', ''):
             self.assertFalse(release.safe_relative(name))

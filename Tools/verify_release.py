@@ -27,7 +27,8 @@ from qa_runner import run_command
 
 VERSION = '2026.09.12.1'
 REQUIRED = ('PRODUCTION_CLOSEOUT.md', 'PRODUCTION_ACCEPTANCE.md', 'ROLLBACK_RUNBOOK.md',
-            'Synology/DSM_SECURITY_LOGGING_PREP.md', 'Firewall/setup_local_reporting.sh')
+            'Synology/DSM_SECURITY_LOGGING_PREP.md', 'Firewall/setup_local_reporting.sh',
+            'DEPLOYMENT_EVIDENCE/acceptance-register.json')
 
 
 def git(*args: str) -> bytes:
@@ -41,6 +42,10 @@ def safe_relative(name: str) -> bool:
 
 def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def source_unchanged(commit: str) -> bool:
+    return git('rev-parse', 'HEAD').decode().strip() == commit and not git('status', '--porcelain').strip()
 
 
 def source_checks(files: dict[str, bytes]) -> list[str]:
@@ -126,6 +131,16 @@ def main() -> int:
                 'acceptance_reference': 'PRODUCTION_ACCEPTANCE.md',
                 'deployment_evidence': sorted(p for p in files if p.startswith('DEPLOYMENT_EVIDENCE/'))}
     problems = source_checks(files)
+    try:
+        acceptance = json.loads(files['DEPLOYMENT_EVIDENCE/acceptance-register.json'])
+        for key in ('targets', 'prerequisites', 'unresolved_blockers'):
+            if not isinstance(acceptance[key], list) or not acceptance[key]:
+                raise ValueError(f'Nonempty {key} required')
+        manifest['actual_deployment_state'] = acceptance['targets']
+        manifest['deployment_prerequisites'] = acceptance['prerequisites']
+        manifest['unresolved_blockers'] = acceptance['unresolved_blockers']
+    except (KeyError, ValueError, TypeError) as exc:
+        problems.append(f'Invalid acceptance register: {exc}')
     manifest['source_check_errors'] = problems
     env = scrub_environment(os.environ, load_policy())
     env.update(PYTHONDONTWRITEBYTECODE='1', GUNNAIRE_TEST_MODE='1',
@@ -165,6 +180,8 @@ def main() -> int:
                     problems.append('Native result did not prove a nonempty, unskipped passing run')
             except (OSError, subprocess.SubprocessError, ValueError) as exc:
                 problems.append(f'Native evidence extraction failed: {type(exc).__name__}')
+    if not source_unchanged(commit):
+        problems.append('Source changed during verification; no commit-bound package may be issued')
     manifest['automated_checks_passed'] = not problems and all(r['passed'] for r in manifest['tests'])
     if manifest['automated_checks_passed']:
         name, sha = package(files, manifest, output / f'GunnAire-{VERSION}.zip')

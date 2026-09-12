@@ -210,6 +210,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         output = args.output.expanduser()
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        progress = {'schema_version': 1, 'status': 'finished', 'result_file': output.name,
+                    'roles': [{'role': item['role'], 'status': item['status']} for item in result['roles']]}
+        output.with_suffix('.progress.json').write_text(json.dumps(progress, indent=2) + '\n', encoding='utf-8')
         print(output)
         return 0 if result['roles'] and all(entry["status"] == "completed" for entry in result["roles"]) else 2
     except (LocalAIError, OSError, ValueError) as exc:

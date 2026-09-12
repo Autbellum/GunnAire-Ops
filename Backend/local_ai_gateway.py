@@ -140,7 +140,7 @@ SECRET_TEXT: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("provider_key", re.compile(r"\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|(?:AKIA|ASIA)[A-Z0-9]{16})\b", re.I)),
     ("jwt", re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")),
     ("ssn", re.compile(r"(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)")),
-    ("secret_assignment", re.compile(r"(?im)\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|private[_-]?key)\b\s*[:=]\s*['\"]?[^\s,'\";]{6,}")),
+    ("secret_assignment", re.compile(r"(?im)\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|private[_-]?key)\b['\"]?\s*[:=]\s*['\"]?[^\s,'\";]{1,}")),
 )
 CARD = re.compile(r"(?<!\d)(?:\d[ -]*?){13,19}(?!\d)")
 

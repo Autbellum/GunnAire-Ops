@@ -163,7 +163,7 @@ class LocalAITests(unittest.TestCase):
             self.assertEqual(client.tags(), ["devstral-small-2:24b", "gpt-oss:20b"])
 
     def test_ollama_chat_parsed(self) -> None:
-        payload = {"model": "gpt-oss:20b", "message": {"content": '{"summary":"ok","risk":"low"}'}, "eval_count": 12}
+        payload = {"models": [{"name": "gpt-oss:20b"}], "model": "gpt-oss:20b", "message": {"content": '{"summary":"ok","risk":"low"}'}, "eval_count": 12}
 
         class FakeResponse:
             def __enter__(self): return self

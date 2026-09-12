@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-09-12T06:32:44.218118+00:00",
+  "status": "PARTIALLY DEPLOYED",
+  "services": [
+    {
+      "label": "com.gunnaire.local-ai-workbench",
+      "launchctl_exit": 0,
+      "facts": [
+        "state = running",
+        "program = /Users/gunnaire/.gunnaire-local-ai/production-venv/bin/python",
+        "runs = 1",
+        "last exit code = (never exited)",
+        "state = active",
+        "state = active"
+      ],
+      "plist_sha256": "1e0d1c127dafaaa55907f1317005b26188b8aeac0d955e0ee396d446bf4ae7d9"
+    },
+    {
+      "label": "com.gunnaire.synology-local-ai",
+      "launchctl_exit": 0,
+      "facts": [
+        "state = running",
+        "program = /Users/gunnaire/.gunnaire-local-ai/production-venv/bin/python",
+        "runs = 1",
+        "last exit code = (never exited)",
+        "state = active",
+        "state = active"
+      ],
+      "plist_sha256": "c499a11713234b6d11af20ecf1c63a883648aa721ae0f6adc175937562519d13"
+    },
+    {
+      "label": "com.gunnaire.localai.health",
+      "launchctl_exit": 0,
+      "facts": [
+        "state = not running",
+        "program = /Users/gunnaire/.gunnaire-local-ai/production-venv/bin/python3",
+        "runs = 1",
+        "last exit code = 0",
+        "state = active",
+        "state = active"
+      ],
+      "plist_sha256": "570719f6c280efcc40cfa875a736b15d4afd81f75155a61811a3126b3752be11"
+    }
+  ],
+  "scheduled_health": {
+    "endpoint": "http://127.0.0.1:11434",
+    "installed_models": [
+      "devstral-small-2:24b",
+      "gemma3:4b",
+      "gpt-oss:20b",
+      "gunnaire-coder:ops",
+      "gunnaire-coder:v1",
+      "qwen2.5-coder:7b",
+      "qwen2.5:1.5b",
+      "qwen3-coder:30b"
+    ],
+    "loopback_only": true,
+    "ollama_version": "0.34.0",
+    "roles": {
+      "challenger": {
+        "model": "qwen3-coder:30b",
+        "present": true,
+        "purpose": "benchmark challenger and independent coding alternative",
+        "required": false
+      },
+      "coder": {
+        "model": "devstral-small-2:24b",
+        "present": true,
+        "purpose": "software engineering, multi-file exploration, patch and test proposals",
+        "required": true
+      },
+      "reviewer": {
+        "model": "gpt-oss:20b",
+        "present": true,
+        "purpose": "independent security, authorization, accounting and deployment-risk review",
+        "required": true
+      },
+      "triage": {
+        "model": "qwen2.5-coder:7b",
+        "present": true,
+        "purpose": "fast log classification and report formatting",
+        "required": false
+      }
+    },
+    "status": "ok",
+    "version_supported": true
+  },
+  "ollama_version": "0.34.0",
+  "models": [
+    {
+      "name": "devstral-small-2:24b",
+      "digest": "24277f07f62db8f9cb68e9dfc679ea1818a7fbac47a50eff0a701d3f645b63c8",
+      "size": 15177374099,
+      "modified_at": "2026-09-12T02:21:26.6482517-04:00"
+    },
+    {
+      "name": "gpt-oss:20b",
+      "digest": "17052f91a42e97930aa6e28a6c6c06a983e6a58dbb00434885a0cf5313e376f7",
+      "size": 13793441244,
+      "modified_at": "2026-09-12T02:03:04.1284336-04:00"
+    },
+    {
+      "name": "gunnaire-coder:ops",
+      "digest": "81a62afe947e7718a8f075fd78f1e9a98597e1bf4d521c5a770eb7531c47977b",
+      "size": 18556701209,
+      "modified_at": "2026-09-11T00:42:43.616890023-04:00"
+    },
+    {
+      "name": "gunnaire-coder:v1",
+      "digest": "2fcd807ffeef511aa9a0ddd3803fa9a1cea52c449d610f1988bd6be8f11da2f2",
+      "size": 18556701196,
+      "modified_at": "2026-09-10T20:12:59.803318424-04:00"
+    },
+    {
+      "name": "qwen3-coder:30b",
+      "digest": "06c1097efce0431c2045fe7b2e5108366e43bee1b4603a7aded8f21689e90bca",
+      "size": 18556700761,
+      "modified_at": "2026-09-10T20:11:58.970996111-04:00"
+    },
+    {
+      "name": "qwen2.5-coder:7b",
+      "digest": "dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364",
+      "size": 4683087561,
+      "modified_at": "2026-09-10T19:23:21.621190532-04:00"
+    },
+    {
+      "name": "qwen2.5:1.5b",
+      "digest": "65ec06548149b04c096a120e4a6da9d4017ea809c91734ea5631e89f96ddc57b",
+      "size": 986061892,
+      "modified_at": "2026-09-10T14:07:35.039804433-04:00"
+    },
+    {
+      "name": "gemma3:4b",
+      "digest": "a2af6cc3eb7fa8be8504abaf9b04e88f17a119ec3f04a3addf55f92841195f5a",
+      "size": 3338801804,
+      "modified_at": "2026-08-24T02:30:52.26423389-04:00"
+    }
+  ],
+  "ollama_listeners": [
+    "127.0.0.1:11434"
+  ],
+  "model_storage": "/Volumes/GunnAireLocalAI/Ollama/models",
+  "workbench_http": 200,
+  "workbench_idle": true,
+  "service_restart_tested": true,
+  "reboot_tested": false,
+  "rollback_directory": "/Users/gunnaire/.gunnaire-local-ai/service-rollback-20260912.Cymefu",
+  "model_role_selection": "Measured advisory candidates: Devstral coder, GPT-OSS independent reviewer, Qwen3 challenger, Qwen2.5 fast triage. Heuristic scores do not qualify autonomous production decisions.",
+  "benchmark_caution": "Generated tests and suggested commands in model responses are proposals, not executed evidence. No suggested security command was applied."
+}

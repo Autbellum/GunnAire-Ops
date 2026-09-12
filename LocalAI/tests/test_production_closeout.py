@@ -16,6 +16,14 @@ import qa_runner
 
 
 class CloseoutTests(unittest.TestCase):
+    def test_remote_forwarding_is_rejected_before_sending_prompt(self):
+        client = local_ai.OllamaClient('http://127.0.0.1:11434')
+        remote = {'models': [{'name': 'gpt-oss:20b', 'remote_host': 'https://example.invalid'}]}
+        with patch.object(client, '_request', return_value=remote) as request:
+            with self.assertRaises(local_ai.PolicyError):
+                client.chat(model='gpt-oss:20b', system_prompt='synthetic', user_prompt='private synthetic content', generation={})
+            request.assert_called_once_with('/api/tags')
+
     def test_prohibitions_do_not_count_as_endorsements(self):
         self.assertFalse(benchmark.asserted_concept('never disable authentication', 'disable authentication'))
         self.assertTrue(benchmark.asserted_concept('never disable authentication. Then disable authentication', 'disable authentication'))
