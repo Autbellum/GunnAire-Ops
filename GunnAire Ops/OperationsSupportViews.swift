@@ -220,6 +220,7 @@ private extension CustomerDataMaintenance.DeletionSummary {
 
 struct CustomersView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.gunnaireReduceMotion) private var reduceMotion
     @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
@@ -436,7 +437,7 @@ struct CustomersView: View {
 
                                             if canViewFinancials, let openInvoice = nextOpenInvoice(for: customer) {
                                                 Button("Collect Payment") {
-                                                    GunnAireAppIntentRouter.storePaymentCollectionRoute(openInvoice.id)
+                                                    GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(openInvoice.id)
                                                 }
                                                 .buttonStyle(.borderedProminent)
                                                 .tint(.green)
@@ -498,7 +499,7 @@ struct CustomersView: View {
               let customer = customers.first(where: { $0.id == pendingID }) else {
             return
         }
-        withAnimation(.easeInOut(duration: 0.2)) {
+        withAnimation(GunnAireAccessibilityMotionPolicy.easeInOut(duration: 0.2, reduceMotion: reduceMotion)) {
             selectedCustomer = customer
         }
     }
@@ -544,6 +545,7 @@ struct CustomersView: View {
 
     private func accountPulseLine(for snapshot: CustomerIntelligenceSnapshot) -> String {
         var parts: [String] = ["\(snapshot.healthLabel) account"]
+        if snapshot.billingReviewMessage != nil { parts.append("billing needs review") }
         if snapshot.openBalance > 0 {
             parts.append("\(snapshot.openBalance.formatted(.currency(code: "USD"))) open")
         }
@@ -638,11 +640,31 @@ struct CustomersView: View {
         }
 
         isSyncingCustomers = true
-        customerSyncMessage = "Syncing \(pendingCustomers.count) customer\(pendingCustomers.count == 1 ? "" : "s") to QuickBooks..."
-        syncCustomerBatch(pendingCustomers, created: 0, failed: 0)
+        customerSyncMessage = "Reconciling \(pendingCustomers.count) customer\(pendingCustomers.count == 1 ? "" : "s") with QuickBooks..."
+        QuickBooksDataAPI.shared.fetchCustomers { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let remoteCustomers):
+                    syncCustomerBatch(
+                        pendingCustomers,
+                        remoteCustomers: remoteCustomers,
+                        linked: 0,
+                        failed: 0
+                    )
+                case .failure(let error):
+                    isSyncingCustomers = false
+                    customerSyncMessage = "Customer sync stopped before creating anything because QuickBooks reconciliation failed: \(error.localizedDescription)"
+                }
+            }
+        }
     }
 
-    private func syncCustomerBatch(_ pendingCustomers: [Customer], created: Int, failed: Int) {
+    private func syncCustomerBatch(
+        _ pendingCustomers: [Customer],
+        remoteCustomers: [QuickBooksCustomer],
+        linked: Int,
+        failed: Int
+    ) {
         guard canSyncCustomerRecords else {
             isSyncingCustomers = false
             customerSyncMessage = "Customer sync stopped because this account no longer has integration access."
@@ -650,42 +672,41 @@ struct CustomersView: View {
         }
         guard let customer = pendingCustomers.first else {
             isSyncingCustomers = false
-            customerSyncMessage = "Customer sync complete: \(created) created, \(failed) failed."
+            do {
+                try modelContext.save()
+                customerSyncMessage = "Customer sync complete: \(linked) linked, \(failed) need attention."
+            } catch {
+                customerSyncMessage = "QuickBooks customer sync completed, but the local link confirmations could not be saved: \(error.localizedDescription)"
+            }
             return
         }
 
-        QuickBooksDataAPI.shared.createCustomer(quickBooksPayload(for: customer)) { result in
+        QuickBooksDataAPI.shared.recoverOrCreateCustomer(
+            QuickBooksCustomerCreateOperation.draft(for: customer),
+            remoteCustomers: remoteCustomers
+        ) { result in
             DispatchQueue.main.async {
-                var createdCount = created
+                var nextRemoteCustomers = remoteCustomers
+                var linkedCount = linked
                 var failedCount = failed
                 switch result {
                 case .success(let quickBooksCustomer):
                     customer.quickBooksID = quickBooksCustomer.Id
-                    createdCount += 1
+                    if !nextRemoteCustomers.contains(where: { $0.Id == quickBooksCustomer.Id }) {
+                        nextRemoteCustomers.append(quickBooksCustomer)
+                    }
+                    linkedCount += 1
                 case .failure:
                     failedCount += 1
                 }
-                syncCustomerBatch(Array(pendingCustomers.dropFirst()), created: createdCount, failed: failedCount)
+                syncCustomerBatch(
+                    Array(pendingCustomers.dropFirst()),
+                    remoteCustomers: nextRemoteCustomers,
+                    linked: linkedCount,
+                    failed: failedCount
+                )
             }
         }
-    }
-
-    private func quickBooksPayload(for customer: Customer) -> QuickBooksCustomerCreate {
-        QuickBooksCustomerCreate(
-            DisplayName: customer.name,
-            PrimaryPhone: customer.phone.flatMap { value in
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : QuickBooksPhoneNumber(FreeFormNumber: trimmed)
-            },
-            PrimaryEmailAddr: customer.email.flatMap { value in
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : QuickBooksEmailAddress(Address: trimmed)
-            },
-            BillAddr: customer.address.flatMap { value in
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : QuickBooksAddress(Line1: trimmed)
-            }
-        )
     }
 }
 
@@ -822,7 +843,15 @@ struct SyncIntegrationsView: View {
     private let calendar = Calendar.current
 
     private var quickBooksConnected: Bool {
-        QuickBooksDataAPI.shared.isAuthenticated
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-uiTestForceQuickBooksConnected") {
+            return true
+        }
+        if ProcessInfo.processInfo.arguments.contains("-uiTestForceQuickBooksDisconnected") {
+            return false
+        }
+        #endif
+        return QuickBooksDataAPI.shared.isAuthenticated
     }
 
     private var canViewFinancials: Bool {
@@ -1628,6 +1657,10 @@ struct SyncIntegrationsView: View {
             }
         }
 
+        if let (_, retained) = try? QBODocumentNativeWorkflow.retainedData(for: attachment, context: modelContext) {
+            return retained
+        }
+
         if let backendDocumentID = attachment.backendDocumentID?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !backendDocumentID.isEmpty,
@@ -1720,7 +1753,7 @@ struct SyncIntegrationsView: View {
                 GunnAireAppIntentRouter.store(.documentation)
             }
         case .collectPayment(let invoiceID):
-            GunnAireAppIntentRouter.storePaymentCollectionRoute(invoiceID)
+            GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(invoiceID)
         case .customer(let customerID):
             GunnAireAppIntentRouter.storeCustomerRoute(customerID)
         case .customers:
@@ -1829,7 +1862,15 @@ struct OnsiteDocumentationView: View {
     @State private var documentExportMessage = ""
 
     private var quickBooksConnected: Bool {
-        QuickBooksDataAPI.shared.isAuthenticated
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-uiTestForceQuickBooksConnected") {
+            return true
+        }
+        if ProcessInfo.processInfo.arguments.contains("-uiTestForceQuickBooksDisconnected") {
+            return false
+        }
+        #endif
+        return QuickBooksDataAPI.shared.isAuthenticated
     }
 
     private var currentUserEmail: String? {
@@ -1863,7 +1904,7 @@ struct OnsiteDocumentationView: View {
     }
 
     private var jobsNeedingDocumentation: [ServiceCall] {
-        openJobs.filter {
+        openJobs.filter { $0.customer != nil }.filter {
             $0.documentationCompletedAt == nil ||
             $0.linkedEstimateID != nil ||
             $0.linkedInvoiceID != nil
@@ -1884,7 +1925,8 @@ struct OnsiteDocumentationView: View {
     }
 
     private var invoicesAwaitingCloseout: [Invoice] {
-        invoices.filter { invoice in
+        BillingMilestoneReconciliation.project(invoices, payments: payments).activeInvoices.filter { invoice in
+            guard invoice.customer != nil else { return false }
             if let call = serviceCall(for: invoice) {
                 return !closeoutReadiness(for: call, invoice: invoice).isReady
             }
@@ -1892,35 +1934,34 @@ struct OnsiteDocumentationView: View {
         }
     }
 
+    private var invoiceQueueStatus: DocumentationQueueStatus {
+        DocumentationQueueStatus.resolve(invoices: invoices, payments: payments,
+            visibleCalls: visibleServiceCalls, includesAllInvoices: canViewFinancials)
+    }
+
     private var selectedServiceCall: ServiceCall? {
         guard let selectedServiceCallID else { return nil }
-        return visibleServiceCalls.first { $0.id == selectedServiceCallID }
+        return JobBillingDocumentLinks.unique(visibleServiceCalls.filter { $0.id == selectedServiceCallID && $0.customer != nil })
     }
 
     private func serviceCall(for invoice: Invoice) -> ServiceCall? {
         guard let serviceCallID = invoice.serviceCallID else { return nil }
-        return visibleServiceCalls.first(where: { $0.id == serviceCallID })
+        return JobBillingDocumentLinks.unique(visibleServiceCalls.filter {
+            $0.id == serviceCallID && $0.customer != nil && $0.customer === invoice.customer
+        })
     }
 
     private func estimate(for call: ServiceCall) -> Estimate? {
-        if let linkedEstimateID = call.linkedEstimateID,
-           let linkedEstimate = estimates.first(where: { $0.id == linkedEstimateID }) {
-            return linkedEstimate
-        }
-        return estimates.first(where: { $0.serviceCallID == call.id })
+        JobBillingDocumentLinks.estimate(for: call, in: estimates)
     }
 
     private func invoice(for call: ServiceCall) -> Invoice? {
-        if let linkedInvoiceID = call.linkedInvoiceID,
-           let linkedInvoice = invoices.first(where: { $0.id == linkedInvoiceID }) {
-            return linkedInvoice
-        }
-        return invoices.first(where: { $0.serviceCallID == call.id })
+        BillingMilestoneReconciliation.documentationInvoice(for: call, in: invoices, payments: payments)
     }
 
     private func payments(for invoice: Invoice?) -> [Payment] {
         guard let invoice else { return [] }
-        return payments.filter { $0.invoice.id == invoice.id }
+        return payments.filter { $0.invoice?.id == invoice.id }
     }
 
     private func invoiceBalanceDue(for invoice: Invoice) -> Double {
@@ -1977,10 +2018,28 @@ struct OnsiteDocumentationView: View {
         }
     }
 
+    private func documentationAccessibilityContext(for call: ServiceCall) -> String {
+        "\(call.customer.name), \(call.type.displayName), \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))"
+    }
+
+    private func invoiceAccessibilityContext(for invoice: Invoice) -> String {
+        if let linkedCall = serviceCall(for: invoice) {
+            return documentationAccessibilityContext(for: linkedCall)
+        }
+        return "\(invoice.customer.name), invoice from \(invoice.createdAt.formatted(date: .abbreviated, time: .omitted))"
+    }
+
     var body: some View {
         NavigationStack {
             Form {
-                        if jobsNeedingDocumentation.isEmpty {
+                        if openJobs.contains(where: { $0.customer == nil }) {
+                            Section("Jobs Awaiting Sync") {
+                                Text("Customer records are still syncing. Your job files are retained; document actions will be available when those records arrive.")
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("DocumentationJobSyncStatus")
+                            }
+                        }
+                        if jobsNeedingDocumentation.isEmpty && !openJobs.contains(where: { $0.customer == nil }) {
                             Section("Documentation Queue") {
                                 Text("No active jobs are waiting for documentation.")
                                     .foregroundColor(.secondary)
@@ -2011,17 +2070,29 @@ struct OnsiteDocumentationView: View {
                         }
 
                         Section("Invoices Awaiting Closeout") {
+                            if invoiceQueueStatus == .pendingSync || invoiceQueueStatus == .review {
+                                Text(invoiceQueueStatus.message)
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("DocumentationInvoiceSyncStatus")
+                                if invoiceQueueStatus == .review && canViewFinancials {
+                                    Button("Review Invoices") { GunnAireAppIntentRouter.store(.invoices) }
+                                        .accessibilityIdentifier("DocumentationReviewInvoices")
+                                }
+                            }
                             if invoicesAwaitingCloseout.isEmpty {
-                                Text("All invoices are finalized and paid.")
-                                    .foregroundColor(.secondary)
+                                if invoiceQueueStatus == .empty || invoiceQueueStatus == .current {
+                                    Text(invoiceQueueStatus.message)
+                                        .foregroundColor(.secondary)
+                                }
                             } else {
                                 ForEach(invoicesAwaitingCloseout) { invoice in
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(invoice.customer.name)
                                             .font(.headline)
-                                        Text("\(invoice.amount, format: .currency(code: "USD")) • \(invoice.status.capitalized)")
+                                        Text("\(invoice.amount, format: .currency(code: "USD")) • \(Invoice.resolvedStatus(for: invoice, payments: payments(for: invoice)).capitalized)")
                                             .font(.caption)
                                             .foregroundColor(.secondary)
+                                            .accessibilityIdentifier("DocumentationInvoiceStatus-\(invoice.id.uuidString)")
                                         if let linkedCall = serviceCall(for: invoice) {
                                             let readiness = closeoutReadiness(for: linkedCall, invoice: invoice)
                                             Text(closeoutSummary(for: linkedCall, invoice: invoice))
@@ -2043,19 +2114,25 @@ struct OnsiteDocumentationView: View {
                                                     selectedServiceCallID = linkedCall.id
                                                 }
                                                 .buttonStyle(.bordered)
+                                                .accessibilityLabel("Open documents for \(documentationAccessibilityContext(for: linkedCall))")
+                                                .accessibilityIdentifier("InvoiceCloseoutOpenDocuments-\(invoice.id.uuidString)")
 
                                                 Button("Open Schedule") {
                                                     GunnAireAppIntentRouter.storeScheduleCallRoute(linkedCall.id)
                                                 }
                                                 .buttonStyle(.bordered)
+                                                .accessibilityLabel("Open schedule for \(documentationAccessibilityContext(for: linkedCall))")
+                                                .accessibilityIdentifier("InvoiceCloseoutOpenSchedule-\(invoice.id.uuidString)")
                                             }
 
-                                            if invoiceBalanceDue(for: invoice) > 0.009 {
+                                            if invoice.isReadyForPaymentCollection && invoiceBalanceDue(for: invoice) > 0.009 {
                                                 Button("Collect Payment") {
-                                                    GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
+                                                    GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(invoice.id)
                                                 }
                                                 .buttonStyle(.borderedProminent)
                                                 .tint(.green)
+                                                .accessibilityLabel("Collect payment for \(invoiceAccessibilityContext(for: invoice))")
+                                                .accessibilityIdentifier("InvoiceCloseoutCollectPayment-\(invoice.id.uuidString)")
                                             }
 
                                             Menu {
@@ -2066,6 +2143,8 @@ struct OnsiteDocumentationView: View {
                                                 Label("Documents", systemImage: "doc.on.doc")
                                             }
                                             .buttonStyle(.bordered)
+                                            .accessibilityLabel("Document actions for \(invoiceAccessibilityContext(for: invoice))")
+                                            .accessibilityIdentifier("InvoiceCloseoutDocumentActions-\(invoice.id.uuidString)")
                                         }
                                     }
                                     .padding(.vertical, 2)
@@ -2147,17 +2226,23 @@ struct OnsiteDocumentationView: View {
                             }
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel("Open documentation for \(documentationAccessibilityContext(for: call))")
+                        .accessibilityIdentifier("DocumentationQueueJob-\(call.id.uuidString)")
 
                         HStack {
                             Button("Open Documents") {
                                 selectedServiceCallID = call.id
                             }
                             .buttonStyle(.bordered)
+                            .accessibilityLabel("Open documents for \(documentationAccessibilityContext(for: call))")
+                            .accessibilityIdentifier("DocumentationQueueOpenDocuments-\(call.id.uuidString)")
 
                             Button("Open Schedule") {
                                 GunnAireAppIntentRouter.storeScheduleCallRoute(call.id)
                             }
                             .buttonStyle(.bordered)
+                            .accessibilityLabel("Open schedule for \(documentationAccessibilityContext(for: call))")
+                            .accessibilityIdentifier("DocumentationQueueOpenSchedule-\(call.id.uuidString)")
 
                             Menu {
                                 Button("Generate Onsite Report") {
@@ -2179,6 +2264,8 @@ struct OnsiteDocumentationView: View {
                                 Label("Documents", systemImage: "doc.on.doc")
                             }
                             .buttonStyle(.bordered)
+                            .accessibilityLabel("Document actions for \(documentationAccessibilityContext(for: call))")
+                            .accessibilityIdentifier("DocumentationQueueDocumentActions-\(call.id.uuidString)")
 
                             if call.linkedInvoiceID == nil {
                                 Button("Create Invoice") {
@@ -2187,14 +2274,22 @@ struct OnsiteDocumentationView: View {
                                 .buttonStyle(.borderedProminent)
                                 .tint(Color.brandGold)
                                 .disabled(!call.canCreateInvoiceDocument)
-                            } else {
+                                .accessibilityLabel("Create invoice for \(documentationAccessibilityContext(for: call))")
+                                .accessibilityIdentifier("DocumentationQueueCreateInvoice-\(call.id.uuidString)")
+                            } else if let invoice = invoice(for: call), invoice.isReadyForPaymentCollection,
+                                      invoiceBalanceDue(for: invoice) > 0.009 {
                                 Button("Collect Payment") {
-                                    if let linkedInvoiceID = call.linkedInvoiceID {
-                                        GunnAireAppIntentRouter.storePaymentCollectionRoute(linkedInvoiceID)
-                                    }
+                                    GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(invoice.id)
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .tint(.green)
+                                .accessibilityLabel("Collect payment for \(documentationAccessibilityContext(for: call))")
+                                .accessibilityIdentifier("DocumentationQueueCollectPayment-\(call.id.uuidString)")
+                            } else {
+                                Button("Review Invoice") { selectedServiceCallID = call.id }
+                                    .buttonStyle(.bordered)
+                                    .accessibilityLabel("Review invoice for \(documentationAccessibilityContext(for: call))")
+                                    .accessibilityIdentifier("DocumentationQueueReviewInvoice-\(call.id.uuidString)")
                             }
                         }
                         if call.linkedInvoiceID == nil,
@@ -2299,12 +2394,13 @@ struct OnsiteDocumentationView: View {
                 attachment = generated
             }
 
-            try? modelContext.save()
+            try modelContext.save()
             syncGeneratedOnsiteReportToCompanyStorage(attachment, data: data)
-            QuickBooksInvoiceAttachmentSync.syncPendingServiceReports(
+            try QuickBooksInvoiceAttachmentSync.syncPendingServiceReports(
                 estimates: estimates,
                 invoices: invoices,
                 serviceCalls: serviceCalls,
+                payments: payments,
                 attachments: documentAttachments + [attachment],
                 modelContext: modelContext
             )
@@ -2460,12 +2556,13 @@ struct OnsiteDocumentationView: View {
                 modelContext.insert(generated)
                 attachment = generated
             }
-            try? modelContext.save()
+            try modelContext.save()
             syncGeneratedBillingDocumentToCompanyStorage(attachment, data: data)
-            QuickBooksInvoiceAttachmentSync.syncPendingServiceReports(
+            try QuickBooksInvoiceAttachmentSync.syncPendingServiceReports(
                 estimates: estimates,
                 invoices: invoices,
                 serviceCalls: serviceCalls,
+                payments: payments,
                 attachments: documentAttachments + [attachment],
                 modelContext: modelContext
             )
@@ -2586,6 +2683,7 @@ private struct CustomerEditorView: View {
     @State private var maintenanceAgreementCancellationReason = ""
     @State private var customerActionMessage: String?
     @State private var isSyncingCustomer = false
+    @State private var customerPublicationOwner: CustomerPublicationWorkflow?
     @State private var showingDeleteConfirmation = false
     @State private var equipmentPendingDeletion: CustomerEquipment?
     @State private var showingCustomerFileImporter = false
@@ -2695,7 +2793,13 @@ private struct CustomerEditorView: View {
 
     private var generalCustomerAttachments: [ServiceDocumentAttachment] {
         customerLevelFilteredAttachments.filter { attachment in
-            attachment.kind.customerProfileGroupTitle == "Customer Files"
+            attachment.kind.customerProfileGroupTitle == "Customer Files" && !attachment.isGeneratedAccountStatement
+        }
+    }
+
+    private var accountStatementAttachments: [ServiceDocumentAttachment] {
+        customerLevelFilteredAttachments.filter {
+            $0.isGeneratedAccountStatement
         }
     }
 
@@ -2787,7 +2891,7 @@ private struct CustomerEditorView: View {
     }
 
     private var openCustomerInvoiceBalances: [(invoice: Invoice, balance: Double)] {
-        invoices.filter {
+        BillingMilestoneReconciliation.project(invoices, payments: payments).activeInvoices.filter {
             $0.customer.id == customer.id
         }
         .compactMap { invoice in
@@ -2795,6 +2899,14 @@ private struct CustomerEditorView: View {
             guard balance > 0 else { return nil }
             return (invoice, balance)
         }
+    }
+
+    private var customerAccountStatementSnapshot: CustomerAccountStatementSnapshot {
+        CustomerDocumentExporter.accountStatementSnapshot(
+            for: customer,
+            invoices: invoices,
+            payments: payments
+        )
     }
 
     private var customerSnapshot: CustomerIntelligenceSnapshot {
@@ -2840,6 +2952,101 @@ private struct CustomerEditorView: View {
 
     private var canSyncCustomerRecords: Bool {
         AppAccess.canSyncCustomerRecordsWithAccounting(email: currentEmail, users: users)
+    }
+
+    private var customerAccountStatementSection: some View {
+        let statement = customerAccountStatementSnapshot
+        return Section("Account Statement") {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(statement.exportBlockingMessage == nil
+                         ? statement.totalBalance.formatted(.currency(code: "USD")) : "Review needed")
+                        .font(.title3.weight(.semibold))
+                    Text(statement.exportBlockingMessage == nil
+                         ? "\(statement.openInvoiceCount) open invoice\(statement.openInvoiceCount == 1 ? "" : "s")"
+                         : "Reconciliation required")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "doc.text")
+                    .foregroundStyle(Color.brandGold)
+                    .accessibilityHidden(true)
+            }
+
+            if statement.exportBlockingMessage == nil {
+                Text(statement.agingSummary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(statement.exportBlockingMessage ?? statement.balanceSourceSummary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("CustomerAccountStatementSource")
+
+            if statement.exportBlockingMessage != nil {
+                Button {
+                    GunnAireAppIntentRouter.store(.invoices)
+                    dismiss()
+                } label: {
+                    Label("Review Invoices", systemImage: "doc.text.magnifyingglass")
+                }
+                .accessibilityIdentifier("ReviewCustomerStatementInvoices")
+            }
+
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    accountStatementPreviewButton
+                    accountStatementEmailButton
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    accountStatementPreviewButton
+                    accountStatementEmailButton
+                }
+            }
+
+            if customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                Label("Add a customer email before emailing the statement.", systemImage: "exclamationmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            } else if !customer.allowsTransactionalEmail {
+                Label("Service and billing email is disabled in Contact Preferences.", systemImage: "envelope.badge.shield.half.filled")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+
+    private var accountStatementPreviewButton: some View {
+        Button {
+            generateCustomerAccountStatement(emailAfterGeneration: false)
+        } label: {
+            Label("Generate & Preview", systemImage: "doc.text.magnifyingglass")
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(Color.brandGold)
+        .foregroundStyle(Color.primaryBlack)
+        .disabled(customerAccountStatementSnapshot.exportBlockingMessage != nil)
+        .accessibilityIdentifier("GenerateCustomerAccountStatement")
+    }
+
+    private var accountStatementEmailButton: some View {
+        Button {
+            generateCustomerAccountStatement(emailAfterGeneration: true)
+        } label: {
+            Label("Email Statement", systemImage: "envelope")
+        }
+        .buttonStyle(.bordered)
+        .disabled(!canEmailCustomerAccountStatement)
+        .accessibilityIdentifier("EmailCustomerAccountStatement")
+    }
+
+    private var canEmailCustomerAccountStatement: Bool {
+        customerAccountStatementSnapshot.exportBlockingMessage == nil &&
+            customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
+            customer.allowsTransactionalEmail &&
+            invoices.contains { $0.customer.id == customer.id }
     }
 
     private var activeCustomerOperationalAlerts: [CustomerOperationalAlert] {
@@ -3034,9 +3241,10 @@ private struct CustomerEditorView: View {
                     Toggle("Allow service text messages", isOn: $allowsServiceText)
                     Toggle("Allow marketing email", isOn: $allowsMarketing)
 
-                    Text("Service and billing email covers appointment, estimate, invoice, and report delivery. Marketing is optional and never implied by service consent. Text preference is stored for a future consent-aware provider; this app does not send texts yet.")
+                    Text("Service and billing email covers appointments, estimates, invoices, and reports. Service texts open as staff-reviewed Apple Messages drafts on a configured iPhone or iPad. Marketing email is separate and optional. Automated SMS requires an approved provider and separate consent.")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                        .accessibilityIdentifier("CustomerCommunicationConsentGuidance")
                 }
                 .disabled(!canEditCustomerRecords)
                 if canViewFinancials, let quickBooksID = customer.quickBooksID, !quickBooksID.isEmpty {
@@ -3104,7 +3312,7 @@ private struct CustomerEditorView: View {
 
                         HStack {
                             metricPill("\(customerServiceCalls.count)", label: "jobs")
-                            metricPill(openCustomerInvoiceBalances.reduce(0) { $0 + $1.balance }.formatted(.currency(code: "USD")), label: "balance")
+                            metricPill(customerSnapshot.billingReviewMessage != nil ? "Review" : openCustomerInvoiceBalances.reduce(0) { $0 + $1.balance }.formatted(.currency(code: "USD")), label: "balance")
                             metricPill("\(customerSnapshot.activeContractCount)", label: "agreements")
                         }
                     } else {
@@ -3346,6 +3554,10 @@ private struct CustomerEditorView: View {
                 }
 
                 if selectedWorkspace == .files {
+                if canViewFinancials {
+                customerAccountStatementSection
+                }
+
                 Section("Documents & Photos") {
                     if canEditCustomerRecords {
                     Picker("Attachment Type", selection: $customerAttachmentKind) {
@@ -3413,6 +3625,7 @@ private struct CustomerEditorView: View {
                             customerEquipmentAttachmentHistory()
                             customerAttachmentGroup("Service Reports", attachments: generatedServiceReportAttachments)
                             if canViewFinancials {
+                                customerAttachmentGroup("Account Statements", attachments: accountStatementAttachments)
                                 customerAttachmentGroup("Maintenance Agreements", attachments: maintenanceAgreementDocumentAttachments)
                                 customerAttachmentGroup("Estimate Documents", attachments: estimateDocumentAttachments)
                                 customerAttachmentGroup("Invoice Documents", attachments: invoiceDocumentAttachments)
@@ -3561,6 +3774,13 @@ private struct CustomerEditorView: View {
                             Label(isSyncingCustomer ? "Syncing Customer" : "Sync Customer to QuickBooks", systemImage: "arrow.triangle.2.circlepath")
                         }
                         .disabled(isSyncingCustomer || !QuickBooksDataAPI.shared.isAuthenticated)
+                        NavigationLink {
+                            CustomerPublicationReviewView(customer: customer, context: modelContext)
+                        } label: {
+                            Label("Customer sync review", systemImage: "arrow.trianglehead.2.clockwise.rotate.90")
+                        }
+                        .disabled(isSyncingCustomer)
+                        .accessibilityIdentifier("OpenCustomerPublicationReview")
                     }
 
                     if canDeleteCustomerRecords {
@@ -3578,6 +3798,7 @@ private struct CustomerEditorView: View {
                 }
             }
             .navigationTitle(canEditCustomerRecords ? "Edit Customer" : "Customer Record")
+            .onDisappear { customerPublicationOwner?.cancel() }
             .onAppear {
                 if selectedWorkspace == .files,
                    canViewFinancials,
@@ -4631,7 +4852,7 @@ private struct CustomerEditorView: View {
                 .lineLimit(2)
             HStack {
                 Button("Collect Payment") {
-                    GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
+                    GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(invoice.id)
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)
@@ -4815,6 +5036,80 @@ private struct CustomerEditorView: View {
             syncCustomerAttachmentIfPossible(attachment, data: data)
         } catch {
             customerAttachmentMessage = "Attachment save failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func generateCustomerAccountStatement(emailAfterGeneration: Bool) {
+        guard canViewFinancials else {
+            customerAttachmentMessage = "This account cannot create customer financial documents."
+            return
+        }
+
+        do {
+            let statement = customerAccountStatementSnapshot
+            let url = try CustomerDocumentExporter.exportAccountStatement(
+                customer: customer,
+                snapshot: statement
+            )
+            let data = try Data(contentsOf: url)
+            let statementDate = statement.asOf.formatted(date: .abbreviated, time: .shortened)
+            let attachment = ServiceDocumentAttachment(
+                customer: customer,
+                serviceCallID: nil,
+                kind: .customerDocument,
+                displayName: url.lastPathComponent,
+                caption: "Customer account statement as of \(statementDate)",
+                localFilePath: url.path,
+                contentType: "application/pdf",
+                fileSizeBytes: data.count,
+                sharedCompanySyncStatus: GunnAireBackendService.isConfigured ? "needs_attention" : nil,
+                sharedCompanySyncDetail: GunnAireBackendService.isConfigured
+                    ? "Waiting for shared company storage upload."
+                    : "Shared company storage is not configured for this build."
+            )
+            modelContext.insert(attachment)
+            try modelContext.save()
+            syncCustomerAttachmentIfPossible(attachment, data: data)
+
+            if emailAfterGeneration {
+                guard let recipient = customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !recipient.isEmpty else {
+                    customerAttachmentMessage = "Statement saved. Add a customer email before emailing it."
+                    customerAttachmentPreviewURL = url
+                    return
+                }
+                guard customer.allowsTransactionalEmail else {
+                    customerAttachmentMessage = "Statement saved. Service and billing email is disabled in Contact Preferences."
+                    customerAttachmentPreviewURL = url
+                    return
+                }
+                let balance = statement.totalBalance.formatted(.currency(code: "USD"))
+                GunnAireAppIntentRouter.storeMailDraftRoute(
+                    to: recipient,
+                    subject: "GunnAire account statement - \(customer.name)",
+                    body: """
+                    Hello \(customer.name),
+
+                    Attached is your GunnAire statement showing a recorded open-invoice balance of \(balance) as of \(statementDate).
+
+                    The statement includes its balance sources and scope. Please let us know if you have a payment or credit that is not reflected.
+
+                    Please reply with any questions.
+
+                    Thank you,
+                    GunnAire
+                    """,
+                    attachmentPaths: [url.path],
+                    customerID: customer.id,
+                    workflow: .accountStatement
+                )
+                dismiss()
+            } else {
+                customerAttachmentPreviewURL = url
+                customerAttachmentMessage = "Generated and saved the current account statement."
+            }
+        } catch {
+            customerAttachmentMessage = "Account statement could not be generated: \(error.localizedDescription)"
         }
     }
 
@@ -5124,8 +5419,12 @@ private struct CustomerEditorView: View {
                         Label("Preview", systemImage: attachment.isImage ? "photo" : "doc.text.magnifyingglass")
                     }
 
-                    ShareLink(item: attachment.localFileURL) {
-                        Label("Share", systemImage: "square.and.arrow.up")
+                    if FileManager.default.fileExists(atPath: attachment.localFileURL.path) {
+                        ShareLink(item: attachment.localFileURL) { Label("Share", systemImage: "square.and.arrow.up") }
+                    } else {
+                        Button { previewCustomerAttachment(attachment) } label: {
+                            Label("Open to Share", systemImage: "square.and.arrow.up")
+                        }
                     }
                 }
                 .font(.caption)
@@ -5145,12 +5444,10 @@ private struct CustomerEditorView: View {
     }
 
     private func previewCustomerAttachment(_ attachment: ServiceDocumentAttachment) {
-        let url = attachment.localFileURL
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            customerAttachmentMessage = "\(attachment.displayName) is no longer available on this device."
-            return
-        }
-        customerAttachmentPreviewURL = url
+        do {
+            customerAttachmentPreviewURL = try QBODocumentNativeWorkflow.previewURL(for: attachment, context: modelContext)
+            customerAttachmentMessage = nil
+        } catch { customerAttachmentMessage = QBODocumentNativeWorkflow.message(error) }
     }
 
     @ViewBuilder
@@ -5424,44 +5721,26 @@ private struct CustomerEditorView: View {
             customerActionMessage = "Connect QuickBooks before syncing this customer."
             return
         }
-        isSyncingCustomer = true
-        customerActionMessage = "Syncing \(customer.name) to QuickBooks..."
-        QuickBooksDataAPI.shared.createCustomer(quickBooksPayload(for: customer)) { result in
-            DispatchQueue.main.async {
-                isSyncingCustomer = false
-                switch result {
-                case .success(let quickBooksCustomer):
-                    customer.quickBooksID = quickBooksCustomer.Id
-                    customerActionMessage = "\(customer.name) is linked to QuickBooks."
-                case .failure(let error):
-                    customerActionMessage = "QuickBooks customer sync failed: \(error.localizedDescription)"
-                }
+        guard !isSyncingCustomer else { return }
+        do {
+            let owner = try CustomerPublicationWorkflow(customer: customer, context: modelContext, api: .shared)
+            customerPublicationOwner = owner
+            isSyncingCustomer = true
+            customerActionMessage = "Reconciling the saved customer with QuickBooks…"
+            Task { @MainActor in
+                defer { isSyncingCustomer = false; customerPublicationOwner = nil }
+                do {
+                    try await owner.publish()
+                    customerActionMessage = "Customer linked to QuickBooks. Saved contact details were kept."
+                } catch { customerActionMessage = error.localizedDescription }
             }
-        }
-    }
-
-    private func quickBooksPayload(for customer: Customer) -> QuickBooksCustomerCreate {
-        QuickBooksCustomerCreate(
-            DisplayName: customer.name,
-            PrimaryPhone: customer.phone.flatMap { value in
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : QuickBooksPhoneNumber(FreeFormNumber: trimmed)
-            },
-            PrimaryEmailAddr: customer.email.flatMap { value in
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : QuickBooksEmailAddress(Address: trimmed)
-            },
-            BillAddr: customer.address.flatMap { value in
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : QuickBooksAddress(Line1: trimmed)
-            }
-        )
+        } catch { customerActionMessage = error.localizedDescription }
     }
 
     private func perform(_ action: CustomerIntelligenceAction) {
         switch action {
         case .collectPayment(let invoiceID):
-            GunnAireAppIntentRouter.storePaymentCollectionRoute(invoiceID)
+            GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(invoiceID)
             dismiss()
         case .openDocumentation(let serviceCallID):
             GunnAireAppIntentRouter.storeDocumentationRoute(serviceCallID)
@@ -5469,6 +5748,8 @@ private struct CustomerEditorView: View {
         case .openSchedule(let serviceCallID):
             GunnAireAppIntentRouter.storeScheduleCallRoute(serviceCallID)
             dismiss()
+        case .reviewInvoices:
+            GunnAireAppIntentRouter.store(.invoices)
         case .openPayments:
             GunnAireAppIntentRouter.store(.payments)
             dismiss()
@@ -5531,8 +5812,6 @@ private struct TechnicianEditorView: View {
     @State private var qualificationReviewedByEmail: String
     @State private var serviceAreas: String
     @State private var laborCostPerHour: String
-    @State private var quickBooksTimeEntityKind: TechnicianQuickBooksTimeEntityKind
-    @State private var quickBooksTimeEntityRef: String
 
     private let reviewerEmail: String
 
@@ -5553,8 +5832,6 @@ private struct TechnicianEditorView: View {
         _qualificationReviewedByEmail = State(initialValue: review.reviewedByEmail ?? AppAccess.normalizedEmail(reviewerEmail))
         _serviceAreas = State(initialValue: technician.serviceAreas.joined(separator: ", "))
         _laborCostPerHour = State(initialValue: technician.laborCostPerHour.map { String(format: "%.2f", $0) } ?? "")
-        _quickBooksTimeEntityKind = State(initialValue: technician.quickBooksTimeEntityKind ?? .employee)
-        _quickBooksTimeEntityRef = State(initialValue: technician.quickBooksTimeEntityRef ?? "")
     }
 
     var body: some View {
@@ -5572,15 +5849,17 @@ private struct TechnicianEditorView: View {
                         .foregroundStyle(.secondary)
                 }
                 Section("QuickBooks Time") {
-                    Picker("Worker type", selection: $quickBooksTimeEntityKind) {
-                        ForEach(TechnicianQuickBooksTimeEntityKind.allCases) { kind in
-                            Text(kind.displayName).tag(kind)
-                        }
+                    NavigationLink("Review QuickBooks Worker") {
+                        SharedTimeWorkerReview(
+                            workerEmail: AppAccess.normalizedEmail(technician.contactInfo), workerName: technician.name,
+                            suggestedKind: technician.quickBooksTimeEntityKind == .vendor ? "Vendor" : "Employee",
+                            suggestedID: technician.quickBooksTimeEntityRef ?? "", technician: technician)
                     }
-                    TextField("QuickBooks employee or vendor ID", text: $quickBooksTimeEntityRef)
-                        .textInputAutocapitalization(.never)
-                        .accessibilityIdentifier("TechnicianQBOTimeEntityRef")
-                    Text("Copy the exact Employee or Vendor ID from the connected QuickBooks company. Completed time stays local until this technician has an explicit mapping; GunnAire never reuses another worker's ID.")
+                    .disabled(!canReviewSavedWorker)
+                    .accessibilityIdentifier("TechnicianQBOTimeWorkerReview")
+                    Text(canReviewSavedWorker
+                         ? "An administrator checks the worker in the business QuickBooks account. Saved legacy IDs are suggestions, not confirmed mappings."
+                         : "Save the technician's name and business email before reviewing the QuickBooks worker.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -5672,9 +5951,6 @@ private struct TechnicianEditorView: View {
                         technician.qualificationNotes = qualificationNotes.nilIfBlank
                         technician.serviceAreas = Technician.serviceAreas(from: serviceAreas)
                         technician.laborCostPerHour = Double(laborCostPerHour.trimmingCharacters(in: .whitespacesAndNewlines))
-                        let timeEntityRef = quickBooksTimeEntityRef.trimmingCharacters(in: .whitespacesAndNewlines)
-                        technician.quickBooksTimeEntityKind = timeEntityRef.isEmpty ? nil : quickBooksTimeEntityKind
-                        technician.quickBooksTimeEntityRef = timeEntityRef.isEmpty ? nil : timeEntityRef
                         dismiss()
                     }
                     .disabled(
@@ -5693,6 +5969,12 @@ private struct TechnicianEditorView: View {
             reviewDueAt: tracksQualificationReview ? qualificationReviewDueAt : nil,
             reviewedByEmail: tracksQualificationReview ? qualificationReviewedByEmail : nil
         )
+    }
+
+    private var canReviewSavedWorker: Bool {
+        SharedTimeError.validEmail(AppAccess.normalizedEmail(technician.contactInfo)) &&
+        AppAccess.normalizedEmail(calendarEmail) == AppAccess.normalizedEmail(technician.contactInfo) &&
+        name.trimmingCharacters(in: .whitespacesAndNewlines) == technician.name
     }
 
     private var qualificationReviewValidationMessage: String? {

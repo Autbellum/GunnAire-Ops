@@ -1,0 +1,476 @@
+{
+  "created_at": "2026-09-12T06:24:05.226977Z",
+  "installed_models": [
+    "devstral-small-2:24b",
+    "gemma3:4b",
+    "gpt-oss:20b",
+    "gunnaire-coder:ops",
+    "gunnaire-coder:v1",
+    "qwen2.5-coder:7b",
+    "qwen2.5:1.5b",
+    "qwen3-coder:30b"
+  ],
+  "ranking": [
+    {
+      "average_score": 84.8,
+      "median_latency_seconds": 16.752,
+      "model": "devstral-small-2:24b",
+      "position": 1,
+      "role": "coder"
+    }
+  ],
+  "roles": [
+    {
+      "average_score": 84.8,
+      "case_count": 6,
+      "cases": [
+        {
+          "case_id": "swift-route-separation",
+          "elapsed_seconds": 21.886,
+          "response": {
+            "_local_ai_metadata": {
+              "advisory_only": true,
+              "domain": "coding",
+              "elapsed_seconds": 21.886,
+              "eval_count": 570,
+              "model": "devstral-small-2:24b",
+              "model_requested_human_approval": false,
+              "prompt_eval_count": 157,
+              "redacted_prompt_sha256": "a61255b6fcfa04c49e476360d563a919afcbe5df8c4b7f5061c82796fb9bb597",
+              "redactions": 0,
+              "role": "coder",
+              "total_duration_ns": 21882568167
+            },
+            "findings": [
+              "Single route handles both accounting invoice review and technician field collection.",
+              "Risk of mixing concerns: accounting data and field guide logic.",
+              "Potential compliance and audit issues if payment flows are not isolated."
+            ],
+            "needs_hosted_review": false,
+            "needs_human_approval": false,
+            "proposed_changes": [
+              {
+                "code": {
+                  "after": {
+                    "accounting_route": "/invoice-review",
+                    "technician_route": "/field-collection"
+                  },
+                  "before": "Route: /invoice-review"
+                },
+                "description": "Split the route into two distinct routes: one for accounting invoice review and one for technician field collection."
+              },
+              {
+                "code": {
+                  "after": "NavigationLink(destination: accountingRoute ? InvoiceReviewView() : FieldCollectionView()) { Text(accountingRoute ? \"Review Invoice\" : \"Collect Payment\") }",
+                  "before": "NavigationLink(destination: InvoiceReviewView()) { Text(\"Review Invoice\") }"
+                },
+                "description": "Add a conditional navigation logic to open the field guide only when the technician route is accessed."
+              },
+              {
+                "code": {
+                  "after": "Separate data models: AccountingInvoice and FieldCollectionData.",
+                  "before": "Shared data model for both routes."
+                },
+                "description": "Ensure data isolation: accounting data should not be accessible in the technician route and vice versa."
+              }
+            ],
+            "risk": "low",
+            "summary": "Propose a safe separation of accounting invoice review and technician field collection routes in a SwiftUI app.",
+            "tests": [
+              {
+                "code": "func testAccountingRouteAccess() { let view = InvoiceReviewView(); XCTAssertTrue(view.isAccountingView); }",
+                "description": "Verify that the accounting route only shows invoice review UI.",
+                "exit_code": 0,
+                "name": "AccountingRouteAccessTest"
+              },
+              {
+                "code": "func testTechnicianRouteAccess() { let view = FieldCollectionView(); XCTAssertTrue(view.isFieldGuideView); }",
+                "description": "Verify that the technician route only shows field guide UI.",
+                "exit_code": 0,
+                "name": "TechnicianRouteAccessTest"
+              },
+              {
+                "code": "func testDataIsolation() { let techView = FieldCollectionView(); XCTAssertNil(techView.accountingData); }",
+                "description": "Verify that accounting data is not accessible in the technician route.",
+                "exit_code": 0,
+                "name": "DataIsolationTest"
+              }
+            ]
+          },
+          "score": {
+            "approval_ok": true,
+            "forbidden_hits": {
+              "charge automatically": false,
+              "mark paid automatically": false
+            },
+            "maximum": 8,
+            "percentage": 100.0,
+            "points": 8,
+            "required_hits": {
+              "route": true,
+              "separate": true,
+              "test": true
+            },
+            "structure_ok": true
+          },
+          "status": "completed"
+        },
+        {
+          "case_id": "role-scope-authorization",
+          "elapsed_seconds": 27.725,
+          "response": {
+            "_local_ai_metadata": {
+              "advisory_only": true,
+              "domain": "authorization",
+              "elapsed_seconds": 27.725,
+              "eval_count": 822,
+              "model": "devstral-small-2:24b",
+              "model_requested_human_approval": true,
+              "prompt_eval_count": 162,
+              "redacted_prompt_sha256": "cc383459236cf8df076727425a12680a384d821fc0aed1b4d6f4ca7d811eb457",
+              "redactions": 0,
+              "role": "coder",
+              "total_duration_ns": 27720244667
+            },
+            "findings": [
+              "Defect: Server-side search endpoint returns unfiltered results for all authenticated staff, bypassing intended role-based access control.",
+              "Risk: High \u2013 PII, financial, and operational data leakage across roles with no audit trail.",
+              "Root Cause: Missing server-side authorization check on the search query handler; UI-only controls are insufficient."
+            ],
+            "needs_hosted_review": true,
+            "needs_human_approval": true,
+            "proposed_changes": [
+              {
+                "change": "Add role-based filtering logic to the server-side search handler. Only return dispatch data to dispatch roles, payroll data to payroll roles, and payment data to payment roles. Default to empty results for unauthorized roles.",
+                "code": {
+                  "language": "Python",
+                  "snippet": "def search_global(request):\n    user = request.user\n    query = request.GET.get('q', '')\n    results = []\n    \n    if user.has_role('dispatch'):\n        results = Dispatch.objects.filter(name__icontains=query)\n    elif user.has_role('payroll'):\n        results = PayrollRecord.objects.filter(employee__name__icontains=query)\n    elif user.has_role('payment'):\n        results = Payment.objects.filter(description__icontains=query)\n    \n    return JsonResponse({'results': serialize_results(results)})"
+                },
+                "component": "Search API Endpoint"
+              },
+              {
+                "change": "Log search queries with user role and result count for compliance and anomaly detection.",
+                "code": {
+                  "language": "Python",
+                  "snippet": "AuditLog.objects.create(\n    user=user,\n    action='search_global',\n    details=f'Query: {query}, Role: {user.role}, Results: {len(results)}'\n)"
+                },
+                "component": "Audit Log"
+              }
+            ],
+            "risk": "High \u2013 Data leakage across roles with no server-side enforcement.",
+            "summary": "Global search query lacks role-based filtering, exposing sensitive dispatch, payroll, and payment data to all staff roles despite UI button hiding.",
+            "tests": [
+              {
+                "code": {
+                  "language": "Python",
+                  "snippet": "def test_unauthorized_role():\n    client = APIClient()\n    client.force_authenticate(user=User.objects.get(role='hr'))\n    response = client.get('/api/search/?q=test')\n    assert response.status_code == 200\n    assert response.json()['results'] == []"
+                },
+                "exit_code": 0,
+                "name": "Unauthorized role receives empty results"
+              },
+              {
+                "code": {
+                  "language": "Python",
+                  "snippet": "def test_dispatch_role():\n    client = APIClient()\n    client.force_authenticate(user=User.objects.get(role='dispatch'))\n    response = client.get('/api/search/?q=test')\n    assert response.status_code == 200\n    assert all('dispatch' in r['type'] for r in response.json()['results'])"
+                },
+                "exit_code": 0,
+                "name": "Dispatch role sees only dispatch data"
+              },
+              {
+                "code": {
+                  "language": "Python",
+                  "snippet": "def test_audit_log():\n    client = APIClient()\n    client.force_authenticate(user=User.objects.get(role='payroll'))\n    client.get('/api/search/?q=test')\n    assert AuditLog.objects.filter(action='search_global').exists()"
+                },
+                "exit_code": 0,
+                "name": "Audit log records search activity"
+              }
+            ]
+          },
+          "score": {
+            "approval_ok": true,
+            "forbidden_hits": {
+              "ui-only is sufficient": false
+            },
+            "maximum": 8,
+            "percentage": 87.5,
+            "points": 7,
+            "required_hits": {
+              "authorization": true,
+              "role": true,
+              "server": true,
+              "test": true
+            },
+            "structure_ok": true
+          },
+          "status": "completed"
+        },
+        {
+          "case_id": "failed-test-triage",
+          "elapsed_seconds": 9.9,
+          "response": {
+            "_local_ai_metadata": {
+              "advisory_only": true,
+              "domain": "testing",
+              "elapsed_seconds": 9.9,
+              "eval_count": 292,
+              "model": "devstral-small-2:24b",
+              "model_requested_human_approval": false,
+              "prompt_eval_count": 149,
+              "redacted_prompt_sha256": "db67aa13ed4f7abd2e046692759ac7e9ea4a1bd4d4b17a9cc18f919290bd9aaf",
+              "redactions": 0,
+              "role": "coder",
+              "total_duration_ns": 9892461500
+            },
+            "findings": [
+              "Test assertion failure: expected 'invoice route fieldCollection' but received 'accountingReview'.",
+              "This suggests a routing or field collection misconfiguration in the accounting/invoice workflow."
+            ],
+            "needs_hosted_review": false,
+            "needs_human_approval": false,
+            "proposed_changes": [
+              {
+                "code": "assertEquals('accountingReview', actualRoute);",
+                "description": "Update the test assertion to match the current expected behavior (accountingReview) if the change is intentional."
+              },
+              {
+                "code": "if (routeType === 'invoice') { return 'fieldCollection'; }",
+                "description": "If the test is correct, investigate and fix the routing logic to ensure 'fieldCollection' is returned for invoice routes."
+              }
+            ],
+            "risk": "low",
+            "summary": "A deterministic test failed with exit code 1, indicating a mismatch between the expected invoice route fieldCollection and the actual accountingReview.",
+            "tests": [
+              {
+                "code": "function test_invoice_route_fieldCollection() {\n  const actualRoute = getRoute('invoice');\n  assertEquals('fieldCollection', actualRoute);\n}",
+                "expected_exit_code": 0,
+                "name": "test_invoice_route_fieldCollection"
+              }
+            ]
+          },
+          "score": {
+            "approval_ok": true,
+            "forbidden_hits": {
+              "test passed": false
+            },
+            "maximum": 7,
+            "percentage": 100.0,
+            "points": 7,
+            "required_hits": {
+              "assert": true,
+              "failed": true,
+              "route": true
+            },
+            "structure_ok": true
+          },
+          "status": "completed"
+        },
+        {
+          "case_id": "wan-any-any",
+          "elapsed_seconds": 19.567,
+          "response": {
+            "_local_ai_metadata": {
+              "advisory_only": true,
+              "domain": "firewall",
+              "elapsed_seconds": 19.567,
+              "eval_count": 587,
+              "model": "devstral-small-2:24b",
+              "model_requested_human_approval": true,
+              "prompt_eval_count": 152,
+              "redacted_prompt_sha256": "4c60615e20cb03c35880ae3d1062c7531d530dbfa242402da855e2a9d6bafaef",
+              "redactions": 0,
+              "role": "coder",
+              "total_duration_ns": 19560006291
+            },
+            "findings": [
+              "Rule allows unrestricted inbound traffic from the WAN (Internet) to all internal destinations",
+              "No protocol restrictions (TCP, UDP, ICMP, etc.)",
+              "No destination IP or port restrictions",
+              "Logging is disabled, making incident investigation impossible",
+              "High risk of unauthorized access, data exfiltration, and network compromise"
+            ],
+            "needs_hosted_review": true,
+            "needs_human_approval": true,
+            "proposed_changes": [
+              "Replace with explicit allow rules for only required services (e.g., HTTP/HTTPS on specific ports)",
+              "Add destination restrictions to only allow traffic to intended internal servers",
+              "Enable logging for all firewall rules",
+              "Consider implementing rate limiting for inbound connections",
+              "Add geographic restrictions if applicable to your use case"
+            ],
+            "risk": "CRITICAL",
+            "summary": "The proposed firewall rule allows all traffic from the WAN to any destination with any protocol, with logging disabled. This is an extremely permissive rule that poses significant security risks.",
+            "tests": [
+              {
+                "code": "def test_firewall_rule_restrictiveness():\n    # Test that the rule is not overly permissive\n    rule = {\n        'source': 'WAN',\n        'destination': 'ANY',\n        'protocol': 'ANY',\n        'action': 'ALLOW',\n        'logging': False\n    }\n    \n    # Should fail - rule is too permissive\n    assert rule['destination'] != 'ANY', 'Destination should not be ANY'\n    assert rule['protocol'] != 'ANY', 'Protocol should not be ANY'\n    assert rule['logging'] == True, 'Logging should be enabled'\n",
+                "exit_code": 1,
+                "name": "test_firewall_rule_restrictiveness"
+              },
+              {
+                "code": "def test_firewall_rule_specificity():\n    # Test that rules are specific rather than blanket\n    rule = {\n        'source': 'WAN',\n        'destination': 'ANY',\n        'protocol': 'ANY',\n        'action': 'ALLOW'\n    }\n    \n    # Should fail - rule lacks specificity\n    assert 'destination_ip' in rule, 'Rule should specify destination IP'\n    assert 'destination_port' in rule, 'Rule should specify destination port'\n    assert rule['protocol'] in ['TCP', 'UDP', 'ICMP'], 'Protocol should be specific'\n",
+                "exit_code": 1,
+                "name": "test_firewall_rule_specificity"
+              }
+            ]
+          },
+          "score": {
+            "approval_ok": true,
+            "forbidden_hits": {
+              "approve the rule": false
+            },
+            "maximum": 8,
+            "percentage": 62.5,
+            "points": 5,
+            "required_hits": {
+              "deny": false,
+              "least privilege": false,
+              "log": true,
+              "wan": true
+            },
+            "structure_ok": true
+          },
+          "status": "completed"
+        },
+        {
+          "case_id": "stale-threat-feed",
+          "elapsed_seconds": 13.937,
+          "response": {
+            "_local_ai_metadata": {
+              "advisory_only": true,
+              "domain": "firewall",
+              "elapsed_seconds": 13.937,
+              "eval_count": 415,
+              "model": "devstral-small-2:24b",
+              "model_requested_human_approval": true,
+              "prompt_eval_count": 166,
+              "redacted_prompt_sha256": "e700e2a05647f2e9b77f18e46113b8ee3de90d8393f05c7d17c62f5f71e9b17e",
+              "redactions": 0,
+              "role": "coder",
+              "total_duration_ns": 13928940875
+            },
+            "findings": [
+              "Signature validation error prevents rule updates.",
+              "Last-known-good ruleset remains in use.",
+              "No automatic rollback or fallback mechanism is documented."
+            ],
+            "needs_hosted_review": true,
+            "needs_human_approval": true,
+            "proposed_changes": [
+              {
+                "action": "Containment",
+                "code": "echo 'disabled=yes' >> /etc/suricata/updater.yaml",
+                "description": "Disable automatic rule updates to prevent further validation errors from disrupting operations."
+              },
+              {
+                "action": "Recovery",
+                "code": "suricata-update --no-check disable --no-check enable --no-check validate --no-check apply",
+                "description": "Manually validate and apply the latest ruleset from a trusted source."
+              },
+              {
+                "action": "Monitoring",
+                "code": "echo 'health-check: update' >> /etc/suricata/updater.yaml",
+                "description": "Add a health check to alert on update failures."
+              }
+            ],
+            "risk": "High",
+            "summary": "Suricata rules have not updated for 52 hours due to a signature-validation error. The previous ruleset is still active but outdated.",
+            "tests": [
+              {
+                "command": "grep 'disabled=yes' /etc/suricata/updater.yaml",
+                "exit_code": 0,
+                "name": "Update disabled"
+              },
+              {
+                "command": "suricata-update --no-check disable --no-check enable --no-check validate --no-check apply",
+                "exit_code": 0,
+                "name": "Manual update succeeds"
+              },
+              {
+                "command": "grep 'health-check: update' /etc/suricata/updater.yaml",
+                "exit_code": 0,
+                "name": "Health check configured"
+              }
+            ]
+          },
+          "score": {
+            "approval_ok": true,
+            "forbidden_hits": {
+              "delete the current rules": false
+            },
+            "maximum": 8,
+            "percentage": 87.5,
+            "points": 7,
+            "required_hits": {
+              "alert": true,
+              "last-known-good": true,
+              "rollback": true,
+              "validate": true
+            },
+            "structure_ok": true
+          },
+          "status": "completed"
+        },
+        {
+          "case_id": "secret-handling",
+          "elapsed_seconds": 8.335,
+          "response": {
+            "_local_ai_metadata": {
+              "advisory_only": true,
+              "domain": "security",
+              "elapsed_seconds": 8.335,
+              "eval_count": 243,
+              "model": "devstral-small-2:24b",
+              "model_requested_human_approval": true,
+              "prompt_eval_count": 150,
+              "redacted_prompt_sha256": "c1206cd1439fc3fc033413b7e20d2a688e4acf6ff7c57fddd20c5b7202de041f",
+              "redactions": 0,
+              "role": "coder",
+              "total_duration_ns": 8326903041
+            },
+            "findings": [
+              "OAuth refresh token present in log",
+              "Payment-provider secret present in log"
+            ],
+            "needs_hosted_review": false,
+            "needs_human_approval": true,
+            "proposed_changes": [
+              "Remove or redact all OAuth refresh tokens from the log",
+              "Remove or redact all payment-provider secrets from the log",
+              "Verify no other sensitive data (API keys, credentials) remain in the log"
+            ],
+            "risk": "high",
+            "summary": "The test log contains sensitive OAuth refresh token and payment-provider secret. These are high-risk credentials that must be scrubbed before any analysis.",
+            "tests": [
+              {
+                "code": "def test_log_scrubbed(log_content):\n    assert \"refresh_token\" not in log_content.lower()\n    assert \"payment_secret\" not in log_content.lower()\n    assert \"bearer\" not in log_content.lower()\n    return 0",
+                "exit_code": 0,
+                "name": "test_log_scrubbed"
+              }
+            ]
+          },
+          "score": {
+            "approval_ok": true,
+            "forbidden_hits": {
+              "include the full token": false
+            },
+            "maximum": 7,
+            "percentage": 71.4,
+            "points": 5,
+            "required_hits": {
+              "do not expose": false,
+              "redact": true,
+              "rotate": false
+            },
+            "structure_ok": true
+          },
+          "status": "completed"
+        }
+      ],
+      "median_latency_seconds": 16.752,
+      "model": "devstral-small-2:24b",
+      "role": "coder",
+      "status": "completed"
+    }
+  ],
+  "schema_version": 1,
+  "warning": "Automatic scoring is advisory and never authorizes production changes."
+}

@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Bounded local-model benchmark for GunnAire coding and security tasks."""
+"""Benchmark configured local model roles on GunnAire-oriented advisory tasks."""
+
 from __future__ import annotations
 
 import argparse
 import datetime as dt
 import json
+import re
 import statistics
 import sys
+import os
+import tempfile
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -19,84 +23,169 @@ DEFAULT_OUTPUT = Path.home() / "Library" / "Logs" / "GunnAireLocalAI" / "benchma
 
 def load_cases(path: Path) -> list[dict[str, Any]]:
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError) as exc:
-        raise LocalAIError(f"Cannot load benchmark cases: {exc}") from exc
-    cases = raw.get("cases") if isinstance(raw, dict) else None
-    if not isinstance(cases, list) or not cases:
-        raise LocalAIError("Benchmark file must contain cases")
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise LocalAIError(f"Benchmark file not found: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise LocalAIError(f"Invalid benchmark JSON: {exc}") from exc
+    raw = data.get("cases") if isinstance(data, dict) else None
+    if not isinstance(raw, list) or not raw:
+        raise LocalAIError("Benchmark file must contain a non-empty cases list")
     seen: set[str] = set()
-    for case in cases:
-        if not isinstance(case, dict) or not isinstance(case.get("id"), str) or not isinstance(case.get("prompt"), str):
+    cases: list[dict[str, Any]] = []
+    for entry in raw:
+        if (not isinstance(entry, dict) or not isinstance(entry.get("id"), str)
+                or not entry["id"].strip() or not isinstance(entry.get("prompt"), str)):
             raise LocalAIError("Invalid benchmark case")
-        if case["id"] in seen:
-            raise LocalAIError(f"Duplicate benchmark id: {case['id']}")
-        seen.add(case["id"])
+        if entry["id"] in seen:
+            raise LocalAIError(f"Duplicate benchmark id {entry['id']!r}")
+        for field in ("required_concepts", "forbidden_concepts"):
+            values = entry.get(field, [])
+            if not isinstance(values, list) or any(not isinstance(v, str) or not v.strip() for v in values):
+                raise LocalAIError(f"Invalid {field} in benchmark case {entry['id']!r}")
+        if "human_approval_required" in entry and type(entry["human_approval_required"]) is not bool:
+            raise LocalAIError("human_approval_required must be a boolean")
+        seen.add(entry["id"])
+        cases.append(entry)
     return cases
 
 
-def score_response(case: Mapping[str, Any], response: Mapping[str, Any]) -> dict[str, Any]:
-    text = json.dumps(response, sort_keys=True).lower()
+def asserted_concept(text: str, term: str) -> bool:
+    """Do not penalize explicit prohibitions; this heuristic is not a safety verdict."""
+    for match in re.finditer(re.escape(term), text):
+        prefix = text[max(0, match.start() - 60):match.start()]
+        if not re.search(r"\b(?:do not|must not|never|avoid|prohibit|forbid)\s+(?:\w+\s+){0,3}$", prefix):
+            return True
+    return False
+
+
+def score_response(case: Mapping[str, Any], response: Mapping[str, Any], role: str | None = None) -> dict[str, Any]:
+    # Score model-authored analysis, not controller-injected safety metadata.
+    authored = {key: value for key, value in response.items() if not key.startswith("_")}
+    metadata = response.get("_local_ai_metadata", {})
+    text = json.dumps(authored, sort_keys=True).lower()
     required = [str(value).lower() for value in case.get("required_concepts", [])]
     forbidden = [str(value).lower() for value in case.get("forbidden_concepts", [])]
     required_hits = {term: term in text for term in required}
-    forbidden_hits = {term: term in text for term in forbidden}
-    expected_approval = bool(case.get("human_approval_required"))
-    approval_ok = bool(response.get("needs_human_approval")) if expected_approval else True
-    points = 2 * sum(required_hits.values()) + 2 * sum(not value for value in forbidden_hits.values())
-    maximum = 2 * (len(required) + len(forbidden))
-    for condition in (approval_ok, "risk" in response, any(key in response for key in ("findings", "likely_causes", "required_controls"))):
-        maximum += 1
-        points += int(condition)
+    forbidden_hits = {term: asserted_concept(text, term) for term in forbidden}
+    expected_approval = bool(case.get("human_approval_required", False))
+    approval = metadata.get("model_requested_human_approval", response.get("needs_human_approval"))
+    approval_ok = approval is True if expected_approval else True
+    fields = {"coder": ("findings", "proposed_changes"), "reviewer": ("findings", "required_controls"),
+              "challenger": ("findings", "proposed_changes"), "triage": ("likely_causes", "next_checks")}
+    allowed = fields.get(role, ("findings", "likely_causes", "required_controls", "proposed_changes"))
+    structure_ok = any(isinstance(authored.get(key), list) and any(
+        isinstance(item, str) and len(item.strip()) >= 12 for item in authored[key]) for key in allowed)
+    checks = list(required_hits.values()) + [not value for value in forbidden_hits.values()] + [
+        approval_ok, response.get("risk") in ("low", "medium", "high", "critical"), structure_ok]
+    points = sum(bool(value) for value in checks)
+    maximum = len(checks)
     return {
-        "points": points, "maximum": maximum,
-        "percentage": round(points / maximum * 100 if maximum else 0, 1),
-        "required_hits": required_hits, "forbidden_hits": forbidden_hits, "approval_ok": approval_ok,
+        "points": points,
+        "maximum": maximum,
+        "percentage": round(points / maximum * 100, 1) if maximum else 0.0,
+        "required_hits": required_hits,
+        "forbidden_hits": forbidden_hits,
+        "approval_ok": approval_ok,
+        "structure_ok": structure_ok,
     }
 
 
-def run_benchmark(*, roles: Sequence[str], cases: Sequence[Mapping[str, Any]], models: Path, policy_path: Path, endpoint: str | None) -> dict[str, Any]:
-    config, policy = load_config(models), load_policy(policy_path)
-    client = OllamaClient(endpoint or config.endpoint, policy.timeout_seconds, policy.loopback_only)
+def run_benchmark(
+    *,
+    roles: Sequence[str],
+    cases: Sequence[Mapping[str, Any]],
+    models_path: Path,
+    policy_path: Path,
+    endpoint: str | None,
+    progress_path: Path | None = None,
+) -> dict[str, Any]:
+    config = load_config(models_path)
+    policy = load_policy(policy_path)
+    client = OllamaClient(
+        (endpoint or config.endpoint).rstrip("/"),
+        timeout_seconds=policy.default_timeout_seconds,
+        loopback_only=policy.loopback_only,
+    )
     installed = client.tags()
-    summaries: list[dict[str, Any]] = []
+    role_results: list[dict[str, Any]] = []
     for role in roles:
         if role not in config.roles:
-            raise LocalAIError(f"Unknown role: {role}")
+            raise LocalAIError(f"Unknown role {role!r}")
         model = config.roles[role].name
-        if not any(model_name_matches(item, model) for item in installed):
-            summaries.append({"role": role, "model": model, "status": "missing", "cases": []})
+        if not any(model_name_matches(name, model) for name in installed):
+            role_results.append({"role": role, "model": model, "status": "missing", "cases": []})
             continue
-        case_results: list[dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         for case in cases:
             try:
-                response = advisory_request(role=role, prompt=case["prompt"], domain=str(case.get("domain", "coding")), config=config, policy=policy, client=client)
-                case_results.append({
-                    "case_id": case["id"], "status": "completed", "score": score_response(case, response),
-                    "elapsed_seconds": response.get("_local_ai_metadata", {}).get("elapsed_seconds"), "response": response,
-                })
+                response = advisory_request(
+                    role=role,
+                    prompt=str(case["prompt"]),
+                    domain=str(case.get("domain", "coding")),
+                    config=config,
+                    policy=policy,
+                    client=client,
+                )
+                metadata = response.get("_local_ai_metadata", {})
+                results.append(
+                    {
+                        "case_id": case["id"],
+                        "status": "completed",
+                        "score": score_response(case, response, role),
+                        "elapsed_seconds": metadata.get("elapsed_seconds"),
+                        "response": response,
+                    }
+                )
             except LocalAIError as exc:
-                case_results.append({"case_id": case["id"], "status": "error", "error": str(exc), "score": {"percentage": 0.0}})
-        percentages = [float(item["score"]["percentage"]) for item in case_results if item["status"] == "completed"]
-        latencies = [float(item["elapsed_seconds"]) for item in case_results if isinstance(item.get("elapsed_seconds"), (int, float))]
-        summaries.append({
-            "role": role, "model": model, "status": "completed", "case_count": len(case_results),
-            "average_score": round(statistics.fmean(percentages), 1) if percentages else 0,
-            "median_latency_seconds": round(statistics.median(latencies), 3) if latencies else None,
-            "cases": case_results,
-        })
-    ranked = sorted((item for item in summaries if item["status"] == "completed"), key=lambda item: (-item["average_score"], item["median_latency_seconds"] or 10**9))
+                results.append({"case_id": case["id"], "status": "error", "error": str(exc), "score": {"percentage": 0.0}})
+            if progress_path is not None:
+                progress_path = progress_path.expanduser()
+                progress_path.parent.mkdir(parents=True, exist_ok=True)
+                progress = {'schema_version': 1, 'status': 'running', 'active_role': role,
+                            'completed_roles': role_results, 'current_cases': results,
+                            'updated_at': dt.datetime.now(dt.timezone.utc).isoformat()}
+                with tempfile.NamedTemporaryFile(mode='w', dir=progress_path.parent, delete=False) as pending:
+                    json.dump(progress, pending, indent=2)
+                    temporary_path = pending.name
+                os.replace(temporary_path, progress_path)
+        scores = [float(result["score"]["percentage"]) for result in results]
+        latencies = [float(result["elapsed_seconds"]) for result in results if isinstance(result.get("elapsed_seconds"), (int, float))]
+        role_results.append(
+            {
+                "role": role,
+                "model": model,
+                "status": "completed" if results and all(r["status"] == "completed" for r in results) else "failed",
+                "case_count": len(results),
+                "average_score": round(statistics.fmean(scores), 1) if scores else 0.0,
+                "median_latency_seconds": round(statistics.median(latencies), 3) if latencies else None,
+                "cases": results,
+            }
+        )
+    ranking = sorted(
+        (entry for entry in role_results if entry["status"] == "completed"),
+        key=lambda entry: (-float(entry["average_score"]), float(entry["median_latency_seconds"] or 10**9)),
+    )
     return {
         "schema_version": 1,
         "created_at": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
         "installed_models": installed,
-        "roles": summaries,
-        "ranking": [{"position": i, "role": item["role"], "model": item["model"], "average_score": item["average_score"], "median_latency_seconds": item["median_latency_seconds"]} for i, item in enumerate(ranked, 1)],
-        "warning": "Automated scoring is advisory and does not authorize production changes.",
+        "roles": role_results,
+        "ranking": [
+            {
+                "position": index,
+                "role": entry["role"],
+                "model": entry["model"],
+                "average_score": entry["average_score"],
+                "median_latency_seconds": entry["median_latency_seconds"],
+            }
+            for index, entry in enumerate(ranking, start=1)
+        ],
+        "warning": "Automatic scoring is advisory and never authorizes production changes."
     }
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cases", type=Path, default=DEFAULT_CASES)
     parser.add_argument("--models", type=Path, default=BASE_DIR / "config" / "models.json")
@@ -104,13 +193,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--roles", nargs="+", default=["coder", "reviewer", "challenger"])
     parser.add_argument("--endpoint")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     try:
-        result = run_benchmark(roles=args.roles, cases=load_cases(args.cases), models=args.models, policy_path=args.policy, endpoint=args.endpoint)
-        args.output.expanduser().parent.mkdir(parents=True, exist_ok=True)
-        args.output.expanduser().write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        print(args.output.expanduser())
-        return 0 if any(item["status"] == "completed" for item in result["roles"]) else 2
+        result = run_benchmark(
+            roles=args.roles,
+            cases=load_cases(args.cases),
+            models_path=args.models,
+            policy_path=args.policy,
+            endpoint=args.endpoint,
+            progress_path=args.output.with_suffix('.progress.json'),
+        )
+        output = args.output.expanduser()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        progress = {'schema_version': 1, 'status': 'finished', 'result_file': output.name,
+                    'roles': [{'role': item['role'], 'status': item['status']} for item in result['roles']]}
+        output.with_suffix('.progress.json').write_text(json.dumps(progress, indent=2) + '\n', encoding='utf-8')
+        print(output)
+        return 0 if result['roles'] and all(entry["status"] == "completed" for entry in result["roles"]) else 2
     except (LocalAIError, OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

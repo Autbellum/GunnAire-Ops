@@ -1,6 +1,6 @@
 import Foundation
 
-enum BillingTaxCalculationStatus: String, Codable, Equatable {
+enum BillingTaxCalculationStatus: String, Codable, Equatable, CaseIterable {
     case notApplicable = "not_applicable"
     case pendingQuickBooks = "pending_quickbooks"
     case calculatedByQuickBooks = "calculated_by_quickbooks"
@@ -46,7 +46,7 @@ enum BillingTaxPolicy {
     }
 
     static func hasTaxableLines(_ snapshotJSON: String?) -> Bool {
-        CatalogLineItemSnapshot.decoded(from: snapshotJSON).contains(where: \.isTaxable)
+        CatalogLineItemSnapshot.decoded(from: snapshotJSON).flatMap(\.soldLeaves).contains(where: \.isTaxable)
     }
 
     static func resolvedStatus(
@@ -87,7 +87,7 @@ enum BillingTaxPolicy {
         let safeTotal = quickBooksTotal.isFinite && quickBooksTotal >= 0 ? quickBooksTotal : 0
         let snapshots = CatalogLineItemSnapshot.decoded(from: snapshotJSON)
         let snapshotSubtotal = BillingDocumentDiscountPolicy.netSubtotal(snapshotJSON: snapshotJSON)
-        let hasTaxableLines = snapshots.contains(where: \.isTaxable)
+        let hasTaxableLines = snapshots.flatMap(\.soldLeaves).contains(where: \.isTaxable)
         let validReportedTax = reportedTax.flatMap { value in
             value.isFinite && value >= 0 ? value : nil
         }

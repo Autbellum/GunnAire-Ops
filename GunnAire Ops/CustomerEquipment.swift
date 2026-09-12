@@ -270,7 +270,7 @@ enum EquipmentServicePlanningPolicy {
 
 @Model
 final class CustomerEquipment {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var customer: Customer?
     /// Stable property identity; `location` remains the room/area within that property.
     var serviceLocationID: UUID?

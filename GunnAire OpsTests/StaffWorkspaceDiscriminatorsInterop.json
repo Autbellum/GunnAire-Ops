@@ -1,0 +1,562 @@
+{
+  "ownerSchemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3",
+  "rules": {
+    "activity": {},
+    "agreement": {},
+    "alert": {
+      "kindRaw": {
+        "kind": "text",
+        "values": [
+          "access",
+          "do_not_service",
+          "other",
+          "pet",
+          "priority",
+          "safety",
+          "warranty"
+        ]
+      }
+    },
+    "attachment": {
+      "googleDriveSyncStatus": {
+        "kind": "text",
+        "values": [
+          "archived",
+          "needs_attention",
+          "not_archived",
+          "preparing",
+          "uploading"
+        ]
+      },
+      "kindRaw": {
+        "kind": "text",
+        "values": [
+          "after_photo",
+          "before_photo",
+          "customer_document",
+          "customer_profile_photo",
+          "diagnostic_photo",
+          "equipment_data_plate_photo",
+          "estimate_support",
+          "expense_receipt",
+          "fleet_service",
+          "invoice_support",
+          "maintenance_agreement",
+          "other",
+          "receipt",
+          "service_report",
+          "warranty_evidence"
+        ]
+      },
+      "quickBooksAttachedEntityKeysRaw": {
+        "kind": "receiptLines",
+        "values": [
+          "bill",
+          "estimate",
+          "invoice",
+          "payment",
+          "purchase",
+          "salesreceipt"
+        ]
+      }
+    },
+    "availability": {
+      "kindRawValue": {
+        "kind": "text",
+        "values": [
+          "break",
+          "time_off",
+          "training",
+          "unavailable"
+        ]
+      }
+    },
+    "availabilityEvent": {
+      "kindRawValue": {
+        "kind": "text",
+        "values": [
+          "approved",
+          "block_cancelled",
+          "block_created",
+          "declined",
+          "requested",
+          "withdrawn"
+        ]
+      },
+      "requestStatusRawSnapshot": {
+        "kind": "text",
+        "values": [
+          "approved",
+          "cancelled",
+          "declined",
+          "pending",
+          "withdrawn"
+        ]
+      }
+    },
+    "communication": {
+      "workflowRawValue": {
+        "kind": "text",
+        "values": [
+          "accountStatement",
+          "appointmentConfirmation",
+          "customerDocument",
+          "estimateFollowUp",
+          "general",
+          "maintenanceRenewal",
+          "maintenanceVisitReminder",
+          "paymentReminder",
+          "postJobReview",
+          "receipt",
+          "serviceFollowUp",
+          "technicianArrival",
+          "technicianEnRoute",
+          "workInProgress"
+        ]
+      }
+    },
+    "customer": {
+      "preferredContactMethodRaw": {
+        "kind": "text",
+        "values": [
+          "email",
+          "phone",
+          "text"
+        ]
+      }
+    },
+    "equipment": {
+      "equipmentTypeRaw": {
+        "kind": "text",
+        "values": [
+          "air_handler",
+          "boiler",
+          "gas_furnace",
+          "heat_pump",
+          "iaq_accessory",
+          "mini_split",
+          "other",
+          "package_unit",
+          "split_system_ac",
+          "ventilation",
+          "water_heater"
+        ]
+      }
+    },
+    "estimate": {
+      "customerApprovalMethodRaw": {
+        "kind": "text",
+        "values": [
+          "email",
+          "inPersonSignature",
+          "phoneVerbal",
+          "textMessage"
+        ]
+      },
+      "proposalOption": {
+        "kind": "text",
+        "values": [
+          "best",
+          "better",
+          "good",
+          "standalone"
+        ]
+      },
+      "taxCalculationStatusRawValue": {
+        "kind": "text",
+        "values": [
+          "calculated_by_quickbooks",
+          "needs_attention",
+          "not_applicable",
+          "pending_quickbooks"
+        ]
+      }
+    },
+    "expense": {
+      "categoryRaw": {
+        "kind": "text",
+        "values": [
+          "fuel",
+          "lodging",
+          "meal",
+          "mileage",
+          "other",
+          "parkingToll",
+          "permitFee",
+          "smallTool"
+        ]
+      },
+      "claimTypeRaw": {
+        "kind": "text",
+        "values": [
+          "expense",
+          "mileage"
+        ]
+      },
+      "statusRaw": {
+        "kind": "text",
+        "values": [
+          "approved",
+          "correctionRequested",
+          "reimbursed",
+          "rejected",
+          "submitted"
+        ]
+      }
+    },
+    "formResponse": {},
+    "formTemplate": {},
+    "invoice": {
+      "taxCalculationStatusRawValue": {
+        "kind": "text",
+        "values": [
+          "calculated_by_quickbooks",
+          "needs_attention",
+          "not_applicable",
+          "pending_quickbooks"
+        ]
+      },
+      "workTypeRaw": {
+        "kind": "text",
+        "values": [
+          "repair",
+          "replacement",
+          "service"
+        ]
+      }
+    },
+    "item": {
+      "itemTypeRawValue": {
+        "kind": "text",
+        "values": [
+          "Category",
+          "Group",
+          "Inventory",
+          "NonInventory",
+          "Service",
+          "Unknown"
+        ]
+      },
+      "pricebookReviewStatusRawValue": {
+        "kind": "text",
+        "values": [
+          "approved",
+          "archived",
+          "needs_review"
+        ]
+      }
+    },
+    "job": {
+      "correctiveWorkReasonRaw": {
+        "kind": "text",
+        "values": [
+          "customer_courtesy",
+          "manufacturer_warranty",
+          "other",
+          "part_failure",
+          "unresolved_concern",
+          "workmanship"
+        ]
+      },
+      "dispatchUrgencyRaw": {
+        "kind": "text",
+        "values": [
+          "emergency",
+          "normal",
+          "priority"
+        ]
+      },
+      "equipmentTypeRaw": {
+        "kind": "text",
+        "values": [
+          "air_handler",
+          "boiler",
+          "gas_furnace",
+          "heat_pump",
+          "iaq_accessory",
+          "mini_split",
+          "other",
+          "package_unit",
+          "split_system_ac",
+          "ventilation",
+          "water_heater"
+        ]
+      },
+      "status": {
+        "kind": "text",
+        "values": [
+          "cancelled",
+          "completed",
+          "inProgress",
+          "invoiced",
+          "scheduled"
+        ]
+      },
+      "type": {
+        "kind": "text",
+        "values": [
+          "estimate",
+          "install",
+          "maintenance",
+          "meeting",
+          "other",
+          "reminder",
+          "repair",
+          "replacement",
+          "service",
+          "site visit"
+        ]
+      },
+      "visitDispositionRaw": {
+        "kind": "text",
+        "values": [
+          "callback",
+          "diagnostic_only",
+          "no_access",
+          "standard",
+          "warranty"
+        ]
+      }
+    },
+    "location": {},
+    "milestone": {
+      "billingTriggerRaw": {
+        "kind": "text",
+        "values": [
+          "customerApproval",
+          "milestoneCompletion"
+        ]
+      },
+      "statusRaw": {
+        "kind": "text",
+        "values": [
+          "invoiced",
+          "planned",
+          "readyForBilling",
+          "scheduled"
+        ]
+      }
+    },
+    "movement": {
+      "movementTypeRaw": {
+        "kind": "text",
+        "values": [
+          "adjust",
+          "consume",
+          "receive",
+          "release",
+          "reserve",
+          "returnToStock",
+          "returnToVendor",
+          "transfer"
+        ]
+      }
+    },
+    "payment": {},
+    "purchaseOrder": {
+      "statusRaw": {
+        "kind": "text",
+        "values": [
+          "cancelled",
+          "draft",
+          "ordered",
+          "partially_received",
+          "received",
+          "requested"
+        ]
+      }
+    },
+    "request": {
+      "requestedServiceTypeRaw": {
+        "kind": "text",
+        "values": [
+          "estimate",
+          "install",
+          "maintenance",
+          "meeting",
+          "other",
+          "reminder",
+          "repair",
+          "replacement",
+          "service",
+          "site visit"
+        ]
+      },
+      "statusRaw": {
+        "kind": "text",
+        "values": [
+          "declined",
+          "new",
+          "qualified",
+          "scheduled"
+        ]
+      },
+      "urgencyRaw": {
+        "kind": "text",
+        "values": [
+          "emergency",
+          "normal",
+          "priority"
+        ]
+      }
+    },
+    "shift": {
+      "kindRawValue": {
+        "kind": "text",
+        "values": [
+          "on_call",
+          "regular"
+        ]
+      },
+      "weekdayRawValue": {
+        "kind": "integer",
+        "values": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7"
+        ]
+      }
+    },
+    "task": {
+      "priorityRaw": {
+        "kind": "text",
+        "values": [
+          "high",
+          "low",
+          "normal",
+          "urgent"
+        ]
+      }
+    },
+    "taskEvent": {
+      "kindRaw": {
+        "kind": "text",
+        "values": [
+          "cancelled",
+          "completed",
+          "created",
+          "reopened",
+          "updated"
+        ]
+      },
+      "priorityRawSnapshot": {
+        "kind": "text",
+        "values": [
+          "high",
+          "low",
+          "normal",
+          "urgent"
+        ]
+      }
+    },
+    "technician": {
+      "quickBooksTimeEntityKindRawValue": {
+        "kind": "text",
+        "values": [
+          "employee",
+          "vendor"
+        ]
+      }
+    },
+    "timeEntry": {
+      "reviewStatusRawValue": {
+        "kind": "text",
+        "values": [
+          "approved",
+          "correction_requested",
+          "submitted"
+        ]
+      }
+    },
+    "timeOff": {
+      "statusRawValue": {
+        "kind": "text",
+        "values": [
+          "approved",
+          "cancelled",
+          "declined",
+          "pending",
+          "withdrawn"
+        ]
+      }
+    },
+    "user": {
+      "roleRawValue": {
+        "kind": "text",
+        "values": [
+          "Accounting",
+          "Admin",
+          "Dispatcher",
+          "Field Technician",
+          "Standard"
+        ]
+      }
+    },
+    "vehicle": {
+      "administrativeStatusRaw": {
+        "kind": "text",
+        "values": [
+          "in_service",
+          "out_of_service",
+          "retired"
+        ]
+      }
+    },
+    "vehicleEvent": {
+      "failedInspectionItemsRaw": {
+        "kind": "lines",
+        "values": [
+          "brakes_steering",
+          "fluids_leaks",
+          "lights_signals",
+          "safety_equipment",
+          "tires_wheels",
+          "windshield_body"
+        ]
+      },
+      "kindRaw": {
+        "kind": "text",
+        "values": [
+          "assignment_changed",
+          "created",
+          "inspection_completed",
+          "service_logged",
+          "status_changed"
+        ]
+      },
+      "newStatusRaw": {
+        "kind": "text",
+        "values": [
+          "in_service",
+          "out_of_service",
+          "retired"
+        ]
+      },
+      "priorStatusRaw": {
+        "kind": "text",
+        "values": [
+          "in_service",
+          "out_of_service",
+          "retired"
+        ]
+      },
+      "serviceCategoryRaw": {
+        "kind": "text",
+        "values": [
+          "inspection",
+          "other",
+          "preventive_maintenance",
+          "registration",
+          "repair",
+          "tires"
+        ]
+      }
+    },
+    "vendor": {}
+  },
+  "schema": "staff-workspace-discriminators-v1"
+}

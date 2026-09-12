@@ -79,10 +79,17 @@ enum EquipmentAssetLabelExporter {
         filter.correctionLevel = "H"
         guard let outputImage = filter.outputImage else { return nil }
 
+        // The image is also scanned independently of its PDF/UI background.
+        // Include the four-module quiet zone in the image itself, then scale
+        // by a whole number so printed and screen modules stay sharp.
+        let paddedBounds = outputImage.extent.insetBy(dx: -4, dy: -4)
+        let whiteBackground = CIImage(color: .white).cropped(to: paddedBounds)
+        let paddedImage = outputImage.composited(over: whiteBackground)
         let targetDimension: CGFloat = 960
-        let scale = max(1, floor(targetDimension / max(outputImage.extent.width, 1)))
-        let scaledImage = outputImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        return CIContext().createCGImage(scaledImage, from: scaledImage.extent)
+        let scale = max(1, floor(targetDimension / max(paddedBounds.width, 1)))
+        let scaledImage = paddedImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        return CIContext(options: [.useSoftwareRenderer: true])
+            .createCGImage(scaledImage, from: scaledImage.extent)
     }
 
     static func pdfData(for content: EquipmentAssetLabelContent) throws -> Data {

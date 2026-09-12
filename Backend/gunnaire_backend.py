@@ -31,9 +31,55 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 
+try:
+    from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications, billing_native, qbo_link_adoption, field_payment_review
+    from Backend.billing_provider import BillingQBOProvider
+    from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads
+    from Backend import document_storage
+    from Backend import staff_owner_field_edits
+    from Backend import staff_workspace_field_updates
+    from Backend import staff_invoice_lines
+    from Backend import staff_owner_invoice_applications
+    from Backend.qbo_document_provider import DocumentQBOProvider
+    from Backend import time_worker_mappings, time_publications, cloudkit_staff_shares, staff_replica, staff_workspace_source, staff_workspace_selections, staff_billing_delivery, staff_workspace_delivery, staff_workspace_cloud, staff_workspace_media, staff_workspace_commands
+    from Backend.time_worker_provider import TimeWorkerQBOProvider
+    from Backend.time_publication_provider import TimeQBOProvider
+except ModuleNotFoundError:
+    import payment_attempts  # Direct launch from the Backend directory.
+    import field_payment_review
+    import catalog_publications
+    import customer_publications
+    import billing_publications
+    import billing_native
+    import qbo_link_adoption
+    from billing_provider import BillingQBOProvider
+    import google_connections
+    import document_storage
+    import staff_owner_field_edits
+    import staff_workspace_field_updates
+    import staff_invoice_lines
+    import staff_owner_invoice_applications
+    import google_mail
+    import qbo_change_capture
+    import qbo_document_uploads
+    from qbo_document_provider import DocumentQBOProvider
+    import time_worker_mappings
+    import time_publications
+    import cloudkit_staff_shares
+    import staff_replica
+    import staff_workspace_source
+    import staff_workspace_selections
+    import staff_billing_delivery
+    import staff_workspace_delivery
+    import staff_workspace_cloud
+    import staff_workspace_media
+    import staff_workspace_commands
+    from time_worker_provider import TimeWorkerQBOProvider
+    from time_publication_provider import TimeQBOProvider
+
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.02.17"
+SERVICE_VERSION = "2026.09.11.64"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -42,11 +88,17 @@ AUTH_MODE = os.environ.get("GUNNAIRE_BACKEND_AUTH_MODE", "api-token").strip().lo
 PRIMARY_ADMIN_EMAIL = os.environ.get("GUNNAIRE_PRIMARY_ADMIN_EMAIL", "eric.gunn@gunnaire.com").strip().lower()
 GOOGLE_CLIENT_ID = os.environ.get("GUNNAIRE_GOOGLE_CLIENT_ID", "").strip()
 GOOGLE_ALLOWED_DOMAIN = os.environ.get("GUNNAIRE_GOOGLE_ALLOWED_DOMAIN", "gunnaire.com").strip().lower()
+GOOGLE_WEB_CLIENT_ID = os.environ.get("GUNNAIRE_GOOGLE_WEB_CLIENT_ID", "").strip()
+GOOGLE_WEB_CLIENT_SECRET = os.environ.get("GUNNAIRE_GOOGLE_WEB_CLIENT_SECRET", "").strip()
+GOOGLE_WEB_REDIRECT_URI = os.environ.get("GUNNAIRE_GOOGLE_WEB_REDIRECT_URI", "").strip()
+GOOGLE_TOKEN_ENCRYPTION_KEY = os.environ.get("GUNNAIRE_GOOGLE_TOKEN_ENCRYPTION_KEY", "").strip()
 APPLE_CLIENT_ID = os.environ.get("GUNNAIRE_APPLE_CLIENT_ID", "com.gunnaire.businesssuite").strip()
 APPLE_ISSUER = "https://appleid.apple.com"
 APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys"
 APPLE_JWKS_CACHE_SECONDS = min(max(int(os.environ.get("GUNNAIRE_APPLE_JWKS_CACHE_SECONDS", "21600")), 300), 86400)
 APP_SESSION_DAYS = min(max(int(os.environ.get("GUNNAIRE_APP_SESSION_DAYS", "30")), 1), 30)
+CLOUDKIT_CONTAINER_ID = "iCloud.com.gunnaire.businesssuite"
+WORKSPACE_APPROVAL_MAX_SESSION_AGE_SECONDS = 600
 APPLE_JWKS_CACHE: dict[str, object] = {"expires_at": 0.0, "keys": {}}
 APPLE_JWKS_LOCK = threading.Lock()
 APPLE_ACCOUNT_EVENT_TYPES = {
@@ -101,8 +153,13 @@ QBO_ENVIRONMENT = os.environ.get("GUNNAIRE_QBO_ENVIRONMENT", "sandbox").strip().
 QBO_TOKEN_ENCRYPTION_KEY = os.environ.get("GUNNAIRE_QBO_TOKEN_ENCRYPTION_KEY", "").strip()
 QBO_WEBHOOK_VERIFIER_TOKEN = os.environ.get("GUNNAIRE_QBO_WEBHOOK_VERIFIER_TOKEN", "").strip()
 QBO_WEBHOOK_MAX_BYTES = min(max(int(os.environ.get("GUNNAIRE_QBO_WEBHOOK_MAX_BYTES", str(1024 * 1024))), 1024), 5 * 1024 * 1024)
+CUSTOMER_PORTAL_RESPONSE_MAX_BYTES = min(
+    max(int(os.environ.get("GUNNAIRE_CUSTOMER_PORTAL_RESPONSE_MAX_BYTES", "4096")), 512),
+    16 * 1024,
+)
 QBO_TOKEN_ENDPOINT = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
 QBO_REVOCATION_ENDPOINT = "https://developer.api.intuit.com/v2/oauth2/tokens/revoke"
+QBO_PAYMENT_READ_LOCK = threading.Lock()
 QBO_ACCOUNTING_REFERENCE_PATTERN = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 QBO_SALES_ITEM_TYPES = {
     "service": "Service",
@@ -697,6 +754,8 @@ def portal_url(token: str) -> str | None:
 
 def redact_capability_tokens(value: str) -> str:
     """Keep bearer-style portal secrets out of ordinary HTTP access logs."""
+    # OAuth codes, states and returned scope/account hints must not enter logs.
+    value = re.sub(r"(?i)(/api/google/oauth/callback)\?[^\s\"]*", r"\1?[REDACTED]", value)
     return re.sub(
         r"(?i)(/portal/)[A-Za-z0-9_-]{32,128}",
         r"\1[REDACTED]",
@@ -932,6 +991,348 @@ def qbo_request(form: dict[str, str], endpoint: str) -> tuple[int, dict[str, obj
         return HTTPStatus.BAD_GATEWAY, {"error": "QuickBooks is unavailable"}
 
 
+class QBOReadNoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Never forward a merchant bearer to a redirect destination.
+        return None
+
+
+def qbo_payment_read_transport(request):
+    if request.get_method() != "GET":
+        raise payment_attempts.AttemptError("read_only", "Only provider verification reads are supported.", 400)
+    try:
+        parsed = urllib.parse.urlsplit(request.full_url)
+        if parsed.scheme != "https" or parsed.hostname not in {
+            "api.intuit.com", "sandbox.api.intuit.com",
+            "quickbooks.api.intuit.com", "sandbox-quickbooks.api.intuit.com",
+        } or parsed.username is not None or parsed.password is not None or parsed.fragment or parsed.port not in (None, 443):
+            raise ValueError("unsupported provider origin")
+        opener = urllib.request.build_opener(QBOReadNoRedirect())
+        with opener.open(request, timeout=20) as response:
+            raw = response.read(1024 * 1024 + 1)
+            if len(raw) > 1024 * 1024:
+                raise ValueError("oversized provider response")
+            payload = json.loads(raw.decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("invalid provider response")
+            return response.status, payload
+    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError):
+        raise payment_attempts.AttemptError(
+            "provider_unavailable", "The provider record could not be verified. No new payment was sent.", 502,
+        ) from None
+
+
+def qbo_authorized_bearer(context, audit_actor="system:payment-verification"):
+    environment = context["environment"]
+    expected_grant = context["grant_fingerprint"]
+    if environment not in ("sandbox", "production") or environment != QBO_ENVIRONMENT:
+        raise payment_attempts.AttemptError("provider_changed", "The original QuickBooks environment is not available.")
+    with QBO_PAYMENT_READ_LOCK:
+        with db() as connection:
+            current = connection.execute("SELECT * FROM qbo_connections WHERE id=1").fetchone()
+        if current is None or payment_attempts.grant_fingerprint(current) != expected_grant or current["realm_id"] != context["realm_id"] or current["environment"] != environment:
+            raise payment_attempts.AttemptError("grant_changed", "The QuickBooks connection changed before verification.")
+        if current["client_id_fingerprint"] != hashlib.sha256(QBO_CLIENT_ID.encode()).hexdigest():
+            raise payment_attempts.AttemptError("client_changed", "Reconnect QuickBooks using the configured provider credentials.")
+        token = decrypt_qbo_refresh_token(current["refresh_token_ciphertext"])
+        if not token:
+            raise payment_attempts.AttemptError("connection_unavailable", "The QuickBooks authorization is unavailable.", 503)
+        status, raw_token = qbo_request({"grant_type": "refresh_token", "refresh_token": token}, QBO_TOKEN_ENDPOINT)
+        result = qbo_token_response(raw_token)
+        if not 200 <= status < 300 or result is None or not result["accessToken"] or not result["refreshToken"]:
+            raise payment_attempts.AttemptError("connection_unavailable", "QuickBooks authorization could not be refreshed.", 502)
+        encrypted = encrypt_qbo_refresh_token(result["refreshToken"])
+        with db() as connection:
+            changed = connection.execute(
+                """UPDATE qbo_connections SET refresh_token_ciphertext=?, updated_at=?
+                   WHERE id=1 AND realm_id=? AND environment=? AND client_id_fingerprint=?
+                   AND authorized_at=? AND refresh_token_ciphertext=?""",
+                (encrypted, utc_now(), current["realm_id"], current["environment"], current["client_id_fingerprint"],
+                 current["authorized_at"], current["refresh_token_ciphertext"]),
+            )
+            if changed.rowcount != 1:
+                raise payment_attempts.AttemptError("grant_changed", "The QuickBooks connection changed during verification.")
+            record_audit_event(audit_actor, "refresh", "qbo-connection",
+                               current["realm_id"], connection=connection)
+        return result["accessToken"]
+
+
+def read_payment_provider_record(context, category, record_id, *, kind="charge", rail="card", source_id=None, authorize=None):
+    """Read from a fixed Intuit resource, using only the exact saved grant.
+
+    This boundary does not send financial mutations. Its refresh is serialized
+    within this process and compare-and-set against other grant writers. The
+    journal reauthorizes the session after every read before accepting evidence.
+    """
+    payment_attempts.reference(record_id)
+    payment_attempts.reference(context["realm_id"])
+    if category not in ("invoice", "accounting", "transaction") or kind not in ("charge", "refund") or rail not in ("card", "ach"):
+        raise payment_attempts.AttemptError("invalid_resource", "Unsupported provider verification resource.", 400)
+    if category == "transaction" and kind == "refund":
+        payment_attempts.reference(source_id)
+    environment = context["environment"]
+    if environment not in ("sandbox", "production") or environment != QBO_ENVIRONMENT:
+        raise payment_attempts.AttemptError("provider_changed", "The original QuickBooks environment is not available.")
+    expected_grant = context["grant_fingerprint"]
+    if authorize is not None:
+        authorize()
+    bearer = qbo_authorized_bearer(context)
+    if authorize is not None:
+        authorize()
+    if category in ("invoice", "accounting"):
+        entity = "invoice" if category == "invoice" else ("payment" if kind == "charge" else "refundreceipt")
+        base = "https://sandbox-quickbooks.api.intuit.com" if environment == "sandbox" else "https://quickbooks.api.intuit.com"
+        path = "/v3/company/" + urllib.parse.quote(context["realm_id"], safe="") + "/" + entity + "/" + urllib.parse.quote(record_id, safe="")
+        url = base + path + "?minorversion=75"
+        envelope = {"invoice": "Invoice", "payment": "Payment", "refundreceipt": "RefundReceipt"}[entity]
+    elif category == "transaction" and kind in ("charge", "refund") and rail in ("card", "ach"):
+        base = "https://sandbox.api.intuit.com" if environment == "sandbox" else "https://api.intuit.com"
+        path = "/quickbooks/v4/payments/" + ("charges" if rail == "card" else "echecks")
+        if kind == "refund":
+            payment_attempts.reference(source_id)
+            path += "/" + urllib.parse.quote(source_id, safe="") + "/refunds"
+        url = base + path + "/" + urllib.parse.quote(record_id, safe="")
+        envelope = None
+    else:
+        raise payment_attempts.AttemptError("invalid_resource", "Unsupported provider verification resource.", 400)
+    request = urllib.request.Request(url, method="GET", headers={"Authorization": "Bearer " + bearer, "Accept": "application/json"})
+    if authorize is not None:
+        authorize()
+    status, payload = qbo_payment_read_transport(request)
+    if authorize is not None:
+        authorize()
+    if not 200 <= status < 300:
+        raise payment_attempts.AttemptError("provider_unavailable", "The provider record could not be verified.", 502)
+    with db() as connection:
+        latest = connection.execute("SELECT * FROM qbo_connections WHERE id=1").fetchone()
+    if latest is None or payment_attempts.grant_fingerprint(latest) != expected_grant:
+        raise payment_attempts.AttemptError("grant_changed", "The QuickBooks connection changed during the provider read.")
+    value = payload.get(envelope) if envelope else payload
+    if not isinstance(value, dict):
+        raise payment_attempts.AttemptError("provider_unconfirmed", "The provider record was incomplete.")
+    return value
+
+
+def qbo_catalog_transport(request):
+    """Bounded fixed-resource transport, no redirect or arbitrary accounting proxy."""
+    try:
+        parsed = urllib.parse.urlsplit(request.full_url)
+        if (parsed.scheme != "https" or parsed.hostname not in
+            {"quickbooks.api.intuit.com", "sandbox-quickbooks.api.intuit.com"}
+            or parsed.username is not None or parsed.password is not None
+            or parsed.port not in (None, 443) or parsed.fragment):
+            raise ValueError("unsupported origin")
+        if not re.fullmatch(r"/v3/company/[A-Za-z0-9._:-]+/(?:query|item(?:/[A-Za-z0-9._:-]+)?|(?:vendor|account)/[A-Za-z0-9._:-]+)", parsed.path):
+            raise ValueError("unsupported resource")
+        if request.get_method() not in ("GET", "POST") or (request.get_method() == "POST" and not parsed.path.endswith("/item")):
+            raise ValueError("unsupported method")
+        with urllib.request.build_opener(QBOReadNoRedirect()).open(request, timeout=20) as response:
+            raw = response.read(1024 * 1024 + 1)
+            if len(raw) > 1024 * 1024:
+                raise ValueError("oversized response")
+            payload = json.loads(raw.decode("utf-8"))
+            if not isinstance(payload, dict) or not 200 <= response.status < 300:
+                raise ValueError("unconfirmed response")
+            return payload
+    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError):
+        raise payment_attempts.AttemptError(
+            "provider_unavailable", "QuickBooks could not confirm the catalog request. Review the original attempt before retrying.", 502,
+        ) from None
+
+
+class CatalogQBOProvider:
+    def __init__(self, context, authorize):
+        self.context, self.authorize, self.bearer = context, authorize, None
+
+    def request(self, resource, query=None, item=None, before_send=None):
+        self.authorize()
+        if self.bearer is None:
+            self.bearer = qbo_authorized_bearer(self.context, "system:catalog-publication")
+        self.authorize()
+        origin = "https://sandbox-quickbooks.api.intuit.com" if self.context["environment"] == "sandbox" else "https://quickbooks.api.intuit.com"
+        url = origin + "/v3/company/" + urllib.parse.quote(self.context["realm_id"], safe="") + "/" + resource
+        url += "?" + urllib.parse.urlencode({"minorversion": "75", **(query or {})})
+        request = urllib.request.Request(
+            url, method="POST" if item is not None else "GET",
+            data=catalog_publications.canonical(item).encode() if item is not None else None,
+            headers={"Authorization": "Bearer " + self.bearer, "Accept": "application/json", "Content-Type": "application/json"},
+        )
+        if item is not None:
+            if resource != "item" or before_send is None:
+                raise payment_attempts.AttemptError("invalid_resource", "Unsupported catalog publication.", 400)
+            # Last operation before network dispatch: atomically reauthorize and
+            # consume the one-time permit. Refresh failures cannot consume it.
+            before_send()
+        result = qbo_catalog_transport(request)
+        self.authorize()
+        return result
+
+    def read(self, entity, identifier):
+        if entity not in ("item", "vendor", "account"):
+            raise payment_attempts.AttemptError("invalid_resource", "Unsupported catalog read.", 400)
+        payment_attempts.reference(identifier)
+        result = self.request(entity + "/" + urllib.parse.quote(identifier, safe="")).get(entity.title())
+        if not isinstance(result, dict):
+            raise payment_attempts.AttemptError("provider_unconfirmed", "QuickBooks returned incomplete catalog evidence.")
+        return result
+
+    def items(self):
+        predicate = " FROM Item WHERE Active IN (true, false)"
+        def count():
+            result = self.request("query", {"query": "SELECT COUNT(*)" + predicate}).get("QueryResponse")
+            value = result.get("totalCount") if isinstance(result, dict) else None
+            if type(value) is not int or not 0 <= value <= 100000:
+                raise payment_attempts.AttemptError("catalog_incomplete", "The complete QuickBooks catalog could not be counted.")
+            return value
+        expected = count()
+        items, identities = [], set()
+        for start in range(1, expected + 1, 1000):
+            query = "SELECT *" + predicate + " ORDERBY Name STARTPOSITION " + str(start) + " MAXRESULTS 1000"
+            page = self.request("query", {"query": query}).get("QueryResponse")
+            values = page.get("Item") if isinstance(page, dict) else None
+            size = min(1000, expected - start + 1)
+            if (not isinstance(values, list) or len(values) != size
+                or page.get("startPosition", start) != start or page.get("maxResults", size) != size):
+                raise payment_attempts.AttemptError("catalog_incomplete", "QuickBooks catalog pages changed or were incomplete. Refresh before publishing.")
+            for value in values:
+                identifier = value.get("Id") if isinstance(value, dict) else None
+                payment_attempts.reference(identifier)
+                if identifier in identities:
+                    raise payment_attempts.AttemptError("catalog_incomplete", "QuickBooks repeated an item across catalog pages.")
+                identities.add(identifier)
+                items.append(value)
+        if count() != expected:
+            raise payment_attempts.AttemptError("catalog_incomplete", "The QuickBooks catalog changed during comparison. Refresh before publishing.")
+        return items
+
+    def write(self, item, request_id, before_send):
+        if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9-]{1,50}", request_id):
+            raise payment_attempts.AttemptError("invalid_request", "The catalog request identity is invalid.", 400)
+        query = {"requestid": request_id}
+        if "Id" in item:
+            query["include"] = "donotupdateaccountontxns"
+        result = self.request("item", query, item, before_send).get("Item")
+        if not isinstance(result, dict):
+            raise payment_attempts.AttemptError("provider_unconfirmed", "QuickBooks returned incomplete publication evidence.")
+        return result
+
+
+def encrypt_catalog_payload(raw):
+    encryptor = qbo_token_store()
+    if encryptor is None:
+        raise RuntimeError("Catalog encryption is not configured")
+    return encryptor.encrypt(raw.encode()).decode()
+
+
+def qbo_customer_transport(request):
+    """Customer-only fixed-origin transport. No send-email, update or delete route."""
+    try:
+        parsed = urllib.parse.urlsplit(request.full_url)
+        if (parsed.scheme != "https" or parsed.hostname not in
+            {"quickbooks.api.intuit.com", "sandbox-quickbooks.api.intuit.com"}
+            or parsed.username is not None or parsed.password is not None
+            or parsed.port not in (None, 443) or parsed.fragment):
+            raise ValueError("unsupported origin")
+        if not re.fullmatch(r"/v3/company/[A-Za-z0-9._:-]+/(?:query|customer(?:/[A-Za-z0-9._:-]+)?)", parsed.path):
+            raise ValueError("unsupported resource")
+        if request.get_method() not in ("GET", "POST") or (request.get_method() == "POST" and not parsed.path.endswith("/customer")):
+            raise ValueError("unsupported method")
+        with urllib.request.build_opener(QBOReadNoRedirect()).open(request, timeout=20) as response:
+            raw = response.read(1024 * 1024 + 1)
+            if len(raw) > 1024 * 1024:
+                raise ValueError("oversized response")
+            payload = json.loads(raw.decode("utf-8"))
+            if not isinstance(payload, dict) or not 200 <= response.status < 300:
+                raise ValueError("unconfirmed response")
+            return payload
+    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError):
+        raise payment_attempts.AttemptError("provider_unavailable",
+            "QuickBooks could not confirm the customer request. Review the original attempt before retrying.", 502) from None
+
+
+class CustomerQBOProvider:
+    def __init__(self, context, authorize):
+        self.context, self.authorize, self.bearer = context, authorize, None
+
+    def request(self, resource, query=None, customer=None, before_send=None):
+        if not re.fullmatch(r"query|customer(?:/[A-Za-z0-9._:-]+)?", resource):
+            raise customer_publications.failure("invalid_resource", "Unsupported customer operation.", 400)
+        if customer is not None and (resource != "customer" or before_send is None):
+            raise customer_publications.failure("invalid_resource", "Unsupported customer publication.", 400)
+        payment_attempts.reference(self.context["realm_id"])
+        if self.context["environment"] not in ("sandbox", "production"):
+            raise customer_publications.failure("invalid_resource", "Unsupported QuickBooks environment.", 400)
+        self.authorize()
+        if self.bearer is None:
+            self.bearer = qbo_authorized_bearer(self.context, "system:customer-publication")
+        self.authorize()
+        origin = "https://sandbox-quickbooks.api.intuit.com" if self.context["environment"] == "sandbox" else "https://quickbooks.api.intuit.com"
+        url = origin + "/v3/company/" + urllib.parse.quote(self.context["realm_id"], safe="") + "/" + resource
+        url += "?" + urllib.parse.urlencode({"minorversion": "75", **(query or {})})
+        request = urllib.request.Request(url, method="POST" if customer is not None else "GET",
+            data=catalog_publications.canonical(customer).encode() if customer is not None else None,
+            headers={"Authorization": "Bearer " + self.bearer, "Accept": "application/json", "Content-Type": "application/json"})
+        if customer is not None:
+            before_send()
+        result = qbo_customer_transport(request)
+        self.authorize()
+        return result
+
+    def read(self, identifier):
+        payment_attempts.reference(identifier)
+        return self.request("customer/" + identifier).get("Customer")
+
+    def customers(self):
+        predicate = " FROM Customer WHERE Active IN (true, false)"
+        def count():
+            result = self.request("query", {"query": "SELECT COUNT(*)" + predicate}).get("QueryResponse")
+            value = result.get("totalCount") if isinstance(result, dict) else None
+            if type(value) is not int or not 0 <= value <= 100000:
+                raise customer_publications.failure("customers_incomplete", "The complete QuickBooks customer list could not be counted.")
+            return value
+        expected = count()
+        customers, seen = [], set()
+        for start in range(1, expected + 1, 1000):
+            query = "SELECT *" + predicate + " ORDERBY DisplayName STARTPOSITION " + str(start) + " MAXRESULTS 1000"
+            page = self.request("query", {"query": query}).get("QueryResponse")
+            values = page.get("Customer") if isinstance(page, dict) else None
+            size = min(1000, expected - start + 1)
+            if (not isinstance(values, list) or len(values) != size or page.get("startPosition", start) != start
+                    or page.get("maxResults", size) != size):
+                raise customer_publications.failure("customers_incomplete", "QuickBooks customer pages changed or were incomplete.")
+            for value in values:
+                identifier = value.get("Id") if isinstance(value, dict) else None
+                payment_attempts.reference(identifier)
+                if identifier in seen:
+                    raise customer_publications.failure("customers_incomplete", "QuickBooks repeated a customer across pages.")
+                seen.add(identifier)
+                customers.append(value)
+        if count() != expected:
+            raise customer_publications.failure("customers_incomplete", "The QuickBooks customer list changed during comparison.")
+        return customers
+
+    def write(self, customer, request_id, before_send):
+        if not isinstance(request_id, str) or not re.fullmatch(r"ga-customer-[0-9a-f-]{36}", request_id):
+            raise customer_publications.failure("invalid_request", "The customer request identity is invalid.", 400)
+        identifier = payment_attempts.canonical_uuid(request_id.removeprefix("ga-customer-"))
+        if not isinstance(customer, dict) or customer.get("Notes") != customer_publications.lineage(identifier):
+            raise customer_publications.failure("invalid_request", "The customer lineage is invalid.", 400)
+        validated = customer_publications.validate_customer({key: value for key, value in customer.items() if key != "Notes"})
+        return self.request("customer", {"requestid": request_id},
+                            {**validated, "Notes": customer["Notes"]}, before_send).get("Customer")
+
+
+def decrypt_catalog_payload(ciphertext):
+    encryptor = qbo_token_store()
+    if encryptor is None:
+        return None
+    try:
+        return encryptor.decrypt(ciphertext.encode()).decode()
+    except Exception:
+        return None
+
+
+
 def qbo_token_response(payload: dict[str, object]) -> dict[str, object] | None:
     access_token = payload.get("access_token")
     refresh_token = payload.get("refresh_token")
@@ -978,16 +1379,18 @@ def verify_qbo_webhook_signature(payload: bytes, signature: str | None) -> bool:
     return hmac.compare_digest(expected, signature.strip())
 
 
-def parse_qbo_cloudevents(payload: bytes) -> list[dict[str, str]]:
-    """Parse current Intuit CloudEvents v1 metadata without retaining event data."""
-    decoded = json.loads(payload.decode("utf-8"))
+def parse_qbo_cloudevents(payload: bytes) -> list[dict[str, object]]:
+    """Retain reconciliation identifiers, never arbitrary webhook customer data."""
+    decoded = qbo_change_capture.strict_json(payload.decode("utf-8"))
     if not isinstance(decoded, list) or not 1 <= len(decoded) <= 200:
         raise ValueError("QuickBooks webhook must contain 1 to 200 CloudEvents")
 
-    records: list[dict[str, str]] = []
+    records: list[dict[str, object]] = []
     for event in decoded:
         if not isinstance(event, dict) or event.get("specversion") != "1.0":
             raise ValueError("Unsupported QuickBooks webhook format")
+        if not all(isinstance(event.get(key), str) for key in ("id", "type", "intuitentityid", "intuitaccountid", "time")):
+            raise ValueError("Invalid QuickBooks event identifiers")
         event_id = str(event.get("id") or "").strip()
         event_type = str(event.get("type") or "").strip().lower()
         entity_id = str(event.get("intuitentityid") or "").strip()
@@ -1006,6 +1409,25 @@ def parse_qbo_cloudevents(payload: bytes) -> list[dict[str, str]]:
             raise ValueError("Invalid QuickBooks event time") from error
         if occurred.tzinfo is None:
             raise ValueError("QuickBooks event time must include a timezone")
+        metadata = event.get("data", {})
+        if not isinstance(metadata, dict):
+            raise ValueError("Invalid QuickBooks event metadata")
+        deleted_id = metadata.get("deletedid")
+        if deleted_id is not None and (not isinstance(deleted_id, str)
+                or not re.fullmatch(r"[A-Za-z0-9._:-]{1,200}", deleted_id)
+                or type_match.group(2) != "merged" or deleted_id == entity_id):
+            raise ValueError("Invalid QuickBooks merge identity")
+        alternatives = metadata.get("alternative_ids", [])
+        if not isinstance(alternatives, list) or len(alternatives) > 20:
+            raise ValueError("Invalid QuickBooks alternative identifiers")
+        normalized_alternatives = []
+        for alternative in alternatives:
+            if (not isinstance(alternative, dict) or set(alternative) != {"id", "namespace"}
+                    or not all(isinstance(alternative[key], str) and
+                               re.fullmatch(r"[A-Za-z0-9._:-]{1,200}", alternative[key]) for key in ("id", "namespace"))):
+                raise ValueError("Invalid QuickBooks alternative identifier")
+            if alternative not in normalized_alternatives:
+                normalized_alternatives.append(alternative)
         records.append(
             {
                 "eventID": event_id,
@@ -1014,6 +1436,8 @@ def parse_qbo_cloudevents(payload: bytes) -> list[dict[str, str]]:
                 "entityID": entity_id,
                 "operation": type_match.group(2),
                 "occurredAt": occurred.astimezone(timezone.utc).isoformat(),
+                "deletedEntityID": deleted_id,
+                "alternativeIDs": normalized_alternatives,
             }
         )
     return records
@@ -1866,6 +2290,39 @@ def ensure_column(connection: sqlite3.Connection, table: str, column: str, defin
 
 def initialize_database() -> None:
     with db() as connection:
+        # A company is the durable backend database, not an email domain, QBO
+        # realm, role, or a nonempty client cache. Backups retain this identity.
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS company_identity (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                company_id TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cloudkit_workspace_bindings (
+                container_id TEXT NOT NULL,
+                environment TEXT NOT NULL CHECK (environment IN ('development', 'production')),
+                replica_id TEXT NOT NULL UNIQUE,
+                cloud_account_hash TEXT NOT NULL,
+                approved_at TEXT NOT NULL,
+                approved_by TEXT NOT NULL,
+                PRIMARY KEY(container_id, environment)
+            )
+            """
+        )
+        if connection.execute("SELECT 1 FROM company_identity WHERE singleton = 1").fetchone() is None:
+            has_staff_table = connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cloudkit_staff_shares'").fetchone() is not None
+            has_staff_history = has_staff_table and connection.execute("SELECT 1 FROM cloudkit_staff_shares LIMIT 1").fetchone() is not None
+            if connection.execute("SELECT 1 FROM cloudkit_workspace_bindings LIMIT 1").fetchone() is not None or has_staff_history:
+                raise sqlite3.DatabaseError("Approved CloudKit workspace has lost its company identity; restore the original database")
+            connection.execute(
+                "INSERT INTO company_identity(singleton, company_id, created_at) VALUES (1, ?, ?)",
+                (str(uuid.uuid4()), utc_now()),
+            )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -2027,6 +2484,14 @@ def initialize_database() -> None:
         ensure_column(connection, "documents", "maintenance_contract_id", "TEXT")
         ensure_column(connection, "documents", "customer_equipment_id", "TEXT")
         ensure_column(connection, "documents", "equipment_name", "TEXT")
+        # Existing rows stay explicitly unverified. Never hash today's disk file
+        # to invent historical upload evidence during a migration or download.
+        ensure_column(connection, "documents", "file_size_bytes", "INTEGER")
+        ensure_column(connection, "documents", "file_sha256", "TEXT")
+        connection.execute("""CREATE TRIGGER IF NOT EXISTS documents_upload_proof_immutable_v1
+            BEFORE UPDATE OF file_size_bytes,file_sha256 ON documents
+            WHEN NEW.file_size_bytes IS NOT OLD.file_size_bytes OR NEW.file_sha256 IS NOT OLD.file_sha256
+            BEGIN SELECT RAISE(ABORT, 'Document upload proof is immutable'); END""")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS payment_collections (
@@ -2073,6 +2538,27 @@ def initialize_database() -> None:
         ensure_column(connection, "field_payment_assignments", "completed_at", "TEXT")
         ensure_column(connection, "field_payment_assignments", "completed_by", "TEXT")
         ensure_column(connection, "field_payment_assignments", "completion_payment_id", "TEXT")
+        payment_attempts.initialize_schema(connection)
+        catalog_publications.initialize_schema(connection)
+        customer_publications.initialize_schema(connection)
+        billing_publications.initialize_schema(connection)
+        qbo_link_adoption.initialize_schema(connection)
+        google_connections.initialize_schema(connection)
+        google_mail.initialize_schema(connection)
+        qbo_change_capture.initialize_schema(connection)
+        qbo_document_uploads.initialize_schema(connection)
+        time_worker_mappings.initialize_schema(connection)
+        time_publications.initialize_schema(connection)
+        cloudkit_staff_shares.initialize_schema(connection)
+        staff_replica.initialize_schema(connection)
+        staff_workspace_source.initialize_schema(connection)
+        staff_workspace_selections.initialize_schema(connection)
+        staff_billing_delivery.initialize_schema(connection)
+        staff_workspace_delivery.initialize_schema(connection)
+        staff_workspace_commands.initialize_schema(connection)
+        staff_owner_field_edits.initialize_schema(connection)
+        staff_invoice_lines.initialize_schema(connection)
+        staff_owner_invoice_applications.initialize_schema(connection)
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS customer_communications (
@@ -2134,6 +2620,17 @@ def initialize_database() -> None:
                 appointment_summary TEXT,
                 invoice_reference TEXT,
                 balance_due REAL,
+                estimate_id TEXT,
+                estimate_label TEXT,
+                estimate_amount REAL,
+                estimate_revision TEXT,
+                estimate_response_id TEXT,
+                estimate_response_name TEXT,
+                estimate_responded_at TEXT,
+                estimate_resolution_status TEXT,
+                estimate_resolution_detail TEXT,
+                estimate_resolved_at TEXT,
+                estimate_resolved_by TEXT,
                 expires_at TEXT NOT NULL,
                 revoked_at TEXT,
                 opened_count INTEGER NOT NULL DEFAULT 0,
@@ -2145,6 +2642,17 @@ def initialize_database() -> None:
         )
         ensure_column(connection, "customer_portal_links", "opened_count", "INTEGER NOT NULL DEFAULT 0")
         ensure_column(connection, "customer_portal_links", "last_opened_at", "TEXT")
+        ensure_column(connection, "customer_portal_links", "estimate_id", "TEXT")
+        ensure_column(connection, "customer_portal_links", "estimate_label", "TEXT")
+        ensure_column(connection, "customer_portal_links", "estimate_amount", "REAL")
+        ensure_column(connection, "customer_portal_links", "estimate_revision", "TEXT")
+        ensure_column(connection, "customer_portal_links", "estimate_response_id", "TEXT")
+        ensure_column(connection, "customer_portal_links", "estimate_response_name", "TEXT")
+        ensure_column(connection, "customer_portal_links", "estimate_responded_at", "TEXT")
+        ensure_column(connection, "customer_portal_links", "estimate_resolution_status", "TEXT")
+        ensure_column(connection, "customer_portal_links", "estimate_resolution_detail", "TEXT")
+        ensure_column(connection, "customer_portal_links", "estimate_resolved_at", "TEXT")
+        ensure_column(connection, "customer_portal_links", "estimate_resolved_by", "TEXT")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS qbo_connections (
@@ -2208,6 +2716,13 @@ def initialize_database() -> None:
         connection.execute(
             "CREATE INDEX IF NOT EXISTS qbo_webhook_events_realm_pending ON qbo_webhook_events(realm_id, acknowledged_at, received_at)"
         )
+        # Existing rows have no trustworthy environment/company provenance.
+        # Leave them unbound for review rather than guess during migration.
+        ensure_column(connection, "qbo_webhook_events", "company_id", "TEXT")
+        ensure_column(connection, "qbo_webhook_events", "environment", "TEXT")
+        ensure_column(connection, "qbo_webhook_events", "grant_fingerprint", "TEXT")
+        ensure_column(connection, "qbo_webhook_events", "deleted_entity_id", "TEXT")
+        ensure_column(connection, "qbo_webhook_events", "alternative_ids_json", "TEXT NOT NULL DEFAULT '[]'")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS supplier_order_attempts (
@@ -2828,6 +3343,8 @@ def document_record(row: sqlite3.Row) -> dict[str, object]:
         "equipmentName": row["equipment_name"],
         "customerName": row["customer_name"],
         "createdAt": row["created_at"],
+        "fileSizeBytes": row["file_size_bytes"],
+        "fileSHA256": row["file_sha256"],
     }
 
 
@@ -2840,15 +3357,7 @@ def document_contains_financial_data(row: sqlite3.Row) -> bool:
     and the billing references protects older uploads whose kind predates the
     current document taxonomy.
     """
-    financial_kinds = {
-        "invoice", "estimate", "payment", "receipt", "bill", "financial",
-        "credit", "statement", "transaction", "maintenance_agreement",
-    }
-    kind = str(row["kind"] or "").strip().lower()
-    return bool(
-        row["invoice_id"] or row["estimate_id"] or
-        row["maintenance_contract_id"] or kind in financial_kinds
-    )
+    return document_storage.financial_document(row)
 
 
 def document_is_maintenance_agreement(row: sqlite3.Row) -> bool:
@@ -2884,6 +3393,16 @@ def communication_record(row: sqlite3.Row) -> dict[str, object]:
     }
 
 
+def customer_portal_link_is_active(row: sqlite3.Row | None) -> bool:
+    if row is None or row["revoked_at"] is not None:
+        return False
+    try:
+        expires_at = datetime.fromisoformat(str(row["expires_at"]).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    return expires_at.tzinfo is not None and expires_at > datetime.now(timezone.utc)
+
+
 def customer_portal_link_record(row: sqlite3.Row) -> dict[str, object]:
     """Return management metadata only; the token hash and capability URL never leave storage."""
     return {
@@ -2896,6 +3415,17 @@ def customer_portal_link_record(row: sqlite3.Row) -> dict[str, object]:
         "appointmentSummary": row["appointment_summary"],
         "invoiceReference": row["invoice_reference"],
         "balanceDue": row["balance_due"],
+        "estimateID": row["estimate_id"],
+        "estimateLabel": row["estimate_label"],
+        "estimateAmount": row["estimate_amount"],
+        "estimateRevision": row["estimate_revision"],
+        "estimateResponseID": row["estimate_response_id"],
+        "estimateResponseName": row["estimate_response_name"],
+        "estimateRespondedAt": row["estimate_responded_at"],
+        "estimateResolutionStatus": row["estimate_resolution_status"],
+        "estimateResolutionDetail": row["estimate_resolution_detail"],
+        "estimateResolvedAt": row["estimate_resolved_at"],
+        "estimateResolvedBy": row["estimate_resolved_by"],
         "expiresAt": row["expires_at"],
         "revokedAt": row["revoked_at"],
         "openedCount": max(int(row["opened_count"] or 0), 0),
@@ -2935,6 +3465,8 @@ def qbo_webhook_event_record(row: sqlite3.Row) -> dict[str, object]:
         "operation": row["operation"],
         "occurredAt": row["occurred_at"],
         "receivedAt": row["received_at"],
+        "deletedEntityID": row["deleted_entity_id"],
+        "alternativeIDs": json.loads(row["alternative_ids_json"]),
     }
 
 
@@ -2993,19 +3525,55 @@ def supplier_order_acceptance_record(row: sqlite3.Row, *, replayed: bool) -> dic
     return safe
 
 
-def record_audit_event(actor_email: str | None, action: str, subject_type: str, subject_id: str | None = None) -> None:
+def cloudkit_workspace_binding_record(row: sqlite3.Row, company_id: str) -> dict[str, str]:
+    return {
+        "companyID": company_id,
+        "containerID": str(row["container_id"]),
+        "environment": str(row["environment"]),
+        "replicaID": str(row["replica_id"]),
+        "cloudAccountHash": str(row["cloud_account_hash"]),
+        "approvedAt": str(row["approved_at"]),
+    }
+
+
+def company_workspace_identity() -> dict[str, object]:
+    with db() as connection:
+        company = connection.execute("SELECT company_id FROM company_identity WHERE singleton = 1").fetchone()
+        if company is None:
+            raise sqlite3.DatabaseError("Company identity is missing; restore the original database")
+        bindings = connection.execute(
+            "SELECT * FROM cloudkit_workspace_bindings ORDER BY container_id, environment"
+        ).fetchall()
+    return {
+        "companyID": str(company["company_id"]),
+        "containerID": CLOUDKIT_CONTAINER_ID,
+        "bindings": [cloudkit_workspace_binding_record(row, str(company["company_id"])) for row in bindings],
+    }
+
+
+def record_audit_event(
+    actor_email: str | None,
+    action: str,
+    subject_type: str,
+    subject_id: str | None = None,
+    *,
+    connection: sqlite3.Connection | None = None,
+) -> None:
     """Record high-impact actions without storing tokens, payment details, or customer content."""
     actor = normalize_email(actor_email)
     if not actor:
         return
-    with db() as connection:
-        connection.execute(
-            """
-            INSERT INTO audit_events(id, occurred_at, actor_email, action, subject_type, subject_id)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (str(uuid.uuid4()), utc_now(), actor, action, subject_type, subject_id),
-        )
+    if connection is None:
+        with db() as audit_connection:
+            record_audit_event(actor, action, subject_type, subject_id, connection=audit_connection)
+        return
+    connection.execute(
+        """
+        INSERT INTO audit_events(id, occurred_at, actor_email, action, subject_type, subject_id)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (str(uuid.uuid4()), utc_now(), actor, action, subject_type, subject_id),
+    )
 
 
 class GunnAireBackendHandler(BaseHTTPRequestHandler):
@@ -3018,6 +3586,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == google_connections.CALLBACK_PATH:
+            self.handle_google_callback(parsed)
+            return
         if parsed.path == "/health":
             self.write_json(
                 {"status": "ok", "serviceVersion": SERVICE_VERSION, "time": utc_now()},
@@ -3033,6 +3604,70 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/session":
             self.write_json({"user": self.principal()})
+            return
+        if parsed.path == "/api/google/connection" or parsed.path.startswith("/api/google/authorizations/"):
+            self.handle_google_connection(parsed, method="GET")
+            return
+        if parsed.path.startswith("/api/google/mail/"):
+            self.handle_google_mail(parsed, method="GET")
+            return
+        if parsed.path == "/api/payment-attempts" or parsed.path.startswith("/api/payment-attempts/"):
+            self.handle_payment_attempt(parsed, method="GET")
+            return
+        if parsed.path in ("/api/field-payment-review", "/api/field-payment-review/context"):
+            self.handle_field_payment_review(parsed)
+            return
+        if parsed.path == "/api/catalog-publications" or parsed.path.startswith("/api/catalog-publications/"):
+            self.handle_catalog_publication(parsed, method="GET")
+            return
+        if parsed.path == "/api/time-worker-mappings" or parsed.path.startswith("/api/time-worker-mappings/"):
+            self.handle_time_worker_mapping(parsed, method="GET")
+            return
+        if parsed.path == "/api/time-publications" or parsed.path.startswith("/api/time-publications/"):
+            self.handle_time_publication(parsed, method="GET")
+            return
+        if parsed.path == "/api/customer-publications" or parsed.path.startswith("/api/customer-publications/"):
+            self.handle_customer_publication(parsed, method="GET")
+            return
+        if parsed.path == "/api/qbo-link-reviews" or parsed.path.startswith("/api/qbo-link-reviews/"):
+            self.handle_qbo_link_review(parsed, method="GET")
+            return
+        if parsed.path == "/api/qbo-document-uploads" or parsed.path.startswith("/api/qbo-document-uploads/"):
+            self.handle_qbo_document_upload(parsed, method="GET")
+            return
+        if parsed.path == "/api/qbo/change-capture":
+            self.handle_qbo_change_capture(parsed, method="GET")
+            return
+        if parsed.path == "/api/billing-publications" or parsed.path.startswith("/api/billing-publications/") or parsed.path in ("/api/job-billing-assignments", "/api/job-billing-assignments/connection"):
+            self.handle_billing_publication(parsed, method="GET")
+            return
+        if parsed.path == "/api/workspace":
+            if not self.require_application_session():
+                return
+            try:
+                workspace = company_workspace_identity()
+            except sqlite3.Error:
+                self.write_json({"error": "Company workspace identity is unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            self.write_json({"user": self.principal(), "workspace": workspace})
+            return
+        if parsed.path == "/api/workspace/staff-shares" or parsed.path.startswith("/api/workspace/staff-shares/"):
+            self.handle_cloudkit_staff_share(parsed, method="GET")
+            return
+        if parsed.path == "/api/workspace/replica-records":
+            self.handle_staff_replica(parsed, method="GET")
+            return
+        if parsed.path == "/api/workspace/full-records":
+            self.handle_staff_workspace_source(parsed, method="GET")
+            return
+        if parsed.path == "/api/workspace/invoice-line-requests" or parsed.path.startswith("/api/workspace/invoice-line-requests/"):
+            self.handle_staff_invoice_line_review(parsed)
+            return
+        if parsed.path == "/api/workspace/invoice-applications" or parsed.path.startswith("/api/workspace/invoice-applications/"):
+            self.handle_staff_owner_invoice_applications(parsed, method="GET")
+            return
+        if parsed.path == "/api/workspace/field-edits" or parsed.path.startswith("/api/workspace/field-edits/"):
+            self.handle_staff_owner_field_edits(parsed, method="GET")
             return
         if parsed.path == "/api/customer-financing":
             self.write_json(customer_financing_readiness())
@@ -3179,14 +3814,24 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 ).fetchall()
             self.write_json({"serviceRequests": [public_service_request_record(row) for row in rows]})
             return
-        if parsed.path.startswith("/api/documents/") and parsed.path.endswith("/download"):
-            document_id = unquote(parsed.path.removeprefix("/api/documents/").removesuffix("/download")).strip()
-            self.download_document(document_id)
+        if parsed.path.startswith("/api/documents/"):
+            parts = parsed.path.removeprefix("/api/documents/").split("/")
+            if (parsed.query or len(parts) != 2 or parts[1] not in ("download", "manifest")
+                    or re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", parts[0]) is None):
+                self.write_json({"error": "Use an exact document endpoint"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            self.download_document(parts[0], manifest_only=parts[1] == "manifest")
             return
         self.write_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/portal/") and parsed.path.endswith("/estimate-response"):
+            token = unquote(
+                parsed.path.removeprefix("/portal/").removesuffix("/estimate-response")
+            ).strip("/")
+            self.record_customer_portal_estimate_response(token)
+            return
         if parsed.path == "/api/qbo/webhooks":
             self.receive_qbo_webhook()
             return
@@ -3207,6 +3852,59 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/auth/logout":
             self.revoke_application_session()
+            return
+        if parsed.path == "/api/google/authorizations" or parsed.path.startswith("/api/google/authorizations/") or parsed.path == "/api/google/connection/disconnect":
+            self.handle_google_connection(parsed, method="POST")
+            return
+        if parsed.path.startswith("/api/google/mail/"):
+            self.handle_google_mail(parsed, method="POST")
+            return
+        if parsed.path == "/api/payment-attempts" or parsed.path.startswith("/api/payment-attempts/"):
+            self.handle_payment_attempt(parsed, method="POST")
+            return
+        if parsed.path == "/api/catalog-publications" or parsed.path.startswith("/api/catalog-publications/"):
+            self.handle_catalog_publication(parsed, method="POST")
+            return
+        if parsed.path == "/api/time-worker-mappings" or parsed.path.startswith("/api/time-worker-mappings/"):
+            self.handle_time_worker_mapping(parsed, method="POST")
+            return
+        if parsed.path == "/api/time-publications" or parsed.path.startswith("/api/time-publications/"):
+            self.handle_time_publication(parsed, method="POST")
+            return
+        if parsed.path == "/api/customer-publications" or parsed.path.startswith("/api/customer-publications/"):
+            self.handle_customer_publication(parsed, method="POST")
+            return
+        if parsed.path == "/api/qbo-link-reviews" or parsed.path.startswith("/api/qbo-link-reviews/"):
+            self.handle_qbo_link_review(parsed, method="POST")
+            return
+        if parsed.path == "/api/qbo-document-uploads" or parsed.path.startswith("/api/qbo-document-uploads/"):
+            self.handle_qbo_document_upload(parsed, method="POST")
+            return
+        if parsed.path == "/api/qbo/change-capture":
+            self.handle_qbo_change_capture(parsed, method="POST")
+            return
+        if parsed.path == "/api/billing-publications" or parsed.path.startswith("/api/billing-publications/") or parsed.path == "/api/job-billing-assignments":
+            self.handle_billing_publication(parsed, method="POST")
+            return
+        if parsed.path == "/api/workspace/bind":
+            if not self.require_application_session() or not self.require_admin():
+                return
+            self.approve_cloudkit_workspace()
+            return
+        if parsed.path == "/api/workspace/staff-shares" or parsed.path.startswith("/api/workspace/staff-shares/"):
+            self.handle_cloudkit_staff_share(parsed, method="POST")
+            return
+        if parsed.path == "/api/workspace/replica-records":
+            self.handle_staff_replica(parsed, method="POST")
+            return
+        if parsed.path == "/api/workspace/full-records":
+            self.handle_staff_workspace_source(parsed, method="POST")
+            return
+        if parsed.path.startswith("/api/workspace/field-edits/"):
+            self.handle_staff_owner_field_edits(parsed, method="POST")
+            return
+        if parsed.path == "/api/workspace/invoice-applications" or parsed.path.startswith("/api/workspace/invoice-applications/"):
+            self.handle_staff_owner_invoice_applications(parsed, method="POST")
             return
         if parsed.path == "/api/push-devices":
             if not self.require_application_session():
@@ -3246,6 +3944,15 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             if not self.require_admin():
                 return
             self.create_customer_portal_link()
+            return
+        if parsed.path.startswith("/api/customer-portal-links/") and parsed.path.endswith("/estimate-response-resolution"):
+            if not self.require_admin():
+                return
+            link_id = unquote(
+                parsed.path.removeprefix("/api/customer-portal-links/")
+                .removesuffix("/estimate-response-resolution")
+            ).strip("/")
+            self.resolve_customer_portal_estimate_response(link_id)
             return
         if parsed.path.startswith("/api/service-requests/") and parsed.path.endswith("/claim"):
             if not self.require_dispatch_access():
@@ -3565,6 +4272,420 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         )
         return False
 
+    def handle_cloudkit_staff_share(self, parsed, *, method):
+        parts = parsed.path.removeprefix("/api/workspace/staff-shares/").split("/")
+        if len(parts) >= 2 and parts[1] == "field-updates":
+            self.handle_staff_field_updates(parsed, method=method, parts=parts)
+            return
+        if len(parts) >= 2 and parts[1] == "full-selections":
+            self.handle_staff_workspace_selection(parsed, method=method, parts=parts)
+            return
+        if len(parts) >= 2 and parts[1] == "projections":
+            self.handle_staff_replica(parsed, method=method, parts=parts)
+            return
+        if not self.require_application_session():
+            return
+        service = cloudkit_staff_shares.StaffShares(db, record_audit_event,
+                                                   encrypt=encrypt_catalog_payload, decrypt=decrypt_catalog_payload)
+        suffix = parsed.path.removeprefix("/api/workspace/staff-shares")
+        parts = suffix[1:].split("/") if suffix.startswith("/") else []
+        try:
+            if method == "GET" and (len(parts) <= 1 or (len(parts) == 2 and parts[1] in ("participant", "owner-authority"))):
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                if any(len(value) != 1 for value in query.values()):
+                    raise cloudkit_staff_shares.fail("invalid_query", "Use one value for each sharing query field.", 400)
+                values = {key: value[0] for key, value in query.items()}
+                if len(parts) == 2 and parts[1] == "participant":
+                    result = service.lookup_participant(self._application_session_id, parts[0], values)
+                else:
+                    result = service.read(self._application_session_id, values, parts[0] if parts else None,
+                                          administrator=len(parts) == 2)
+            elif method == "POST" and not parsed.query:
+                payload = json.loads(self.read_limited_body(8192).decode("utf-8"))
+                if not parts:
+                    result = service.enroll(self._application_session_id, payload)
+                elif len(parts) == 2:
+                    result = service.change(self._application_session_id, parts[0], parts[1], payload)
+                else:
+                    raise cloudkit_staff_shares.fail("not_found", "Sharing action not found.", 404)
+            else:
+                raise cloudkit_staff_shares.fail("not_found", "Sharing action not found.", 404)
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError):
+            self.write_json({"error": "Invalid CloudKit staff sharing request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Sharing storage is unavailable. Keep the original request for recovery.",
+                             "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+
+    def handle_staff_field_updates(self, parsed, *, method, parts):
+        if not self.require_application_session():
+            return
+        shares = cloudkit_staff_shares.StaffShares(db, record_audit_event,
+            encrypt=encrypt_catalog_payload, decrypt=decrypt_catalog_payload)
+        try:
+            if method != "GET" or len(parts) not in (2, 3):
+                raise cloudkit_staff_shares.fail("not_found", "Field update action not found.", 404)
+            query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+            if any(len(value) != 1 for value in query.values()):
+                raise cloudkit_staff_shares.fail("invalid_query", "Use one value per query field.", 400)
+            result = staff_workspace_field_updates.StaffWorkspaceFieldUpdates(shares).read_updates(
+                self._application_session_id, parts[0], parts[2] if len(parts) == 3 else None,
+                {key: value[0] for key, value in query.items()})
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError, RecursionError):
+            self.write_json({"error": "Invalid field update query", "code": "invalid_request"}, status=400)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Field updates are unavailable. Original submissions are retained.",
+                             "code": "storage_unavailable"}, status=503)
+
+    def handle_staff_workspace_selection(self, parsed, *, method, parts):
+        if not self.require_application_session():
+            return
+        shares = cloudkit_staff_shares.StaffShares(db, record_audit_event,
+                                                  encrypt=encrypt_catalog_payload, decrypt=decrypt_catalog_payload)
+        service = staff_workspace_selections.StaffWorkspaceSelections(shares)
+        try:
+            if len(parts) >= 4 and parts[3] == "content":
+                delivery = staff_workspace_delivery.StaffWorkspaceDelivery(shares)
+                if len(parts) == 5 and parts[4] == "cloud-key" and method == "GET":
+                    cloud = staff_workspace_cloud.StaffWorkspaceCloud(shares)
+                    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                    if any(len(value) != 1 for value in query.values()):
+                        raise cloudkit_staff_shares.fail("invalid_query", "Use one value per seal-key query field.", 400)
+                    payload = {key: value[0] for key, value in query.items()}
+                    result = cloud.release_key(self._application_session_id, parts[0], parts[2], payload)
+                elif len(parts) == 5 and parts[4] == "cloud-seal" and method in ("GET", "POST"):
+                    cloud = staff_workspace_cloud.StaffWorkspaceCloud(shares)
+                    if method == "POST" and not parsed.query:
+                        payload = qbo_change_capture.strict_json(self.read_limited_body(8192).decode("utf-8"))
+                    elif method == "GET":
+                        query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                        if any(len(value) != 1 for value in query.values()):
+                            raise cloudkit_staff_shares.fail("invalid_query", "Use one value per seal query field.", 400)
+                        payload = {key: value[0] for key, value in query.items()}
+                    else:
+                        raise cloudkit_staff_shares.fail("invalid_query", "Seal preparation cannot contain query fields.", 400)
+                    result = cloud.seal(self._application_session_id, parts[0], parts[2], payload, prepare=method == "POST")
+                elif method == "POST" and len(parts) == 4 and not parsed.query:
+                    payload = qbo_change_capture.strict_json(self.read_limited_body(8192).decode("utf-8"))
+                    result = delivery.prepare(self._application_session_id, parts[0], parts[2], payload)
+                elif method == "POST" and len(parts) == 5 and parts[4] == "commands" and not parsed.query:
+                    commands = staff_workspace_commands.StaffWorkspaceCommands(shares)
+                    payload = qbo_change_capture.strict_json(self.read_limited_body(8192).decode("utf-8"))
+                    result = commands.submit(self._application_session_id, parts[0], parts[2], payload)
+                elif method == "POST" and len(parts) == 5 and parts[4] == "invoice-line-requests" and not parsed.query:
+                    payload = qbo_change_capture.strict_json(self.read_limited_body(16384).decode("utf-8"))
+                    result = staff_invoice_lines.StaffInvoiceLines(shares).submit(self._application_session_id, parts[0], parts[2], payload)
+                elif method == "GET" and len(parts) == 5 and parts[4] == "media":
+                    media = staff_workspace_media.StaffWorkspaceMedia(shares)
+                    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                    if any(len(value) != 1 for value in query.values()):
+                        raise cloudkit_staff_shares.fail("invalid_query", "Use one value per media query field.", 400)
+                    result = media.authorize(self._application_session_id, parts[0], parts[2],
+                                             {key: value[0] for key, value in query.items()})
+                elif method == "GET" and len(parts) == 6 and parts[4] == "media" and parts[5] == "bytes":
+                    media = staff_workspace_media.StaffWorkspaceMedia(shares)
+                    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                    if any(len(value) != 1 for value in query.values()):
+                        raise cloudkit_staff_shares.fail("invalid_query", "Use one value per media-bytes query field.", 400)
+                    payload = media.download(self._application_session_id, parts[0], parts[2],
+                                             {key: value[0] for key, value in query.items()},
+                                             storage_root=STORAGE_ROOT)
+                    self.write_media_bytes(payload["data"], payload["contentType"], payload["filename"])
+                    return
+                elif method == "GET" and (len(parts) == 4 or len(parts) == 5 and parts[4] == "chunks"):
+                    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                    if any(len(value) != 1 for value in query.values()):
+                        raise cloudkit_staff_shares.fail("invalid_query", "Use one value per content query field.", 400)
+                    result = delivery.read(self._application_session_id, parts[0], parts[2],
+                        {key: value[0] for key, value in query.items()}, chunks=len(parts) == 5)
+                else:
+                    raise cloudkit_staff_shares.fail("not_found", "Workspace content action not found.", 404)
+            elif len(parts) >= 4 and parts[3] == "billing":
+                delivery = staff_billing_delivery.StaffBillingDelivery(shares)
+                if method == "POST" and len(parts) == 4 and not parsed.query:
+                    payload = qbo_change_capture.strict_json(self.read_limited_body(8192).decode("utf-8"))
+                    result = delivery.prepare(self._application_session_id, parts[0], parts[2], payload)
+                elif method == "GET" and (len(parts) == 4 or len(parts) == 5 and parts[4] == "documents"):
+                    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                    if any(len(value) != 1 for value in query.values()):
+                        raise cloudkit_staff_shares.fail("invalid_query", "Use one value per billing query field.", 400)
+                    result = delivery.read(self._application_session_id, parts[0], parts[2],
+                        {key: value[0] for key, value in query.items()}, documents=len(parts) == 5)
+                else:
+                    raise cloudkit_staff_shares.fail("not_found", "Billing content action not found.", 404)
+            elif method == "POST" and len(parts) == 2 and not parsed.query:
+                payload = qbo_change_capture.strict_json(self.read_limited_body(8192).decode("utf-8"))
+                result = service.prepare(self._application_session_id, parts[0], payload)
+            elif method == "GET" and (len(parts) == 3 or len(parts) == 4 and parts[3] == "records"):
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                if any(len(value) != 1 for value in query.values()):
+                    raise cloudkit_staff_shares.fail("invalid_query", "Use one value per selection query field.", 400)
+                result = service.read(self._application_session_id, parts[0], parts[2],
+                                      {key: value[0] for key, value in query.items()}, records=len(parts) == 4)
+            else:
+                raise cloudkit_staff_shares.fail("not_found", "Full selection action not found.", 404)
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError, RecursionError):
+            self.write_json({"error": "Invalid full workspace selection request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Selection storage is unavailable. Retain the original operation for recovery.",
+                             "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+
+    def handle_staff_invoice_line_review(self, parsed):
+        if not self.require_application_session():
+            return
+        shares = cloudkit_staff_shares.StaffShares(db, record_audit_event,
+            encrypt=encrypt_catalog_payload, decrypt=decrypt_catalog_payload)
+        try:
+            suffix = parsed.path.removeprefix("/api/workspace/invoice-line-requests")
+            parts = suffix[1:].split("/") if suffix else []
+            if len(parts) > 1 or parts and not parts[0]:
+                raise cloudkit_staff_shares.fail("invalid_request", "Use an exact invoice-line request review endpoint.", 400)
+            query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+            if any(len(value) != 1 for value in query.values()):
+                raise cloudkit_staff_shares.fail("invalid_query", "Use one value per invoice-line review query.", 400)
+            result = staff_invoice_lines.StaffInvoiceLines(shares).review(
+                self._application_session_id, parts[0] if parts else None,
+                {key: value[0] for key, value in query.items()})
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError, RecursionError):
+            self.write_json({"error": "Invalid invoice-line review request", "code": "invalid_request"}, status=400)
+        except (sqlite3.Error, RuntimeError, KeyError):
+            self.write_json({"error": "Invoice-line review is unavailable. Original saved requests are retained.",
+                             "code": "storage_unavailable"}, status=503)
+
+    def handle_staff_owner_invoice_applications(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        shares = cloudkit_staff_shares.StaffShares(db, record_audit_event,
+            encrypt=encrypt_catalog_payload, decrypt=decrypt_catalog_payload)
+        service = staff_owner_invoice_applications.StaffOwnerInvoiceApplications(shares)
+        try:
+            suffix = parsed.path.removeprefix("/api/workspace/invoice-applications")
+            parts = suffix.removeprefix("/").split("/") if suffix else []
+            if method == "GET" and len(parts) == 1:
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                if any(len(value) != 1 for value in query.values()):
+                    raise staff_owner_invoice_applications.contract.invalid()
+                result = service.read_application(self._application_session_id, parts[0], {key: value[0] for key, value in query.items()})
+            elif method == "POST" and len(parts) == 2 and parts[1] in ("prepare", "confirm") and not parsed.query:
+                payload = qbo_change_capture.strict_json(self.read_limited_body(staff_owner_invoice_applications.MAX_BYTES).decode("utf-8"))
+                result = service.change(self._application_session_id, parts[0], parts[1], payload)
+            else:
+                raise cloudkit_staff_shares.fail("not_found", "Use an exact office invoice application endpoint.", 404)
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError, RecursionError):
+            self.write_json({"error": "Invalid office invoice proposal", "code": "invalid_request"}, status=400)
+        except (sqlite3.Error, RuntimeError, KeyError, AttributeError):
+            self.write_json({"error": "Office invoice recovery is unavailable. Keep the original approved proposal.", "code": "storage_unavailable"}, status=503)
+
+    def handle_staff_owner_field_edits(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        shares = cloudkit_staff_shares.StaffShares(db, record_audit_event,
+            encrypt=encrypt_catalog_payload, decrypt=decrypt_catalog_payload)
+        service = staff_owner_field_edits.StaffOwnerFieldEdits(shares)
+        try:
+            suffix = parsed.path.removeprefix("/api/workspace/field-edits")
+            parts = suffix.removeprefix("/").split("/") if suffix else []
+            if method == "GET" and len(parts) <= 1:
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                if any(len(value) != 1 for value in query.values()):
+                    raise cloudkit_staff_shares.fail("invalid_query", "Use one value per field-edit query.", 400)
+                result = service.read(self._application_session_id, parts[0] if parts else None,
+                    {key: value[0] for key, value in query.items()})
+            elif method == "POST" and len(parts) == 2 and parts[1] in ("prepare", "confirm", "keep-office", "confirm-observed", "release") and not parsed.query:
+                payload = qbo_change_capture.strict_json(self.read_limited_body(7 * 1024 * 1024).decode("utf-8"))
+                result = (service.keep_office(self._application_session_id, parts[0], payload) if parts[1] == "keep-office"
+                          else service.confirm_observed(self._application_session_id, parts[0], payload) if parts[1] == "confirm-observed"
+                          else service.release_claim(self._application_session_id, parts[0], payload) if parts[1] == "release"
+                          else service.change(self._application_session_id, parts[0], parts[1], payload))
+            else:
+                raise cloudkit_staff_shares.fail("invalid_request", "Use an exact field-edit endpoint.", 400)
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError, RecursionError):
+            self.write_json({"error": "Invalid field-edit request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
+        except (sqlite3.Error, RuntimeError, KeyError):
+            self.write_json({"error": "Field-edit recovery storage is unavailable. Retain saved work.",
+                             "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+
+    def handle_staff_workspace_source(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        shares = cloudkit_staff_shares.StaffShares(db, record_audit_event,
+                                                  encrypt=encrypt_catalog_payload, decrypt=decrypt_catalog_payload)
+        service = staff_workspace_source.StaffWorkspaceSource(shares)
+        try:
+            if method == "GET":
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                if any(len(value) != 1 for value in query.values()):
+                    raise cloudkit_staff_shares.fail("invalid_query", "Use one value per owner query field.", 400)
+                result = service.source_page(self._application_session_id, {key: value[0] for key, value in query.items()})
+            elif method == "POST" and not parsed.query:
+                payload = qbo_change_capture.strict_json(self.read_limited_body(8 * 1024 * 1024).decode("utf-8"))
+                result = service.apply(self._application_session_id, payload)
+            else:
+                raise cloudkit_staff_shares.fail("invalid_request", "Use the exact original owner source endpoint.", 400)
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError, RecursionError):
+            self.write_json({"error": "Invalid full owner source request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Owner source storage is unavailable. Retain original local work and pending requests.",
+                             "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+
+    def handle_staff_replica(self, parsed, *, method, parts=None):
+        if not self.require_application_session():
+            return
+        shares = cloudkit_staff_shares.StaffShares(db, record_audit_event,
+                                                  encrypt=encrypt_catalog_payload, decrypt=decrypt_catalog_payload)
+        service = staff_replica.StaffReplica(shares)
+        try:
+            if method == "GET":
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                if any(len(value) != 1 for value in query.values()):
+                    raise cloudkit_staff_shares.fail("invalid_query", "Use one value for each replica query field.", 400)
+                payload = {key: value[0] for key, value in query.items()}
+                if parts is None:
+                    result = service.source_page(self._application_session_id, payload)
+                elif len(parts) == 4 and parts[3] in ("cloud-payload", "cloud-key"):
+                    result = service.read_cloud_transport(self._application_session_id, parts[0], parts[2], payload,
+                                                          content=parts[3] == "cloud-payload")
+                elif len(parts) == 3 or (len(parts) == 4 and parts[3] == "payload"):
+                    result = service.read_projection(self._application_session_id, parts[0], parts[2], payload, content=len(parts) == 4)
+                else:
+                    raise cloudkit_staff_shares.fail("not_found", "Replica action not found.", 404)
+            elif method == "POST" and not parsed.query:
+                payload = qbo_change_capture.strict_json(self.read_limited_body(2 * 1024 * 1024 if parts is None else 8192).decode("utf-8"))
+                if parts is None:
+                    result = service.apply(self._application_session_id, payload)
+                elif len(parts) == 2:
+                    result = service.projection(self._application_session_id, parts[0], payload)
+                else:
+                    raise cloudkit_staff_shares.fail("not_found", "Replica action not found.", 404)
+            else:
+                raise cloudkit_staff_shares.fail("not_found", "Replica action not found.", 404)
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError):
+            self.write_json({"error": "Invalid operational replica request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Operational replica storage is unavailable. Keep original local work for recovery.",
+                             "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+
+    def approve_cloudkit_workspace(self) -> None:
+        """An explicit, fresh admin approval; never adopt records on login.
+
+        The digest is an admin-approved device assertion, not Apple identity
+        attestation. Clients must obtain the actual current CloudKit user ID
+        through CKContainer and match both this binding and replica metadata.
+        """
+        try:
+            payload = json.loads(self.read_limited_body(4096).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            self.write_json({"error": "Invalid workspace approval"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not isinstance(payload, dict):
+            self.write_json({"error": "Invalid workspace approval"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        company_id = payload.get("expectedCompanyID")
+        container_id = payload.get("containerID")
+        environment = payload.get("environment")
+        account_hash = payload.get("cloudAccountHash")
+        try:
+            valid_company = isinstance(company_id, str) and str(uuid.UUID(company_id)) == company_id
+        except ValueError:
+            valid_company = False
+        if (
+            not valid_company
+            or container_id != CLOUDKIT_CONTAINER_ID
+            or environment not in ("development", "production")
+            or not isinstance(account_hash, str)
+            or re.fullmatch(r"[0-9a-f]{64}", account_hash) is None
+            or payload.get("confirmCompanyDataOwnership") is not True
+        ):
+            self.write_json({"error": "Invalid or unconfirmed workspace approval"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        result = None
+        created = False
+        failure = None
+        try:
+            with db() as connection:
+                # Recheck role, revocation and age inside the write transaction,
+                # so a stale authenticated request cannot win a later approval.
+                connection.execute("BEGIN IMMEDIATE")
+                session = connection.execute(
+                    """SELECT s.*, u.role, u.is_active FROM auth_sessions s
+                       JOIN users u ON u.email = s.email WHERE s.id = ?""",
+                    (getattr(self, "_application_session_id", None),),
+                ).fetchone()
+                now = datetime.now(timezone.utc)
+                is_fresh_admin = False
+                if session is not None and session["revoked_at"] is None and session["role"] == "Admin" and bool(session["is_active"]):
+                    try:
+                        issued = datetime.fromisoformat(str(session["created_at"]).replace("Z", "+00:00"))
+                        expires = datetime.fromisoformat(str(session["expires_at"]).replace("Z", "+00:00"))
+                        is_fresh_admin = (
+                            issued.tzinfo is not None and expires.tzinfo is not None
+                            and expires > now
+                            and 0 <= (now - issued).total_seconds() <= WORKSPACE_APPROVAL_MAX_SESSION_AGE_SECONDS
+                        )
+                    except ValueError:
+                        pass
+                if not is_fresh_admin:
+                    failure = (HTTPStatus.FORBIDDEN, "Sign in again as an administrator before approving a company workspace")
+                else:
+                    company = connection.execute("SELECT company_id FROM company_identity WHERE singleton = 1").fetchone()
+                    if company is None:
+                        failure = (HTTPStatus.SERVICE_UNAVAILABLE, "Company workspace identity is unavailable")
+                    elif company["company_id"] != company_id:
+                        failure = (HTTPStatus.CONFLICT, "Company identity changed; reload the verified business session")
+                    else:
+                        row = connection.execute(
+                            "SELECT * FROM cloudkit_workspace_bindings WHERE container_id = ? AND environment = ?",
+                            (container_id, environment),
+                        ).fetchone()
+                        if row is not None and row["cloud_account_hash"] != account_hash:
+                            failure = (HTTPStatus.CONFLICT, "A different CloudKit account is already approved; workspace rebinding requires reviewed data migration")
+                        elif row is not None:
+                            result = cloudkit_workspace_binding_record(row, company_id)
+                        else:
+                            replica_id = str(uuid.uuid4())
+                            connection.execute(
+                                """INSERT INTO cloudkit_workspace_bindings
+                                   (container_id, environment, replica_id, cloud_account_hash, approved_at, approved_by)
+                                   VALUES (?, ?, ?, ?, ?, ?)""",
+                                (container_id, environment, replica_id, account_hash, now.isoformat(), session["email"]),
+                            )
+                            record_audit_event(session["email"], "approve", "cloudkit-workspace", replica_id, connection=connection)
+                            row = connection.execute(
+                                "SELECT * FROM cloudkit_workspace_bindings WHERE replica_id = ?", (replica_id,)
+                            ).fetchone()
+                            result = cloudkit_workspace_binding_record(row, company_id)
+                            created = True
+        except sqlite3.Error:
+            self.write_json({"error": "Workspace approval was not saved; retry after storage recovers"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        if failure is not None:
+            self.write_json({"error": failure[1]}, status=failure[0])
+            return
+        self.write_json({"binding": result}, status=HTTPStatus.CREATED if created else HTTPStatus.OK)
+
     def register_push_device(self) -> None:
         try:
             raw = self.read_limited_body(16 * 1024)
@@ -3765,9 +4886,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
 
     def has_billing_document_access(self) -> bool:
         principal = self.principal()
-        return principal is not None and principal.get("role") in {
-            "Admin", "Accounting", "Field Technician",
-        }
+        return principal is not None and principal.get("role") in document_storage.BILLING_ROLES
 
     def has_maintenance_agreement_document_access(self) -> bool:
         principal = self.principal()
@@ -3848,25 +4967,30 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             self.write_json({"error": "Invalid QuickBooks CloudEvents payload"}, status=HTTPStatus.BAD_REQUEST, require_auth=False)
             return
 
-        expected_realm = current_qbo_realm_id()
         received_at = utc_now()
         stored = 0
-        if expected_realm is not None:
-            with db() as connection:
+        with db() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            grant = connection.execute("SELECT * FROM qbo_connections WHERE id=1").fetchone()
+            company = connection.execute("SELECT company_id FROM company_identity WHERE singleton=1").fetchone()
+            if grant is not None and company is not None:
                 for event in events:
-                    if event["realmID"] != expected_realm:
+                    if event["realmID"] != grant["realm_id"]:
                         continue
                     stored += connection.execute(
                         """
                         INSERT INTO qbo_webhook_events(
                             event_id, realm_id, entity_type, entity_id, operation,
-                            occurred_at, received_at, acknowledged_at, acknowledged_by
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+                            occurred_at, received_at, acknowledged_at, acknowledged_by,
+                            company_id, environment, grant_fingerprint, deleted_entity_id, alternative_ids_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)
                         ON CONFLICT(event_id) DO NOTHING
                         """,
                         (
                             event["eventID"], event["realmID"], event["entityType"],
                             event["entityID"], event["operation"], event["occurredAt"], received_at,
+                            company["company_id"], grant["environment"], payment_attempts.grant_fingerprint(grant),
+                            event["deletedEntityID"], catalog_publications.canonical(event["alternativeIDs"]),
                         ),
                     ).rowcount
         # Always acknowledge a valid signed delivery. Realm-mismatched or duplicate
@@ -3921,7 +5045,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         text_fields = (
             "customerName", "customerEmail", "serviceCallID", "invoiceID",
-            "title", "appointmentSummary", "invoiceReference",
+            "title", "appointmentSummary", "invoiceReference", "estimateID",
+            "estimateLabel", "estimateRevision",
         )
         if any(payload.get(key) is not None and not isinstance(payload.get(key), str) for key in text_fields):
             self.write_json({"error": "Portal link text fields are invalid"}, status=HTTPStatus.BAD_REQUEST)
@@ -3934,6 +5059,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         title = (payload.get("title") or "GunnAire service update").strip()
         appointment_summary = (payload.get("appointmentSummary") or "").strip() or None
         invoice_reference = (payload.get("invoiceReference") or "").strip() or None
+        estimate_id = (payload.get("estimateID") or "").strip() or None
+        estimate_label = (payload.get("estimateLabel") or "").strip() or None
+        estimate_revision = (payload.get("estimateRevision") or "").strip().lower() or None
 
         if not customer_name or not is_valid_email(customer_email) or not (service_call_id or invoice_id):
             self.write_json({"error": "Customer, email, and a job or invoice reference are required"}, status=HTTPStatus.BAD_REQUEST)
@@ -3941,10 +5069,11 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         try:
             service_call_id = str(uuid.UUID(service_call_id)) if service_call_id else None
             invoice_id = str(uuid.UUID(invoice_id)) if invoice_id else None
+            estimate_id = str(uuid.UUID(estimate_id)) if estimate_id else None
         except ValueError:
-            self.write_json({"error": "Job and invoice references must be valid UUIDs"}, status=HTTPStatus.BAD_REQUEST)
+            self.write_json({"error": "Job, invoice, and estimate references must be valid UUIDs"}, status=HTTPStatus.BAD_REQUEST)
             return
-        if any(len(value) > limit for value, limit in ((customer_name, 300), (customer_email, 254), (title, 200), (appointment_summary or "", 600), (invoice_reference or "", 160), (service_call_id or "", 80), (invoice_id or "", 80))):
+        if any(len(value) > limit for value, limit in ((customer_name, 300), (customer_email, 254), (title, 200), (appointment_summary or "", 600), (invoice_reference or "", 160), (service_call_id or "", 80), (invoice_id or "", 80), (estimate_id or "", 80), (estimate_label or "", 100), (estimate_revision or "", 64))):
             self.write_json({"error": "Portal link fields are too long"}, status=HTTPStatus.BAD_REQUEST)
             return
 
@@ -3954,11 +5083,39 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             if isinstance(raw_balance_due, bool) or not isinstance(raw_balance_due, (int, float)):
                 self.write_json({"error": "Balance due must be a non-negative amount"}, status=HTTPStatus.BAD_REQUEST)
                 return
-            balance_due = float(raw_balance_due)
-            if not math.isfinite(balance_due) or not 0 <= balance_due <= 999_999_999.99:
+            # Bound arbitrary-precision JSON integers before float conversion.
+            if not 0 <= raw_balance_due <= 999_999_999.99:
                 self.write_json({"error": "Balance due must be a non-negative amount"}, status=HTTPStatus.BAD_REQUEST)
                 return
+            balance_due = float(raw_balance_due)
             balance_due = round(balance_due, 2)
+
+        raw_estimate_amount = payload.get("estimateAmount")
+        estimate_amount: float | None = None
+        estimate_fields_present = (
+            estimate_id is not None,
+            estimate_label is not None,
+            raw_estimate_amount is not None,
+            estimate_revision is not None,
+        )
+        if any(estimate_fields_present) and not all(estimate_fields_present):
+            self.write_json({"error": "Estimate approval links require an exact estimate snapshot"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if all(estimate_fields_present):
+            if (
+                isinstance(raw_estimate_amount, bool)
+                or not isinstance(raw_estimate_amount, (int, float))
+            ):
+                self.write_json({"error": "Estimate amount is invalid"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            if (
+                not 0 <= raw_estimate_amount <= 999_999_999.99
+                or re.fullmatch(r"[0-9a-f]{64}", estimate_revision or "") is None
+            ):
+                self.write_json({"error": "Estimate approval snapshot is invalid"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            estimate_amount = float(raw_estimate_amount)
+            estimate_amount = round(estimate_amount, 2)
 
         requested_days = payload.get("expiresInDays", 14)
         if isinstance(requested_days, bool):
@@ -3987,11 +5144,17 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 """
                 INSERT INTO customer_portal_links(
                     id, token_hash, customer_name, customer_email, service_call_id, invoice_id,
-                    title, appointment_summary, invoice_reference, balance_due, expires_at,
-                    created_at, created_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    title, appointment_summary, invoice_reference, balance_due,
+                    estimate_id, estimate_label, estimate_amount, estimate_revision,
+                    expires_at, created_at, created_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (link_id, portal_token_hash(token), customer_name, customer_email, service_call_id, invoice_id, title, appointment_summary, invoice_reference, balance_due, expires_at, created_at, actor),
+                (
+                    link_id, portal_token_hash(token), customer_name, customer_email,
+                    service_call_id, invoice_id, title, appointment_summary,
+                    invoice_reference, balance_due, estimate_id, estimate_label,
+                    estimate_amount, estimate_revision, expires_at, created_at, actor,
+                ),
             )
         record_audit_event(actor, "create", "customer-portal-link", link_id)
         self.write_json({"id": link_id, "url": portal_url(token), "expiresAt": expires_at}, status=HTTPStatus.CREATED)
@@ -4009,31 +5172,57 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 "SELECT * FROM customer_portal_links WHERE token_hash = ? AND revoked_at IS NULL",
                 (portal_token_hash(token),),
             ).fetchone()
-            try:
-                expires_at = datetime.fromisoformat(str(row["expires_at"]).replace("Z", "+00:00")) if row is not None else None
-            except (TypeError, ValueError):
-                expires_at = None
-            if expires_at is not None and expires_at.tzinfo is None:
-                expires_at = None
-            if row is not None and expires_at is not None and expires_at > datetime.now(timezone.utc):
+            if customer_portal_link_is_active(row):
                 opened_at = utc_now()
                 updated = connection.execute(
                     """
                     UPDATE customer_portal_links
                     SET opened_count = opened_count + 1, last_opened_at = ?
                     WHERE id = ? AND revoked_at IS NULL
+                        AND julianday(expires_at) > julianday('now')
                     """,
                     (opened_at, row["id"]),
                 ).rowcount
             else:
                 updated = 0
-        if row is None or expires_at is None or updated != 1:
+        if updated != 1:
             self.write_json({"error": "This customer link is unavailable"}, status=HTTPStatus.NOT_FOUND, require_auth=False)
             return
         items = [("Appointment", row["appointment_summary"]), ("Invoice", row["invoice_reference"])]
         if row["balance_due"] is not None:
             items.append(("Balance due", f"${float(row['balance_due']):,.2f}"))
+        if row["estimate_id"] is not None:
+            items.append(
+                (
+                    "Estimate",
+                    f"{row['estimate_label']} — ${float(row['estimate_amount']):,.2f}",
+                )
+            )
         detail_rows = "".join(f"<dt>{html.escape(label)}</dt><dd>{html.escape(str(value))}</dd>" for label, value in items if value)
+        if row["estimate_id"] is None:
+            estimate_action = "<p>Please contact GunnAire to request changes or ask a question.</p>"
+        elif row["estimate_response_id"] is not None:
+            estimate_action = (
+                "<section class=\"decision confirmed\" aria-labelledby=\"approval-title\">"
+                "<h2 id=\"approval-title\">Estimate approved</h2>"
+                f"<p>Approval was recorded for {html.escape(str(row['estimate_response_name']))} "
+                f"on <time datetime=\"{html.escape(str(row['estimate_responded_at']))}\">"
+                f"{html.escape(str(row['estimate_responded_at']))}</time>.</p>"
+                "<p>GunnAire will review the approval and contact you with the next step.</p></section>"
+            )
+        else:
+            response_path = f"/portal/{token}/estimate-response"
+            estimate_action = f"""
+<section class="decision" aria-labelledby="approval-title">
+<h2 id="approval-title">Approve this estimate</h2>
+<p>Confirm the exact estimate and amount shown above. Approval authorizes GunnAire to proceed with that scope; scheduling and payment remain separate.</p>
+<form method="post" action="{html.escape(response_path, quote=True)}">
+<label for="approval-name">Your full name</label>
+<input id="approval-name" name="approvalName" type="text" maxlength="120" autocomplete="name" required>
+<label class="check"><input name="approvalConfirmed" type="checkbox" value="yes" required> I approve this estimate and understand that GunnAire will contact me about scheduling.</label>
+<button type="submit">Approve estimate</button>
+</form></section>
+"""
         content = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -4041,12 +5230,15 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>GunnAire service update</title>
-<style>body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:42rem;margin:clamp(1rem,7vw,3rem) auto;padding:0 1.25rem;color:CanvasText;background:Canvas}}main{{border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:16px;padding:clamp(1.25rem,5vw,2rem);box-shadow:0 12px 32px color-mix(in srgb,CanvasText 8%,transparent)}}h1{{font-size:clamp(1.55rem,5vw,2.2rem);line-height:1.15}}dt{{font-weight:650;margin-top:1rem}}dd{{margin:.25rem 0}}small{{color:color-mix(in srgb,CanvasText 65%,transparent);line-height:1.45}} </style>
+<style>body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:42rem;margin:clamp(1rem,7vw,3rem) auto;padding:0 1.25rem;color:CanvasText;background:Canvas}}main{{border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:16px;padding:clamp(1.25rem,5vw,2rem);box-shadow:0 12px 32px color-mix(in srgb,CanvasText 8%,transparent)}}h1{{font-size:clamp(1.55rem,5vw,2.2rem);line-height:1.15}}h2{{font-size:1.2rem}}dt{{font-weight:650;margin-top:1rem}}dd{{margin:.25rem 0}}.decision{{border-top:1px solid color-mix(in srgb,CanvasText 18%,transparent);margin-top:1.5rem;padding-top:.5rem}}label{{display:block;font-weight:650;margin:.9rem 0 .35rem}}input[type=text]{{box-sizing:border-box;width:100%;font:inherit;padding:.7rem;border:1px solid color-mix(in srgb,CanvasText 35%,transparent);border-radius:8px;background:Canvas;color:CanvasText}}.check{{display:flex;gap:.55rem;align-items:flex-start;font-weight:400;line-height:1.4}}.check input{{margin-top:.25rem}}button{{font:inherit;font-weight:700;padding:.75rem 1rem;border:0;border-radius:10px;background:#d7a928;color:#111;cursor:pointer}}small{{display:block;margin-top:1.5rem;color:color-mix(in srgb,CanvasText 65%,transparent);line-height:1.45}}</style>
 </head>
-<body><main aria-labelledby="portal-title"><h1 id="portal-title">{html.escape(str(row['title']))}</h1><p>Hello {html.escape(str(row['customer_name']))},</p><dl>{detail_rows}</dl><p>Please contact GunnAire to request changes or ask a question.</p><small>This secure link expires <time datetime="{html.escape(str(row['expires_at']))}">{html.escape(str(row['expires_at']))}</time>. Do not forward it.</small></main></body>
+<body><main aria-labelledby="portal-title"><h1 id="portal-title">{html.escape(str(row['title']))}</h1><p>Hello {html.escape(str(row['customer_name']))},</p><dl>{detail_rows}</dl>{estimate_action}<small>This secure link expires <time datetime="{html.escape(str(row['expires_at']))}">{html.escape(str(row['expires_at']))}</time>. Do not forward it.</small></main></body>
 </html>"""
+        self.write_customer_portal_html(content)
+
+    def write_customer_portal_html(self, content: str, status: HTTPStatus = HTTPStatus.OK) -> None:
         data = content.encode("utf-8")
-        self.send_response(HTTPStatus.OK)
+        self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
@@ -4058,10 +5250,164 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         self.send_header("Cross-Origin-Resource-Policy", "same-origin")
         self.send_header(
             "Content-Security-Policy",
-            "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
         )
         self.end_headers()
         self.wfile.write(data)
+
+    def record_customer_portal_estimate_response(self, token: str) -> None:
+        if (
+            not CUSTOMER_PORTAL_ENABLED
+            or customer_portal_origin() is None
+            or re.fullmatch(r"[A-Za-z0-9_-]{32,128}", token) is None
+        ):
+            self.write_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND, require_auth=False)
+            return
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            content_length = 0
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if content_type != "application/x-www-form-urlencoded" or not 1 <= content_length <= CUSTOMER_PORTAL_RESPONSE_MAX_BYTES:
+            self.write_json({"error": "Invalid approval response"}, status=HTTPStatus.BAD_REQUEST, require_auth=False)
+            return
+        try:
+            body = self.rfile.read(content_length).decode("utf-8")
+            fields = urllib.parse.parse_qs(
+                body,
+                keep_blank_values=True,
+                strict_parsing=True,
+                max_num_fields=4,
+            )
+        except (UnicodeDecodeError, ValueError):
+            self.write_json({"error": "Invalid approval response"}, status=HTTPStatus.BAD_REQUEST, require_auth=False)
+            return
+        names = fields.get("approvalName", [])
+        confirmations = fields.get("approvalConfirmed", [])
+        if len(names) != 1 or len(confirmations) != 1:
+            self.write_json({"error": "Name and approval confirmation are required"}, status=HTTPStatus.BAD_REQUEST, require_auth=False)
+            return
+        approval_name = names[0].strip()
+        if (
+            not approval_name
+            or len(approval_name) > 120
+            or any(ord(character) < 32 or ord(character) == 127 for character in approval_name)
+            or confirmations[0] != "yes"
+        ):
+            self.write_json({"error": "Name and approval confirmation are required"}, status=HTTPStatus.BAD_REQUEST, require_auth=False)
+            return
+
+        with db() as connection:
+            row = connection.execute(
+                "SELECT * FROM customer_portal_links WHERE token_hash = ? AND revoked_at IS NULL",
+                (portal_token_hash(token),),
+            ).fetchone()
+            if (
+                not customer_portal_link_is_active(row)
+                or row["estimate_id"] is None
+            ):
+                self.write_json({"error": "This approval link is unavailable"}, status=HTTPStatus.NOT_FOUND, require_auth=False)
+                return
+            if row["estimate_response_id"] is None:
+                response_id = str(uuid.uuid4())
+                responded_at = utc_now()
+                connection.execute(
+                    """
+                    UPDATE customer_portal_links
+                    SET estimate_response_id = ?, estimate_response_name = ?,
+                        estimate_responded_at = ?, estimate_resolution_status = 'pending'
+                    WHERE id = ? AND revoked_at IS NULL AND estimate_response_id IS NULL
+                        AND julianday(expires_at) > julianday('now')
+                    """,
+                    (response_id, approval_name, responded_at, row["id"]),
+                )
+            # Revalidate the capability for both new submissions and replays.
+            # A stale initial read must not confirm a link another request revoked.
+            row = connection.execute(
+                "SELECT * FROM customer_portal_links WHERE token_hash = ? AND revoked_at IS NULL",
+                (portal_token_hash(token),),
+            ).fetchone()
+            if not customer_portal_link_is_active(row):
+                self.write_json({"error": "This approval link is unavailable"}, status=HTTPStatus.NOT_FOUND, require_auth=False)
+                return
+            if row["estimate_response_id"] is None:
+                self.write_json({"error": "Approval could not be recorded"}, status=HTTPStatus.CONFLICT, require_auth=False)
+                return
+
+        content = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Estimate approved</title><style>body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:40rem;margin:clamp(1rem,8vw,4rem) auto;padding:0 1.25rem;color:CanvasText;background:Canvas}}main{{border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:16px;padding:clamp(1.25rem,5vw,2rem)}}h1{{font-size:clamp(1.55rem,5vw,2.2rem);line-height:1.15}}small{{color:color-mix(in srgb,CanvasText 65%,transparent)}}</style></head>
+<body><main><h1>Estimate approved</h1><p>Thank you, {html.escape(str(row['estimate_response_name']))}. Your approval of {html.escape(str(row['estimate_label']))} for ${float(row['estimate_amount']):,.2f} was recorded.</p><p>GunnAire will review the approval and contact you about scheduling.</p><small>You can close this page.</small></main></body></html>"""
+        self.write_customer_portal_html(content)
+
+    def resolve_customer_portal_estimate_response(self, link_id: str) -> None:
+        try:
+            link_id = str(uuid.UUID(link_id.strip()))
+        except (AttributeError, ValueError):
+            self.write_json({"error": "Invalid portal link"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            payload = self.read_json()
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+            self.write_json({"error": "Invalid JSON"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not isinstance(payload, dict):
+            self.write_json({"error": "Resolution body must be an object"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        response_id = payload.get("responseID")
+        status = payload.get("status")
+        detail = payload.get("detail")
+        if (
+            not isinstance(response_id, str)
+            or not isinstance(status, str)
+            or (detail is not None and not isinstance(detail, str))
+        ):
+            self.write_json({"error": "Resolution fields are invalid"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            response_id = str(uuid.UUID(response_id.strip()))
+        except ValueError:
+            self.write_json({"error": "Invalid response reference"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        status = status.strip().lower()
+        detail = (detail or "").strip() or None
+        if status not in {"applied", "needs_attention"} or (detail is not None and len(detail) > 300):
+            self.write_json({"error": "Invalid resolution"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if status == "needs_attention" and detail is None:
+            self.write_json({"error": "Attention resolutions require a safe detail"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        principal = self.principal() or {}
+        actor = principal.get("email") if isinstance(principal.get("email"), str) else "unknown"
+        with db() as connection:
+            # The write predicate protects the transition across connections.
+            # Once applied, all original resolution evidence is immutable.
+            updated = connection.execute(
+                """
+                UPDATE customer_portal_links
+                SET estimate_resolution_status = ?, estimate_resolution_detail = ?,
+                    estimate_resolved_at = ?, estimate_resolved_by = ?
+                WHERE id = ? AND estimate_response_id = ?
+                    AND (estimate_resolution_status IS NULL OR estimate_resolution_status != 'applied')
+                """,
+                (status, detail, utc_now(), actor, link_id, response_id),
+            ).rowcount
+            row = connection.execute(
+                "SELECT * FROM customer_portal_links WHERE id = ?",
+                (link_id,),
+            ).fetchone()
+            if row is None or row["estimate_response_id"] != response_id:
+                self.write_json({"error": "Portal approval response not found"}, status=HTTPStatus.NOT_FOUND)
+                return
+            if row["estimate_resolution_status"] == "applied" and status != "applied":
+                self.write_json({"error": "An applied approval cannot be downgraded"}, status=HTTPStatus.CONFLICT)
+                return
+            if updated == 1:
+                record_audit_event(
+                    actor, f"estimate-approval-{status}", "customer-portal-link", link_id,
+                    connection=connection,
+                )
+        self.write_json(customer_portal_link_record(row))
 
     def store_public_service_request(self) -> None:
         if not PUBLIC_BOOKING_ENABLED:
@@ -4574,7 +5920,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         with db() as connection:
             connection_row = connection.execute(
-                "SELECT realm_id, environment, refresh_token_ciphertext FROM qbo_connections WHERE id = 1"
+                "SELECT * FROM qbo_connections WHERE id = 1"
             ).fetchone()
         if connection_row is None:
             self.write_json({"error": "QuickBooks is not connected"}, status=HTTPStatus.CONFLICT)
@@ -4596,13 +5942,30 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         except RuntimeError:
             self.write_json({"error": "QuickBooks encrypted token storage is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
             return
-        with db() as connection:
-            connection.execute(
-                "UPDATE qbo_connections SET refresh_token_ciphertext = ?, updated_at = ? WHERE id = 1",
-                (encrypted_refresh_token, utc_now()),
-            )
         principal = self.principal() or {}
-        record_audit_event(principal.get("email") if isinstance(principal.get("email"), str) else None, "refresh", "quickbooks")
+        with db() as connection:
+            # Compare the exact grant read before the network call. Reconnection,
+            # revocation, or another rotation must never be overwritten by a
+            # late refresh, even when the company and environment are unchanged.
+            updated = connection.execute(
+                """UPDATE qbo_connections SET refresh_token_ciphertext = ?, updated_at = ?
+                   WHERE id = 1 AND realm_id = ? AND environment = ?
+                     AND client_id_fingerprint = ? AND authorized_at = ?
+                     AND refresh_token_ciphertext = ?""",
+                (encrypted_refresh_token, utc_now(), connection_row["realm_id"],
+                 connection_row["environment"], connection_row["client_id_fingerprint"],
+                 connection_row["authorized_at"], connection_row["refresh_token_ciphertext"]),
+            )
+            if updated.rowcount != 1:
+                self.write_json(
+                    {"error": "QuickBooks connection changed during refresh; reopen the current connection"},
+                    status=HTTPStatus.CONFLICT,
+                )
+                return
+            record_audit_event(
+                principal.get("email") if isinstance(principal.get("email"), str) else None,
+                "refresh", "quickbooks", connection=connection,
+            )
         self.write_json(qbo_client_token_response(result))
 
     def revoke_qbo_token(self) -> None:
@@ -4611,7 +5974,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         with db() as connection:
             connection_row = connection.execute(
-                "SELECT refresh_token_ciphertext FROM qbo_connections WHERE id = 1"
+                "SELECT * FROM qbo_connections WHERE id = 1"
             ).fetchone()
         if connection_row is None:
             self.write_json({"revoked": True})
@@ -4624,10 +5987,25 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if status < 200 or status >= 300:
             self.write_json({"error": "QuickBooks token revocation failed"}, status=HTTPStatus.BAD_GATEWAY)
             return
-        with db() as connection:
-            connection.execute("DELETE FROM qbo_connections WHERE id = 1")
         principal = self.principal() or {}
-        record_audit_event(principal.get("email") if isinstance(principal.get("email"), str) else None, "revoke", "quickbooks")
+        with db() as connection:
+            deleted = connection.execute(
+                """DELETE FROM qbo_connections WHERE id = 1 AND realm_id = ? AND environment = ?
+                   AND client_id_fingerprint = ? AND authorized_at = ? AND refresh_token_ciphertext = ?""",
+                (connection_row["realm_id"], connection_row["environment"],
+                 connection_row["client_id_fingerprint"], connection_row["authorized_at"],
+                 connection_row["refresh_token_ciphertext"]),
+            )
+            if deleted.rowcount != 1:
+                self.write_json(
+                    {"error": "QuickBooks connection changed during revocation; review the current authorization in QuickBooks"},
+                    status=HTTPStatus.CONFLICT,
+                )
+                return
+            record_audit_event(
+                principal.get("email") if isinstance(principal.get("email"), str) else None,
+                "revoke", "quickbooks", connection=connection,
+            )
         self.write_json({"revoked": True})
 
     def store_document(self) -> None:
@@ -4649,6 +6027,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
 
         filename = safe_filename(str(payload.get("filename") or "upload.bin"))
         content_type = str(payload.get("contentType") or "application/octet-stream")
+        if not document_storage.header_text(filename, 255) or filename.startswith(".") or not document_storage.content_type(content_type):
+            self.write_json({"error": "Use a safe filename and content type"}, status=HTTPStatus.BAD_REQUEST)
+            return
         kind = safe_filename(str(payload.get("kind") or "document")).lower()
         data_base64 = payload.get("dataBase64")
         if not isinstance(data_base64, str) or not data_base64:
@@ -4713,6 +6094,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             self.write_json({"error": "Document metadata is too long"}, status=HTTPStatus.BAD_REQUEST)
             return
         # Do not create a file until every request field has been accepted.
+        original_principal = self.principal()
         document_id = str(uuid.uuid4())
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         destination_dir = STORAGE_ROOT / kind / today
@@ -4720,8 +6102,15 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         destination = destination_dir / f"{document_id}-{filename}"
         try:
             destination.write_bytes(data)
-        except OSError:
+            document_storage.read_document(STORAGE_ROOT, destination, expected_bytes=len(data),
+                                           expected_sha256=hashlib.sha256(data).hexdigest())
+        except (OSError, document_storage.DocumentReadError):
             self.write_json({"error": "Company document storage is unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        self._principal = None
+        self._principal_checked = False
+        if self.principal() is None or self.principal() != original_principal:
+            self.write_json({"error": "Document access changed during upload"}, status=HTTPStatus.FORBIDDEN)
             return
         created_at = utc_now()
         with db() as connection:
@@ -4730,8 +6119,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 INSERT INTO documents(
                     id, filename, content_type, kind, service_call_id, invoice_id, estimate_id,
                     maintenance_contract_id, customer_equipment_id, equipment_name, customer_name,
-                    stored_path, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    stored_path, created_at, file_size_bytes, file_sha256
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     document_id,
@@ -4747,6 +6136,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                     customer_name,
                     str(destination),
                     created_at,
+                    len(data),
+                    hashlib.sha256(data).hexdigest(),
                 ),
             )
 
@@ -4758,6 +6149,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 "id": document_id,
                 "filename": filename,
                 "createdAt": created_at,
+                "fileSizeBytes": len(data),
+                "fileSHA256": hashlib.sha256(data).hexdigest(),
             },
             status=HTTPStatus.CREATED,
         )
@@ -4908,6 +6301,554 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 ).fetchone()
         record_audit_event(actor, "cancel", "field-payment", assignment_id)
         self.write_json({"assignment": field_payment_assignment_record(row)})
+
+    def handle_qbo_document_upload(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        service = qbo_document_uploads.DocumentUploads(
+            db, lambda context, authorize: DocumentQBOProvider(context, authorize, qbo_authorized_bearer),
+            encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
+        )
+        suffix = parsed.path.removeprefix("/api/qbo-document-uploads")
+        parts = suffix[1:].split("/") if suffix.startswith("/") else []
+        try:
+            if method == "GET" and not suffix:
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+                if any(len(value) != 1 for value in query.values()):
+                    raise ValueError()
+                result = service.lookup(self._application_session_id, {key: value[0] for key, value in query.items()})
+            elif method == "GET" and not parsed.query and (len(parts) == 1 or (len(parts) == 2 and parts[1] == "file")):
+                result = service.read(self._application_session_id, parts[0], include_file=len(parts) == 2)
+            elif method == "POST" and not parsed.query:
+                maximum = qbo_document_uploads.MAX_BODY_BYTES if not suffix else 4096
+                payload = qbo_change_capture.strict_json(self.read_limited_body(maximum).decode("utf-8"))
+                if not suffix:
+                    result = service.reserve(self._application_session_id, payload)
+                elif len(parts) == 2 and isinstance(payload, dict):
+                    if parts[1] in ("send", "cancel") and set(payload) == {"revision"}:
+                        action = service.send if parts[1] == "send" else service.cancel
+                        result = action(self._application_session_id, parts[0], payload["revision"])
+                    elif parts[1] == "recover" and not payload:
+                        result = service.recover(self._application_session_id, parts[0])
+                    else:
+                        raise ValueError()
+                else:
+                    raise ValueError()
+            else:
+                raise ValueError()
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeError, TypeError, OverflowError):
+            self.write_json({"error": "Invalid original-file upload request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "The original file upload could not be verified. Keep the saved operation for recovery.",
+                             "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+
+    def handle_qbo_change_capture(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        capture = qbo_change_capture.ChangeCapture(
+            db, lambda context, authorize: qbo_change_capture.ChangeCaptureQBOProvider(context, authorize, qbo_authorized_bearer),
+            encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
+        )
+        try:
+            if method == "POST" and not parsed.query:
+                payload = qbo_change_capture.strict_json(self.read_limited_body(4096).decode("utf-8"))
+                result = capture.capture(self._application_session_id, payload)
+            elif method == "GET":
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+                if any(len(value) != 1 for value in query.values()):
+                    raise ValueError()
+                payload = {key: value[0] for key, value in query.items()}
+                after_raw, through_raw = payload.pop("afterSequence", "0"), payload.pop("throughSequence", None)
+                revision_raw = payload.pop("captureRevision", None)
+                if any(value is not None and not re.fullmatch(r"0|[1-9][0-9]{0,18}", value)
+                       for value in (after_raw, through_raw, revision_raw)):
+                    raise ValueError()
+                result = capture.read(self._application_session_id, payload, after=int(after_raw),
+                                      through=int(through_raw) if through_raw is not None else None,
+                                      expected_revision=int(revision_raw) if revision_raw is not None else None)
+            else:
+                raise ValueError()
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError, OverflowError):
+            self.write_json({"error": "Invalid accounting change capture request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Accounting history storage is unavailable. Keep the original cursor for recovery.",
+                             "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+
+    def handle_qbo_link_review(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        adopter = qbo_link_adoption.LinkAdopter(
+            db, lambda context, authorize: BillingQBOProvider(context, authorize, qbo_authorized_bearer),
+            encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
+        )
+        session_id = self._application_session_id
+        suffix = parsed.path.removeprefix("/api/qbo-link-reviews")
+        parts = suffix[1:].split("/") if suffix.startswith("/") else []
+        try:
+            if method == "GET" and suffix in ("", "/context"):
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True, max_num_fields=4)
+                if any(len(value) != 1 for value in query.values()):
+                    raise qbo_link_adoption.failure("invalid_query", "Choose one original review operation.", 400)
+                query = {key: value[0] for key, value in query.items()}
+                result = adopter.context(session_id, query) if suffix == "/context" else adopter.lookup(session_id, query)
+            elif method == "GET" and len(parts) == 1 and not parsed.query:
+                result = adopter.read(session_id, parts[0])
+            elif method == "POST" and not parsed.query:
+                payload = qbo_change_capture.strict_json(self.read_limited_body(1024 * 1024).decode("utf-8"))
+                if not suffix:
+                    result = adopter.preview(session_id, payload)
+                elif len(parts) == 2 and parts[1] in ("confirm", "cancel") and isinstance(payload, dict) and set(payload) == {"revision"}:
+                    result = adopter.decide(session_id, parts[0], payload["revision"], confirm=parts[1] == "confirm")
+                else:
+                    raise qbo_link_adoption.failure("invalid_request", "Choose confirm or cancel for the exact link review.", 400)
+            else:
+                raise qbo_link_adoption.failure("not_found", "Link review action not found.", 404)
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError):
+            self.write_json({"error": "Invalid link review request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Link review storage is unavailable. Keep the original operation for recovery.",
+                             "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+
+    def handle_billing_publication(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        publisher = billing_publications.BillingPublisher(
+            db, lambda context, authorize: BillingQBOProvider(context, authorize, qbo_authorized_bearer),
+            encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
+        )
+        native = billing_native.NativeBilling(publisher)
+        session_id = self._application_session_id
+        assignments = parsed.path == "/api/job-billing-assignments"
+        assignment_connection = parsed.path == "/api/job-billing-assignments/connection"
+        suffix = parsed.path.removeprefix("/api/billing-publications")
+        parts = suffix[1:].split("/") if suffix.startswith("/") else []
+        try:
+            if method == "GET" and (assignments or assignment_connection or not suffix or parts in (["context"], ["connection"])):
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+                if any(len(value) != 1 for value in query.values()):
+                    raise billing_publications.failure("invalid_query", "Choose one original job or billing document.", 400)
+                query = {key: values[0] for key, values in query.items()}
+                if assignment_connection:
+                    result = publisher.assignments.connection(session_id, query)
+                elif assignments:
+                    result = publisher.assignments.read(session_id, query)
+                elif parts == ["context"]:
+                    result = native.context(session_id, query)
+                elif parts == ["connection"]:
+                    result = native.connection(session_id, query)
+                else:
+                    result = publisher.list_for_document(session_id, query)
+            elif method == "GET" and len(parts) == 1 and not parsed.query:
+                result = native.proposal(session_id, parts[0])
+            elif method == "POST" and not parsed.query:
+                # Reject duplicate keys/nonfinite JSON before hashing a durable
+                # intent; different decoders must not see different proposals.
+                def unique_object(pairs):
+                    result = {}
+                    for key, value in pairs:
+                        if key in result:
+                            raise ValueError()
+                        result[key] = value
+                    return result
+
+                def invalid_constant(value):
+                    raise ValueError()
+
+                payload = json.loads(self.read_limited_body(1024 * 1024).decode("utf-8"),
+                                     object_pairs_hook=unique_object, parse_constant=invalid_constant)
+                if assignments:
+                    result = publisher.assignments.save(session_id, payload)
+                elif not suffix:
+                    result = publisher.publish(session_id, payload)
+                elif parts == ["approve"] and isinstance(payload, dict) and set(payload) == {"proposal", "technicianEmail"}:
+                    result = {"id": publisher.approve_draft(session_id, payload["proposal"], payload["technicianEmail"])}
+                elif len(parts) == 2 and parts[1] == "approve":
+                    result = native.approve_original(session_id, parts[0], payload)
+                elif len(parts) == 2 and isinstance(payload, dict) and not payload:
+                    identifier, action = parts
+                    if action == "recover":
+                        result = publisher.run(session_id, identifier)
+                    elif action == "cancel":
+                        result = publisher.cancel(session_id, identifier)
+                    else:
+                        raise billing_publications.failure("invalid_action", "Choose recover or cancel for the original attempt.", 400)
+                elif len(parts) == 3 and parts[0] == "draft-grants" and parts[2] == "revoke" and isinstance(payload, dict) and not payload:
+                    publisher.revoke_draft(session_id, parts[1])
+                    result = {"id": payment_attempts.canonical_uuid(parts[1]), "revoked": True}
+                else:
+                    raise billing_publications.failure("invalid_request", "Use the supported billing action fields only.", 400)
+            else:
+                raise billing_publications.failure("not_found", "Billing action not found.", 404)
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError):
+            self.write_json({"error": "Invalid billing request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Billing storage is unavailable. Keep the original draft and attempt for review.",
+                             "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+
+    def google_connection_service(self):
+        return google_connections.GoogleConnections(db, record_audit_event,
+            client_id=GOOGLE_WEB_CLIENT_ID, client_secret=GOOGLE_WEB_CLIENT_SECRET,
+            redirect_uri=GOOGLE_WEB_REDIRECT_URI, encryption_key=GOOGLE_TOKEN_ENCRYPTION_KEY,
+            allowed_domain=GOOGLE_ALLOWED_DOMAIN)
+
+    def google_mail_service(self):
+        return google_mail.GoogleMail(self.google_connection_service())
+
+    def handle_google_mail(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        try:
+            service = self.google_mail_service()
+            route = parsed.path.removeprefix("/api/google/mail/").split("/")
+            if method == "GET":
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, max_num_fields=8)
+                if any(len(values) != 1 for values in query.values()):
+                    raise google_mail.failure()
+                query = {key: values[0] for key, values in query.items()}
+                google_mail.fields(query, ("companyID", "grantID"), ("folder", "query", "pageToken", "maxResults"))
+                context = service.context(self._application_session_id, query.pop("companyID"), query.pop("grantID"))
+                if route == ["messages"]:
+                    result = service.page(context, folder=query.pop("folder", "Inbox"), query=query.pop("query", ""),
+                        page_token=query.pop("pageToken", None), maximum=int(query.pop("maxResults", "25")))
+                elif route == ["outbox"]:
+                    google_mail.fields(query, (), ("pageToken",))
+                    result = service.outbox(context, before=query.get("pageToken"))
+                elif not query and len(route) == 2 and route[0] == "messages":
+                    result = service.message(context, route[1])
+                elif not query and len(route) == 4 and route[0] == "messages" and route[2] == "attachments":
+                    result = service.attachment(context, route[1], route[3])
+                elif not query and len(route) == 2 and route[0] == "operations":
+                    result = service.outcome(context, route[1])
+                elif not query and len(route) == 3 and route[0] == "operations" and route[2] == "message":
+                    result = service.saved_message(context, route[1])
+                elif not query and len(route) == 3 and route[0] == "operations" and route[2] == "recovery":
+                    original = service.original(context, route[1])
+                    result = (service.recover_send if original["kind"] == "send" else service.recover_action)(context, route[1])
+                else:
+                    raise google_mail.failure()
+            elif method == "POST" and not parsed.query:
+                maximum = google_mail.MAX_MESSAGE_BYTES if route == ["outbox"] else 8192
+                payload = google_connections.strict_json(self.read_limited_body(maximum))
+                google_mail.fields(payload, ("companyID", "grantID"), ("id", "message", "threadID", "action"))
+                context = service.context(self._application_session_id, payload.pop("companyID"), payload.pop("grantID"))
+                if route == ["outbox"]:
+                    google_mail.fields(payload, ("id", "message"))
+                    result = service.prepare_send(context, payload["id"], payload["message"])
+                elif len(route) == 3 and route[0] == "messages" and route[2] == "actions":
+                    google_mail.fields(payload, ("id", "threadID", "action"))
+                    result = service.action(context, payload["id"], message=route[1], thread=payload["threadID"], action=payload["action"])
+                elif len(route) == 3 and route[0] == "operations" and route[2] in {"send", "cancel"} and not payload:
+                    result = (service.send if route[2] == "send" else service.cancel)(context, route[1])
+                else:
+                    raise google_mail.failure()
+            else:
+                raise google_mail.failure()
+            self.write_json(result)
+        except google_connections.ConnectionError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError, KeyError, AttributeError, RecursionError):
+            self.write_json({"error": "The original mail request could not be verified.", "code": "invalid_mail"}, status=400)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Shared mail storage is unavailable. Keep the original request for recovery.", "code": "storage_unavailable"}, status=503)
+
+    def handle_google_connection(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        service, session_id = self.google_connection_service(), self._application_session_id
+        try:
+            if method == "GET" and parsed.path == "/api/google/connection":
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, max_num_fields=2)
+                if set(query) != {"companyID"} or len(query["companyID"]) != 1:
+                    raise google_connections.invalid()
+                result = service.status(session_id, query["companyID"][0])
+            elif method == "GET" and not parsed.query:
+                result = service.attempt_status(session_id, parsed.path.removeprefix("/api/google/authorizations/"))
+            elif method == "POST" and not parsed.query:
+                payload = google_connections.strict_json(self.read_limited_body(4096).decode("utf-8"))
+                if parsed.path == "/api/google/authorizations":
+                    result = service.start(session_id, payload)
+                elif parsed.path == "/api/google/connection/disconnect" and isinstance(payload, dict) and set(payload) == {"companyID", "grantID"}:
+                    result = service.disconnect(session_id, payload["companyID"], payload["grantID"])
+                elif parsed.path.startswith("/api/google/authorizations/") and parsed.path.endswith("/cancel") and isinstance(payload, dict):
+                    result = service.cancel(session_id, parsed.path.removeprefix("/api/google/authorizations/").removesuffix("/cancel"),
+                        None if payload == {} else payload)
+                else:
+                    raise google_connections.invalid()
+            else:
+                raise google_connections.invalid()
+            self.write_json(result)
+        except google_connections.ConnectionError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, TypeError, UnicodeDecodeError):
+            self.write_json({"error": "Invalid Google connection request", "code": "invalid_request"}, status=400)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Google connection storage is unavailable", "code": "storage_unavailable"}, status=503)
+
+    def handle_google_callback(self, parsed):
+        # The state binds this public callback to the initiating approved session.
+        # No provider errors, tokens, scope strings, emails or codes are rendered.
+        redirect = None
+        try:
+            result = self.google_connection_service().callback(parsed.query)
+            message = "Google connection saved. Close this tab and return to GunnAire Ops." if result["state"] == "connected" else "Google connection was not approved. Return to GunnAire Ops to continue."
+            # Fixed native handoff contains only the original request ID. The
+            # app must recover its authenticated server outcome, not trust URL data.
+            redirect = "gunnaireops://oauth/google/connection?attemptID=" + google_connections.identifier(result["id"])
+            status = 303
+        except google_connections.ConnectionError as error:
+            message, status = "Google connection could not be completed. Return to GunnAire Ops to check the original request.", error.status
+        except Exception:
+            message, status = "Google connection could not be confirmed. Return to GunnAire Ops to check the original request.", 503
+        data = ("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>GunnAire Ops Google connection</title><main><h1>Google connection</h1><p>" + message + "</p></main></html>").encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        if redirect:
+            self.send_header("Location", redirect)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def handle_customer_publication(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        publisher = customer_publications.CustomerPublisher(
+            db, CustomerQBOProvider, encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
+        )
+        session_id = self._application_session_id
+        suffix = parsed.path.removeprefix("/api/customer-publications")
+        parts = suffix.strip("/").split("/") if suffix else []
+        try:
+            if method == "GET" and not parts:
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                if set(query) != {"companyID", "localCustomerID"} or any(len(value) != 1 for value in query.values()):
+                    raise customer_publications.failure("invalid_query", "Choose one business customer.", 400)
+                result = {"publications": publisher.list_for_customer(session_id, query["companyID"][0], query["localCustomerID"][0])}
+            elif method == "POST" and not parsed.query:
+                payload = json.loads(self.read_limited_body(32768).decode("utf-8"))
+                if not parts:
+                    result = publisher.publish(session_id, payload)
+                elif len(parts) == 2 and isinstance(payload, dict) and not payload:
+                    identifier, action = parts
+                    if action == "recover":
+                        result = publisher.run(session_id, identifier)
+                    elif action == "cancel":
+                        result = publisher.cancel(session_id, identifier)
+                    else:
+                        raise customer_publications.failure("invalid_action", "Choose recover or cancel for this customer attempt.", 400)
+                else:
+                    raise customer_publications.failure("invalid_request", "Use the supported customer publication fields only.", 400)
+            else:
+                raise customer_publications.failure("not_found", "Customer publication action not found.", 404)
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError):
+            self.write_json({"error": "Invalid customer publication request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Customer publication storage is unavailable. Keep the original attempt for review.",
+                             "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+
+    def handle_time_publication(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        publisher = time_publications.TimePublisher(
+            db, lambda context, authorize: TimeQBOProvider(context, authorize, qbo_authorized_bearer),
+            lambda context, authorize: TimeWorkerQBOProvider(context, authorize, qbo_authorized_bearer),
+            encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
+        )
+        try:
+            root = "/api/time-publications"
+            session = self._application_session_id
+            action = re.fullmatch(re.escape(root) + r"/([0-9a-f-]{36})/(confirm|recover|cancel|adopt)", parsed.path)
+            if method == "GET" and parsed.path == root:
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True, max_num_fields=2)
+                if any(len(value) != 1 for value in query.values()):
+                    raise time_publications.failure("invalid_query", "Choose one original time entry.", 400)
+                result = publisher.list_for_entry(session, {key: value[0] for key, value in query.items()})
+            elif method == "POST" and not parsed.query and (parsed.path == root or action):
+                payload = qbo_change_capture.strict_json(self.read_limited_body(32768).decode("utf-8"))
+                if parsed.path == root:
+                    result = publisher.prepare(session, payload)
+                else:
+                    identifier, name = action.groups()
+                    if name == "recover":
+                        if payload != {}:
+                            raise time_publications.failure("invalid_request", "Recover the original time without replacement values.", 400)
+                        result = publisher.recover(session, identifier)
+                    elif name == "cancel":
+                        result = publisher.cancel(session, identifier, payload)
+                    else:
+                        result = publisher.decision(session, identifier, payload, adoption=name == "adopt")
+            else:
+                raise time_publications.failure("not_found", "Time publication action not found.", 404)
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError):
+            self.write_json({"error": "Invalid time publication request", "code": "invalid_request"}, status=400)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Time publication storage is unavailable. Keep the original proposal.", "code": "storage_unavailable"}, status=503)
+
+    def handle_time_worker_mapping(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        service = time_worker_mappings.TimeWorkerMappings(
+            db, lambda context, authorize: TimeWorkerQBOProvider(context, authorize, qbo_authorized_bearer),
+            encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
+        )
+        try:
+            if method == "GET" and parsed.path in ("/api/time-worker-mappings", "/api/time-worker-mappings/candidate"):
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True, max_num_fields=4)
+                if any(len(value) != 1 for value in query.values()):
+                    raise time_worker_mappings.failure("invalid_query", "Choose one original worker mapping.", 400)
+                result = service.context(self._application_session_id, {key: value[0] for key, value in query.items()},
+                                         candidate=parsed.path.endswith("/candidate"))
+            elif method == "POST" and parsed.path == "/api/time-worker-mappings" and not parsed.query:
+                payload = qbo_change_capture.strict_json(self.read_limited_body(8192).decode("utf-8"))
+                result = service.save(self._application_session_id, payload)
+            else:
+                raise time_worker_mappings.failure("not_found", "Worker mapping action not found.", 404)
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError):
+            self.write_json({"error": "Invalid worker mapping request", "code": "invalid_request"}, status=400)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Worker mapping storage is unavailable. Keep the original review.", "code": "storage_unavailable"}, status=503)
+
+    def handle_catalog_publication(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        publisher = catalog_publications.CatalogPublisher(
+            db, CatalogQBOProvider, encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
+        )
+        session_id = self._application_session_id
+        suffix = parsed.path.removeprefix("/api/catalog-publications")
+        parts = suffix[1:].split("/") if suffix.startswith("/") else []
+        try:
+            if method == "GET" and (not suffix or suffix == "/context"):
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True, max_num_fields=2)
+                if set(query) != {"companyID", "localItemID"} or any(len(value) != 1 for value in query.values()):
+                    raise payment_attempts.AttemptError("invalid_query", "Choose one business catalog item.", 400)
+                result = (publisher.context(session_id, {key: value[0] for key, value in query.items()}) if suffix == "/context" else
+                          {"publications": publisher.list_for_item(session_id, query["companyID"][0], query["localItemID"][0])})
+            elif method == "POST" and not parsed.query:
+                payload = qbo_change_capture.strict_json(self.read_limited_body(32768).decode("utf-8"))
+                if not suffix:
+                    result = publisher.publish(session_id, payload)
+                elif len(parts) == 2 and isinstance(payload, dict) and not payload:
+                    identifier, action = parts
+                    if action == "recover":
+                        result = publisher.run(session_id, identifier)
+                    elif action == "cancel":
+                        result = publisher.cancel(session_id, identifier)
+                    else:
+                        raise payment_attempts.AttemptError("invalid_action", "Choose recover or cancel for this catalog attempt.", 400)
+                else:
+                    raise payment_attempts.AttemptError("invalid_request", "Use the supported catalog publication fields only.", 400)
+            else:
+                raise payment_attempts.AttemptError("not_found", "Catalog action not found.", 404)
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError):
+            self.write_json({"error": "Invalid catalog publication request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Catalog publication storage is unavailable. Review the original attempt before retrying.",
+                             "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+
+
+    def handle_field_payment_review(self, parsed):
+        if not self.require_application_session():
+            return
+        try:
+            query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, max_num_fields=10)
+            if any(len(value) != 1 for value in query.values()):
+                raise ValueError()
+            service = field_payment_review.FieldPaymentReview(db, read_payment_provider_record, record_audit_event)
+            action = service.context if parsed.path.endswith("/context") else service.review
+            result = action(self._application_session_id, {key: value[0] for key, value in query.items()})
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError):
+            self.write_json({"error": "Choose one original business invoice.", "code": "invalid_query"}, status=400)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Payment review is unavailable. No payment was sent.", "code": "review_unavailable"}, status=503)
+
+    def handle_payment_attempt(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        session_id = self._application_session_id
+        journal = payment_attempts.PaymentAttemptJournal(
+            db,
+            lambda context, invoice_id: read_payment_provider_record(context, "invoice", invoice_id),
+            lambda context, kind, rail, source, provider_id: read_payment_provider_record(
+                context, "transaction", provider_id, kind=kind, rail=rail, source_id=source,
+            ),
+            lambda context, kind, accounting_id: read_payment_provider_record(context, "accounting", accounting_id, kind=kind),
+            record_audit_event,
+            decrypt=decrypt_catalog_payload,
+        )
+        suffix = parsed.path.removeprefix("/api/payment-attempts")
+        parts = suffix.strip("/").split("/") if suffix else []
+        try:
+            if method == "GET":
+                if not parts:
+                    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                    if set(query) != {"companyID", "invoiceID"} or any(len(value) != 1 for value in query.values()):
+                        raise payment_attempts.AttemptError("invalid_query", "Choose one company invoice to review.", 400)
+                    result = journal.list_for_invoice(session_id, query["companyID"][0], query["invoiceID"][0])
+                    self.write_json({"attempts": result})
+                    return
+                if len(parts) == 1:
+                    result = journal.get(session_id, parts[0])
+                else:
+                    raise payment_attempts.AttemptError("not_found", "Payment action not found.", 404)
+            else:
+                payload = json.loads(self.read_limited_body(8192).decode("utf-8"))
+                if not isinstance(payload, dict):
+                    raise payment_attempts.AttemptError("invalid_request", "A payment request object is required.", 400)
+                if not parts:
+                    result = journal.reserve(session_id, payload)
+                elif len(parts) == 2:
+                    attempt_id, action = parts
+                    if action in ("begin", "cancel", "unknown") and not payload:
+                        result = getattr(journal, action)(session_id, attempt_id)
+                    elif action == "confirm" and set(payload) == {"providerID"}:
+                        result = journal.confirm(session_id, attempt_id, payload["providerID"])
+                    elif action == "complete" and set(payload) == {"accountingID"}:
+                        result = journal.complete(session_id, attempt_id, payload["accountingID"])
+                    else:
+                        raise payment_attempts.AttemptError("invalid_action", "Use the supported payment action fields only.", 400)
+                else:
+                    raise payment_attempts.AttemptError("not_found", "Payment action not found.", 404)
+            self.write_json({"attempt": result})
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError):
+            self.write_json({"error": "Invalid payment attempt request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json(
+                {"error": "Payment verification storage is unavailable; review existing attempts before retrying", "code": "storage_unavailable"},
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
 
     def store_payment_collection(self) -> None:
         try:
@@ -5233,7 +7174,19 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         record_audit_event(actor_email, "create", "customer-communication", record_id)
         self.write_json(communication_record(row), status=HTTPStatus.CREATED)
 
-    def download_document(self, document_id: str) -> None:
+    def write_media_bytes(self, data: bytes, content_type: str, filename: str) -> None:
+        safe_name = safe_filename(filename)
+        self.send_response(HTTPStatus.OK)
+        self.send_cors_headers()
+        self.send_header("Content-Type", content_type if document_storage.content_type(content_type) else "application/octet-stream")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition", f'attachment; filename="{safe_name}"')
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def download_document(self, document_id: str, *, manifest_only=False) -> None:
         if not document_id:
             self.write_json({"error": "Missing document id"}, status=HTTPStatus.BAD_REQUEST)
             return
@@ -5249,30 +7202,31 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             self.write_json({"error": "Financial access required"}, status=HTTPStatus.FORBIDDEN)
             return
 
-        stored_path = Path(row["stored_path"]).expanduser()
+        principal = self.principal()
         try:
-            resolved_storage = STORAGE_ROOT.resolve()
-            resolved_file = stored_path.resolve()
-        except OSError:
-            self.write_json({"error": "Document path is invalid"}, status=HTTPStatus.NOT_FOUND)
+            proof = document_storage.content_proof(row)
+            if manifest_only:
+                self.write_json(proof)
+                return
+            data = document_storage.read_document(STORAGE_ROOT, row["stored_path"],
+                expected_bytes=proof["fileSizeBytes"], expected_sha256=proof["fileSHA256"])
+        except document_storage.DocumentReadError as error:
+            self.write_json({"error": str(error)}, status=error.status)
             return
-
-        if resolved_storage not in resolved_file.parents:
-            self.write_json({"error": "Document path is outside storage"}, status=HTTPStatus.FORBIDDEN)
+        # The first principal is request-cached. A slow disk read must not
+        # outlive logout, revocation, role change, or a changed document binding.
+        self._principal = None
+        self._principal_checked = False
+        current_principal = self.principal()
+        if current_principal is None or current_principal != principal:
+            self.write_json({"error": "Document access changed during download"}, status=HTTPStatus.FORBIDDEN)
             return
-        if not resolved_file.is_file():
-            self.write_json({"error": "Document file is missing"}, status=HTTPStatus.NOT_FOUND)
+        with db() as connection:
+            current = connection.execute("SELECT * FROM documents WHERE id=?", (document_id,)).fetchone()
+        if current is None or dict(current) != dict(row):
+            self.write_json({"error": "Document binding changed during download"}, status=HTTPStatus.CONFLICT)
             return
-
-        data = resolved_file.read_bytes()
-        filename = safe_filename(row["filename"])
-        self.send_response(HTTPStatus.OK)
-        self.send_cors_headers()
-        self.send_header("Content-Type", row["content_type"] or "application/octet-stream")
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
-        self.end_headers()
-        self.wfile.write(data)
+        self.write_media_bytes(data, row["content_type"], row["filename"])
 
     def write_json(self, payload: dict[str, object], status: HTTPStatus = HTTPStatus.OK, require_auth: bool = True) -> None:
         data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
@@ -5296,6 +7250,19 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         message = redact_capability_tokens(format % args)
+        # Search terms and provider resource IDs can identify customer mail.
+        message = re.sub(r"/api/google/mail/[^\s\"]*", "/api/google/mail/[redacted]", message)
+        message = re.sub(r"/api/qbo/change-capture(?:\?[^\s\"]*)?", "/api/qbo/change-capture", message)
+        message = re.sub(r"/api/qbo-document-uploads(?:[/?][^\s\"]*)?", "/api/qbo-document-uploads/[redacted]", message)
+        message = re.sub(r"/api/field-payment-review(?:/context)?(?:\?[^\s\"]*)?", "/api/field-payment-review", message)
+        message = re.sub(r"/api/time-worker-mappings(?:[/?][^\s\"]*)?", "/api/time-worker-mappings/[redacted]", message)
+        message = re.sub(r"/api/workspace/staff-shares(?:[/?][^\s\"]*)?", "/api/workspace/staff-shares/[redacted]", message)
+        message = re.sub(r"/api/workspace/replica-records(?:[/?][^\s\"]*)?", "/api/workspace/replica-records/[redacted]", message)
+        message = re.sub(r"/api/workspace/full-records(?:[/?][^\s\"]*)?", "/api/workspace/full-records/[redacted]", message)
+        message = re.sub(r"/api/workspace/field-edits(?:[/?][^\s\"]*)?", "/api/workspace/field-edits/[redacted]", message)
+        message = re.sub(r"/api/workspace/invoice-line-requests(?:[/?][^\s\"]*)?", "/api/workspace/invoice-line-requests/[redacted]", message)
+        message = re.sub(r"/api/workspace/invoice-applications(?:[/?][^\s\"]*)?", "/api/workspace/invoice-applications/[redacted]", message)
+        message = re.sub(r"/api/time-publications(?:[/?][^\s\"]*)?", "/api/time-publications/[redacted]", message)
         print(f"{timestamp} {self.address_string()} {message}")
 
 

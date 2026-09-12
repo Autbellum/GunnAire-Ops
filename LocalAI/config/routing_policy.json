@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "policy_name": "GunnAire local-first AI routing",
+  "text_and_reasoning": {
+    "default_provider": "ollama",
+    "primary_model": "devstral-small-2:24b",
+    "review_model": "gpt-oss:20b",
+    "triage_model": "qwen2.5-coder:7b",
+    "challenger_model": "qwen3-coder:30b",
+    "hosted_fallback_enabled": false,
+    "fallback_when_local_unavailable": "deterministic_or_explicitly_unavailable",
+    "reason": "Use local inference for eligible business drafting, summarization, classification, extraction, triage, and development work to avoid hosted-model credits."
+  },
+  "image_generation": {
+    "provider": "stable-diffusion",
+    "allowed_purposes": [
+      "image_generation",
+      "image_editing",
+      "visual_asset_prototyping"
+    ],
+    "prohibited_purposes": [
+      "business_text",
+      "document_analysis",
+      "classification",
+      "summarization",
+      "coding",
+      "test_triage",
+      "security_analysis",
+      "accounting_analysis"
+    ]
+  },
+  "transport": {
+    "ollama_endpoint": "http://127.0.0.1:11434",
+    "ollama_loopback_only": true,
+    "mobile_clients_may_contact_ollama_directly": false,
+    "business_app_uses_authenticated_backend_gateway": true,
+    "gateway_may_send_secrets_or_payment_data": false
+  },
+  "enforcement": {
+    "runtime_source_extensions": [
+      ".swift",
+      ".py",
+      ".js",
+      ".jsx",
+      ".ts",
+      ".tsx",
+      ".m",
+      ".mm",
+      ".sh"
+    ],
+    "scan_extensions": [
+      ".swift",
+      ".py",
+      ".js",
+      ".jsx",
+      ".ts",
+      ".tsx",
+      ".m",
+      ".mm",
+      ".sh",
+      ".json",
+      ".md",
+      ".txt",
+      ".yml",
+      ".yaml",
+      ".plist",
+      ".xcconfig"
+    ],
+    "skip_directories": [
+      ".git",
+      ".build",
+      ".swiftpm",
+      "DerivedData",
+      "node_modules",
+      "vendor",
+      "Pods"
+    ],
+    "scanner_exempt_paths": [
+      "LocalAI/audit_ai_routing.py",
+      "LocalAI/tests/test_audit_ai_routing.py"
+    ],
+    "test_path_fragments": [
+      "/tests/",
+      "/test_",
+      "Tests/",
+      "UITests/"
+    ],
+    "stable_diffusion_allowed_path_prefixes": [
+      "ImageAI/",
+      "VisualAI/",
+      "AppStoreAssets/"
+    ],
+    "stable_diffusion_allow_marker": "AI_ROUTING_ALLOW_IMAGE_PROVIDER",
+    "hosted_provider_allow_marker": "AI_ROUTING_ALLOW_HOSTED_PROVIDER",
+    "direct_mobile_ollama_allow_marker": "AI_ROUTING_ALLOW_DIRECT_MOBILE_OLLAMA"
+  }
+}

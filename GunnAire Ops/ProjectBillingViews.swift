@@ -3,6 +3,67 @@
 
 import SwiftUI
 
+/// Review the durable issued record, never an empty or repriced editable
+/// selection. Catalog refresh/archival cannot change what was billed.
+struct ProjectProgressInvoiceReview: View {
+    let invoice: Invoice
+
+    var body: some View {
+        LabeledContent("Customer", value: invoice.customer?.name ?? "Customer is syncing")
+        LabeledContent("Milestone", value: invoice.projectMilestoneTitle ?? "Project invoice")
+        ForEach(Array(invoice.catalogLineSnapshots.enumerated()), id: \.offset) { index, line in
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text(line.name)
+                    Spacer()
+                    Text(line.extendedAmount, format: .currency(code: "USD"))
+                }
+                Text("Billed quantity: \(line.quantity.formatted(.number.precision(.fractionLength(0...5))))")
+                    .font(.caption).foregroundStyle(.secondary)
+                if let bundle = line.bundle {
+                    DisclosureGroup("Included Items (\(bundle.members.count))") {
+                        ForEach(Array(bundle.members.enumerated()), id: \.offset) { position, member in
+                            VStack(alignment: .leading, spacing: 3) {
+                                HStack {
+                                    Text(member.line.name)
+                                    Spacer()
+                                    Text(member.line.extendedAmount, format: .currency(code: "USD"))
+                                }
+                                Text("\(member.line.quantity.formatted(.number.precision(.fractionLength(0...5)))) × \(QuickBooksSalesLineContract.unitPriceLabel(member.line.unitPrice))")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            .accessibilityElement(children: .combine)
+                            .accessibilityIdentifier("ProjectMilestoneMember-\(index)-\(position)")
+                        }
+                    }
+                    .disclosureGroupStyle(CatalogBundleDisclosureStyle())
+                }
+            }
+        }
+        if let discount = invoice.documentDiscount {
+            LabeledContent("Discount", value: invoice.documentDiscountAmount.formatted(.currency(code: "USD")))
+            Text(discount.reason).font(.caption).foregroundStyle(.secondary)
+        }
+        LabeledContent("Subtotal", value: invoice.subtotalAmount.formatted(.currency(code: "USD")))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Milestone subtotal")
+            .accessibilityValue(invoice.subtotalAmount.formatted(.currency(code: "USD")))
+            .accessibilityIdentifier("ProjectMilestoneSavedSubtotal")
+        if invoice.salesTaxAmount > 0 {
+            LabeledContent("Sales tax", value: invoice.salesTaxAmount.formatted(.currency(code: "USD")))
+        }
+        LabeledContent("Invoice total", value: invoice.amount.formatted(.currency(code: "USD")))
+        LabeledContent("Due date", value: invoice.effectiveDueDate().formatted(date: .abbreviated, time: .omitted))
+        Label("Approved milestone allocation. Items and prices are locked.", systemImage: "lock")
+            .font(.caption).foregroundStyle(.secondary)
+            .accessibilityIdentifier("ProjectMilestoneAllocationLocked")
+        if invoice.quickBooksSyncState != "synced" {
+            Text("QuickBooks publication is pending. Open Billing Review to continue.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
 struct ProjectBillingSummaryCard: View {
     let summary: ProjectBillingSummary
     let issuedMilestoneCount: Int
@@ -222,15 +283,18 @@ struct ProjectBillingPlanSetupSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     let contractAmount: Double
+    let snapshotJSON: String?
     let onSave: ([ProjectMilestonePlanDraft]) -> Void
     @State private var drafts: [ProjectMilestonePlanDraft]
 
     init(
         contractAmount: Double,
+        snapshotJSON: String?,
         initialDate: Date,
         onSave: @escaping ([ProjectMilestonePlanDraft]) -> Void
     ) {
         self.contractAmount = contractAmount
+        self.snapshotJSON = snapshotJSON
         self.onSave = onSave
         _drafts = State(initialValue: ProjectBillingPolicy.defaultDrafts(startingAt: initialDate))
     }
@@ -242,6 +306,8 @@ struct ProjectBillingPlanSetupSheet: View {
     private var validationMessage: String? {
         do {
             try ProjectBillingPolicy.validate(drafts: drafts, contractAmount: contractAmount)
+            _ = try ProjectProgressAllocation.documents(from: snapshotJSON,
+                targetAmounts: ProjectBillingPolicy.allocatedAmounts(total: contractAmount, percentages: drafts.map(\.billingPercent)))
             return nil
         } catch {
             return error.localizedDescription
@@ -252,9 +318,9 @@ struct ProjectBillingPlanSetupSheet: View {
         NavigationStack {
             Form {
                 Section("Approved Contract") {
-                    LabeledContent("Contract total", value: contractAmount.formatted(.currency(code: "USD")))
+                    LabeledContent("Contract before tax", value: contractAmount.formatted(.currency(code: "USD")))
                     LabeledContent("Allocated", value: "\(totalPercent.formatted(.number.precision(.fractionLength(0...2))))%")
-                    Text("Progress invoices use the approved estimate's immutable catalog prices. Only quantities are proportionally allocated, so the project closes at exactly 100% without changing the shared pricebook.")
+                    Text("Each stage uses the approved items and prices, including bundle components and discounts. Sales tax is calculated on each invoice.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -265,7 +331,7 @@ struct ProjectBillingPlanSetupSheet: View {
                         TextField("Scope / completion detail", text: $draft.milestoneDescription, axis: .vertical)
                             .lineLimit(2...4)
                         TextField("Billing percent", value: $draft.billingPercent, format: .number)
-                            .keyboardType(.decimalPad)
+                            .catalogNumericKeyboard()
                         DatePicker("Planned date", selection: $draft.plannedDate, displayedComponents: [.date])
                         Picker("Billing trigger", selection: $draft.billingTrigger) {
                             ForEach(ProjectBillingTrigger.allCases) { trigger in
@@ -302,7 +368,6 @@ struct ProjectBillingPlanSetupSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Create Plan") {
                         onSave(drafts)
-                        dismiss()
                     }
                     .disabled(validationMessage != nil)
                     .accessibilityIdentifier("ConfirmProjectBillingPlan")

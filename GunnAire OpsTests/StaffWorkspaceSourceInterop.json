@@ -1,0 +1,7529 @@
+{
+  "schema": {
+    "activity": {
+      "action": {
+        "nullable": false,
+        "type": "text"
+      },
+      "actorEmail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "detail": {
+        "nullable": false,
+        "type": "text"
+      },
+      "occurredAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "serviceCallID": {
+        "nullable": false,
+        "type": "identifier"
+      }
+    },
+    "agreement": {
+      "active": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "coveredEquipmentIDsJSON": {
+        "nullable": true,
+        "type": "text"
+      },
+      "customer": {
+        "nullable": false,
+        "reference": "customer",
+        "type": "identifier"
+      },
+      "includedVisitsPerTerm": {
+        "nullable": true,
+        "type": "integer"
+      },
+      "lifecycleJSON": {
+        "nullable": true,
+        "type": "text"
+      },
+      "nextDate": {
+        "nullable": false,
+        "type": "date"
+      },
+      "planName": {
+        "nullable": true,
+        "type": "text"
+      },
+      "pricePerVisit": {
+        "nullable": true,
+        "type": "number"
+      },
+      "renewalReminderDays": {
+        "nullable": false,
+        "type": "integer"
+      },
+      "schedulePattern": {
+        "nullable": false,
+        "type": "text"
+      },
+      "termEndsOn": {
+        "nullable": true,
+        "type": "date"
+      }
+    },
+    "alert": {
+      "createdAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "createdByEmail": {
+        "nullable": false,
+        "type": "text"
+      },
+      "creationOperationID": {
+        "nullable": false,
+        "type": "identifier"
+      },
+      "customerID": {
+        "nullable": false,
+        "type": "identifier"
+      },
+      "customerName": {
+        "nullable": false,
+        "type": "text"
+      },
+      "detail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "kindRaw": {
+        "nullable": false,
+        "type": "text"
+      },
+      "resolutionNote": {
+        "nullable": true,
+        "type": "text"
+      },
+      "resolutionOperationID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "resolvedAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "resolvedByEmail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "serviceLocationID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "serviceLocationName": {
+        "nullable": true,
+        "type": "text"
+      },
+      "title": {
+        "nullable": false,
+        "type": "text"
+      },
+      "updatedAt": {
+        "nullable": false,
+        "type": "date"
+      }
+    },
+    "attachment": {
+      "backendDocumentID": {
+        "nullable": true,
+        "type": "text"
+      },
+      "caption": {
+        "nullable": true,
+        "type": "text"
+      },
+      "contentType": {
+        "nullable": false,
+        "type": "text"
+      },
+      "createdAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "customer": {
+        "nullable": true,
+        "reference": "customer",
+        "type": "identifier"
+      },
+      "customerEquipmentID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "displayName": {
+        "nullable": false,
+        "type": "text"
+      },
+      "estimateID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "expenseClaimID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "fileSizeBytes": {
+        "nullable": false,
+        "type": "integer"
+      },
+      "fleetVehicleEventID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "fleetVehicleID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "googleDriveArchivedByEmail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "googleDriveFileID": {
+        "nullable": true,
+        "type": "text"
+      },
+      "googleDriveLastSyncedAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "googleDriveSyncDetail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "googleDriveSyncStatus": {
+        "nullable": true,
+        "type": "text"
+      },
+      "googleDriveWebViewLink": {
+        "nullable": true,
+        "type": "text"
+      },
+      "invoiceID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "kindRaw": {
+        "nullable": false,
+        "type": "text"
+      },
+      "maintenanceContractID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "quickBooksAttachableID": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksAttachedEntityKeysRaw": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksSyncError": {
+        "nullable": true,
+        "type": "text"
+      },
+      "serviceCallID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "sharedCompanySyncDetail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "sharedCompanySyncStatus": {
+        "nullable": true,
+        "type": "text"
+      }
+    },
+    "availability": {
+      "cancellationOperationID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "cancellationReason": {
+        "nullable": true,
+        "type": "text"
+      },
+      "cancelledAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "cancelledByEmail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "createdAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "createdByEmail": {
+        "nullable": false,
+        "type": "text"
+      },
+      "creationOperationID": {
+        "nullable": false,
+        "type": "identifier"
+      },
+      "endsAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "kindRawValue": {
+        "nullable": false,
+        "type": "text"
+      },
+      "reason": {
+        "nullable": true,
+        "type": "text"
+      },
+      "sourceTimeOffRequestID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "startsAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "technicianID": {
+        "nullable": false,
+        "type": "identifier"
+      }
+    },
+    "availabilityEvent": {
+      "actorEmail": {
+        "nullable": false,
+        "type": "text"
+      },
+      "availabilityBlockID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "endsAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "kindRawValue": {
+        "nullable": false,
+        "type": "text"
+      },
+      "occurredAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "operationID": {
+        "nullable": false,
+        "type": "identifier"
+      },
+      "privateDetail": {
+        "nullable": false,
+        "type": "text"
+      },
+      "requestID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "requestStatusRawSnapshot": {
+        "nullable": true,
+        "type": "text"
+      },
+      "startsAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "technicianID": {
+        "nullable": false,
+        "type": "identifier"
+      },
+      "technicianNameSnapshot": {
+        "nullable": false,
+        "type": "text"
+      }
+    },
+    "communication": {
+      "actorEmail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "attachmentFileNamesJSON": {
+        "nullable": true,
+        "type": "text"
+      },
+      "backendCommunicationID": {
+        "nullable": true,
+        "type": "text"
+      },
+      "backendSyncError": {
+        "nullable": true,
+        "type": "text"
+      },
+      "channel": {
+        "nullable": false,
+        "type": "text"
+      },
+      "consentSnapshotJSON": {
+        "nullable": true,
+        "type": "text"
+      },
+      "createdAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "customer": {
+        "nullable": false,
+        "reference": "customer",
+        "type": "identifier"
+      },
+      "deliveredAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "deliveryStatus": {
+        "nullable": false,
+        "type": "text"
+      },
+      "direction": {
+        "nullable": false,
+        "type": "text"
+      },
+      "estimateID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "invoiceID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "maintenanceContractID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "providerMessageID": {
+        "nullable": true,
+        "type": "text"
+      },
+      "providerStatusDetail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "recipient": {
+        "nullable": false,
+        "type": "text"
+      },
+      "serviceCallID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "subject": {
+        "nullable": false,
+        "type": "text"
+      },
+      "templateVersion": {
+        "nullable": false,
+        "type": "text"
+      },
+      "workflowRawValue": {
+        "nullable": false,
+        "type": "text"
+      }
+    },
+    "customer": {
+      "address": {
+        "nullable": true,
+        "type": "text"
+      },
+      "allowsMarketing": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "allowsServiceText": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "allowsTransactionalEmail": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "communicationConsentUpdatedAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "email": {
+        "nullable": true,
+        "type": "text"
+      },
+      "name": {
+        "nullable": false,
+        "type": "text"
+      },
+      "phone": {
+        "nullable": true,
+        "type": "text"
+      },
+      "preferredContactMethodRaw": {
+        "nullable": false,
+        "type": "text"
+      },
+      "quickBooksID": {
+        "nullable": true,
+        "type": "text"
+      }
+    },
+    "equipment": {
+      "createdAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "customer": {
+        "nullable": false,
+        "reference": "customer",
+        "type": "identifier"
+      },
+      "equipmentTypeRaw": {
+        "nullable": true,
+        "type": "text"
+      },
+      "filterSize": {
+        "nullable": true,
+        "type": "text"
+      },
+      "installDate": {
+        "nullable": true,
+        "type": "date"
+      },
+      "isActive": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "location": {
+        "nullable": true,
+        "type": "text"
+      },
+      "manufacturer": {
+        "nullable": true,
+        "type": "text"
+      },
+      "modelNumber": {
+        "nullable": true,
+        "type": "text"
+      },
+      "name": {
+        "nullable": false,
+        "type": "text"
+      },
+      "notes": {
+        "nullable": true,
+        "type": "text"
+      },
+      "serialNumber": {
+        "nullable": true,
+        "type": "text"
+      },
+      "serviceLocationID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "technicalBaselineReadingsJSON": {
+        "nullable": true,
+        "type": "text"
+      },
+      "warrantyExpiration": {
+        "nullable": true,
+        "type": "date"
+      }
+    },
+    "estimate": {
+      "amount": {
+        "nullable": false,
+        "type": "number"
+      },
+      "catalogSnapshotJSON": {
+        "nullable": true,
+        "type": "text"
+      },
+      "changeOrderReason": {
+        "nullable": true,
+        "type": "text"
+      },
+      "createdAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "customer": {
+        "nullable": false,
+        "reference": "customer",
+        "type": "identifier"
+      },
+      "customerApprovalMethodRaw": {
+        "nullable": true,
+        "type": "text"
+      },
+      "customerApprovalRecordedByEmail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "customerApprovalReference": {
+        "nullable": true,
+        "type": "text"
+      },
+      "customerApprovalSignatureImageBase64": {
+        "nullable": true,
+        "type": "text"
+      },
+      "customerApprovedAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "customerApprovedByName": {
+        "nullable": true,
+        "type": "text"
+      },
+      "lineItemSummary": {
+        "nullable": false,
+        "type": "text"
+      },
+      "notes": {
+        "nullable": true,
+        "type": "text"
+      },
+      "parentEstimateID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "proposalGroupID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "proposalIsRecommended": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "proposalOption": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksID": {
+        "nullable": true,
+        "type": "text"
+      },
+      "salesTaxAmount": {
+        "nullable": false,
+        "type": "number"
+      },
+      "scheduledServiceCallID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "serviceCallID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "serviceLocationID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "siteAddress": {
+        "nullable": true,
+        "type": "text"
+      },
+      "status": {
+        "nullable": false,
+        "type": "text"
+      },
+      "taxCalculatedAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "taxCalculationStatusRawValue": {
+        "nullable": true,
+        "type": "text"
+      }
+    },
+    "expense": {
+      "amount": {
+        "nullable": false,
+        "type": "number"
+      },
+      "auditJSON": {
+        "nullable": true,
+        "type": "text"
+      },
+      "businessPurpose": {
+        "nullable": false,
+        "type": "text"
+      },
+      "categoryRaw": {
+        "nullable": false,
+        "type": "text"
+      },
+      "claimTypeRaw": {
+        "nullable": false,
+        "type": "text"
+      },
+      "claimantEmail": {
+        "nullable": false,
+        "type": "text"
+      },
+      "claimantName": {
+        "nullable": false,
+        "type": "text"
+      },
+      "createdAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "customerID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "customerName": {
+        "nullable": true,
+        "type": "text"
+      },
+      "expenseDate": {
+        "nullable": false,
+        "type": "date"
+      },
+      "jobSummary": {
+        "nullable": true,
+        "type": "text"
+      },
+      "merchant": {
+        "nullable": false,
+        "type": "text"
+      },
+      "mileageDestination": {
+        "nullable": true,
+        "type": "text"
+      },
+      "mileageMiles": {
+        "nullable": true,
+        "type": "number"
+      },
+      "mileageOrigin": {
+        "nullable": true,
+        "type": "text"
+      },
+      "mileageRatePerMile": {
+        "nullable": true,
+        "type": "number"
+      },
+      "receiptAttachmentID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "reimbursable": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "reimbursedAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "reimbursedByEmail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "reimbursementReference": {
+        "nullable": true,
+        "type": "text"
+      },
+      "reviewNote": {
+        "nullable": true,
+        "type": "text"
+      },
+      "reviewedAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "reviewedByEmail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "serviceCallID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "statusRaw": {
+        "nullable": false,
+        "type": "text"
+      },
+      "submittedAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "updatedAt": {
+        "nullable": false,
+        "type": "date"
+      }
+    },
+    "formResponse": {
+      "answersJSON": {
+        "nullable": false,
+        "type": "text"
+      },
+      "completedAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "completedByEmail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "serviceCallID": {
+        "nullable": false,
+        "type": "identifier"
+      },
+      "templateID": {
+        "nullable": false,
+        "type": "identifier"
+      },
+      "templateTitle": {
+        "nullable": false,
+        "type": "text"
+      }
+    },
+    "formTemplate": {
+      "applicableServiceTypesJSON": {
+        "nullable": true,
+        "type": "text"
+      },
+      "createdAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "isActive": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "questionsJSON": {
+        "nullable": false,
+        "type": "text"
+      },
+      "title": {
+        "nullable": false,
+        "type": "text"
+      }
+    },
+    "invoice": {
+      "amount": {
+        "nullable": false,
+        "type": "number"
+      },
+      "catalogSnapshotJSON": {
+        "nullable": true,
+        "type": "text"
+      },
+      "completionNotes": {
+        "nullable": true,
+        "type": "text"
+      },
+      "createdAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "customer": {
+        "nullable": false,
+        "reference": "customer",
+        "type": "identifier"
+      },
+      "customerSignatureImageBase64": {
+        "nullable": true,
+        "type": "text"
+      },
+      "customerSignatureName": {
+        "nullable": true,
+        "type": "text"
+      },
+      "customerSignedAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "dueDate": {
+        "nullable": true,
+        "type": "date"
+      },
+      "finalizedAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "lineItemSummary": {
+        "nullable": false,
+        "type": "text"
+      },
+      "milestoneDraftReceiptJSON": {
+        "nullable": true,
+        "type": "text"
+      },
+      "notes": {
+        "nullable": true,
+        "type": "text"
+      },
+      "projectBillingPercent": {
+        "nullable": true,
+        "type": "number"
+      },
+      "projectContractAmount": {
+        "nullable": true,
+        "type": "number"
+      },
+      "projectMilestoneID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "projectMilestoneSequence": {
+        "nullable": true,
+        "type": "integer"
+      },
+      "projectMilestoneTitle": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksBalanceDue": {
+        "nullable": true,
+        "type": "number"
+      },
+      "quickBooksID": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksLastSyncedAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "quickBooksPaymentReviewJSON": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksSyncDetail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksSyncStatus": {
+        "nullable": false,
+        "type": "text"
+      },
+      "salesTaxAmount": {
+        "nullable": false,
+        "type": "number"
+      },
+      "serviceCallID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "serviceLocationID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "siteAddress": {
+        "nullable": true,
+        "type": "text"
+      },
+      "status": {
+        "nullable": false,
+        "type": "text"
+      },
+      "taxCalculatedAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "taxCalculationStatusRawValue": {
+        "nullable": true,
+        "type": "text"
+      },
+      "workTypeRaw": {
+        "nullable": false,
+        "type": "text"
+      }
+    },
+    "item": {
+      "createdAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "defaultInventoryLocation": {
+        "nullable": true,
+        "type": "text"
+      },
+      "flatRateAssemblyJSON": {
+        "nullable": true,
+        "type": "text"
+      },
+      "isTaxable": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "itemDescription": {
+        "nullable": true,
+        "type": "text"
+      },
+      "itemTypeRawValue": {
+        "nullable": false,
+        "type": "text"
+      },
+      "name": {
+        "nullable": false,
+        "type": "text"
+      },
+      "preferredVendorName": {
+        "nullable": true,
+        "type": "text"
+      },
+      "preferredVendorQuickBooksID": {
+        "nullable": true,
+        "type": "text"
+      },
+      "pricebookCreatedByEmail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "pricebookReviewStatusRawValue": {
+        "nullable": true,
+        "type": "text"
+      },
+      "pricebookReviewedAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "pricebookReviewedByEmail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "purchaseCost": {
+        "nullable": true,
+        "type": "number"
+      },
+      "purchaseDescription": {
+        "nullable": true,
+        "type": "text"
+      },
+      "purchaseURL": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksCatalogDetailsJSON": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksCatalogReceiptJSON": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksID": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksInventorySetupJSON": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksLastSyncedAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "quickBooksSyncDetail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksSyncStatus": {
+        "nullable": false,
+        "type": "text"
+      },
+      "reorderPoint": {
+        "nullable": true,
+        "type": "number"
+      },
+      "sku": {
+        "nullable": true,
+        "type": "text"
+      },
+      "timestamp": {
+        "nullable": false,
+        "type": "date"
+      },
+      "tracksInventory": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "unitPrice": {
+        "nullable": false,
+        "type": "number"
+      },
+      "vendorPartNumber": {
+        "nullable": true,
+        "type": "text"
+      }
+    },
+    "job": {
+      "additionalTechnicianIDsJSON": {
+        "nullable": true,
+        "type": "text"
+      },
+      "afterPhotoCount": {
+        "nullable": false,
+        "type": "integer"
+      },
+      "arrivalConfirmed": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "assignedTechnician": {
+        "nullable": true,
+        "reference": "technician",
+        "type": "identifier"
+      },
+      "beforePhotoCount": {
+        "nullable": false,
+        "type": "integer"
+      },
+      "cancellationReason": {
+        "nullable": true,
+        "type": "text"
+      },
+      "cancelledAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "correctiveWorkReasonRaw": {
+        "nullable": true,
+        "type": "text"
+      },
+      "customer": {
+        "nullable": false,
+        "reference": "customer",
+        "type": "identifier"
+      },
+      "customerEquipmentID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "customerNotified": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "diagnosticsCaptured": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "dispatchUrgencyRaw": {
+        "nullable": false,
+        "type": "text"
+      },
+      "documentationChecklist": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "documentationCompletedAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "documentationStartedAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "drainLineCondition": {
+        "nullable": true,
+        "type": "text"
+      },
+      "duration": {
+        "nullable": false,
+        "type": "number"
+      },
+      "equipmentInstallDate": {
+        "nullable": true,
+        "type": "date"
+      },
+      "equipmentLocation": {
+        "nullable": true,
+        "type": "text"
+      },
+      "equipmentManufacturer": {
+        "nullable": true,
+        "type": "text"
+      },
+      "equipmentModel": {
+        "nullable": true,
+        "type": "text"
+      },
+      "equipmentName": {
+        "nullable": true,
+        "type": "text"
+      },
+      "equipmentNotes": {
+        "nullable": true,
+        "type": "text"
+      },
+      "equipmentSerialNumber": {
+        "nullable": true,
+        "type": "text"
+      },
+      "equipmentTypeRaw": {
+        "nullable": true,
+        "type": "text"
+      },
+      "equipmentVerifiedChecklist": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "equipmentWarrantyExpiration": {
+        "nullable": true,
+        "type": "date"
+      },
+      "eventTitle": {
+        "nullable": true,
+        "type": "text"
+      },
+      "filterCondition": {
+        "nullable": true,
+        "type": "text"
+      },
+      "filterSize": {
+        "nullable": true,
+        "type": "text"
+      },
+      "findingsSummary": {
+        "nullable": true,
+        "type": "text"
+      },
+      "followUpAction": {
+        "nullable": true,
+        "type": "text"
+      },
+      "followUpDueDate": {
+        "nullable": true,
+        "type": "date"
+      },
+      "followUpRequired": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "googleCalendarID": {
+        "nullable": true,
+        "type": "text"
+      },
+      "googleEventID": {
+        "nullable": true,
+        "type": "text"
+      },
+      "googleEventManagedByApp": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "indoorCoilCondition": {
+        "nullable": true,
+        "type": "text"
+      },
+      "linkedEstimateID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "linkedInvoiceID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "maintenanceAgreementDueDate": {
+        "nullable": true,
+        "type": "date"
+      },
+      "maintenanceAgreementID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "maintenanceChecklistComplete": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "notes": {
+        "nullable": true,
+        "type": "text"
+      },
+      "originatingServiceCallID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "outdoorCoilCondition": {
+        "nullable": true,
+        "type": "text"
+      },
+      "paymentCollectedChecklist": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "promisedArrivalWindowEnd": {
+        "nullable": true,
+        "type": "date"
+      },
+      "promisedArrivalWindowStart": {
+        "nullable": true,
+        "type": "date"
+      },
+      "quoteReviewedWithCustomer": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "recommendedWorkSummary": {
+        "nullable": true,
+        "type": "text"
+      },
+      "safetyChecklistComplete": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "scheduledDate": {
+        "nullable": false,
+        "type": "date"
+      },
+      "scheduledFollowUpServiceCallID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "serviceActionChecklistJSON": {
+        "nullable": true,
+        "type": "text"
+      },
+      "serviceLocationID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "serviceReportReadingsJSON": {
+        "nullable": true,
+        "type": "text"
+      },
+      "serviceReportSummary": {
+        "nullable": true,
+        "type": "text"
+      },
+      "siteAddress": {
+        "nullable": true,
+        "type": "text"
+      },
+      "startupChecklistComplete": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "status": {
+        "enumeration": [
+          "cancelled",
+          "completed",
+          "inProgress",
+          "invoiced",
+          "scheduled"
+        ],
+        "nullable": false,
+        "type": "text"
+      },
+      "technicianArrivedAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "technicianEnRouteAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "thermostatOperation": {
+        "nullable": true,
+        "type": "text"
+      },
+      "type": {
+        "enumeration": [
+          "estimate",
+          "install",
+          "maintenance",
+          "meeting",
+          "other",
+          "reminder",
+          "repair",
+          "replacement",
+          "service",
+          "site visit"
+        ],
+        "nullable": false,
+        "type": "text"
+      },
+      "visitDispositionNotes": {
+        "nullable": true,
+        "type": "text"
+      },
+      "visitDispositionRaw": {
+        "nullable": false,
+        "type": "text"
+      },
+      "workCompletedChecklist": {
+        "nullable": false,
+        "type": "flag"
+      }
+    },
+    "location": {
+      "accessNotes": {
+        "nullable": true,
+        "type": "text"
+      },
+      "address": {
+        "nullable": false,
+        "type": "text"
+      },
+      "contactName": {
+        "nullable": true,
+        "type": "text"
+      },
+      "contactPhone": {
+        "nullable": true,
+        "type": "text"
+      },
+      "createdAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "customer": {
+        "nullable": false,
+        "reference": "customer",
+        "type": "identifier"
+      },
+      "isActive": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "isPrimary": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "name": {
+        "nullable": false,
+        "type": "text"
+      },
+      "updatedAt": {
+        "nullable": false,
+        "type": "date"
+      }
+    },
+    "milestone": {
+      "billingPercent": {
+        "nullable": false,
+        "type": "number"
+      },
+      "billingTriggerRaw": {
+        "nullable": false,
+        "type": "text"
+      },
+      "completedAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "completedByEmail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "createdAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "createdByEmail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "estimateID": {
+        "nullable": false,
+        "type": "identifier"
+      },
+      "invoiceID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "milestoneDescription": {
+        "nullable": true,
+        "type": "text"
+      },
+      "plannedAmount": {
+        "nullable": false,
+        "type": "number"
+      },
+      "plannedDate": {
+        "nullable": false,
+        "type": "date"
+      },
+      "projectServiceCallID": {
+        "nullable": false,
+        "type": "identifier"
+      },
+      "scheduledVisitID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "sequence": {
+        "nullable": false,
+        "type": "integer"
+      },
+      "statusRaw": {
+        "nullable": false,
+        "type": "text"
+      },
+      "title": {
+        "nullable": false,
+        "type": "text"
+      },
+      "updatedAt": {
+        "nullable": false,
+        "type": "date"
+      }
+    },
+    "movement": {
+      "createdAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "createdByEmail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "destinationLocation": {
+        "nullable": true,
+        "type": "text"
+      },
+      "itemID": {
+        "nullable": false,
+        "type": "identifier"
+      },
+      "itemName": {
+        "nullable": false,
+        "type": "text"
+      },
+      "itemSKU": {
+        "nullable": true,
+        "type": "text"
+      },
+      "movementTypeRaw": {
+        "nullable": false,
+        "type": "text"
+      },
+      "notes": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quantity": {
+        "nullable": false,
+        "type": "number"
+      },
+      "serviceCallID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "sourceLocation": {
+        "nullable": true,
+        "type": "text"
+      }
+    },
+    "payment": {
+      "amount": {
+        "nullable": false,
+        "type": "number"
+      },
+      "authorizationReference": {
+        "nullable": true,
+        "type": "text"
+      },
+      "cardLast4": {
+        "nullable": true,
+        "type": "text"
+      },
+      "collectionAttemptID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "date": {
+        "nullable": false,
+        "type": "date"
+      },
+      "invoice": {
+        "nullable": false,
+        "reference": "invoice",
+        "type": "identifier"
+      },
+      "isRefund": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "method": {
+        "nullable": false,
+        "type": "text"
+      },
+      "notes": {
+        "nullable": true,
+        "type": "text"
+      },
+      "processor": {
+        "nullable": true,
+        "type": "text"
+      },
+      "processorSyncDetail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "processorSyncStatus": {
+        "nullable": true,
+        "type": "text"
+      },
+      "providerPaymentStatus": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksAccountingSyncDetail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksAccountingSyncStatus": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksChargeID": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksClientTransID": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksDepositID": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksID": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksRefundReceiptID": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksSalesReceiptID": {
+        "nullable": true,
+        "type": "text"
+      },
+      "refundedPaymentID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "settlementBatchID": {
+        "nullable": true,
+        "type": "text"
+      }
+    },
+    "purchaseOrder": {
+      "createdAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "createdByEmail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "itemName": {
+        "nullable": false,
+        "type": "text"
+      },
+      "itemSKU": {
+        "nullable": true,
+        "type": "text"
+      },
+      "notes": {
+        "nullable": true,
+        "type": "text"
+      },
+      "number": {
+        "nullable": false,
+        "type": "text"
+      },
+      "orderedAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "quantity": {
+        "nullable": false,
+        "type": "number"
+      },
+      "receivedAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "receivedToLocation": {
+        "nullable": true,
+        "type": "text"
+      },
+      "serviceCallID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "shippingCost": {
+        "nullable": false,
+        "type": "number"
+      },
+      "statusRaw": {
+        "nullable": false,
+        "type": "text"
+      },
+      "unitCost": {
+        "nullable": false,
+        "type": "number"
+      },
+      "updatedAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "vendorName": {
+        "nullable": false,
+        "type": "text"
+      },
+      "vendorPartNumber": {
+        "nullable": true,
+        "type": "text"
+      },
+      "vendorQuickBooksID": {
+        "nullable": true,
+        "type": "text"
+      }
+    },
+    "request": {
+      "address": {
+        "nullable": true,
+        "type": "text"
+      },
+      "backendRequestID": {
+        "nullable": true,
+        "type": "text"
+      },
+      "convertedCustomerID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "convertedServiceCallID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "createdAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "createdByEmail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "customerName": {
+        "nullable": false,
+        "type": "text"
+      },
+      "email": {
+        "nullable": true,
+        "type": "text"
+      },
+      "phone": {
+        "nullable": true,
+        "type": "text"
+      },
+      "preferredDate": {
+        "nullable": true,
+        "type": "date"
+      },
+      "qualificationNotes": {
+        "nullable": true,
+        "type": "text"
+      },
+      "qualifiedAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "requestedServiceTypeRaw": {
+        "nullable": false,
+        "type": "text"
+      },
+      "statusRaw": {
+        "nullable": false,
+        "type": "text"
+      },
+      "summary": {
+        "nullable": false,
+        "type": "text"
+      },
+      "urgencyRaw": {
+        "nullable": false,
+        "type": "text"
+      }
+    },
+    "shift": {
+      "createdAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "createdByEmail": {
+        "nullable": false,
+        "type": "text"
+      },
+      "creationOperationID": {
+        "nullable": false,
+        "type": "identifier"
+      },
+      "durationMinutes": {
+        "nullable": false,
+        "type": "integer"
+      },
+      "effectiveFrom": {
+        "nullable": false,
+        "type": "date"
+      },
+      "effectiveUntil": {
+        "nullable": true,
+        "type": "date"
+      },
+      "kindRawValue": {
+        "nullable": false,
+        "type": "text"
+      },
+      "note": {
+        "nullable": true,
+        "type": "text"
+      },
+      "retiredAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "retiredByEmail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "retirementOperationID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "retirementReason": {
+        "nullable": true,
+        "type": "text"
+      },
+      "startMinute": {
+        "nullable": false,
+        "type": "integer"
+      },
+      "technicianID": {
+        "nullable": false,
+        "type": "identifier"
+      },
+      "technicianNameSnapshot": {
+        "nullable": false,
+        "type": "text"
+      },
+      "timeZoneIdentifier": {
+        "nullable": false,
+        "type": "text"
+      },
+      "weekdayRawValue": {
+        "nullable": false,
+        "type": "integer"
+      }
+    },
+    "task": {
+      "assignedToEmail": {
+        "nullable": false,
+        "type": "text"
+      },
+      "cancellationOperationID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "cancellationReason": {
+        "nullable": true,
+        "type": "text"
+      },
+      "cancelledAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "cancelledByEmail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "completedAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "completedByEmail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "completionNote": {
+        "nullable": true,
+        "type": "text"
+      },
+      "completionOperationID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "createdAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "createdByEmail": {
+        "nullable": false,
+        "type": "text"
+      },
+      "creationOperationID": {
+        "nullable": false,
+        "type": "identifier"
+      },
+      "customerID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "customerName": {
+        "nullable": true,
+        "type": "text"
+      },
+      "dueAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "estimateID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "estimateSummary": {
+        "nullable": true,
+        "type": "text"
+      },
+      "priorityRaw": {
+        "nullable": false,
+        "type": "text"
+      },
+      "serviceCallID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "serviceCallSummary": {
+        "nullable": true,
+        "type": "text"
+      },
+      "serviceLocationID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "serviceLocationName": {
+        "nullable": true,
+        "type": "text"
+      },
+      "taskDescription": {
+        "nullable": true,
+        "type": "text"
+      },
+      "title": {
+        "nullable": false,
+        "type": "text"
+      },
+      "updatedAt": {
+        "nullable": false,
+        "type": "date"
+      }
+    },
+    "taskEvent": {
+      "actorEmail": {
+        "nullable": false,
+        "type": "text"
+      },
+      "assignedToEmailSnapshot": {
+        "nullable": false,
+        "type": "text"
+      },
+      "detail": {
+        "nullable": false,
+        "type": "text"
+      },
+      "dueAtSnapshot": {
+        "nullable": false,
+        "type": "date"
+      },
+      "kindRaw": {
+        "nullable": false,
+        "type": "text"
+      },
+      "occurredAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "operationID": {
+        "nullable": false,
+        "type": "identifier"
+      },
+      "priorityRawSnapshot": {
+        "nullable": false,
+        "type": "text"
+      },
+      "taskID": {
+        "nullable": false,
+        "type": "identifier"
+      },
+      "titleSnapshot": {
+        "nullable": false,
+        "type": "text"
+      }
+    },
+    "technician": {
+      "contactInfo": {
+        "nullable": true,
+        "type": "text"
+      },
+      "laborCostPerHour": {
+        "nullable": true,
+        "type": "number"
+      },
+      "name": {
+        "nullable": false,
+        "type": "text"
+      },
+      "qualificationNotes": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksTimeEntityKindRawValue": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksTimeEntityRef": {
+        "nullable": true,
+        "type": "text"
+      },
+      "serviceAreasJSON": {
+        "nullable": true,
+        "type": "text"
+      },
+      "supportedEquipmentTypesJSON": {
+        "nullable": true,
+        "type": "text"
+      }
+    },
+    "timeEntry": {
+      "clockIn": {
+        "nullable": false,
+        "type": "date"
+      },
+      "clockOut": {
+        "nullable": true,
+        "type": "date"
+      },
+      "notes": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksTimeActivityID": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksTimeActivitySyncError": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksTimeActivitySyncToken": {
+        "nullable": true,
+        "type": "text"
+      },
+      "quickBooksTimeActivitySyncedAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "reviewAuditJSON": {
+        "nullable": true,
+        "type": "text"
+      },
+      "reviewNote": {
+        "nullable": true,
+        "type": "text"
+      },
+      "reviewStatusRawValue": {
+        "nullable": false,
+        "type": "text"
+      },
+      "reviewedAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "reviewedByEmail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "serviceCall": {
+        "nullable": true,
+        "reference": "job",
+        "type": "identifier"
+      },
+      "userEmail": {
+        "nullable": false,
+        "type": "text"
+      }
+    },
+    "timeOff": {
+      "approvedAvailabilityBlockID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "cancellationOperationID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "cancellationReason": {
+        "nullable": true,
+        "type": "text"
+      },
+      "cancelledAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "cancelledByEmail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "createdAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "creationOperationID": {
+        "nullable": false,
+        "type": "identifier"
+      },
+      "endsAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "privateReason": {
+        "nullable": true,
+        "type": "text"
+      },
+      "privateReviewNote": {
+        "nullable": true,
+        "type": "text"
+      },
+      "requestedByEmail": {
+        "nullable": false,
+        "type": "text"
+      },
+      "reviewOperationID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "reviewedAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "reviewedByEmail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "startsAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "statusRawValue": {
+        "nullable": false,
+        "type": "text"
+      },
+      "technicianID": {
+        "nullable": false,
+        "type": "identifier"
+      },
+      "technicianNameSnapshot": {
+        "nullable": false,
+        "type": "text"
+      },
+      "updatedAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "withdrawalOperationID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "withdrawnAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "withdrawnByEmail": {
+        "nullable": true,
+        "type": "text"
+      }
+    },
+    "user": {
+      "createdAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "email": {
+        "nullable": false,
+        "type": "text"
+      },
+      "isActive": {
+        "nullable": false,
+        "type": "flag"
+      },
+      "roleRawValue": {
+        "nullable": false,
+        "type": "text"
+      }
+    },
+    "vehicle": {
+      "administrativeStatusRaw": {
+        "nullable": false,
+        "type": "text"
+      },
+      "assignedTechnicianID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "assignedTechnicianName": {
+        "nullable": true,
+        "type": "text"
+      },
+      "createdAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "latestInspectionAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "licensePlate": {
+        "nullable": true,
+        "type": "text"
+      },
+      "make": {
+        "nullable": true,
+        "type": "text"
+      },
+      "model": {
+        "nullable": true,
+        "type": "text"
+      },
+      "nextInspectionDueAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "nextServiceDueAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "nextServiceDueOdometer": {
+        "nullable": true,
+        "type": "number"
+      },
+      "notes": {
+        "nullable": true,
+        "type": "text"
+      },
+      "odometer": {
+        "nullable": true,
+        "type": "number"
+      },
+      "odometerUpdatedAt": {
+        "nullable": true,
+        "type": "date"
+      },
+      "stockLocation": {
+        "nullable": false,
+        "type": "text"
+      },
+      "unitNumber": {
+        "nullable": false,
+        "type": "text"
+      },
+      "updatedAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "updatedByEmail": {
+        "nullable": true,
+        "type": "text"
+      },
+      "vehicleYear": {
+        "nullable": true,
+        "type": "integer"
+      },
+      "vin": {
+        "nullable": true,
+        "type": "text"
+      }
+    },
+    "vehicleEvent": {
+      "actorEmail": {
+        "nullable": false,
+        "type": "text"
+      },
+      "assignmentTechnicianID": {
+        "nullable": true,
+        "type": "identifier"
+      },
+      "assignmentTechnicianName": {
+        "nullable": true,
+        "type": "text"
+      },
+      "detail": {
+        "nullable": false,
+        "type": "text"
+      },
+      "failedInspectionItemsRaw": {
+        "nullable": true,
+        "type": "text"
+      },
+      "inspectionResultsJSON": {
+        "nullable": true,
+        "type": "text"
+      },
+      "invoiceNumber": {
+        "nullable": true,
+        "type": "text"
+      },
+      "kindRaw": {
+        "nullable": false,
+        "type": "text"
+      },
+      "newStatusRaw": {
+        "nullable": true,
+        "type": "text"
+      },
+      "occurredAt": {
+        "nullable": false,
+        "type": "date"
+      },
+      "odometer": {
+        "nullable": true,
+        "type": "number"
+      },
+      "priorStatusRaw": {
+        "nullable": true,
+        "type": "text"
+      },
+      "resolvesOutOfService": {
+        "nullable": true,
+        "type": "flag"
+      },
+      "serviceCategoryRaw": {
+        "nullable": true,
+        "type": "text"
+      },
+      "serviceCenter": {
+        "nullable": true,
+        "type": "text"
+      },
+      "serviceCost": {
+        "nullable": true,
+        "type": "number"
+      },
+      "vehicleID": {
+        "nullable": false,
+        "type": "identifier"
+      },
+      "vehicleUnitNumber": {
+        "nullable": false,
+        "type": "text"
+      }
+    },
+    "vendor": {
+      "contactInfo": {
+        "nullable": true,
+        "type": "text"
+      },
+      "name": {
+        "nullable": false,
+        "type": "text"
+      },
+      "quickBooksID": {
+        "nullable": true,
+        "type": "text"
+      }
+    }
+  },
+  "original": [
+    {
+      "fields": {
+        "address": {
+          "null": {}
+        },
+        "allowsMarketing": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "allowsServiceText": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "allowsTransactionalEmail": {
+          "flag": {
+            "_0": true
+          }
+        },
+        "communicationConsentUpdatedAt": {
+          "null": {}
+        },
+        "email": {
+          "null": {}
+        },
+        "name": {
+          "text": {
+            "_0": "Original customer"
+          }
+        },
+        "phone": {
+          "null": {}
+        },
+        "preferredContactMethodRaw": {
+          "text": {
+            "_0": "email"
+          }
+        },
+        "quickBooksID": {
+          "null": {}
+        }
+      },
+      "id": "9D98492B-8093-46D4-B89E-E9C745F5BEAB",
+      "kind": "customer",
+      "version": 1
+    },
+    {
+      "fields": {
+        "contactInfo": {
+          "null": {}
+        },
+        "laborCostPerHour": {
+          "null": {}
+        },
+        "name": {
+          "text": {
+            "_0": "Original lead"
+          }
+        },
+        "qualificationNotes": {
+          "null": {}
+        },
+        "quickBooksTimeEntityKindRawValue": {
+          "null": {}
+        },
+        "quickBooksTimeEntityRef": {
+          "null": {}
+        },
+        "serviceAreasJSON": {
+          "null": {}
+        },
+        "supportedEquipmentTypesJSON": {
+          "null": {}
+        }
+      },
+      "id": "672272B3-F890-4945-8275-D0B823F02859",
+      "kind": "technician",
+      "version": 1
+    },
+    {
+      "fields": {
+        "createdAt": {
+          "date": {
+            "_0": 810687548.626528
+          }
+        },
+        "defaultInventoryLocation": {
+          "null": {}
+        },
+        "flatRateAssemblyJSON": {
+          "null": {}
+        },
+        "isTaxable": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "itemDescription": {
+          "null": {}
+        },
+        "itemTypeRawValue": {
+          "text": {
+            "_0": "Service"
+          }
+        },
+        "name": {
+          "text": {
+            "_0": "Original valve"
+          }
+        },
+        "preferredVendorName": {
+          "null": {}
+        },
+        "preferredVendorQuickBooksID": {
+          "null": {}
+        },
+        "pricebookCreatedByEmail": {
+          "null": {}
+        },
+        "pricebookReviewStatusRawValue": {
+          "text": {
+            "_0": "approved"
+          }
+        },
+        "pricebookReviewedAt": {
+          "null": {}
+        },
+        "pricebookReviewedByEmail": {
+          "null": {}
+        },
+        "purchaseCost": {
+          "null": {}
+        },
+        "purchaseDescription": {
+          "null": {}
+        },
+        "purchaseURL": {
+          "null": {}
+        },
+        "quickBooksCatalogDetailsJSON": {
+          "null": {}
+        },
+        "quickBooksCatalogReceiptJSON": {
+          "null": {}
+        },
+        "quickBooksID": {
+          "null": {}
+        },
+        "quickBooksInventorySetupJSON": {
+          "null": {}
+        },
+        "quickBooksLastSyncedAt": {
+          "null": {}
+        },
+        "quickBooksSyncDetail": {
+          "null": {}
+        },
+        "quickBooksSyncStatus": {
+          "text": {
+            "_0": "pending"
+          }
+        },
+        "reorderPoint": {
+          "null": {}
+        },
+        "sku": {
+          "null": {}
+        },
+        "timestamp": {
+          "date": {
+            "_0": 810687548.626528
+          }
+        },
+        "tracksInventory": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "unitPrice": {
+          "number": {
+            "_0": 123.375
+          }
+        },
+        "vendorPartNumber": {
+          "null": {}
+        }
+      },
+      "id": "662E0CCA-4E8D-4000-91F1-30D63F4B079F",
+      "kind": "item",
+      "version": 1
+    },
+    {
+      "fields": {
+        "additionalTechnicianIDsJSON": {
+          "null": {}
+        },
+        "afterPhotoCount": {
+          "integer": {
+            "_0": 0
+          }
+        },
+        "arrivalConfirmed": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "assignedTechnician": {
+          "identifier": {
+            "_0": "672272B3-F890-4945-8275-D0B823F02859"
+          }
+        },
+        "beforePhotoCount": {
+          "integer": {
+            "_0": 0
+          }
+        },
+        "cancellationReason": {
+          "null": {}
+        },
+        "cancelledAt": {
+          "null": {}
+        },
+        "correctiveWorkReasonRaw": {
+          "null": {}
+        },
+        "customer": {
+          "identifier": {
+            "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+          }
+        },
+        "customerEquipmentID": {
+          "null": {}
+        },
+        "customerNotified": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "diagnosticsCaptured": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "dispatchUrgencyRaw": {
+          "text": {
+            "_0": "normal"
+          }
+        },
+        "documentationChecklist": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "documentationCompletedAt": {
+          "null": {}
+        },
+        "documentationStartedAt": {
+          "null": {}
+        },
+        "drainLineCondition": {
+          "null": {}
+        },
+        "duration": {
+          "number": {
+            "_0": 3600
+          }
+        },
+        "equipmentInstallDate": {
+          "null": {}
+        },
+        "equipmentLocation": {
+          "null": {}
+        },
+        "equipmentManufacturer": {
+          "null": {}
+        },
+        "equipmentModel": {
+          "null": {}
+        },
+        "equipmentName": {
+          "null": {}
+        },
+        "equipmentNotes": {
+          "null": {}
+        },
+        "equipmentSerialNumber": {
+          "null": {}
+        },
+        "equipmentTypeRaw": {
+          "null": {}
+        },
+        "equipmentVerifiedChecklist": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "equipmentWarrantyExpiration": {
+          "null": {}
+        },
+        "eventTitle": {
+          "null": {}
+        },
+        "filterCondition": {
+          "null": {}
+        },
+        "filterSize": {
+          "null": {}
+        },
+        "findingsSummary": {
+          "null": {}
+        },
+        "followUpAction": {
+          "null": {}
+        },
+        "followUpDueDate": {
+          "null": {}
+        },
+        "followUpRequired": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "googleCalendarID": {
+          "null": {}
+        },
+        "googleEventID": {
+          "null": {}
+        },
+        "googleEventManagedByApp": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "indoorCoilCondition": {
+          "null": {}
+        },
+        "linkedEstimateID": {
+          "null": {}
+        },
+        "linkedInvoiceID": {
+          "null": {}
+        },
+        "maintenanceAgreementDueDate": {
+          "null": {}
+        },
+        "maintenanceAgreementID": {
+          "null": {}
+        },
+        "maintenanceChecklistComplete": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "notes": {
+          "null": {}
+        },
+        "originatingServiceCallID": {
+          "null": {}
+        },
+        "outdoorCoilCondition": {
+          "null": {}
+        },
+        "paymentCollectedChecklist": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "promisedArrivalWindowEnd": {
+          "null": {}
+        },
+        "promisedArrivalWindowStart": {
+          "null": {}
+        },
+        "quoteReviewedWithCustomer": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "recommendedWorkSummary": {
+          "null": {}
+        },
+        "safetyChecklistComplete": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "scheduledDate": {
+          "date": {
+            "_0": 810123456.123456
+          }
+        },
+        "scheduledFollowUpServiceCallID": {
+          "null": {}
+        },
+        "serviceActionChecklistJSON": {
+          "null": {}
+        },
+        "serviceLocationID": {
+          "null": {}
+        },
+        "serviceReportReadingsJSON": {
+          "null": {}
+        },
+        "serviceReportSummary": {
+          "null": {}
+        },
+        "siteAddress": {
+          "null": {}
+        },
+        "startupChecklistComplete": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "status": {
+          "text": {
+            "_0": "scheduled"
+          }
+        },
+        "technicianArrivedAt": {
+          "null": {}
+        },
+        "technicianEnRouteAt": {
+          "null": {}
+        },
+        "thermostatOperation": {
+          "null": {}
+        },
+        "type": {
+          "text": {
+            "_0": "repair"
+          }
+        },
+        "visitDispositionNotes": {
+          "null": {}
+        },
+        "visitDispositionRaw": {
+          "text": {
+            "_0": "standard"
+          }
+        },
+        "workCompletedChecklist": {
+          "flag": {
+            "_0": false
+          }
+        }
+      },
+      "id": "ECC96BF1-0A93-42CC-B497-A580799067B9",
+      "kind": "job",
+      "version": 1
+    },
+    {
+      "fields": {
+        "amount": {
+          "number": {
+            "_0": 123.375
+          }
+        },
+        "catalogSnapshotJSON": {
+          "null": {}
+        },
+        "completionNotes": {
+          "null": {}
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.627036
+          }
+        },
+        "customer": {
+          "identifier": {
+            "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+          }
+        },
+        "customerSignatureImageBase64": {
+          "null": {}
+        },
+        "customerSignatureName": {
+          "null": {}
+        },
+        "customerSignedAt": {
+          "null": {}
+        },
+        "dueDate": {
+          "null": {}
+        },
+        "finalizedAt": {
+          "null": {}
+        },
+        "lineItemSummary": {
+          "text": {
+            "_0": ""
+          }
+        },
+        "milestoneDraftReceiptJSON": {
+          "null": {}
+        },
+        "notes": {
+          "null": {}
+        },
+        "projectBillingPercent": {
+          "null": {}
+        },
+        "projectContractAmount": {
+          "null": {}
+        },
+        "projectMilestoneID": {
+          "null": {}
+        },
+        "projectMilestoneSequence": {
+          "null": {}
+        },
+        "projectMilestoneTitle": {
+          "null": {}
+        },
+        "quickBooksBalanceDue": {
+          "null": {}
+        },
+        "quickBooksID": {
+          "null": {}
+        },
+        "quickBooksLastSyncedAt": {
+          "null": {}
+        },
+        "quickBooksPaymentReviewJSON": {
+          "null": {}
+        },
+        "quickBooksSyncDetail": {
+          "null": {}
+        },
+        "quickBooksSyncStatus": {
+          "text": {
+            "_0": "pending"
+          }
+        },
+        "salesTaxAmount": {
+          "number": {
+            "_0": 0
+          }
+        },
+        "serviceCallID": {
+          "null": {}
+        },
+        "serviceLocationID": {
+          "null": {}
+        },
+        "siteAddress": {
+          "null": {}
+        },
+        "status": {
+          "text": {
+            "_0": "unpaid"
+          }
+        },
+        "taxCalculatedAt": {
+          "null": {}
+        },
+        "taxCalculationStatusRawValue": {
+          "null": {}
+        },
+        "workTypeRaw": {
+          "text": {
+            "_0": "service"
+          }
+        }
+      },
+      "id": "52BE8B00-7A09-49C5-9096-424A00043EF0",
+      "kind": "invoice",
+      "version": 1
+    },
+    {
+      "fields": {
+        "amount": {
+          "number": {
+            "_0": 123.375
+          }
+        },
+        "catalogSnapshotJSON": {
+          "null": {}
+        },
+        "changeOrderReason": {
+          "null": {}
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.62712
+          }
+        },
+        "customer": {
+          "identifier": {
+            "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+          }
+        },
+        "customerApprovalMethodRaw": {
+          "null": {}
+        },
+        "customerApprovalRecordedByEmail": {
+          "null": {}
+        },
+        "customerApprovalReference": {
+          "null": {}
+        },
+        "customerApprovalSignatureImageBase64": {
+          "null": {}
+        },
+        "customerApprovedAt": {
+          "null": {}
+        },
+        "customerApprovedByName": {
+          "null": {}
+        },
+        "lineItemSummary": {
+          "text": {
+            "_0": ""
+          }
+        },
+        "notes": {
+          "null": {}
+        },
+        "parentEstimateID": {
+          "null": {}
+        },
+        "proposalGroupID": {
+          "null": {}
+        },
+        "proposalIsRecommended": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "proposalOption": {
+          "null": {}
+        },
+        "quickBooksID": {
+          "null": {}
+        },
+        "salesTaxAmount": {
+          "number": {
+            "_0": 0
+          }
+        },
+        "scheduledServiceCallID": {
+          "null": {}
+        },
+        "serviceCallID": {
+          "null": {}
+        },
+        "serviceLocationID": {
+          "null": {}
+        },
+        "siteAddress": {
+          "null": {}
+        },
+        "status": {
+          "text": {
+            "_0": "pending"
+          }
+        },
+        "taxCalculatedAt": {
+          "null": {}
+        },
+        "taxCalculationStatusRawValue": {
+          "null": {}
+        }
+      },
+      "id": "AA862A6A-8277-4601-B2C8-AFB8A9B7104D",
+      "kind": "estimate",
+      "version": 1
+    },
+    {
+      "fields": {
+        "accessNotes": {
+          "null": {}
+        },
+        "address": {
+          "text": {
+            "_0": "10 Main"
+          }
+        },
+        "contactName": {
+          "null": {}
+        },
+        "contactPhone": {
+          "null": {}
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.627311
+          }
+        },
+        "customer": {
+          "identifier": {
+            "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+          }
+        },
+        "isActive": {
+          "flag": {
+            "_0": true
+          }
+        },
+        "isPrimary": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "name": {
+          "text": {
+            "_0": "Shop"
+          }
+        },
+        "updatedAt": {
+          "date": {
+            "_0": 810687548.627311
+          }
+        }
+      },
+      "id": "93A1FF38-AA34-48AA-AA8E-5DE0E7C42D63",
+      "kind": "location",
+      "version": 1
+    },
+    {
+      "fields": {
+        "createdAt": {
+          "date": {
+            "_0": 810687548.627351
+          }
+        },
+        "customer": {
+          "identifier": {
+            "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+          }
+        },
+        "equipmentTypeRaw": {
+          "null": {}
+        },
+        "filterSize": {
+          "null": {}
+        },
+        "installDate": {
+          "null": {}
+        },
+        "isActive": {
+          "flag": {
+            "_0": true
+          }
+        },
+        "location": {
+          "null": {}
+        },
+        "manufacturer": {
+          "null": {}
+        },
+        "modelNumber": {
+          "null": {}
+        },
+        "name": {
+          "text": {
+            "_0": "Original heat pump"
+          }
+        },
+        "notes": {
+          "null": {}
+        },
+        "serialNumber": {
+          "null": {}
+        },
+        "serviceLocationID": {
+          "null": {}
+        },
+        "technicalBaselineReadingsJSON": {
+          "null": {}
+        },
+        "warrantyExpiration": {
+          "null": {}
+        }
+      },
+      "id": "F1C6763B-4CCA-4252-B3BD-B221C72EC550",
+      "kind": "equipment",
+      "version": 1
+    },
+    {
+      "fields": {
+        "amount": {
+          "number": {
+            "_0": 12.125
+          }
+        },
+        "authorizationReference": {
+          "null": {}
+        },
+        "cardLast4": {
+          "null": {}
+        },
+        "collectionAttemptID": {
+          "null": {}
+        },
+        "date": {
+          "date": {
+            "_0": 810687548.627384
+          }
+        },
+        "invoice": {
+          "identifier": {
+            "_0": "52BE8B00-7A09-49C5-9096-424A00043EF0"
+          }
+        },
+        "isRefund": {
+          "flag": {
+            "_0": false
+          }
+        },
+        "method": {
+          "text": {
+            "_0": "cash"
+          }
+        },
+        "notes": {
+          "null": {}
+        },
+        "processor": {
+          "null": {}
+        },
+        "processorSyncDetail": {
+          "null": {}
+        },
+        "processorSyncStatus": {
+          "null": {}
+        },
+        "providerPaymentStatus": {
+          "null": {}
+        },
+        "quickBooksAccountingSyncDetail": {
+          "null": {}
+        },
+        "quickBooksAccountingSyncStatus": {
+          "null": {}
+        },
+        "quickBooksChargeID": {
+          "null": {}
+        },
+        "quickBooksClientTransID": {
+          "null": {}
+        },
+        "quickBooksDepositID": {
+          "null": {}
+        },
+        "quickBooksID": {
+          "null": {}
+        },
+        "quickBooksRefundReceiptID": {
+          "null": {}
+        },
+        "quickBooksSalesReceiptID": {
+          "null": {}
+        },
+        "refundedPaymentID": {
+          "null": {}
+        },
+        "settlementBatchID": {
+          "null": {}
+        }
+      },
+      "id": "640F75A3-F70C-4D32-B9E2-41E88382ACF7",
+      "kind": "payment",
+      "version": 1
+    },
+    {
+      "fields": {
+        "createdAt": {
+          "date": {
+            "_0": 810687548.627555
+          }
+        },
+        "email": {
+          "text": {
+            "_0": "field@example.invalid"
+          }
+        },
+        "isActive": {
+          "flag": {
+            "_0": true
+          }
+        },
+        "roleRawValue": {
+          "text": {
+            "_0": "Field Technician"
+          }
+        }
+      },
+      "id": "08A8BBD2-0397-44FD-9D63-F0409ECB59FF",
+      "kind": "user",
+      "version": 1
+    },
+    {
+      "fields": {
+        "cancellationOperationID": {
+          "null": {}
+        },
+        "cancellationReason": {
+          "null": {}
+        },
+        "cancelledAt": {
+          "null": {}
+        },
+        "cancelledByEmail": {
+          "null": {}
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.62757
+          }
+        },
+        "createdByEmail": {
+          "text": {
+            "_0": ""
+          }
+        },
+        "creationOperationID": {
+          "identifier": {
+            "_0": "AEDE1742-7E32-4BE9-9EE2-B4FEDF114205"
+          }
+        },
+        "endsAt": {
+          "date": {
+            "_0": 810127056.123456
+          }
+        },
+        "kindRawValue": {
+          "text": {
+            "_0": "unavailable"
+          }
+        },
+        "reason": {
+          "null": {}
+        },
+        "sourceTimeOffRequestID": {
+          "null": {}
+        },
+        "startsAt": {
+          "date": {
+            "_0": 810123456.123456
+          }
+        },
+        "technicianID": {
+          "identifier": {
+            "_0": "672272B3-F890-4945-8275-D0B823F02859"
+          }
+        }
+      },
+      "id": "7633FB22-2BF4-4E92-9529-233BED134D5F",
+      "kind": "availability",
+      "version": 1
+    },
+    {
+      "fields": {
+        "createdAt": {
+          "date": {
+            "_0": 810687548.627626
+          }
+        },
+        "createdByEmail": {
+          "text": {
+            "_0": "office@example.invalid"
+          }
+        },
+        "creationOperationID": {
+          "identifier": {
+            "_0": "B9744C3C-E47F-499B-9C8B-CD794F38D729"
+          }
+        },
+        "durationMinutes": {
+          "integer": {
+            "_0": 540
+          }
+        },
+        "effectiveFrom": {
+          "date": {
+            "_0": 810123456.123456
+          }
+        },
+        "effectiveUntil": {
+          "null": {}
+        },
+        "kindRawValue": {
+          "text": {
+            "_0": "regular"
+          }
+        },
+        "note": {
+          "null": {}
+        },
+        "retiredAt": {
+          "null": {}
+        },
+        "retiredByEmail": {
+          "null": {}
+        },
+        "retirementOperationID": {
+          "null": {}
+        },
+        "retirementReason": {
+          "null": {}
+        },
+        "startMinute": {
+          "integer": {
+            "_0": 480
+          }
+        },
+        "technicianID": {
+          "identifier": {
+            "_0": "672272B3-F890-4945-8275-D0B823F02859"
+          }
+        },
+        "technicianNameSnapshot": {
+          "text": {
+            "_0": "Original lead"
+          }
+        },
+        "timeZoneIdentifier": {
+          "text": {
+            "_0": "America/New_York"
+          }
+        },
+        "weekdayRawValue": {
+          "integer": {
+            "_0": 2
+          }
+        }
+      },
+      "id": "9136D6E7-3681-4AB8-94FF-54ECE0CEF8E7",
+      "kind": "shift",
+      "version": 1
+    },
+    {
+      "fields": {
+        "approvedAvailabilityBlockID": {
+          "null": {}
+        },
+        "cancellationOperationID": {
+          "null": {}
+        },
+        "cancellationReason": {
+          "null": {}
+        },
+        "cancelledAt": {
+          "null": {}
+        },
+        "cancelledByEmail": {
+          "null": {}
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.627652
+          }
+        },
+        "creationOperationID": {
+          "identifier": {
+            "_0": "A472AB1F-5233-44C2-BC4A-40C0EDAEAECA"
+          }
+        },
+        "endsAt": {
+          "date": {
+            "_0": 810127056.123456
+          }
+        },
+        "privateReason": {
+          "null": {}
+        },
+        "privateReviewNote": {
+          "null": {}
+        },
+        "requestedByEmail": {
+          "text": {
+            "_0": "field@example.invalid"
+          }
+        },
+        "reviewOperationID": {
+          "null": {}
+        },
+        "reviewedAt": {
+          "null": {}
+        },
+        "reviewedByEmail": {
+          "null": {}
+        },
+        "startsAt": {
+          "date": {
+            "_0": 810123456.123456
+          }
+        },
+        "statusRawValue": {
+          "text": {
+            "_0": "pending"
+          }
+        },
+        "technicianID": {
+          "identifier": {
+            "_0": "672272B3-F890-4945-8275-D0B823F02859"
+          }
+        },
+        "technicianNameSnapshot": {
+          "text": {
+            "_0": "Original lead"
+          }
+        },
+        "updatedAt": {
+          "date": {
+            "_0": 810687548.627652
+          }
+        },
+        "withdrawalOperationID": {
+          "null": {}
+        },
+        "withdrawnAt": {
+          "null": {}
+        },
+        "withdrawnByEmail": {
+          "null": {}
+        }
+      },
+      "id": "31B9EBBC-A518-4D5D-B17B-49FD0DBD12AC",
+      "kind": "timeOff",
+      "version": 1
+    },
+    {
+      "fields": {
+        "actorEmail": {
+          "text": {
+            "_0": "field@example.invalid"
+          }
+        },
+        "availabilityBlockID": {
+          "null": {}
+        },
+        "endsAt": {
+          "date": {
+            "_0": 810127056.123456
+          }
+        },
+        "kindRawValue": {
+          "text": {
+            "_0": "requested"
+          }
+        },
+        "occurredAt": {
+          "date": {
+            "_0": 810687548.627689
+          }
+        },
+        "operationID": {
+          "identifier": {
+            "_0": "E8903AFF-8FF1-4D69-9541-F9A12B9DA494"
+          }
+        },
+        "privateDetail": {
+          "text": {
+            "_0": "Original"
+          }
+        },
+        "requestID": {
+          "null": {}
+        },
+        "requestStatusRawSnapshot": {
+          "text": {
+            "_0": "pending"
+          }
+        },
+        "startsAt": {
+          "date": {
+            "_0": 810123456.123456
+          }
+        },
+        "technicianID": {
+          "identifier": {
+            "_0": "672272B3-F890-4945-8275-D0B823F02859"
+          }
+        },
+        "technicianNameSnapshot": {
+          "text": {
+            "_0": "Original lead"
+          }
+        }
+      },
+      "id": "D074BC76-3559-4B9B-825B-24314DD80CF8",
+      "kind": "availabilityEvent",
+      "version": 1
+    },
+    {
+      "fields": {
+        "clockIn": {
+          "date": {
+            "_0": 810123456.123456
+          }
+        },
+        "clockOut": {
+          "null": {}
+        },
+        "notes": {
+          "null": {}
+        },
+        "quickBooksTimeActivityID": {
+          "null": {}
+        },
+        "quickBooksTimeActivitySyncError": {
+          "null": {}
+        },
+        "quickBooksTimeActivitySyncToken": {
+          "null": {}
+        },
+        "quickBooksTimeActivitySyncedAt": {
+          "null": {}
+        },
+        "reviewAuditJSON": {
+          "null": {}
+        },
+        "reviewNote": {
+          "null": {}
+        },
+        "reviewStatusRawValue": {
+          "text": {
+            "_0": "submitted"
+          }
+        },
+        "reviewedAt": {
+          "null": {}
+        },
+        "reviewedByEmail": {
+          "null": {}
+        },
+        "serviceCall": {
+          "identifier": {
+            "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+          }
+        },
+        "userEmail": {
+          "text": {
+            "_0": "field@example.invalid"
+          }
+        }
+      },
+      "id": "FD799D6B-37A1-4AD5-9D03-6757A88EFC3E",
+      "kind": "timeEntry",
+      "version": 1
+    },
+    {
+      "fields": {
+        "active": {
+          "flag": {
+            "_0": true
+          }
+        },
+        "coveredEquipmentIDsJSON": {
+          "null": {}
+        },
+        "customer": {
+          "identifier": {
+            "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+          }
+        },
+        "includedVisitsPerTerm": {
+          "null": {}
+        },
+        "lifecycleJSON": {
+          "null": {}
+        },
+        "nextDate": {
+          "date": {
+            "_0": 810123456.123456
+          }
+        },
+        "planName": {
+          "null": {}
+        },
+        "pricePerVisit": {
+          "null": {}
+        },
+        "renewalReminderDays": {
+          "integer": {
+            "_0": 30
+          }
+        },
+        "schedulePattern": {
+          "text": {
+            "_0": "every 6 months"
+          }
+        },
+        "termEndsOn": {
+          "null": {}
+        }
+      },
+      "id": "4F467296-196C-4766-8367-36138BF411AC",
+      "kind": "agreement",
+      "version": 1
+    },
+    {
+      "fields": {
+        "address": {
+          "null": {}
+        },
+        "backendRequestID": {
+          "null": {}
+        },
+        "convertedCustomerID": {
+          "null": {}
+        },
+        "convertedServiceCallID": {
+          "null": {}
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.62798
+          }
+        },
+        "createdByEmail": {
+          "null": {}
+        },
+        "customerName": {
+          "text": {
+            "_0": "Original lead"
+          }
+        },
+        "email": {
+          "null": {}
+        },
+        "phone": {
+          "null": {}
+        },
+        "preferredDate": {
+          "null": {}
+        },
+        "qualificationNotes": {
+          "text": {
+            "_0": "GUNNAIRE_REQUEST_METADATA_V1:eyJzb3VyY2VSYXciOiJwaG9uZSIsInZlcnNpb24iOjF9"
+          }
+        },
+        "qualifiedAt": {
+          "null": {}
+        },
+        "requestedServiceTypeRaw": {
+          "text": {
+            "_0": "service"
+          }
+        },
+        "statusRaw": {
+          "text": {
+            "_0": "new"
+          }
+        },
+        "summary": {
+          "text": {
+            "_0": "No cooling"
+          }
+        },
+        "urgencyRaw": {
+          "text": {
+            "_0": "normal"
+          }
+        }
+      },
+      "id": "945F8922-821E-47F1-80DC-61A0BFDECCA7",
+      "kind": "request",
+      "version": 1
+    },
+    {
+      "fields": {
+        "action": {
+          "text": {
+            "_0": "Arrived"
+          }
+        },
+        "actorEmail": {
+          "null": {}
+        },
+        "detail": {
+          "text": {
+            "_0": "Original arrival"
+          }
+        },
+        "occurredAt": {
+          "date": {
+            "_0": 810687548.62807
+          }
+        },
+        "serviceCallID": {
+          "identifier": {
+            "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+          }
+        }
+      },
+      "id": "0A813731-6ECE-4374-A14F-BE1193F01598",
+      "kind": "activity",
+      "version": 1
+    },
+    {
+      "fields": {
+        "billingPercent": {
+          "number": {
+            "_0": 33.333
+          }
+        },
+        "billingTriggerRaw": {
+          "text": {
+            "_0": "milestoneCompletion"
+          }
+        },
+        "completedAt": {
+          "null": {}
+        },
+        "completedByEmail": {
+          "null": {}
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.628106
+          }
+        },
+        "createdByEmail": {
+          "null": {}
+        },
+        "estimateID": {
+          "identifier": {
+            "_0": "AA862A6A-8277-4601-B2C8-AFB8A9B7104D"
+          }
+        },
+        "invoiceID": {
+          "null": {}
+        },
+        "milestoneDescription": {
+          "null": {}
+        },
+        "plannedAmount": {
+          "number": {
+            "_0": 123.375
+          }
+        },
+        "plannedDate": {
+          "date": {
+            "_0": 810123456.123456
+          }
+        },
+        "projectServiceCallID": {
+          "identifier": {
+            "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+          }
+        },
+        "scheduledVisitID": {
+          "null": {}
+        },
+        "sequence": {
+          "integer": {
+            "_0": 2
+          }
+        },
+        "statusRaw": {
+          "text": {
+            "_0": "planned"
+          }
+        },
+        "title": {
+          "text": {
+            "_0": "Equipment delivery"
+          }
+        },
+        "updatedAt": {
+          "date": {
+            "_0": 810687548.628106
+          }
+        }
+      },
+      "id": "3BB12418-C9DA-45E5-BB78-CB56AFB7B138",
+      "kind": "milestone",
+      "version": 1
+    },
+    {
+      "fields": {
+        "createdAt": {
+          "date": {
+            "_0": 810687548.628136
+          }
+        },
+        "createdByEmail": {
+          "text": {
+            "_0": "office@example.invalid"
+          }
+        },
+        "creationOperationID": {
+          "identifier": {
+            "_0": "FD828AA4-C605-4A7B-8199-42384239973E"
+          }
+        },
+        "customerID": {
+          "identifier": {
+            "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+          }
+        },
+        "customerName": {
+          "text": {
+            "_0": "Original customer"
+          }
+        },
+        "detail": {
+          "null": {}
+        },
+        "kindRaw": {
+          "text": {
+            "_0": "other"
+          }
+        },
+        "resolutionNote": {
+          "null": {}
+        },
+        "resolutionOperationID": {
+          "null": {}
+        },
+        "resolvedAt": {
+          "null": {}
+        },
+        "resolvedByEmail": {
+          "null": {}
+        },
+        "serviceLocationID": {
+          "null": {}
+        },
+        "serviceLocationName": {
+          "null": {}
+        },
+        "title": {
+          "text": {
+            "_0": "Side entry"
+          }
+        },
+        "updatedAt": {
+          "date": {
+            "_0": 810687548.628136
+          }
+        }
+      },
+      "id": "82449CD5-0799-4DBF-A089-ACAB5FA114C8",
+      "kind": "alert",
+      "version": 1
+    },
+    {
+      "fields": {
+        "assignedToEmail": {
+          "text": {
+            "_0": "field@example.invalid"
+          }
+        },
+        "cancellationOperationID": {
+          "null": {}
+        },
+        "cancellationReason": {
+          "null": {}
+        },
+        "cancelledAt": {
+          "null": {}
+        },
+        "cancelledByEmail": {
+          "null": {}
+        },
+        "completedAt": {
+          "null": {}
+        },
+        "completedByEmail": {
+          "null": {}
+        },
+        "completionNote": {
+          "null": {}
+        },
+        "completionOperationID": {
+          "null": {}
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.627244
+          }
+        },
+        "createdByEmail": {
+          "text": {
+            "_0": "office@example.invalid"
+          }
+        },
+        "creationOperationID": {
+          "identifier": {
+            "_0": "99D62288-4143-4103-826F-40D8C6C7E3BB"
+          }
+        },
+        "customerID": {
+          "null": {}
+        },
+        "customerName": {
+          "null": {}
+        },
+        "dueAt": {
+          "date": {
+            "_0": 810123456.123456
+          }
+        },
+        "estimateID": {
+          "null": {}
+        },
+        "estimateSummary": {
+          "null": {}
+        },
+        "priorityRaw": {
+          "text": {
+            "_0": "normal"
+          }
+        },
+        "serviceCallID": {
+          "null": {}
+        },
+        "serviceCallSummary": {
+          "null": {}
+        },
+        "serviceLocationID": {
+          "null": {}
+        },
+        "serviceLocationName": {
+          "null": {}
+        },
+        "taskDescription": {
+          "null": {}
+        },
+        "title": {
+          "text": {
+            "_0": "Order valve"
+          }
+        },
+        "updatedAt": {
+          "date": {
+            "_0": 810687548.627244
+          }
+        }
+      },
+      "id": "63912DE3-E9C9-4C4D-8977-F97B6DE7FBD6",
+      "kind": "task",
+      "version": 1
+    },
+    {
+      "fields": {
+        "actorEmail": {
+          "text": {
+            "_0": "office@example.invalid"
+          }
+        },
+        "assignedToEmailSnapshot": {
+          "text": {
+            "_0": "field@example.invalid"
+          }
+        },
+        "detail": {
+          "text": {
+            "_0": "Original"
+          }
+        },
+        "dueAtSnapshot": {
+          "date": {
+            "_0": 810123456.123456
+          }
+        },
+        "kindRaw": {
+          "text": {
+            "_0": "created"
+          }
+        },
+        "occurredAt": {
+          "date": {
+            "_0": 810687548.62817
+          }
+        },
+        "operationID": {
+          "identifier": {
+            "_0": "047508E2-60A7-4107-85AD-8ED547CF305D"
+          }
+        },
+        "priorityRawSnapshot": {
+          "text": {
+            "_0": "normal"
+          }
+        },
+        "taskID": {
+          "identifier": {
+            "_0": "63912DE3-E9C9-4C4D-8977-F97B6DE7FBD6"
+          }
+        },
+        "titleSnapshot": {
+          "text": {
+            "_0": "Order valve"
+          }
+        }
+      },
+      "id": "6F7308E8-E9D2-47BC-B01F-E0F7C8741E13",
+      "kind": "taskEvent",
+      "version": 1
+    },
+    {
+      "fields": {
+        "backendDocumentID": {
+          "null": {}
+        },
+        "caption": {
+          "null": {}
+        },
+        "contentType": {
+          "text": {
+            "_0": "application/pdf"
+          }
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.628202
+          }
+        },
+        "customer": {
+          "identifier": {
+            "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+          }
+        },
+        "customerEquipmentID": {
+          "null": {}
+        },
+        "displayName": {
+          "text": {
+            "_0": "Original.pdf"
+          }
+        },
+        "estimateID": {
+          "null": {}
+        },
+        "expenseClaimID": {
+          "null": {}
+        },
+        "fileSizeBytes": {
+          "integer": {
+            "_0": 123
+          }
+        },
+        "fleetVehicleEventID": {
+          "null": {}
+        },
+        "fleetVehicleID": {
+          "null": {}
+        },
+        "googleDriveArchivedByEmail": {
+          "null": {}
+        },
+        "googleDriveFileID": {
+          "null": {}
+        },
+        "googleDriveLastSyncedAt": {
+          "null": {}
+        },
+        "googleDriveSyncDetail": {
+          "null": {}
+        },
+        "googleDriveSyncStatus": {
+          "null": {}
+        },
+        "googleDriveWebViewLink": {
+          "null": {}
+        },
+        "invoiceID": {
+          "null": {}
+        },
+        "kindRaw": {
+          "text": {
+            "_0": "service_report"
+          }
+        },
+        "maintenanceContractID": {
+          "null": {}
+        },
+        "quickBooksAttachableID": {
+          "null": {}
+        },
+        "quickBooksAttachedEntityKeysRaw": {
+          "null": {}
+        },
+        "quickBooksSyncError": {
+          "null": {}
+        },
+        "serviceCallID": {
+          "identifier": {
+            "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+          }
+        },
+        "sharedCompanySyncDetail": {
+          "null": {}
+        },
+        "sharedCompanySyncStatus": {
+          "null": {}
+        }
+      },
+      "id": "DD56F517-F2A5-478C-9FF2-3ABE09C41D3F",
+      "kind": "attachment",
+      "version": 1
+    },
+    {
+      "fields": {
+        "actorEmail": {
+          "null": {}
+        },
+        "attachmentFileNamesJSON": {
+          "text": {
+            "_0": "[]"
+          }
+        },
+        "backendCommunicationID": {
+          "null": {}
+        },
+        "backendSyncError": {
+          "null": {}
+        },
+        "channel": {
+          "text": {
+            "_0": "email"
+          }
+        },
+        "consentSnapshotJSON": {
+          "null": {}
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.628248
+          }
+        },
+        "customer": {
+          "identifier": {
+            "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+          }
+        },
+        "deliveredAt": {
+          "date": {
+            "_0": 810123456.123456
+          }
+        },
+        "deliveryStatus": {
+          "text": {
+            "_0": "sent"
+          }
+        },
+        "direction": {
+          "text": {
+            "_0": "outbound"
+          }
+        },
+        "estimateID": {
+          "null": {}
+        },
+        "invoiceID": {
+          "null": {}
+        },
+        "maintenanceContractID": {
+          "null": {}
+        },
+        "providerMessageID": {
+          "text": {
+            "_0": "original-message"
+          }
+        },
+        "providerStatusDetail": {
+          "null": {}
+        },
+        "recipient": {
+          "text": {
+            "_0": "customer@example.invalid"
+          }
+        },
+        "serviceCallID": {
+          "identifier": {
+            "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+          }
+        },
+        "subject": {
+          "text": {
+            "_0": "Original service report"
+          }
+        },
+        "templateVersion": {
+          "text": {
+            "_0": "general-v1"
+          }
+        },
+        "workflowRawValue": {
+          "text": {
+            "_0": "general"
+          }
+        }
+      },
+      "id": "EECABFD9-072A-450A-A145-697606A11254",
+      "kind": "communication",
+      "version": 1
+    },
+    {
+      "fields": {
+        "applicableServiceTypesJSON": {
+          "text": {
+            "_0": "{\"version\":1,\"requiredForCloseout\":false,\"serviceTypes\":[]}"
+          }
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.627169
+          }
+        },
+        "isActive": {
+          "flag": {
+            "_0": true
+          }
+        },
+        "questionsJSON": {
+          "text": {
+            "_0": "[]"
+          }
+        },
+        "title": {
+          "text": {
+            "_0": "Original form"
+          }
+        }
+      },
+      "id": "FFD3210E-C1EA-44C1-86C8-6E85D0DF1803",
+      "kind": "formTemplate",
+      "version": 1
+    },
+    {
+      "fields": {
+        "answersJSON": {
+          "text": {
+            "_0": "{\"version\":2,\"questions\":[],\"rows\":[]}"
+          }
+        },
+        "completedAt": {
+          "date": {
+            "_0": 810687548.628304
+          }
+        },
+        "completedByEmail": {
+          "null": {}
+        },
+        "serviceCallID": {
+          "identifier": {
+            "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+          }
+        },
+        "templateID": {
+          "identifier": {
+            "_0": "FFD3210E-C1EA-44C1-86C8-6E85D0DF1803"
+          }
+        },
+        "templateTitle": {
+          "text": {
+            "_0": "Original form"
+          }
+        }
+      },
+      "id": "74571481-D71D-4D52-A9D5-24784D71DCE7",
+      "kind": "formResponse",
+      "version": 1
+    },
+    {
+      "fields": {
+        "contactInfo": {
+          "null": {}
+        },
+        "name": {
+          "text": {
+            "_0": "Original supplier"
+          }
+        },
+        "quickBooksID": {
+          "null": {}
+        }
+      },
+      "id": "CF2286D7-B76E-4D00-925E-E2978837FAA2",
+      "kind": "vendor",
+      "version": 1
+    },
+    {
+      "fields": {
+        "createdAt": {
+          "date": {
+            "_0": 810687548.628459
+          }
+        },
+        "createdByEmail": {
+          "null": {}
+        },
+        "itemName": {
+          "text": {
+            "_0": "Original valve"
+          }
+        },
+        "itemSKU": {
+          "null": {}
+        },
+        "notes": {
+          "null": {}
+        },
+        "number": {
+          "text": {
+            "_0": "ORIGINAL-PO-123"
+          }
+        },
+        "orderedAt": {
+          "null": {}
+        },
+        "quantity": {
+          "number": {
+            "_0": 2.5
+          }
+        },
+        "receivedAt": {
+          "null": {}
+        },
+        "receivedToLocation": {
+          "null": {}
+        },
+        "serviceCallID": {
+          "identifier": {
+            "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+          }
+        },
+        "shippingCost": {
+          "number": {
+            "_0": 0
+          }
+        },
+        "statusRaw": {
+          "text": {
+            "_0": "draft"
+          }
+        },
+        "unitCost": {
+          "number": {
+            "_0": 12.125
+          }
+        },
+        "updatedAt": {
+          "date": {
+            "_0": 810687548.628459
+          }
+        },
+        "vendorName": {
+          "text": {
+            "_0": "Original supplier"
+          }
+        },
+        "vendorPartNumber": {
+          "null": {}
+        },
+        "vendorQuickBooksID": {
+          "null": {}
+        }
+      },
+      "id": "459BA003-86C0-4751-8D7D-EA549DF50646",
+      "kind": "purchaseOrder",
+      "version": 1
+    },
+    {
+      "fields": {
+        "createdAt": {
+          "date": {
+            "_0": 810687548.628526
+          }
+        },
+        "createdByEmail": {
+          "null": {}
+        },
+        "destinationLocation": {
+          "null": {}
+        },
+        "itemID": {
+          "identifier": {
+            "_0": "662E0CCA-4E8D-4000-91F1-30D63F4B079F"
+          }
+        },
+        "itemName": {
+          "text": {
+            "_0": "Original valve"
+          }
+        },
+        "itemSKU": {
+          "null": {}
+        },
+        "movementTypeRaw": {
+          "text": {
+            "_0": "adjust"
+          }
+        },
+        "notes": {
+          "null": {}
+        },
+        "quantity": {
+          "number": {
+            "_0": -0.125
+          }
+        },
+        "serviceCallID": {
+          "identifier": {
+            "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+          }
+        },
+        "sourceLocation": {
+          "null": {}
+        }
+      },
+      "id": "0B6AD657-9D6E-454E-A985-EC6152EB3FAA",
+      "kind": "movement",
+      "version": 1
+    },
+    {
+      "fields": {
+        "administrativeStatusRaw": {
+          "text": {
+            "_0": "in_service"
+          }
+        },
+        "assignedTechnicianID": {
+          "null": {}
+        },
+        "assignedTechnicianName": {
+          "null": {}
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.627196
+          }
+        },
+        "latestInspectionAt": {
+          "null": {}
+        },
+        "licensePlate": {
+          "null": {}
+        },
+        "make": {
+          "null": {}
+        },
+        "model": {
+          "null": {}
+        },
+        "nextInspectionDueAt": {
+          "null": {}
+        },
+        "nextServiceDueAt": {
+          "null": {}
+        },
+        "nextServiceDueOdometer": {
+          "null": {}
+        },
+        "notes": {
+          "null": {}
+        },
+        "odometer": {
+          "null": {}
+        },
+        "odometerUpdatedAt": {
+          "null": {}
+        },
+        "stockLocation": {
+          "text": {
+            "_0": "Truck 2"
+          }
+        },
+        "unitNumber": {
+          "text": {
+            "_0": "Truck 2"
+          }
+        },
+        "updatedAt": {
+          "date": {
+            "_0": 810687548.627196
+          }
+        },
+        "updatedByEmail": {
+          "null": {}
+        },
+        "vehicleYear": {
+          "null": {}
+        },
+        "vin": {
+          "null": {}
+        }
+      },
+      "id": "A52A4A66-754E-48BE-BDD1-DC5B21CC6784",
+      "kind": "vehicle",
+      "version": 1
+    },
+    {
+      "fields": {
+        "actorEmail": {
+          "text": {
+            "_0": "office@example.invalid"
+          }
+        },
+        "assignmentTechnicianID": {
+          "null": {}
+        },
+        "assignmentTechnicianName": {
+          "null": {}
+        },
+        "detail": {
+          "text": {
+            "_0": "Original inspection"
+          }
+        },
+        "failedInspectionItemsRaw": {
+          "null": {}
+        },
+        "inspectionResultsJSON": {
+          "null": {}
+        },
+        "invoiceNumber": {
+          "null": {}
+        },
+        "kindRaw": {
+          "text": {
+            "_0": "created"
+          }
+        },
+        "newStatusRaw": {
+          "null": {}
+        },
+        "occurredAt": {
+          "date": {
+            "_0": 810687548.628581
+          }
+        },
+        "odometer": {
+          "null": {}
+        },
+        "priorStatusRaw": {
+          "null": {}
+        },
+        "resolvesOutOfService": {
+          "null": {}
+        },
+        "serviceCategoryRaw": {
+          "null": {}
+        },
+        "serviceCenter": {
+          "null": {}
+        },
+        "serviceCost": {
+          "null": {}
+        },
+        "vehicleID": {
+          "identifier": {
+            "_0": "A52A4A66-754E-48BE-BDD1-DC5B21CC6784"
+          }
+        },
+        "vehicleUnitNumber": {
+          "text": {
+            "_0": "Truck 2"
+          }
+        }
+      },
+      "id": "AD4ECBD0-CBBF-4844-A80C-B7A266AB31EA",
+      "kind": "vehicleEvent",
+      "version": 1
+    },
+    {
+      "fields": {
+        "amount": {
+          "number": {
+            "_0": 12.13
+          }
+        },
+        "auditJSON": {
+          "text": {
+            "_0": "[{\"occurredAt\":810687548.628616,\"id\":\"762DE800-CB5C-4545-8090-395B7D21E650\",\"actorEmail\":\"field@example.invalid\",\"detail\":\"Submitted a job-linked claim.\",\"action\":\"submitted\"}]"
+          }
+        },
+        "businessPurpose": {
+          "text": {
+            "_0": "Valve"
+          }
+        },
+        "categoryRaw": {
+          "text": {
+            "_0": "other"
+          }
+        },
+        "claimTypeRaw": {
+          "text": {
+            "_0": "expense"
+          }
+        },
+        "claimantEmail": {
+          "text": {
+            "_0": "field@example.invalid"
+          }
+        },
+        "claimantName": {
+          "text": {
+            "_0": "Original lead"
+          }
+        },
+        "createdAt": {
+          "date": {
+            "_0": 810687548.628616
+          }
+        },
+        "customerID": {
+          "identifier": {
+            "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+          }
+        },
+        "customerName": {
+          "null": {}
+        },
+        "expenseDate": {
+          "date": {
+            "_0": 810123456.123456
+          }
+        },
+        "jobSummary": {
+          "null": {}
+        },
+        "merchant": {
+          "text": {
+            "_0": "Original supplier"
+          }
+        },
+        "mileageDestination": {
+          "null": {}
+        },
+        "mileageMiles": {
+          "null": {}
+        },
+        "mileageOrigin": {
+          "null": {}
+        },
+        "mileageRatePerMile": {
+          "null": {}
+        },
+        "receiptAttachmentID": {
+          "null": {}
+        },
+        "reimbursable": {
+          "flag": {
+            "_0": true
+          }
+        },
+        "reimbursedAt": {
+          "null": {}
+        },
+        "reimbursedByEmail": {
+          "null": {}
+        },
+        "reimbursementReference": {
+          "null": {}
+        },
+        "reviewNote": {
+          "null": {}
+        },
+        "reviewedAt": {
+          "null": {}
+        },
+        "reviewedByEmail": {
+          "null": {}
+        },
+        "serviceCallID": {
+          "identifier": {
+            "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+          }
+        },
+        "statusRaw": {
+          "text": {
+            "_0": "submitted"
+          }
+        },
+        "submittedAt": {
+          "date": {
+            "_0": 810687548.628616
+          }
+        },
+        "updatedAt": {
+          "date": {
+            "_0": 810687548.628616
+          }
+        }
+      },
+      "id": "F2686925-36FD-43A8-9F39-062884C7C685",
+      "kind": "expense",
+      "version": 1
+    }
+  ],
+  "receipt": {
+    "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+    "environment": "development",
+    "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+    "schema": "owner-workspace-v1",
+    "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3",
+    "operationID": "cd631ead-0314-4f1b-8c06-3d1514c9e48d",
+    "sequence": 1,
+    "changes": [
+      {
+        "kind": "customer",
+        "id": "9d98492b-8093-46d4-b89e-e9c745f5beab",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "technician",
+        "id": "672272b3-f890-4945-8275-d0b823f02859",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "item",
+        "id": "662e0cca-4e8d-4000-91f1-30d63f4b079f",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "job",
+        "id": "ecc96bf1-0a93-42cc-b497-a580799067b9",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "invoice",
+        "id": "52be8b00-7a09-49c5-9096-424a00043ef0",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "estimate",
+        "id": "aa862a6a-8277-4601-b2c8-afb8a9b7104d",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "location",
+        "id": "93a1ff38-aa34-48aa-aa8e-5de0e7c42d63",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "equipment",
+        "id": "f1c6763b-4cca-4252-b3bd-b221c72ec550",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "payment",
+        "id": "640f75a3-f70c-4d32-b9e2-41e88382acf7",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "user",
+        "id": "08a8bbd2-0397-44fd-9d63-f0409ecb59ff",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "availability",
+        "id": "7633fb22-2bf4-4e92-9529-233bed134d5f",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "shift",
+        "id": "9136d6e7-3681-4ab8-94ff-54ece0cef8e7",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "timeOff",
+        "id": "31b9ebbc-a518-4d5d-b17b-49fd0dbd12ac",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "availabilityEvent",
+        "id": "d074bc76-3559-4b9b-825b-24314dd80cf8",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "timeEntry",
+        "id": "fd799d6b-37a1-4ad5-9d03-6757a88efc3e",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "agreement",
+        "id": "4f467296-196c-4766-8367-36138bf411ac",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "request",
+        "id": "945f8922-821e-47f1-80dc-61a0bfdecca7",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "activity",
+        "id": "0a813731-6ece-4374-a14f-be1193f01598",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "milestone",
+        "id": "3bb12418-c9da-45e5-bb78-cb56afb7b138",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "alert",
+        "id": "82449cd5-0799-4dbf-a089-acab5fa114c8",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "task",
+        "id": "63912de3-e9c9-4c4d-8977-f97b6de7fbd6",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "taskEvent",
+        "id": "6f7308e8-e9d2-47bc-b01f-e0f7c8741e13",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "attachment",
+        "id": "dd56f517-f2a5-478c-9ff2-3abe09c41d3f",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "communication",
+        "id": "eecabfd9-072a-450a-a145-697606a11254",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "formTemplate",
+        "id": "ffd3210e-c1ea-44c1-86c8-6e85d0df1803",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "formResponse",
+        "id": "74571481-d71d-4d52-a9d5-24784d71dce7",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "vendor",
+        "id": "cf2286d7-b76e-4d00-925e-e2978837faa2",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "purchaseOrder",
+        "id": "459ba003-86c0-4751-8d7d-ea549df50646",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "movement",
+        "id": "0b6ad657-9d6e-454e-a985-ec6152eb3faa",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "vehicle",
+        "id": "a52a4a66-754e-48be-bdd1-dc5b21cc6784",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "vehicleEvent",
+        "id": "ad4ecbd0-cbbf-4844-a80c-b7a266ab31ea",
+        "revision": 1,
+        "deleted": false
+      },
+      {
+        "kind": "expense",
+        "id": "f2686925-36fd-43a8-9f39-062884c7c685",
+        "revision": 1,
+        "deleted": false
+      }
+    ],
+    "currentSequence": 1
+  },
+  "page": {
+    "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+    "environment": "development",
+    "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+    "schema": "owner-workspace-v1",
+    "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3",
+    "sequence": 1,
+    "records": [
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "action": {
+            "text": {
+              "_0": "Arrived"
+            }
+          },
+          "actorEmail": {
+            "null": {}
+          },
+          "detail": {
+            "text": {
+              "_0": "Original arrival"
+            }
+          },
+          "occurredAt": {
+            "date": {
+              "_0": 810687548.62807
+            }
+          },
+          "serviceCallID": {
+            "identifier": {
+              "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+            }
+          }
+        },
+        "id": "0a813731-6ece-4374-a14f-be1193f01598",
+        "kind": "activity",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "active": {
+            "flag": {
+              "_0": true
+            }
+          },
+          "coveredEquipmentIDsJSON": {
+            "null": {}
+          },
+          "customer": {
+            "identifier": {
+              "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+            }
+          },
+          "includedVisitsPerTerm": {
+            "null": {}
+          },
+          "lifecycleJSON": {
+            "null": {}
+          },
+          "nextDate": {
+            "date": {
+              "_0": 810123456.123456
+            }
+          },
+          "planName": {
+            "null": {}
+          },
+          "pricePerVisit": {
+            "null": {}
+          },
+          "renewalReminderDays": {
+            "integer": {
+              "_0": 30
+            }
+          },
+          "schedulePattern": {
+            "text": {
+              "_0": "every 6 months"
+            }
+          },
+          "termEndsOn": {
+            "null": {}
+          }
+        },
+        "id": "4f467296-196c-4766-8367-36138bf411ac",
+        "kind": "agreement",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "createdAt": {
+            "date": {
+              "_0": 810687548.628136
+            }
+          },
+          "createdByEmail": {
+            "text": {
+              "_0": "office@example.invalid"
+            }
+          },
+          "creationOperationID": {
+            "identifier": {
+              "_0": "FD828AA4-C605-4A7B-8199-42384239973E"
+            }
+          },
+          "customerID": {
+            "identifier": {
+              "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+            }
+          },
+          "customerName": {
+            "text": {
+              "_0": "Original customer"
+            }
+          },
+          "detail": {
+            "null": {}
+          },
+          "kindRaw": {
+            "text": {
+              "_0": "other"
+            }
+          },
+          "resolutionNote": {
+            "null": {}
+          },
+          "resolutionOperationID": {
+            "null": {}
+          },
+          "resolvedAt": {
+            "null": {}
+          },
+          "resolvedByEmail": {
+            "null": {}
+          },
+          "serviceLocationID": {
+            "null": {}
+          },
+          "serviceLocationName": {
+            "null": {}
+          },
+          "title": {
+            "text": {
+              "_0": "Side entry"
+            }
+          },
+          "updatedAt": {
+            "date": {
+              "_0": 810687548.628136
+            }
+          }
+        },
+        "id": "82449cd5-0799-4dbf-a089-acab5fa114c8",
+        "kind": "alert",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "backendDocumentID": {
+            "null": {}
+          },
+          "caption": {
+            "null": {}
+          },
+          "contentType": {
+            "text": {
+              "_0": "application/pdf"
+            }
+          },
+          "createdAt": {
+            "date": {
+              "_0": 810687548.628202
+            }
+          },
+          "customer": {
+            "identifier": {
+              "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+            }
+          },
+          "customerEquipmentID": {
+            "null": {}
+          },
+          "displayName": {
+            "text": {
+              "_0": "Original.pdf"
+            }
+          },
+          "estimateID": {
+            "null": {}
+          },
+          "expenseClaimID": {
+            "null": {}
+          },
+          "fileSizeBytes": {
+            "integer": {
+              "_0": 123
+            }
+          },
+          "fleetVehicleEventID": {
+            "null": {}
+          },
+          "fleetVehicleID": {
+            "null": {}
+          },
+          "googleDriveArchivedByEmail": {
+            "null": {}
+          },
+          "googleDriveFileID": {
+            "null": {}
+          },
+          "googleDriveLastSyncedAt": {
+            "null": {}
+          },
+          "googleDriveSyncDetail": {
+            "null": {}
+          },
+          "googleDriveSyncStatus": {
+            "null": {}
+          },
+          "googleDriveWebViewLink": {
+            "null": {}
+          },
+          "invoiceID": {
+            "null": {}
+          },
+          "kindRaw": {
+            "text": {
+              "_0": "service_report"
+            }
+          },
+          "maintenanceContractID": {
+            "null": {}
+          },
+          "quickBooksAttachableID": {
+            "null": {}
+          },
+          "quickBooksAttachedEntityKeysRaw": {
+            "null": {}
+          },
+          "quickBooksSyncError": {
+            "null": {}
+          },
+          "serviceCallID": {
+            "identifier": {
+              "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+            }
+          },
+          "sharedCompanySyncDetail": {
+            "null": {}
+          },
+          "sharedCompanySyncStatus": {
+            "null": {}
+          }
+        },
+        "id": "dd56f517-f2a5-478c-9ff2-3abe09c41d3f",
+        "kind": "attachment",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "cancellationOperationID": {
+            "null": {}
+          },
+          "cancellationReason": {
+            "null": {}
+          },
+          "cancelledAt": {
+            "null": {}
+          },
+          "cancelledByEmail": {
+            "null": {}
+          },
+          "createdAt": {
+            "date": {
+              "_0": 810687548.62757
+            }
+          },
+          "createdByEmail": {
+            "text": {
+              "_0": ""
+            }
+          },
+          "creationOperationID": {
+            "identifier": {
+              "_0": "AEDE1742-7E32-4BE9-9EE2-B4FEDF114205"
+            }
+          },
+          "endsAt": {
+            "date": {
+              "_0": 810127056.123456
+            }
+          },
+          "kindRawValue": {
+            "text": {
+              "_0": "unavailable"
+            }
+          },
+          "reason": {
+            "null": {}
+          },
+          "sourceTimeOffRequestID": {
+            "null": {}
+          },
+          "startsAt": {
+            "date": {
+              "_0": 810123456.123456
+            }
+          },
+          "technicianID": {
+            "identifier": {
+              "_0": "672272B3-F890-4945-8275-D0B823F02859"
+            }
+          }
+        },
+        "id": "7633fb22-2bf4-4e92-9529-233bed134d5f",
+        "kind": "availability",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "actorEmail": {
+            "text": {
+              "_0": "field@example.invalid"
+            }
+          },
+          "availabilityBlockID": {
+            "null": {}
+          },
+          "endsAt": {
+            "date": {
+              "_0": 810127056.123456
+            }
+          },
+          "kindRawValue": {
+            "text": {
+              "_0": "requested"
+            }
+          },
+          "occurredAt": {
+            "date": {
+              "_0": 810687548.627689
+            }
+          },
+          "operationID": {
+            "identifier": {
+              "_0": "E8903AFF-8FF1-4D69-9541-F9A12B9DA494"
+            }
+          },
+          "privateDetail": {
+            "text": {
+              "_0": "Original"
+            }
+          },
+          "requestID": {
+            "null": {}
+          },
+          "requestStatusRawSnapshot": {
+            "text": {
+              "_0": "pending"
+            }
+          },
+          "startsAt": {
+            "date": {
+              "_0": 810123456.123456
+            }
+          },
+          "technicianID": {
+            "identifier": {
+              "_0": "672272B3-F890-4945-8275-D0B823F02859"
+            }
+          },
+          "technicianNameSnapshot": {
+            "text": {
+              "_0": "Original lead"
+            }
+          }
+        },
+        "id": "d074bc76-3559-4b9b-825b-24314dd80cf8",
+        "kind": "availabilityEvent",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "actorEmail": {
+            "null": {}
+          },
+          "attachmentFileNamesJSON": {
+            "text": {
+              "_0": "[]"
+            }
+          },
+          "backendCommunicationID": {
+            "null": {}
+          },
+          "backendSyncError": {
+            "null": {}
+          },
+          "channel": {
+            "text": {
+              "_0": "email"
+            }
+          },
+          "consentSnapshotJSON": {
+            "null": {}
+          },
+          "createdAt": {
+            "date": {
+              "_0": 810687548.628248
+            }
+          },
+          "customer": {
+            "identifier": {
+              "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+            }
+          },
+          "deliveredAt": {
+            "date": {
+              "_0": 810123456.123456
+            }
+          },
+          "deliveryStatus": {
+            "text": {
+              "_0": "sent"
+            }
+          },
+          "direction": {
+            "text": {
+              "_0": "outbound"
+            }
+          },
+          "estimateID": {
+            "null": {}
+          },
+          "invoiceID": {
+            "null": {}
+          },
+          "maintenanceContractID": {
+            "null": {}
+          },
+          "providerMessageID": {
+            "text": {
+              "_0": "original-message"
+            }
+          },
+          "providerStatusDetail": {
+            "null": {}
+          },
+          "recipient": {
+            "text": {
+              "_0": "customer@example.invalid"
+            }
+          },
+          "serviceCallID": {
+            "identifier": {
+              "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+            }
+          },
+          "subject": {
+            "text": {
+              "_0": "Original service report"
+            }
+          },
+          "templateVersion": {
+            "text": {
+              "_0": "general-v1"
+            }
+          },
+          "workflowRawValue": {
+            "text": {
+              "_0": "general"
+            }
+          }
+        },
+        "id": "eecabfd9-072a-450a-a145-697606a11254",
+        "kind": "communication",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "address": {
+            "null": {}
+          },
+          "allowsMarketing": {
+            "flag": {
+              "_0": false
+            }
+          },
+          "allowsServiceText": {
+            "flag": {
+              "_0": false
+            }
+          },
+          "allowsTransactionalEmail": {
+            "flag": {
+              "_0": true
+            }
+          },
+          "communicationConsentUpdatedAt": {
+            "null": {}
+          },
+          "email": {
+            "null": {}
+          },
+          "name": {
+            "text": {
+              "_0": "Original customer"
+            }
+          },
+          "phone": {
+            "null": {}
+          },
+          "preferredContactMethodRaw": {
+            "text": {
+              "_0": "email"
+            }
+          },
+          "quickBooksID": {
+            "null": {}
+          }
+        },
+        "id": "9d98492b-8093-46d4-b89e-e9c745f5beab",
+        "kind": "customer",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "createdAt": {
+            "date": {
+              "_0": 810687548.627351
+            }
+          },
+          "customer": {
+            "identifier": {
+              "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+            }
+          },
+          "equipmentTypeRaw": {
+            "null": {}
+          },
+          "filterSize": {
+            "null": {}
+          },
+          "installDate": {
+            "null": {}
+          },
+          "isActive": {
+            "flag": {
+              "_0": true
+            }
+          },
+          "location": {
+            "null": {}
+          },
+          "manufacturer": {
+            "null": {}
+          },
+          "modelNumber": {
+            "null": {}
+          },
+          "name": {
+            "text": {
+              "_0": "Original heat pump"
+            }
+          },
+          "notes": {
+            "null": {}
+          },
+          "serialNumber": {
+            "null": {}
+          },
+          "serviceLocationID": {
+            "null": {}
+          },
+          "technicalBaselineReadingsJSON": {
+            "null": {}
+          },
+          "warrantyExpiration": {
+            "null": {}
+          }
+        },
+        "id": "f1c6763b-4cca-4252-b3bd-b221c72ec550",
+        "kind": "equipment",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "amount": {
+            "number": {
+              "_0": 123.375
+            }
+          },
+          "catalogSnapshotJSON": {
+            "null": {}
+          },
+          "changeOrderReason": {
+            "null": {}
+          },
+          "createdAt": {
+            "date": {
+              "_0": 810687548.62712
+            }
+          },
+          "customer": {
+            "identifier": {
+              "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+            }
+          },
+          "customerApprovalMethodRaw": {
+            "null": {}
+          },
+          "customerApprovalRecordedByEmail": {
+            "null": {}
+          },
+          "customerApprovalReference": {
+            "null": {}
+          },
+          "customerApprovalSignatureImageBase64": {
+            "null": {}
+          },
+          "customerApprovedAt": {
+            "null": {}
+          },
+          "customerApprovedByName": {
+            "null": {}
+          },
+          "lineItemSummary": {
+            "text": {
+              "_0": ""
+            }
+          },
+          "notes": {
+            "null": {}
+          },
+          "parentEstimateID": {
+            "null": {}
+          },
+          "proposalGroupID": {
+            "null": {}
+          },
+          "proposalIsRecommended": {
+            "flag": {
+              "_0": false
+            }
+          },
+          "proposalOption": {
+            "null": {}
+          },
+          "quickBooksID": {
+            "null": {}
+          },
+          "salesTaxAmount": {
+            "number": {
+              "_0": 0
+            }
+          },
+          "scheduledServiceCallID": {
+            "null": {}
+          },
+          "serviceCallID": {
+            "null": {}
+          },
+          "serviceLocationID": {
+            "null": {}
+          },
+          "siteAddress": {
+            "null": {}
+          },
+          "status": {
+            "text": {
+              "_0": "pending"
+            }
+          },
+          "taxCalculatedAt": {
+            "null": {}
+          },
+          "taxCalculationStatusRawValue": {
+            "null": {}
+          }
+        },
+        "id": "aa862a6a-8277-4601-b2c8-afb8a9b7104d",
+        "kind": "estimate",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "amount": {
+            "number": {
+              "_0": 12.13
+            }
+          },
+          "auditJSON": {
+            "text": {
+              "_0": "[{\"occurredAt\":810687548.628616,\"id\":\"762DE800-CB5C-4545-8090-395B7D21E650\",\"actorEmail\":\"field@example.invalid\",\"detail\":\"Submitted a job-linked claim.\",\"action\":\"submitted\"}]"
+            }
+          },
+          "businessPurpose": {
+            "text": {
+              "_0": "Valve"
+            }
+          },
+          "categoryRaw": {
+            "text": {
+              "_0": "other"
+            }
+          },
+          "claimTypeRaw": {
+            "text": {
+              "_0": "expense"
+            }
+          },
+          "claimantEmail": {
+            "text": {
+              "_0": "field@example.invalid"
+            }
+          },
+          "claimantName": {
+            "text": {
+              "_0": "Original lead"
+            }
+          },
+          "createdAt": {
+            "date": {
+              "_0": 810687548.628616
+            }
+          },
+          "customerID": {
+            "identifier": {
+              "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+            }
+          },
+          "customerName": {
+            "null": {}
+          },
+          "expenseDate": {
+            "date": {
+              "_0": 810123456.123456
+            }
+          },
+          "jobSummary": {
+            "null": {}
+          },
+          "merchant": {
+            "text": {
+              "_0": "Original supplier"
+            }
+          },
+          "mileageDestination": {
+            "null": {}
+          },
+          "mileageMiles": {
+            "null": {}
+          },
+          "mileageOrigin": {
+            "null": {}
+          },
+          "mileageRatePerMile": {
+            "null": {}
+          },
+          "receiptAttachmentID": {
+            "null": {}
+          },
+          "reimbursable": {
+            "flag": {
+              "_0": true
+            }
+          },
+          "reimbursedAt": {
+            "null": {}
+          },
+          "reimbursedByEmail": {
+            "null": {}
+          },
+          "reimbursementReference": {
+            "null": {}
+          },
+          "reviewNote": {
+            "null": {}
+          },
+          "reviewedAt": {
+            "null": {}
+          },
+          "reviewedByEmail": {
+            "null": {}
+          },
+          "serviceCallID": {
+            "identifier": {
+              "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+            }
+          },
+          "statusRaw": {
+            "text": {
+              "_0": "submitted"
+            }
+          },
+          "submittedAt": {
+            "date": {
+              "_0": 810687548.628616
+            }
+          },
+          "updatedAt": {
+            "date": {
+              "_0": 810687548.628616
+            }
+          }
+        },
+        "id": "f2686925-36fd-43a8-9f39-062884c7c685",
+        "kind": "expense",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "answersJSON": {
+            "text": {
+              "_0": "{\"version\":2,\"questions\":[],\"rows\":[]}"
+            }
+          },
+          "completedAt": {
+            "date": {
+              "_0": 810687548.628304
+            }
+          },
+          "completedByEmail": {
+            "null": {}
+          },
+          "serviceCallID": {
+            "identifier": {
+              "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+            }
+          },
+          "templateID": {
+            "identifier": {
+              "_0": "FFD3210E-C1EA-44C1-86C8-6E85D0DF1803"
+            }
+          },
+          "templateTitle": {
+            "text": {
+              "_0": "Original form"
+            }
+          }
+        },
+        "id": "74571481-d71d-4d52-a9d5-24784d71dce7",
+        "kind": "formResponse",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "applicableServiceTypesJSON": {
+            "text": {
+              "_0": "{\"version\":1,\"requiredForCloseout\":false,\"serviceTypes\":[]}"
+            }
+          },
+          "createdAt": {
+            "date": {
+              "_0": 810687548.627169
+            }
+          },
+          "isActive": {
+            "flag": {
+              "_0": true
+            }
+          },
+          "questionsJSON": {
+            "text": {
+              "_0": "[]"
+            }
+          },
+          "title": {
+            "text": {
+              "_0": "Original form"
+            }
+          }
+        },
+        "id": "ffd3210e-c1ea-44c1-86c8-6e85d0df1803",
+        "kind": "formTemplate",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "amount": {
+            "number": {
+              "_0": 123.375
+            }
+          },
+          "catalogSnapshotJSON": {
+            "null": {}
+          },
+          "completionNotes": {
+            "null": {}
+          },
+          "createdAt": {
+            "date": {
+              "_0": 810687548.627036
+            }
+          },
+          "customer": {
+            "identifier": {
+              "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+            }
+          },
+          "customerSignatureImageBase64": {
+            "null": {}
+          },
+          "customerSignatureName": {
+            "null": {}
+          },
+          "customerSignedAt": {
+            "null": {}
+          },
+          "dueDate": {
+            "null": {}
+          },
+          "finalizedAt": {
+            "null": {}
+          },
+          "lineItemSummary": {
+            "text": {
+              "_0": ""
+            }
+          },
+          "milestoneDraftReceiptJSON": {
+            "null": {}
+          },
+          "notes": {
+            "null": {}
+          },
+          "projectBillingPercent": {
+            "null": {}
+          },
+          "projectContractAmount": {
+            "null": {}
+          },
+          "projectMilestoneID": {
+            "null": {}
+          },
+          "projectMilestoneSequence": {
+            "null": {}
+          },
+          "projectMilestoneTitle": {
+            "null": {}
+          },
+          "quickBooksBalanceDue": {
+            "null": {}
+          },
+          "quickBooksID": {
+            "null": {}
+          },
+          "quickBooksLastSyncedAt": {
+            "null": {}
+          },
+          "quickBooksPaymentReviewJSON": {
+            "null": {}
+          },
+          "quickBooksSyncDetail": {
+            "null": {}
+          },
+          "quickBooksSyncStatus": {
+            "text": {
+              "_0": "pending"
+            }
+          },
+          "salesTaxAmount": {
+            "number": {
+              "_0": 0
+            }
+          },
+          "serviceCallID": {
+            "null": {}
+          },
+          "serviceLocationID": {
+            "null": {}
+          },
+          "siteAddress": {
+            "null": {}
+          },
+          "status": {
+            "text": {
+              "_0": "unpaid"
+            }
+          },
+          "taxCalculatedAt": {
+            "null": {}
+          },
+          "taxCalculationStatusRawValue": {
+            "null": {}
+          },
+          "workTypeRaw": {
+            "text": {
+              "_0": "service"
+            }
+          }
+        },
+        "id": "52be8b00-7a09-49c5-9096-424a00043ef0",
+        "kind": "invoice",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "createdAt": {
+            "date": {
+              "_0": 810687548.626528
+            }
+          },
+          "defaultInventoryLocation": {
+            "null": {}
+          },
+          "flatRateAssemblyJSON": {
+            "null": {}
+          },
+          "isTaxable": {
+            "flag": {
+              "_0": false
+            }
+          },
+          "itemDescription": {
+            "null": {}
+          },
+          "itemTypeRawValue": {
+            "text": {
+              "_0": "Service"
+            }
+          },
+          "name": {
+            "text": {
+              "_0": "Original valve"
+            }
+          },
+          "preferredVendorName": {
+            "null": {}
+          },
+          "preferredVendorQuickBooksID": {
+            "null": {}
+          },
+          "pricebookCreatedByEmail": {
+            "null": {}
+          },
+          "pricebookReviewStatusRawValue": {
+            "text": {
+              "_0": "approved"
+            }
+          },
+          "pricebookReviewedAt": {
+            "null": {}
+          },
+          "pricebookReviewedByEmail": {
+            "null": {}
+          },
+          "purchaseCost": {
+            "null": {}
+          },
+          "purchaseDescription": {
+            "null": {}
+          },
+          "purchaseURL": {
+            "null": {}
+          },
+          "quickBooksCatalogDetailsJSON": {
+            "null": {}
+          },
+          "quickBooksCatalogReceiptJSON": {
+            "null": {}
+          },
+          "quickBooksID": {
+            "null": {}
+          },
+          "quickBooksInventorySetupJSON": {
+            "null": {}
+          },
+          "quickBooksLastSyncedAt": {
+            "null": {}
+          },
+          "quickBooksSyncDetail": {
+            "null": {}
+          },
+          "quickBooksSyncStatus": {
+            "text": {
+              "_0": "pending"
+            }
+          },
+          "reorderPoint": {
+            "null": {}
+          },
+          "sku": {
+            "null": {}
+          },
+          "timestamp": {
+            "date": {
+              "_0": 810687548.626528
+            }
+          },
+          "tracksInventory": {
+            "flag": {
+              "_0": false
+            }
+          },
+          "unitPrice": {
+            "number": {
+              "_0": 123.375
+            }
+          },
+          "vendorPartNumber": {
+            "null": {}
+          }
+        },
+        "id": "662e0cca-4e8d-4000-91f1-30d63f4b079f",
+        "kind": "item",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "additionalTechnicianIDsJSON": {
+            "null": {}
+          },
+          "afterPhotoCount": {
+            "integer": {
+              "_0": 0
+            }
+          },
+          "arrivalConfirmed": {
+            "flag": {
+              "_0": false
+            }
+          },
+          "assignedTechnician": {
+            "identifier": {
+              "_0": "672272B3-F890-4945-8275-D0B823F02859"
+            }
+          },
+          "beforePhotoCount": {
+            "integer": {
+              "_0": 0
+            }
+          },
+          "cancellationReason": {
+            "null": {}
+          },
+          "cancelledAt": {
+            "null": {}
+          },
+          "correctiveWorkReasonRaw": {
+            "null": {}
+          },
+          "customer": {
+            "identifier": {
+              "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+            }
+          },
+          "customerEquipmentID": {
+            "null": {}
+          },
+          "customerNotified": {
+            "flag": {
+              "_0": false
+            }
+          },
+          "diagnosticsCaptured": {
+            "flag": {
+              "_0": false
+            }
+          },
+          "dispatchUrgencyRaw": {
+            "text": {
+              "_0": "normal"
+            }
+          },
+          "documentationChecklist": {
+            "flag": {
+              "_0": false
+            }
+          },
+          "documentationCompletedAt": {
+            "null": {}
+          },
+          "documentationStartedAt": {
+            "null": {}
+          },
+          "drainLineCondition": {
+            "null": {}
+          },
+          "duration": {
+            "number": {
+              "_0": 3600
+            }
+          },
+          "equipmentInstallDate": {
+            "null": {}
+          },
+          "equipmentLocation": {
+            "null": {}
+          },
+          "equipmentManufacturer": {
+            "null": {}
+          },
+          "equipmentModel": {
+            "null": {}
+          },
+          "equipmentName": {
+            "null": {}
+          },
+          "equipmentNotes": {
+            "null": {}
+          },
+          "equipmentSerialNumber": {
+            "null": {}
+          },
+          "equipmentTypeRaw": {
+            "null": {}
+          },
+          "equipmentVerifiedChecklist": {
+            "flag": {
+              "_0": false
+            }
+          },
+          "equipmentWarrantyExpiration": {
+            "null": {}
+          },
+          "eventTitle": {
+            "null": {}
+          },
+          "filterCondition": {
+            "null": {}
+          },
+          "filterSize": {
+            "null": {}
+          },
+          "findingsSummary": {
+            "null": {}
+          },
+          "followUpAction": {
+            "null": {}
+          },
+          "followUpDueDate": {
+            "null": {}
+          },
+          "followUpRequired": {
+            "flag": {
+              "_0": false
+            }
+          },
+          "googleCalendarID": {
+            "null": {}
+          },
+          "googleEventID": {
+            "null": {}
+          },
+          "googleEventManagedByApp": {
+            "flag": {
+              "_0": false
+            }
+          },
+          "indoorCoilCondition": {
+            "null": {}
+          },
+          "linkedEstimateID": {
+            "null": {}
+          },
+          "linkedInvoiceID": {
+            "null": {}
+          },
+          "maintenanceAgreementDueDate": {
+            "null": {}
+          },
+          "maintenanceAgreementID": {
+            "null": {}
+          },
+          "maintenanceChecklistComplete": {
+            "flag": {
+              "_0": false
+            }
+          },
+          "notes": {
+            "null": {}
+          },
+          "originatingServiceCallID": {
+            "null": {}
+          },
+          "outdoorCoilCondition": {
+            "null": {}
+          },
+          "paymentCollectedChecklist": {
+            "flag": {
+              "_0": false
+            }
+          },
+          "promisedArrivalWindowEnd": {
+            "null": {}
+          },
+          "promisedArrivalWindowStart": {
+            "null": {}
+          },
+          "quoteReviewedWithCustomer": {
+            "flag": {
+              "_0": false
+            }
+          },
+          "recommendedWorkSummary": {
+            "null": {}
+          },
+          "safetyChecklistComplete": {
+            "flag": {
+              "_0": false
+            }
+          },
+          "scheduledDate": {
+            "date": {
+              "_0": 810123456.123456
+            }
+          },
+          "scheduledFollowUpServiceCallID": {
+            "null": {}
+          },
+          "serviceActionChecklistJSON": {
+            "null": {}
+          },
+          "serviceLocationID": {
+            "null": {}
+          },
+          "serviceReportReadingsJSON": {
+            "null": {}
+          },
+          "serviceReportSummary": {
+            "null": {}
+          },
+          "siteAddress": {
+            "null": {}
+          },
+          "startupChecklistComplete": {
+            "flag": {
+              "_0": false
+            }
+          },
+          "status": {
+            "text": {
+              "_0": "scheduled"
+            }
+          },
+          "technicianArrivedAt": {
+            "null": {}
+          },
+          "technicianEnRouteAt": {
+            "null": {}
+          },
+          "thermostatOperation": {
+            "null": {}
+          },
+          "type": {
+            "text": {
+              "_0": "repair"
+            }
+          },
+          "visitDispositionNotes": {
+            "null": {}
+          },
+          "visitDispositionRaw": {
+            "text": {
+              "_0": "standard"
+            }
+          },
+          "workCompletedChecklist": {
+            "flag": {
+              "_0": false
+            }
+          }
+        },
+        "id": "ecc96bf1-0a93-42cc-b497-a580799067b9",
+        "kind": "job",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "accessNotes": {
+            "null": {}
+          },
+          "address": {
+            "text": {
+              "_0": "10 Main"
+            }
+          },
+          "contactName": {
+            "null": {}
+          },
+          "contactPhone": {
+            "null": {}
+          },
+          "createdAt": {
+            "date": {
+              "_0": 810687548.627311
+            }
+          },
+          "customer": {
+            "identifier": {
+              "_0": "9D98492B-8093-46D4-B89E-E9C745F5BEAB"
+            }
+          },
+          "isActive": {
+            "flag": {
+              "_0": true
+            }
+          },
+          "isPrimary": {
+            "flag": {
+              "_0": false
+            }
+          },
+          "name": {
+            "text": {
+              "_0": "Shop"
+            }
+          },
+          "updatedAt": {
+            "date": {
+              "_0": 810687548.627311
+            }
+          }
+        },
+        "id": "93a1ff38-aa34-48aa-aa8e-5de0e7c42d63",
+        "kind": "location",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "billingPercent": {
+            "number": {
+              "_0": 33.333
+            }
+          },
+          "billingTriggerRaw": {
+            "text": {
+              "_0": "milestoneCompletion"
+            }
+          },
+          "completedAt": {
+            "null": {}
+          },
+          "completedByEmail": {
+            "null": {}
+          },
+          "createdAt": {
+            "date": {
+              "_0": 810687548.628106
+            }
+          },
+          "createdByEmail": {
+            "null": {}
+          },
+          "estimateID": {
+            "identifier": {
+              "_0": "AA862A6A-8277-4601-B2C8-AFB8A9B7104D"
+            }
+          },
+          "invoiceID": {
+            "null": {}
+          },
+          "milestoneDescription": {
+            "null": {}
+          },
+          "plannedAmount": {
+            "number": {
+              "_0": 123.375
+            }
+          },
+          "plannedDate": {
+            "date": {
+              "_0": 810123456.123456
+            }
+          },
+          "projectServiceCallID": {
+            "identifier": {
+              "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+            }
+          },
+          "scheduledVisitID": {
+            "null": {}
+          },
+          "sequence": {
+            "integer": {
+              "_0": 2
+            }
+          },
+          "statusRaw": {
+            "text": {
+              "_0": "planned"
+            }
+          },
+          "title": {
+            "text": {
+              "_0": "Equipment delivery"
+            }
+          },
+          "updatedAt": {
+            "date": {
+              "_0": 810687548.628106
+            }
+          }
+        },
+        "id": "3bb12418-c9da-45e5-bb78-cb56afb7b138",
+        "kind": "milestone",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "createdAt": {
+            "date": {
+              "_0": 810687548.628526
+            }
+          },
+          "createdByEmail": {
+            "null": {}
+          },
+          "destinationLocation": {
+            "null": {}
+          },
+          "itemID": {
+            "identifier": {
+              "_0": "662E0CCA-4E8D-4000-91F1-30D63F4B079F"
+            }
+          },
+          "itemName": {
+            "text": {
+              "_0": "Original valve"
+            }
+          },
+          "itemSKU": {
+            "null": {}
+          },
+          "movementTypeRaw": {
+            "text": {
+              "_0": "adjust"
+            }
+          },
+          "notes": {
+            "null": {}
+          },
+          "quantity": {
+            "number": {
+              "_0": -0.125
+            }
+          },
+          "serviceCallID": {
+            "identifier": {
+              "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+            }
+          },
+          "sourceLocation": {
+            "null": {}
+          }
+        },
+        "id": "0b6ad657-9d6e-454e-a985-ec6152eb3faa",
+        "kind": "movement",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "amount": {
+            "number": {
+              "_0": 12.125
+            }
+          },
+          "authorizationReference": {
+            "null": {}
+          },
+          "cardLast4": {
+            "null": {}
+          },
+          "collectionAttemptID": {
+            "null": {}
+          },
+          "date": {
+            "date": {
+              "_0": 810687548.627384
+            }
+          },
+          "invoice": {
+            "identifier": {
+              "_0": "52BE8B00-7A09-49C5-9096-424A00043EF0"
+            }
+          },
+          "isRefund": {
+            "flag": {
+              "_0": false
+            }
+          },
+          "method": {
+            "text": {
+              "_0": "cash"
+            }
+          },
+          "notes": {
+            "null": {}
+          },
+          "processor": {
+            "null": {}
+          },
+          "processorSyncDetail": {
+            "null": {}
+          },
+          "processorSyncStatus": {
+            "null": {}
+          },
+          "providerPaymentStatus": {
+            "null": {}
+          },
+          "quickBooksAccountingSyncDetail": {
+            "null": {}
+          },
+          "quickBooksAccountingSyncStatus": {
+            "null": {}
+          },
+          "quickBooksChargeID": {
+            "null": {}
+          },
+          "quickBooksClientTransID": {
+            "null": {}
+          },
+          "quickBooksDepositID": {
+            "null": {}
+          },
+          "quickBooksID": {
+            "null": {}
+          },
+          "quickBooksRefundReceiptID": {
+            "null": {}
+          },
+          "quickBooksSalesReceiptID": {
+            "null": {}
+          },
+          "refundedPaymentID": {
+            "null": {}
+          },
+          "settlementBatchID": {
+            "null": {}
+          }
+        },
+        "id": "640f75a3-f70c-4d32-b9e2-41e88382acf7",
+        "kind": "payment",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "createdAt": {
+            "date": {
+              "_0": 810687548.628459
+            }
+          },
+          "createdByEmail": {
+            "null": {}
+          },
+          "itemName": {
+            "text": {
+              "_0": "Original valve"
+            }
+          },
+          "itemSKU": {
+            "null": {}
+          },
+          "notes": {
+            "null": {}
+          },
+          "number": {
+            "text": {
+              "_0": "ORIGINAL-PO-123"
+            }
+          },
+          "orderedAt": {
+            "null": {}
+          },
+          "quantity": {
+            "number": {
+              "_0": 2.5
+            }
+          },
+          "receivedAt": {
+            "null": {}
+          },
+          "receivedToLocation": {
+            "null": {}
+          },
+          "serviceCallID": {
+            "identifier": {
+              "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+            }
+          },
+          "shippingCost": {
+            "number": {
+              "_0": 0
+            }
+          },
+          "statusRaw": {
+            "text": {
+              "_0": "draft"
+            }
+          },
+          "unitCost": {
+            "number": {
+              "_0": 12.125
+            }
+          },
+          "updatedAt": {
+            "date": {
+              "_0": 810687548.628459
+            }
+          },
+          "vendorName": {
+            "text": {
+              "_0": "Original supplier"
+            }
+          },
+          "vendorPartNumber": {
+            "null": {}
+          },
+          "vendorQuickBooksID": {
+            "null": {}
+          }
+        },
+        "id": "459ba003-86c0-4751-8d7d-ea549df50646",
+        "kind": "purchaseOrder",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "address": {
+            "null": {}
+          },
+          "backendRequestID": {
+            "null": {}
+          },
+          "convertedCustomerID": {
+            "null": {}
+          },
+          "convertedServiceCallID": {
+            "null": {}
+          },
+          "createdAt": {
+            "date": {
+              "_0": 810687548.62798
+            }
+          },
+          "createdByEmail": {
+            "null": {}
+          },
+          "customerName": {
+            "text": {
+              "_0": "Original lead"
+            }
+          },
+          "email": {
+            "null": {}
+          },
+          "phone": {
+            "null": {}
+          },
+          "preferredDate": {
+            "null": {}
+          },
+          "qualificationNotes": {
+            "text": {
+              "_0": "GUNNAIRE_REQUEST_METADATA_V1:eyJzb3VyY2VSYXciOiJwaG9uZSIsInZlcnNpb24iOjF9"
+            }
+          },
+          "qualifiedAt": {
+            "null": {}
+          },
+          "requestedServiceTypeRaw": {
+            "text": {
+              "_0": "service"
+            }
+          },
+          "statusRaw": {
+            "text": {
+              "_0": "new"
+            }
+          },
+          "summary": {
+            "text": {
+              "_0": "No cooling"
+            }
+          },
+          "urgencyRaw": {
+            "text": {
+              "_0": "normal"
+            }
+          }
+        },
+        "id": "945f8922-821e-47f1-80dc-61a0bfdecca7",
+        "kind": "request",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "createdAt": {
+            "date": {
+              "_0": 810687548.627626
+            }
+          },
+          "createdByEmail": {
+            "text": {
+              "_0": "office@example.invalid"
+            }
+          },
+          "creationOperationID": {
+            "identifier": {
+              "_0": "B9744C3C-E47F-499B-9C8B-CD794F38D729"
+            }
+          },
+          "durationMinutes": {
+            "integer": {
+              "_0": 540
+            }
+          },
+          "effectiveFrom": {
+            "date": {
+              "_0": 810123456.123456
+            }
+          },
+          "effectiveUntil": {
+            "null": {}
+          },
+          "kindRawValue": {
+            "text": {
+              "_0": "regular"
+            }
+          },
+          "note": {
+            "null": {}
+          },
+          "retiredAt": {
+            "null": {}
+          },
+          "retiredByEmail": {
+            "null": {}
+          },
+          "retirementOperationID": {
+            "null": {}
+          },
+          "retirementReason": {
+            "null": {}
+          },
+          "startMinute": {
+            "integer": {
+              "_0": 480
+            }
+          },
+          "technicianID": {
+            "identifier": {
+              "_0": "672272B3-F890-4945-8275-D0B823F02859"
+            }
+          },
+          "technicianNameSnapshot": {
+            "text": {
+              "_0": "Original lead"
+            }
+          },
+          "timeZoneIdentifier": {
+            "text": {
+              "_0": "America/New_York"
+            }
+          },
+          "weekdayRawValue": {
+            "integer": {
+              "_0": 2
+            }
+          }
+        },
+        "id": "9136d6e7-3681-4ab8-94ff-54ece0cef8e7",
+        "kind": "shift",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "assignedToEmail": {
+            "text": {
+              "_0": "field@example.invalid"
+            }
+          },
+          "cancellationOperationID": {
+            "null": {}
+          },
+          "cancellationReason": {
+            "null": {}
+          },
+          "cancelledAt": {
+            "null": {}
+          },
+          "cancelledByEmail": {
+            "null": {}
+          },
+          "completedAt": {
+            "null": {}
+          },
+          "completedByEmail": {
+            "null": {}
+          },
+          "completionNote": {
+            "null": {}
+          },
+          "completionOperationID": {
+            "null": {}
+          },
+          "createdAt": {
+            "date": {
+              "_0": 810687548.627244
+            }
+          },
+          "createdByEmail": {
+            "text": {
+              "_0": "office@example.invalid"
+            }
+          },
+          "creationOperationID": {
+            "identifier": {
+              "_0": "99D62288-4143-4103-826F-40D8C6C7E3BB"
+            }
+          },
+          "customerID": {
+            "null": {}
+          },
+          "customerName": {
+            "null": {}
+          },
+          "dueAt": {
+            "date": {
+              "_0": 810123456.123456
+            }
+          },
+          "estimateID": {
+            "null": {}
+          },
+          "estimateSummary": {
+            "null": {}
+          },
+          "priorityRaw": {
+            "text": {
+              "_0": "normal"
+            }
+          },
+          "serviceCallID": {
+            "null": {}
+          },
+          "serviceCallSummary": {
+            "null": {}
+          },
+          "serviceLocationID": {
+            "null": {}
+          },
+          "serviceLocationName": {
+            "null": {}
+          },
+          "taskDescription": {
+            "null": {}
+          },
+          "title": {
+            "text": {
+              "_0": "Order valve"
+            }
+          },
+          "updatedAt": {
+            "date": {
+              "_0": 810687548.627244
+            }
+          }
+        },
+        "id": "63912de3-e9c9-4c4d-8977-f97b6de7fbd6",
+        "kind": "task",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "actorEmail": {
+            "text": {
+              "_0": "office@example.invalid"
+            }
+          },
+          "assignedToEmailSnapshot": {
+            "text": {
+              "_0": "field@example.invalid"
+            }
+          },
+          "detail": {
+            "text": {
+              "_0": "Original"
+            }
+          },
+          "dueAtSnapshot": {
+            "date": {
+              "_0": 810123456.123456
+            }
+          },
+          "kindRaw": {
+            "text": {
+              "_0": "created"
+            }
+          },
+          "occurredAt": {
+            "date": {
+              "_0": 810687548.62817
+            }
+          },
+          "operationID": {
+            "identifier": {
+              "_0": "047508E2-60A7-4107-85AD-8ED547CF305D"
+            }
+          },
+          "priorityRawSnapshot": {
+            "text": {
+              "_0": "normal"
+            }
+          },
+          "taskID": {
+            "identifier": {
+              "_0": "63912DE3-E9C9-4C4D-8977-F97B6DE7FBD6"
+            }
+          },
+          "titleSnapshot": {
+            "text": {
+              "_0": "Order valve"
+            }
+          }
+        },
+        "id": "6f7308e8-e9d2-47bc-b01f-e0f7c8741e13",
+        "kind": "taskEvent",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "contactInfo": {
+            "null": {}
+          },
+          "laborCostPerHour": {
+            "null": {}
+          },
+          "name": {
+            "text": {
+              "_0": "Original lead"
+            }
+          },
+          "qualificationNotes": {
+            "null": {}
+          },
+          "quickBooksTimeEntityKindRawValue": {
+            "null": {}
+          },
+          "quickBooksTimeEntityRef": {
+            "null": {}
+          },
+          "serviceAreasJSON": {
+            "null": {}
+          },
+          "supportedEquipmentTypesJSON": {
+            "null": {}
+          }
+        },
+        "id": "672272b3-f890-4945-8275-d0b823f02859",
+        "kind": "technician",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "clockIn": {
+            "date": {
+              "_0": 810123456.123456
+            }
+          },
+          "clockOut": {
+            "null": {}
+          },
+          "notes": {
+            "null": {}
+          },
+          "quickBooksTimeActivityID": {
+            "null": {}
+          },
+          "quickBooksTimeActivitySyncError": {
+            "null": {}
+          },
+          "quickBooksTimeActivitySyncToken": {
+            "null": {}
+          },
+          "quickBooksTimeActivitySyncedAt": {
+            "null": {}
+          },
+          "reviewAuditJSON": {
+            "null": {}
+          },
+          "reviewNote": {
+            "null": {}
+          },
+          "reviewStatusRawValue": {
+            "text": {
+              "_0": "submitted"
+            }
+          },
+          "reviewedAt": {
+            "null": {}
+          },
+          "reviewedByEmail": {
+            "null": {}
+          },
+          "serviceCall": {
+            "identifier": {
+              "_0": "ECC96BF1-0A93-42CC-B497-A580799067B9"
+            }
+          },
+          "userEmail": {
+            "text": {
+              "_0": "field@example.invalid"
+            }
+          }
+        },
+        "id": "fd799d6b-37a1-4ad5-9d03-6757a88efc3e",
+        "kind": "timeEntry",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "approvedAvailabilityBlockID": {
+            "null": {}
+          },
+          "cancellationOperationID": {
+            "null": {}
+          },
+          "cancellationReason": {
+            "null": {}
+          },
+          "cancelledAt": {
+            "null": {}
+          },
+          "cancelledByEmail": {
+            "null": {}
+          },
+          "createdAt": {
+            "date": {
+              "_0": 810687548.627652
+            }
+          },
+          "creationOperationID": {
+            "identifier": {
+              "_0": "A472AB1F-5233-44C2-BC4A-40C0EDAEAECA"
+            }
+          },
+          "endsAt": {
+            "date": {
+              "_0": 810127056.123456
+            }
+          },
+          "privateReason": {
+            "null": {}
+          },
+          "privateReviewNote": {
+            "null": {}
+          },
+          "requestedByEmail": {
+            "text": {
+              "_0": "field@example.invalid"
+            }
+          },
+          "reviewOperationID": {
+            "null": {}
+          },
+          "reviewedAt": {
+            "null": {}
+          },
+          "reviewedByEmail": {
+            "null": {}
+          },
+          "startsAt": {
+            "date": {
+              "_0": 810123456.123456
+            }
+          },
+          "statusRawValue": {
+            "text": {
+              "_0": "pending"
+            }
+          },
+          "technicianID": {
+            "identifier": {
+              "_0": "672272B3-F890-4945-8275-D0B823F02859"
+            }
+          },
+          "technicianNameSnapshot": {
+            "text": {
+              "_0": "Original lead"
+            }
+          },
+          "updatedAt": {
+            "date": {
+              "_0": 810687548.627652
+            }
+          },
+          "withdrawalOperationID": {
+            "null": {}
+          },
+          "withdrawnAt": {
+            "null": {}
+          },
+          "withdrawnByEmail": {
+            "null": {}
+          }
+        },
+        "id": "31b9ebbc-a518-4d5d-b17b-49fd0dbd12ac",
+        "kind": "timeOff",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "createdAt": {
+            "date": {
+              "_0": 810687548.627555
+            }
+          },
+          "email": {
+            "text": {
+              "_0": "field@example.invalid"
+            }
+          },
+          "isActive": {
+            "flag": {
+              "_0": true
+            }
+          },
+          "roleRawValue": {
+            "text": {
+              "_0": "Field Technician"
+            }
+          }
+        },
+        "id": "08a8bbd2-0397-44fd-9d63-f0409ecb59ff",
+        "kind": "user",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "administrativeStatusRaw": {
+            "text": {
+              "_0": "in_service"
+            }
+          },
+          "assignedTechnicianID": {
+            "null": {}
+          },
+          "assignedTechnicianName": {
+            "null": {}
+          },
+          "createdAt": {
+            "date": {
+              "_0": 810687548.627196
+            }
+          },
+          "latestInspectionAt": {
+            "null": {}
+          },
+          "licensePlate": {
+            "null": {}
+          },
+          "make": {
+            "null": {}
+          },
+          "model": {
+            "null": {}
+          },
+          "nextInspectionDueAt": {
+            "null": {}
+          },
+          "nextServiceDueAt": {
+            "null": {}
+          },
+          "nextServiceDueOdometer": {
+            "null": {}
+          },
+          "notes": {
+            "null": {}
+          },
+          "odometer": {
+            "null": {}
+          },
+          "odometerUpdatedAt": {
+            "null": {}
+          },
+          "stockLocation": {
+            "text": {
+              "_0": "Truck 2"
+            }
+          },
+          "unitNumber": {
+            "text": {
+              "_0": "Truck 2"
+            }
+          },
+          "updatedAt": {
+            "date": {
+              "_0": 810687548.627196
+            }
+          },
+          "updatedByEmail": {
+            "null": {}
+          },
+          "vehicleYear": {
+            "null": {}
+          },
+          "vin": {
+            "null": {}
+          }
+        },
+        "id": "a52a4a66-754e-48be-bdd1-dc5b21cc6784",
+        "kind": "vehicle",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "actorEmail": {
+            "text": {
+              "_0": "office@example.invalid"
+            }
+          },
+          "assignmentTechnicianID": {
+            "null": {}
+          },
+          "assignmentTechnicianName": {
+            "null": {}
+          },
+          "detail": {
+            "text": {
+              "_0": "Original inspection"
+            }
+          },
+          "failedInspectionItemsRaw": {
+            "null": {}
+          },
+          "inspectionResultsJSON": {
+            "null": {}
+          },
+          "invoiceNumber": {
+            "null": {}
+          },
+          "kindRaw": {
+            "text": {
+              "_0": "created"
+            }
+          },
+          "newStatusRaw": {
+            "null": {}
+          },
+          "occurredAt": {
+            "date": {
+              "_0": 810687548.628581
+            }
+          },
+          "odometer": {
+            "null": {}
+          },
+          "priorStatusRaw": {
+            "null": {}
+          },
+          "resolvesOutOfService": {
+            "null": {}
+          },
+          "serviceCategoryRaw": {
+            "null": {}
+          },
+          "serviceCenter": {
+            "null": {}
+          },
+          "serviceCost": {
+            "null": {}
+          },
+          "vehicleID": {
+            "identifier": {
+              "_0": "A52A4A66-754E-48BE-BDD1-DC5B21CC6784"
+            }
+          },
+          "vehicleUnitNumber": {
+            "text": {
+              "_0": "Truck 2"
+            }
+          }
+        },
+        "id": "ad4ecbd0-cbbf-4844-a80c-b7a266ab31ea",
+        "kind": "vehicleEvent",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      },
+      {
+        "companyID": "0da1d79a-a4ac-4d28-9754-9149b887d40f",
+        "deleted": false,
+        "environment": "development",
+        "fields": {
+          "contactInfo": {
+            "null": {}
+          },
+          "name": {
+            "text": {
+              "_0": "Original supplier"
+            }
+          },
+          "quickBooksID": {
+            "null": {}
+          }
+        },
+        "id": "cf2286d7-b76e-4d00-925e-e2978837faa2",
+        "kind": "vendor",
+        "replicaID": "a3f1bdc5-a4e5-4e5a-a6c3-83f2bedb7e0e",
+        "revision": 1,
+        "schema": "owner-workspace-v1",
+        "schemaDigest": "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
+      }
+    ],
+    "nextCursor": null
+  }
+}

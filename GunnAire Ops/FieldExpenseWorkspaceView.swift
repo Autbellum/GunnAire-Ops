@@ -238,6 +238,17 @@ struct FieldExpenseClaimEditor: View {
     @State private var importedFileURL: URL?
     @State private var showingFileImporter = false
     @State private var errorMessage: String?
+    @FocusState private var focusedField: Field?
+
+    private enum Field: Hashable {
+        case merchant
+        case amount
+        case mileageOrigin
+        case mileageDestination
+        case mileageMiles
+        case mileageRate
+        case businessPurpose
+    }
 
     private var currentEmail: String { AppAccess.normalizedEmail(AppIdentity.currentEmail) }
     private var currentRole: AppUserRole? { AppAccess.activeRole(email: currentEmail, users: users) }
@@ -305,23 +316,35 @@ struct FieldExpenseClaimEditor: View {
                             }
                         }
                         TextField("Merchant or payee", text: $merchant)
+                            .focused($focusedField, equals: .merchant)
                             .accessibilityIdentifier("FieldExpenseMerchant")
                         TextField("Amount", text: $amount)
                             .keyboardType(.decimalPad)
+                            .focused($focusedField, equals: .amount)
                             .accessibilityIdentifier("FieldExpenseAmount")
                     }
                 } else {
                     Section("Mileage") {
-                        TextField("Starting point", text: $mileageOrigin)
-                            .accessibilityIdentifier("FieldMileageOrigin")
-                        TextField("Destination", text: $mileageDestination)
-                            .accessibilityIdentifier("FieldMileageDestination")
-                        TextField("Miles", text: $mileageMiles)
-                            .keyboardType(.decimalPad)
-                            .accessibilityIdentifier("FieldMileageMiles")
-                        TextField("Rate per mile", text: $mileageRate)
-                            .keyboardType(.decimalPad)
-                            .accessibilityIdentifier("FieldMileageRate")
+                        HStack(spacing: 16) {
+                            TextField("Starting point", text: $mileageOrigin)
+                                .focused($focusedField, equals: .mileageOrigin)
+                                .accessibilityIdentifier("FieldMileageOrigin")
+                            TextField("Destination", text: $mileageDestination)
+                                .focused($focusedField, equals: .mileageDestination)
+                                .accessibilityIdentifier("FieldMileageDestination")
+                        }
+                        .accessibilityElement(children: .contain)
+                        HStack(spacing: 16) {
+                            TextField("Miles", text: $mileageMiles)
+                                .keyboardType(.decimalPad)
+                                .focused($focusedField, equals: .mileageMiles)
+                                .accessibilityIdentifier("FieldMileageMiles")
+                            TextField("Rate per mile", text: $mileageRate)
+                                .keyboardType(.decimalPad)
+                                .focused($focusedField, equals: .mileageRate)
+                                .accessibilityIdentifier("FieldMileageRate")
+                        }
+                        .accessibilityElement(children: .contain)
                         if let miles = Double(mileageMiles), let rate = Double(mileageRate), miles > 0, rate > 0 {
                             Text("Calculated reimbursement: \(FieldExpenseClaimPolicy.roundCurrency(miles * rate).formatted(.currency(code: "USD")))")
                                 .font(.caption.weight(.semibold))
@@ -335,6 +358,7 @@ struct FieldExpenseClaimEditor: View {
                 Section("Business Purpose") {
                     TextField("Why was this cost necessary?", text: $businessPurpose, axis: .vertical)
                         .lineLimit(2...5)
+                        .focused($focusedField, equals: .businessPurpose)
                         .accessibilityIdentifier("FieldExpensePurpose")
                     Toggle("Employee paid; reimbursement needed", isOn: $reimbursable)
                     Text(reimbursable
@@ -369,6 +393,11 @@ struct FieldExpenseClaimEditor: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button(existingClaim == nil ? "Submit" : "Resubmit") { save() }
                         .accessibilityIdentifier("SubmitFieldExpense")
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { focusedField = nil }
+                        .accessibilityLabel("Done Editing Expense")
                 }
             }
             .fileImporter(

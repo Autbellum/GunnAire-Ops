@@ -139,9 +139,50 @@ struct EquipmentAttachmentGroup: Identifiable {
     }
 }
 
+struct AttachmentMarkupCopyMetadata: Equatable {
+    let filename: String
+    let caption: String
+}
+
+enum AttachmentMarkupCopyPolicy {
+    static func metadata(
+        originalDisplayName: String,
+        originalCaption: String?,
+        modifiedContentsURL: URL
+    ) -> AttachmentMarkupCopyMetadata {
+        let originalFilename = userFacingFilename(originalDisplayName)
+        let originalURL = URL(fileURLWithPath: originalFilename)
+        let stem = originalURL.deletingPathExtension().lastPathComponent
+        let outputExtension = modifiedContentsURL.pathExtension.isEmpty
+            ? originalURL.pathExtension
+            : modifiedContentsURL.pathExtension
+        let filename = outputExtension.isEmpty
+            ? "\(stem)-annotated"
+            : "\(stem)-annotated.\(outputExtension.lowercased())"
+        let trimmedCaption = originalCaption?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let caption = [
+            "Annotated copy of \(originalFilename)",
+            trimmedCaption?.isEmpty == false ? trimmedCaption : nil
+        ]
+        .compactMap { $0 }
+        .joined(separator: " — ")
+        return AttachmentMarkupCopyMetadata(filename: filename, caption: caption)
+    }
+
+    static func userFacingFilename(_ storedDisplayName: String) -> String {
+        guard storedDisplayName.count > 37 else { return storedDisplayName }
+        let prefix = String(storedDisplayName.prefix(36))
+        let separatorIndex = storedDisplayName.index(storedDisplayName.startIndex, offsetBy: 36)
+        guard UUID(uuidString: prefix) != nil, storedDisplayName[separatorIndex] == "-" else {
+            return storedDisplayName
+        }
+        return String(storedDisplayName.dropFirst(37))
+    }
+}
+
 @Model
 final class ServiceDocumentAttachment {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var customer: Customer?
     var serviceCallID: UUID?
     var customerEquipmentID: UUID?
@@ -276,7 +317,11 @@ final class ServiceDocumentAttachment {
     }
 
     var isFinancialCustomerProfileAttachment: Bool {
-        kind.isFinancialCustomerProfileAttachment
+        kind.isFinancialCustomerProfileAttachment || isGeneratedAccountStatement
+    }
+
+    var isGeneratedAccountStatement: Bool {
+        kind == .customerDocument && displayName.hasPrefix("GunnAire-Account-Statement-")
     }
 
     var canLinkToInvoiceReport: Bool {
@@ -398,10 +443,13 @@ final class ServiceDocumentAttachment {
     }
 
     func canUploadToQuickBooksInvoice(_ invoice: Invoice) -> Bool {
-        guard canLinkToQuickBooksInvoiceDocument,
+        guard invoice.customer != nil,
+            invoice.quickBooksIdentityReviewMessage == nil,
+            canLinkToQuickBooksInvoiceDocument,
             invoiceID == invoice.id &&
             invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
-            customerMatches(invoice.customer),
+            customer === invoice.customer,
+            serviceCallID == nil || invoice.serviceCallID == nil || serviceCallID == invoice.serviceCallID,
             let reference = quickBooksInvoiceReference(for: invoice) else {
             return false
         }
@@ -409,10 +457,13 @@ final class ServiceDocumentAttachment {
     }
 
     func canBePendingQuickBooksInvoiceAttachment(for invoice: Invoice) -> Bool {
-        guard canLinkToQuickBooksInvoiceDocument,
+        guard invoice.customer != nil,
+            invoice.quickBooksIdentityReviewMessage == nil,
+            canLinkToQuickBooksInvoiceDocument,
             (invoiceID == nil || invoiceID == invoice.id) &&
             invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
-            customerMatches(invoice.customer),
+            customer === invoice.customer,
+            serviceCallID == nil || invoice.serviceCallID == nil || serviceCallID == invoice.serviceCallID,
             let reference = quickBooksInvoiceReference(for: invoice) else {
             return false
         }
@@ -420,10 +471,13 @@ final class ServiceDocumentAttachment {
     }
 
     func canUploadToQuickBooksEstimate(_ estimate: Estimate) -> Bool {
-        guard canLinkToQuickBooksEstimateDocument,
+        guard estimate.customer != nil,
+            canLinkToQuickBooksEstimateDocument,
             estimateID == estimate.id &&
             estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
-            customerMatches(estimate.customer),
+            customer === estimate.customer,
+            EstimateJobLineage.matches(jobID: serviceCallID, diagnosticJobID: estimate.serviceCallID,
+                                      scheduledJobID: estimate.scheduledServiceCallID),
             let reference = quickBooksEstimateReference(for: estimate) else {
             return false
         }

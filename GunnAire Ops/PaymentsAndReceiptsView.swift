@@ -15,6 +15,7 @@ struct PaymentsAndReceiptsView: View {
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openURL) private var openURL
+    @Environment(\.gunnaireReduceMotion) private var reduceMotion
     @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
     @AppStorage("onsitePaymentProcessor") private var onsitePaymentProcessor = OnsitePaymentProcessor.none.rawValue
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
@@ -30,6 +31,8 @@ struct PaymentsAndReceiptsView: View {
     @State private var showingRecordPaymentSheet = false
     @State private var showingContactlessPaymentGuide = false
     @State private var showingRefundSheet = false
+    @State private var showingPaymentReview = false
+    @State private var reviewInvoiceID: UUID?
     @State private var selectedInvoiceID: UUID?
     @State private var refundPaymentID: UUID?
     @State private var amountText = ""
@@ -41,6 +44,7 @@ struct PaymentsAndReceiptsView: View {
     @State private var refundNotes = ""
     @State private var tapToPayMessage = ""
     @State private var fieldHandoffMessage = ""
+    @State private var isShowingFieldHandoffHelp = false
     @State private var actionMessage = ""
     @State private var backendUploadMessage = ""
     @State private var sharedPaymentCollections: [BackendPaymentCollectionRecord] = []
@@ -53,6 +57,8 @@ struct PaymentsAndReceiptsView: View {
     @State private var deferredCollectionPrefersContactlessGuide = false
     @State private var deferredCollectionExpiresAt: Date?
     @State private var contactlessGuideMessage = ""
+    @State private var isShowingContactlessCollectionSteps = false
+    @State private var isVerifyingContactlessPayment = false
     @State private var syncingPaymentID: UUID?
     @State private var isProcessingQuickBooksPayment = false
     @State private var isProcessingQuickBooksRefund = false
@@ -92,6 +98,10 @@ struct PaymentsAndReceiptsView: View {
 
     private var isAdminUser: Bool {
         AppAccess.canViewFinancialManagement(email: signedInEmail, users: users)
+    }
+
+    private var canManageQuickBooks: Bool {
+        AppAccess.canAccessSidebarItem(.quickBooksManagement, email: signedInEmail, users: users)
     }
 
     private var visibleInvoiceIDsForFieldUser: Set<UUID> {
@@ -224,8 +234,30 @@ struct PaymentsAndReceiptsView: View {
                                     .foregroundStyle(fieldHandoffMessage.localizedCaseInsensitiveContains("could not") ? .red : .secondary)
                             }
                             if fieldPaymentHandoff.activeInvoiceID != nil {
+                                Label("Ready for nearby iPhone", systemImage: "iphone.and.arrow.forward")
+                                    .foregroundStyle(Color.green)
+                                    .accessibilityElement(children: .combine)
+                                    .accessibilityIdentifier("ActiveFieldPaymentHandoffStatus")
+
+                                Text(FieldPaymentHandoff.activeHandoffStatusCaption(
+                                    invoiceQuickBooksID: invoices.first(where: { $0.id == fieldPaymentHandoff.activeInvoiceID })?.quickBooksID
+                                ))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+
+                                DisclosureGroup(
+                                    "Handoff help",
+                                    isExpanded: $isShowingFieldHandoffHelp
+                                ) {
+                                    Text(FieldPaymentHandoff.requirementsDetail)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .accessibilityIdentifier("ActiveFieldPaymentHandoffHelp")
+
                                 Button("Stop Field Handoff", role: .cancel) {
                                     fieldPaymentHandoff.end()
+                                    isShowingFieldHandoffHelp = false
                                     fieldHandoffMessage = "Payment handoff stopped. Send the invoice again if it still needs field collection."
                                 }
                                 .buttonStyle(.bordered)
@@ -314,6 +346,13 @@ struct PaymentsAndReceiptsView: View {
                                     }
 
                                     LazyVGrid(columns: collectionActionColumns, alignment: .leading, spacing: 8) {
+                                        if entry.invoice.quickBooksID != nil {
+                                            Button("Payment review") {
+                                                reviewInvoiceID = entry.invoice.id
+                                                showingPaymentReview = true
+                                            }
+                                            .buttonStyle(.bordered)
+                                        }
                                         Button("Open Invoice") {
                                             selectedInvoiceID = entry.invoice.id
                                         }
@@ -367,9 +406,11 @@ struct PaymentsAndReceiptsView: View {
                                                     invoiceID: entry.invoice.id,
                                                     amount: entry.balanceDue
                                                 )
-                                                fieldHandoffMessage = didStart
-                                                    ? "Payment handoff is ready for \(Int(FieldPaymentHandoff.validityDuration / 60)) minutes. Open GunnAire Ops from Handoff on the nearby company iPhone to collect this invoice. \(FieldPaymentHandoff.quickBooksTapToPayDetail) \(FieldPaymentHandoff.requirementsDetail)"
-                                                    : "Payment handoff could not start on this device."
+                                                isShowingFieldHandoffHelp = false
+                                                fieldHandoffMessage = FieldPaymentHandoff.originStartMessage(
+                                                    didStart: didStart,
+                                                    invoiceQuickBooksID: entry.invoice.quickBooksID
+                                                )
                                             }
                                             .buttonStyle(.bordered)
                                             .accessibilityHint(FieldPaymentHandoff.requirementsDetail)
@@ -449,6 +490,12 @@ struct PaymentsAndReceiptsView: View {
                     }
 
                     if selectedWorkspace == .history {
+                    Section {
+                        Button("Review interrupted payments") {
+                            reviewInvoiceID = nil
+                            showingPaymentReview = true
+                        }
+                    }
                     if isAdminUser {
                         Section("Shared Field Collections") {
                             HStack {
@@ -521,6 +568,10 @@ struct PaymentsAndReceiptsView: View {
                                         VStack(alignment: .leading, spacing: 2) {
                                             Text(payment.invoice.customer.name)
                                                 .font(.headline)
+                                            if payment.isProviderSettlementPending {
+                                                Label("Bank settlement pending", systemImage: "clock")
+                                                    .font(.caption).foregroundStyle(.secondary)
+                                            }
                                             Text("\(payment.methodSummary) - \(payment.date.formatted(date: .abbreviated, time: .shortened))")
                                                 .font(.caption)
                                                 .foregroundColor(.secondary)
@@ -692,6 +743,9 @@ struct PaymentsAndReceiptsView: View {
         .sheet(isPresented: $showingRefundSheet) {
             refundSheet
         }
+        .sheet(isPresented: $showingPaymentReview) {
+            PaymentAttemptRecoveryView(invoices: visibleInvoices, initialInvoiceID: reviewInvoiceID)
+        }
         .onAppear {
             if !isAdminUser, selectedWorkspace == .overview {
                 selectedWorkspace = .collect
@@ -816,7 +870,9 @@ struct PaymentsAndReceiptsView: View {
                                 Button("Open Collection") {
                                     GunnAireAppIntentRouter.storePaymentCollectionRoute(
                                         invoiceID,
-                                        prefersContactlessGuide: true
+                                        prefersContactlessGuide: FieldPaymentHandoff.prefersContactlessGuide(
+                                            forFieldCollectionIntent: true
+                                        )
                                     )
                                 }
                                 .buttonStyle(.bordered)
@@ -971,115 +1027,30 @@ struct PaymentsAndReceiptsView: View {
     }
 
     private var contactlessPaymentGuide: some View {
-        NavigationStack {
-            Form {
-                if let invoice = selectedInvoice {
-                    let balance = outstandingBalance(for: invoice)
-                    let quickBooksReference = FieldPaymentHandoff.quickBooksInvoiceReference(invoice.quickBooksID)
-
-                    Section("Collection") {
-                        LabeledContent("Customer", value: invoice.customer.name)
-                        LabeledContent("Authorized balance", value: balance.formatted(.currency(code: "USD")))
-                    }
-
-                    if let quickBooksReference {
-                        Section("QuickBooks Invoice") {
-                            LabeledContent("Invoice ID", value: quickBooksReference)
-                                .accessibilityIdentifier("ContactlessQuickBooksInvoiceID")
-
-                            Button {
-                                UIPasteboard.general.string = quickBooksReference
-                                contactlessGuideMessage = "QuickBooks invoice ID copied."
-                            } label: {
-                                Label("Copy QuickBooks Invoice ID", systemImage: "doc.on.doc")
-                            }
-                        }
-
-                        Section("Use Tap to Pay on iPhone in QuickBooks") {
-                            ForEach(Array(FieldPaymentHandoff.quickBooksTapToPaySteps.enumerated()), id: \.offset) { index, step in
-                                HStack(alignment: .top, spacing: 10) {
-                                    Text("\(index + 1)")
-                                        .font(.caption.weight(.bold))
-                                        .foregroundStyle(Color.primaryBlack)
-                                        .frame(width: 24, height: 24)
-                                        .background(Color.brandGold, in: Circle())
-                                    Text(step)
-                                }
-                            }
-
-                            Text("QuickBooks does not publish a supported link that opens a specific invoice, so GunnAire Ops provides the verified QBO identifier without sending customer or card data through Handoff.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-
-                            Link(destination: FieldPaymentHandoff.quickBooksMobileAppStoreURL) {
-                                Label("Open or Install QuickBooks Mobile", systemImage: "arrow.up.forward.app")
-                            }
-                            .accessibilityIdentifier("OpenQuickBooksMobileApp")
-
-                            Link(destination: FieldPaymentHandoff.goPaymentAppStoreURL) {
-                                Label("Open or Install GoPayment", systemImage: "arrow.up.forward.app")
-                            }
-                            .accessibilityIdentifier("OpenGoPaymentApp")
-                        }
-
-                        Section("After Collection") {
-                            Text("Return to GunnAire Ops after QuickBooks confirms payment. Refresh QuickBooks before recording anything manually so the invoice is not paid twice.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-
-                            Button("Record Cash, Check, or Another Verified Payment") {
-                                openVerifiedPaymentEntryFromContactlessGuide()
-                            }
-                        }
-                    } else {
-                        Section("QuickBooks Invoice Required") {
-                            Label(
-                                "Contactless collection is waiting for QuickBooks publication.",
-                                systemImage: "exclamationmark.triangle.fill"
-                            )
-                            .foregroundStyle(Color.orange)
-
-                            Text("Ask the office to publish this invoice to QuickBooks, then reopen the collection task. GunnAire Ops will not present a local identifier as though QuickBooks could find it.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-
-                            Button("Record Cash, Check, or Another Verified Payment") {
-                                openVerifiedPaymentEntryFromContactlessGuide()
-                            }
-                        }
-                    }
-
-                    if !contactlessGuideMessage.isEmpty {
-                        Section("Status") {
-                            Text(contactlessGuideMessage)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                } else {
-                    ContentUnavailableView(
-                        "Invoice Unavailable",
-                        systemImage: "exclamationmark.triangle",
-                        description: Text("The invoice is no longer available to this business account.")
-                    )
-                }
-            }
-            .navigationTitle("Contactless Payment")
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") {
-                        showingContactlessPaymentGuide = false
-                    }
-                }
+        Group {
+            if let invoice = selectedInvoice {
+                FieldPaymentReviewView(invoice: invoice, localBalance: outstandingBalance(for: invoice),
+                                       recordVerifiedPayment: openVerifiedPaymentEntryFromContactlessGuide)
+            } else {
+                ContentUnavailableView("Invoice Unavailable", systemImage: "exclamationmark.triangle",
+                    description: Text("Reopen the invoice from your approved business workspace."))
             }
         }
-        .tint(Color.brandGold)
     }
 
-    private func openVerifiedPaymentEntryFromContactlessGuide() {
+    private func openVerifiedPaymentEntryFromContactlessGuide(limit: Double?) {
+        let original = selectedInvoice
+        let generation = CompanyWorkspaceAccessController.shared.generation
         showingContactlessPaymentGuide = false
         Task { @MainActor in
             await Task.yield()
+            guard let original, selectedInvoice === original,
+                  CompanyWorkspaceAccessController.shared.generation == generation else { return }
+            if let limit {
+                guard limit.isFinite, limit > 0 else { return }
+                amountText = String(format: "%.2f", min(outstandingBalance(for: original), limit))
+            }
+            selectedMethod = .cash
             showingRecordPaymentSheet = true
         }
     }
@@ -1164,7 +1135,15 @@ struct PaymentsAndReceiptsView: View {
     }
 
     private var isQuickBooksConnected: Bool {
-        liveAPI.isAuthenticated
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-uiTestForceQuickBooksConnected") {
+            return true
+        }
+        if ProcessInfo.processInfo.arguments.contains("-uiTestForceQuickBooksDisconnected") {
+            return false
+        }
+        #endif
+        return liveAPI.isAuthenticated
     }
 
     private func preparePaymentForm() {
@@ -1225,7 +1204,7 @@ struct PaymentsAndReceiptsView: View {
             deferredCollectionPrefersContactlessGuide = false
             deferredCollectionExpiresAt = nil
             GunnAireAppIntentRouter.clearDeferredPaymentCollectionRoute()
-            withAnimation(.easeInOut(duration: 0.2)) {
+            withAnimation(GunnAireAccessibilityMotionPolicy.easeInOut(duration: 0.2, reduceMotion: reduceMotion)) {
                 preparePaymentForm(for: invoice)
                 if presentsContactlessGuide {
                     contactlessGuideMessage = ""
@@ -1297,11 +1276,14 @@ struct PaymentsAndReceiptsView: View {
 
     @discardableResult
     private func saveLocalPayment(
+        id: UUID = UUID(),
         invoice: Invoice,
         amount: Double,
         quickBooksPaymentID: String? = nil,
         quickBooksChargeID: String? = nil,
         quickBooksClientTransID: String? = nil,
+        collectionAttemptID: UUID? = nil,
+        providerPaymentStatus: String? = nil,
         quickBooksAccountingSyncStatus: String? = nil,
         quickBooksAccountingSyncDetail: String? = nil,
         processorSyncStatus: String? = nil,
@@ -1313,10 +1295,13 @@ struct PaymentsAndReceiptsView: View {
         processorOverride: String? = nil
     ) -> Payment {
         let payment = Payment(
+                id: id,
                 invoice: invoice,
                 quickBooksID: quickBooksPaymentID,
                 quickBooksChargeID: quickBooksChargeID,
                 quickBooksClientTransID: quickBooksClientTransID,
+                collectionAttemptID: collectionAttemptID,
+                providerPaymentStatus: providerPaymentStatus,
                 quickBooksDepositID: quickBooksDepositID,
                 quickBooksSalesReceiptID: quickBooksSalesReceiptID,
                 quickBooksAccountingSyncStatus: quickBooksAccountingSyncStatus,
@@ -1515,23 +1500,29 @@ struct PaymentsAndReceiptsView: View {
             defer { isProcessingQuickBooksPayment = false }
 
             do {
+                let localPaymentID = UUID()
                 let result = try await QuickBooksPaymentsService.shared.processCardPayment(
+                    localPaymentID: localPaymentID,
                     invoice: invoice,
                     amount: amount,
                     cardInput: quickBooksCardInput(for: invoice),
                     note: paymentNotes.nilIfBlank,
                     catalogItems: catalogItems
                 )
+                try result.validateWorkspace()
                 if let masked = result.charge.card?.number?.suffix(4), cardLast4.nilIfBlank == nil {
                     cardLast4 = String(masked)
                 }
                 authorizationReference = result.charge.authCode ?? authorizationReference
                 let payment = saveLocalPayment(
+                    id: localPaymentID,
                     invoice: invoice,
                     amount: amount,
                     quickBooksPaymentID: result.accountingPayment?.Id,
                     quickBooksChargeID: result.charge.id,
                     quickBooksClientTransID: result.clientTransactionID,
+                    collectionAttemptID: localPaymentID,
+                    providerPaymentStatus: result.charge.status,
                     quickBooksAccountingSyncStatus: result.accountingError == nil ? "synced" : "needs_attention",
                     quickBooksAccountingSyncDetail: result.accountingError,
                     processorSyncStatus: "captured",
@@ -1548,7 +1539,7 @@ struct PaymentsAndReceiptsView: View {
                 resetPaymentForm()
                 showingRecordPaymentSheet = false
             } catch {
-                actionMessage = "QuickBooks payment failed: \(error.localizedDescription)"
+                actionMessage = "QuickBooks payment needs review: \(error.localizedDescription)"
             }
             return
         }
@@ -1558,7 +1549,9 @@ struct PaymentsAndReceiptsView: View {
             defer { isProcessingQuickBooksPayment = false }
 
             do {
+                let localPaymentID = UUID()
                 let result = try await QuickBooksPaymentsService.shared.processBankPayment(
+                    localPaymentID: localPaymentID,
                     invoice: invoice,
                     amount: amount,
                     bankInput: QuickBooksPaymentsBankAccountInput(
@@ -1572,13 +1565,17 @@ struct PaymentsAndReceiptsView: View {
                     note: paymentNotes.nilIfBlank,
                     catalogItems: catalogItems
                 )
+                try result.validateWorkspace()
                 authorizationReference = result.charge.authCode ?? authorizationReference
                 let payment = saveLocalPayment(
+                    id: localPaymentID,
                     invoice: invoice,
                     amount: amount,
                     quickBooksPaymentID: result.accountingPayment?.Id,
                     quickBooksChargeID: result.charge.id,
                     quickBooksClientTransID: result.clientTransactionID,
+                    collectionAttemptID: localPaymentID,
+                    providerPaymentStatus: result.charge.status,
                     quickBooksAccountingSyncStatus: result.accountingError == nil ? "synced" : "needs_attention",
                     quickBooksAccountingSyncDetail: result.accountingError,
                     processorSyncStatus: "submitted",
@@ -1595,7 +1592,7 @@ struct PaymentsAndReceiptsView: View {
                 resetPaymentForm()
                 showingRecordPaymentSheet = false
             } catch {
-                actionMessage = "QuickBooks ACH payment failed: \(error.localizedDescription)"
+                actionMessage = "QuickBooks ACH payment needs review: \(error.localizedDescription)"
             }
             return
         }
@@ -1790,20 +1787,17 @@ GunnAire
         syncingPaymentID = payment.id
         Task {
             do {
-                let quickBooksPayment = try await QuickBooksPaymentsService.shared.syncManualAccountingPayment(for: payment)
-                await MainActor.run {
+                let result = try await QuickBooksPaymentsService.shared
+                    .syncAndRecordAccountingFollowUp(for: payment, manual: true)
+                try await MainActor.run {
+                    try result.validateWorkspace()
                     syncingPaymentID = nil
-                    payment.quickBooksID = quickBooksPayment.Id
-                    payment.quickBooksAccountingSyncStatus = "synced"
-                    payment.quickBooksAccountingSyncDetail = nil
-                    actionMessage = "Payment synced to QuickBooks: \(quickBooksPayment.Id)."
+                    actionMessage = result.accountingReviewMessage ?? "Payment synced to QuickBooks: \(result.value)."
                 }
             } catch {
                 await MainActor.run {
                     syncingPaymentID = nil
-                    payment.quickBooksAccountingSyncStatus = "needs_attention"
-                    payment.quickBooksAccountingSyncDetail = error.localizedDescription
-                    actionMessage = "QuickBooks payment sync failed: \(error.localizedDescription)"
+                    actionMessage = "QuickBooks payment sync needs attention: \(error.localizedDescription)"
                 }
             }
         }
@@ -1818,31 +1812,16 @@ GunnAire
         syncingPaymentID = payment.id
         Task {
             do {
-                if payment.isRefund {
-                    let receipt = try await QuickBooksPaymentsService.shared.retryRefundReceiptSync(for: payment)
-                    await MainActor.run {
-                        payment.quickBooksRefundReceiptID = receipt.Id
-                        payment.quickBooksAccountingSyncStatus = "synced"
-                        payment.quickBooksAccountingSyncDetail = nil
-                        syncingPaymentID = nil
-                        actionMessage = "QuickBooks refund receipt sync completed."
-                    }
-                } else {
-                    let accountingPayment = try await QuickBooksPaymentsService.shared.retryAccountingSync(for: payment)
-                    await MainActor.run {
-                        payment.quickBooksID = accountingPayment.Id
-                        payment.quickBooksAccountingSyncStatus = "synced"
-                        payment.quickBooksAccountingSyncDetail = nil
-                        syncingPaymentID = nil
-                        actionMessage = "QuickBooks accounting payment sync completed."
-                    }
+                let result = try await QuickBooksPaymentsService.shared.syncAndRecordAccountingFollowUp(for: payment)
+                try await MainActor.run {
+                    try result.validateWorkspace()
+                    syncingPaymentID = nil
+                    actionMessage = result.accountingReviewMessage ?? "QuickBooks accounting follow-up completed."
                 }
             } catch {
                 await MainActor.run {
-                    payment.quickBooksAccountingSyncStatus = "needs_attention"
-                    payment.quickBooksAccountingSyncDetail = error.localizedDescription
                     syncingPaymentID = nil
-                    actionMessage = "QuickBooks follow-up retry failed: \(error.localizedDescription)"
+                    actionMessage = "QuickBooks follow-up needs attention: \(error.localizedDescription)"
                 }
             }
         }
@@ -1919,12 +1898,16 @@ GunnAire
                 amount: refundAmountValue,
                 note: refundNotes.nilIfBlank
             )
+            try result.validateWorkspace()
 
             modelContext.insert(
                 Payment(
+                    id: result.localPaymentID,
                     invoice: payment.invoice,
                     quickBooksChargeID: result.refund.id,
                     quickBooksClientTransID: result.clientTransactionID,
+                    collectionAttemptID: result.localPaymentID,
+                    providerPaymentStatus: result.refund.status,
                     quickBooksRefundReceiptID: result.refundReceipt?.Id,
                     quickBooksAccountingSyncStatus: result.accountingError == nil ? "synced" : "needs_attention",
                     quickBooksAccountingSyncDetail: result.accountingError,
@@ -1950,7 +1933,7 @@ GunnAire
             resetRefundForm()
             showingRefundSheet = false
         } catch {
-            actionMessage = "Refund failed: \(error.localizedDescription)"
+            actionMessage = "Refund needs review: \(error.localizedDescription)"
         }
     }
 

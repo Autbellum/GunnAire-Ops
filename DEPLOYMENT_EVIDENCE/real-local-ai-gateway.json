@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-09-12T06:21:46.956950+00:00",
+  "scope": "Real loopback HTTP, app-session verification and Ollama inference; synthetic identity bootstrap only",
+  "provider_login_tested": false,
+  "native_app_configuration_tested": false,
+  "production_data_used": false,
+  "persistent_service_deployed": false,
+  "checks": [
+    {
+      "scope": "unauthenticated-status",
+      "http": 401,
+      "passed": true
+    },
+    {
+      "scope": "authenticated-status",
+      "http": 200,
+      "passed": true
+    },
+    {
+      "scope": "unauthorized-role",
+      "http": 403,
+      "passed": true
+    },
+    {
+      "scope": "authenticated-real-model-draft",
+      "http": 200,
+      "passed": true
+    },
+    {
+      "scope": "audit-record",
+      "passed": true
+    }
+  ],
+  "response": {
+    "requestID": "b76d39b5-be03-423c-8ab2-f05b4f66cb38",
+    "generatedAt": "2026-09-12T06:21:46.636476Z",
+    "task": "customer_text_draft",
+    "provider": "ollama",
+    "model": "qwen2.5-coder:7b",
+    "local": true,
+    "cached": false,
+    "advisoryOnly": true,
+    "hostedFallbackUsed": false,
+    "hostedCreditsUsed": 0,
+    "stableDiffusionUsed": false,
+    "needsHumanApproval": true,
+    "redactions": 0,
+    "inputDigest": "a12cf9e92155084d3cb87d0735a6cea0d455abdfae6e09848a35cda4e10db013",
+    "metrics": {
+      "elapsed_seconds": 25.744,
+      "prompt_eval_count": 151,
+      "eval_count": 31
+    },
+    "result": {
+      "body": "We appreciate your patience. Our office will contact you shortly to arrange a convenient service appointment.",
+      "warnings": []
+    }
+  },
+  "passed": true
+}

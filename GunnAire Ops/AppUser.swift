@@ -13,7 +13,7 @@ enum AppUserRole: String, Codable, CaseIterable, Identifiable {
 
 @Model
 final class AppUser {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var email: String = ""
     var roleRawValue: String = AppUserRole.standard.rawValue
     var isActive: Bool = true
@@ -57,20 +57,38 @@ enum AppAccess {
     }
 
     static func activeRole(email: String?, users: [AppUser]) -> AppUserRole? {
-        let email = normalizedEmail(email)
-        if email == primaryAdminEmail {
-            return .admin
+        #if DEBUG
+        if GunnAireCloudKit.usesTestDatabase {
+            return localRole(email: email, users: users)
         }
-        let matchingUsers = users.filter { $0.email == email }
-        guard !matchingUsers.isEmpty,
-              matchingUsers.allSatisfy(\.isActive) else {
+        #endif
+        return activeRole(email: email, users: users,
+                          verifiedUser: CompanyWorkspaceAccessController.shared.verifiedUser)
+    }
+
+    /// CloudKit records are a replica, not authority to grant a business role.
+    /// This pure policy also lets tests exercise the live decision without
+    /// installing a fake singleton session or touching CloudKit credentials.
+    static func activeRole(email: String?, users: [AppUser], verifiedUser: BackendAppUserRecord?) -> AppUserRole? {
+        guard let verifiedUser, verifiedUser.isActive,
+              normalizedEmail(verifiedUser.email) == normalizedEmail(email),
+              let approvedRole = AppUserRole(rawValue: verifiedUser.role),
+              localRole(email: email, users: users) == approvedRole else { return nil }
+        return approvedRole
+    }
+
+    private static func localRole(email: String?, users: [AppUser]) -> AppUserRole? {
+        let email = normalizedEmail(email)
+        let matchingUsers = users.filter { normalizedEmail($0.email) == email }
+        guard !email.isEmpty, !matchingUsers.isEmpty,
+              matchingUsers.allSatisfy({ $0.isActive && AppUserRole(rawValue: $0.roleRawValue) != nil }) else {
             return nil
         }
         let roles = Set(matchingUsers.map(\.role))
         // CloudKit does not enforce uniqueness constraints. Until the approved
         // backend refreshes a conflict, fail closed instead of selecting an
         // arbitrary record that could grant dispatch or financial access.
-        return roles.count == 1 ? roles.first : .standard
+        return roles.count == 1 ? roles.first : nil
     }
 
     static func isAuthorized(email: String?, users: [AppUser]) -> Bool {
@@ -110,6 +128,16 @@ enum AppAccess {
     static func canReviewTeamTime(email: String?, users: [AppUser]) -> Bool {
         guard let role = activeRole(email: email, users: users) else { return false }
         return role == .accounting || role == .admin
+    }
+
+    static func canRecordOwnTime(email: String?, users: [AppUser]) -> Bool {
+        guard let role = activeRole(email: email, users: users) else { return false }
+        return role != .accounting && !isPrimaryAdmin(email)
+    }
+
+    static func canEditOwnOpenTime(_ entry: TimeEntry, email: String?, users: [AppUser]) -> Bool {
+        canRecordOwnTime(email: email, users: users) && entry.clockOut == nil &&
+            normalizedEmail(entry.userEmail) == normalizedEmail(email)
     }
 
     /// Field expenses are employee-originated operational evidence. Field and
@@ -476,13 +504,12 @@ enum AppAccess {
     }
 
     static func businessTaskAssigneeEmails(users: [AppUser]) -> [String] {
-        var emails = Set(users.filter(\.isActive).map { normalizedEmail($0.email) }.filter { !$0.isEmpty })
-        emails.insert(primaryAdminEmail)
-        return emails.sorted()
+        Set(users.map { normalizedEmail($0.email) })
+            .filter { localRole(email: $0, users: users) != nil }.sorted()
     }
 
     private static func isActiveBusinessTaskAssignee(_ email: String, users: [AppUser]) -> Bool {
-        isPrimaryAdmin(email) || users.contains { $0.isActive && normalizedEmail($0.email) == email }
+        localRole(email: email, users: users) != nil
     }
 
     /// Assigned technicians can present or capture a customer-approved service

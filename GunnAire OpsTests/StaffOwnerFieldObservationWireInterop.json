@@ -1,0 +1,198 @@
+{
+  "claimed": {
+    "application": {
+      "commandID": "cfd79646-394c-4319-8469-ca64c2956453",
+      "expectedRevision": 1,
+      "expectedValue": {
+        "null": {}
+      },
+      "operationID": "2d7b124d-8272-4f5a-89ba-2fdebd793bd6",
+      "ownerEmail": "admin@gunnaire.com",
+      "ownerStoreID": "45417b7b-8c41-4dfd-af6a-6a44b4442a66",
+      "preparedAt": "2026-09-10T15:45:22.525335+00:00",
+      "publishedAt": null,
+      "reviewedConflict": false,
+      "schema": "staff-owner-field-edit-v1",
+      "state": "prepared"
+    },
+    "baseValue": {
+      "null": {}
+    },
+    "current": {
+      "deleted": false,
+      "revision": 2,
+      "value": {
+        "text": {
+          "_0": "Field note from command path"
+        }
+      }
+    },
+    "eligible": true,
+    "receipt": {
+      "actorEmail": "field.technician@gunnaire.com",
+      "commandID": "cfd79646-394c-4319-8469-ca64c2956453",
+      "contentSHA256": "17b1e8284374d42cff5c04db5414f686681bf96483fcfb8b6d81aa30420cf271",
+      "createdAt": "2026-09-10T15:45:22.518875+00:00",
+      "expectedRevision": 1,
+      "fieldName": "notes",
+      "operationalWorkspaceReady": false,
+      "recordID": "ecc96bf1-0a93-42cc-b497-a580799067b9",
+      "recordKind": "job",
+      "schema": "staff-workspace-operational-command-v1",
+      "selectionID": "843c0ab4-44ce-49ae-a8a5-38dbfae64281",
+      "sourceSequence": 1,
+      "state": "recorded",
+      "value": {
+        "text": {
+          "_0": "Field note from command path"
+        }
+      }
+    },
+    "request": {
+      "commandID": "cfd79646-394c-4319-8469-ca64c2956453",
+      "companyID": "32d7445b-82e4-4d00-a4c7-e3bf7b5229cf",
+      "contentSHA256": "17b1e8284374d42cff5c04db5414f686681bf96483fcfb8b6d81aa30420cf271",
+      "environment": "development",
+      "expectedRevision": 1,
+      "fieldName": "notes",
+      "recordID": "ecc96bf1-0a93-42cc-b497-a580799067b9",
+      "recordKind": "job",
+      "replicaID": "253aba7b-94af-4d1e-b6ab-08384b436af7",
+      "schema": "staff-workspace-operational-command-v1",
+      "selectionID": "843c0ab4-44ce-49ae-a8a5-38dbfae64281",
+      "sourceSequence": 1,
+      "value": {
+        "text": {
+          "_0": "Field note from command path"
+        }
+      }
+    },
+    "schema": "staff-owner-field-edit-v1",
+    "shareID": "1cabdebc-a986-4667-951a-13b210f5b9b0",
+    "sourceSequence": 2
+  },
+  "completed": {
+    "application": {
+      "commandID": "cfd79646-394c-4319-8469-ca64c2956453",
+      "expectedRevision": 1,
+      "expectedValue": {
+        "null": {}
+      },
+      "operationID": "2d7b124d-8272-4f5a-89ba-2fdebd793bd6",
+      "ownerEmail": "admin@gunnaire.com",
+      "ownerStoreID": "45417b7b-8c41-4dfd-af6a-6a44b4442a66",
+      "preparedAt": "2026-09-10T15:45:22.525335+00:00",
+      "publishedAt": "2026-09-10T15:45:22.538539+00:00",
+      "reviewedConflict": false,
+      "schema": "staff-owner-field-edit-v1",
+      "state": "published"
+    },
+    "baseValue": {
+      "null": {}
+    },
+    "current": {
+      "deleted": false,
+      "revision": 2,
+      "value": {
+        "text": {
+          "_0": "Field note from command path"
+        }
+      }
+    },
+    "eligible": true,
+    "receipt": {
+      "actorEmail": "field.technician@gunnaire.com",
+      "commandID": "cfd79646-394c-4319-8469-ca64c2956453",
+      "contentSHA256": "17b1e8284374d42cff5c04db5414f686681bf96483fcfb8b6d81aa30420cf271",
+      "createdAt": "2026-09-10T15:45:22.518875+00:00",
+      "expectedRevision": 1,
+      "fieldName": "notes",
+      "operationalWorkspaceReady": false,
+      "recordID": "ecc96bf1-0a93-42cc-b497-a580799067b9",
+      "recordKind": "job",
+      "schema": "staff-workspace-operational-command-v1",
+      "selectionID": "843c0ab4-44ce-49ae-a8a5-38dbfae64281",
+      "sourceSequence": 1,
+      "state": "recorded",
+      "value": {
+        "text": {
+          "_0": "Field note from command path"
+        }
+      }
+    },
+    "request": {
+      "commandID": "cfd79646-394c-4319-8469-ca64c2956453",
+      "companyID": "32d7445b-82e4-4d00-a4c7-e3bf7b5229cf",
+      "contentSHA256": "17b1e8284374d42cff5c04db5414f686681bf96483fcfb8b6d81aa30420cf271",
+      "environment": "development",
+      "expectedRevision": 1,
+      "fieldName": "notes",
+      "recordID": "ecc96bf1-0a93-42cc-b497-a580799067b9",
+      "recordKind": "job",
+      "replicaID": "253aba7b-94af-4d1e-b6ab-08384b436af7",
+      "schema": "staff-workspace-operational-command-v1",
+      "selectionID": "843c0ab4-44ce-49ae-a8a5-38dbfae64281",
+      "sourceSequence": 1,
+      "value": {
+        "text": {
+          "_0": "Field note from command path"
+        }
+      }
+    },
+    "schema": "staff-owner-field-edit-v1",
+    "shareID": "1cabdebc-a986-4667-951a-13b210f5b9b0",
+    "sourceSequence": 2
+  },
+  "observation": {
+    "application": {
+      "commandID": "cfd79646-394c-4319-8469-ca64c2956453",
+      "expectedRevision": 1,
+      "expectedValue": {
+        "null": {}
+      },
+      "operationID": "2d7b124d-8272-4f5a-89ba-2fdebd793bd6",
+      "ownerEmail": "admin@gunnaire.com",
+      "ownerStoreID": "45417b7b-8c41-4dfd-af6a-6a44b4442a66",
+      "preparedAt": "2026-09-10T15:45:22.525335+00:00",
+      "publishedAt": "2026-09-10T15:45:22.538539+00:00",
+      "reviewedConflict": false,
+      "schema": "staff-owner-field-edit-v1",
+      "state": "published"
+    },
+    "observedAt": "2026-09-10T15:45:22.538539+00:00",
+    "ownerEmail": "admin@gunnaire.com",
+    "request": {
+      "claimOperationID": "2d7b124d-8272-4f5a-89ba-2fdebd793bd6",
+      "commandID": "cfd79646-394c-4319-8469-ca64c2956453",
+      "companyID": "32d7445b-82e4-4d00-a4c7-e3bf7b5229cf",
+      "environment": "development",
+      "expectedRevision": 2,
+      "expectedValue": {
+        "text": {
+          "_0": "Field note from command path"
+        }
+      },
+      "observerStoreID": "c29d64e9-b328-49de-a634-2e21bfe707af",
+      "operationID": "002bd324-cc46-4382-a968-e82fb2b5528f",
+      "replicaID": "253aba7b-94af-4d1e-b6ab-08384b436af7",
+      "schema": "staff-owner-field-observation-v1"
+    },
+    "schema": "staff-owner-field-observation-v1"
+  },
+  "request": {
+    "claimOperationID": "2d7b124d-8272-4f5a-89ba-2fdebd793bd6",
+    "commandID": "cfd79646-394c-4319-8469-ca64c2956453",
+    "companyID": "32d7445b-82e4-4d00-a4c7-e3bf7b5229cf",
+    "environment": "development",
+    "expectedRevision": 2,
+    "expectedValue": {
+      "text": {
+        "_0": "Field note from command path"
+      }
+    },
+    "observerStoreID": "c29d64e9-b328-49de-a634-2e21bfe707af",
+    "operationID": "002bd324-cc46-4382-a968-e82fb2b5528f",
+    "replicaID": "253aba7b-94af-4d1e-b6ab-08384b436af7",
+    "schema": "staff-owner-field-observation-v1"
+  }
+}

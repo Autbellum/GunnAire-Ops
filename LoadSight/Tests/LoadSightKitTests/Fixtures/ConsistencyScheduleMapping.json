@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "regions": [
+    {
+      "sourceID": "292bff6b5ca20cd19299fd324f5b01943824ac68e5658cd1bd03b8a830d23254",
+      "pageID": "292bff6b5ca20cd19299fd324f5b01943824ac68e5658cd1bd03b8a830d23254:1",
+      "bodyBounds": {
+        "x": 40,
+        "y": 520,
+        "width": 480,
+        "height": 160
+      },
+      "columns": [
+        {
+          "field": "tag",
+          "minX": 40,
+          "maxX": 160,
+          "headerText": "TAG"
+        },
+        {
+          "field": "manufacturer",
+          "minX": 160,
+          "maxX": 320,
+          "headerText": "MANUFACTURER"
+        },
+        {
+          "field": "airflow",
+          "minX": 320,
+          "maxX": 430,
+          "headerText": "TOTAL CFM",
+          "unitText": "CFM"
+        },
+        {
+          "field": "outdoorAir",
+          "minX": 430,
+          "maxX": 520,
+          "headerText": "OA CFM",
+          "unitText": "CFM"
+        }
+      ],
+      "textMode": "nativePDFWords",
+      "recordedBy": "Synthetic fixture author",
+      "mappingBasis": "Controlled fixture header positions; not customer or engineering evidence."
+    }
+  ]
+}

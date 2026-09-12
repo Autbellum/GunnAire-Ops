@@ -1,0 +1,51 @@
+name: AI Routing Audit
+
+on:
+  pull_request:
+    paths:
+      - 'GunnAire Ops/**'
+      - 'Backend/**'
+      - 'LocalAI/**'
+      - 'ImageAI/**'
+      - 'VisualAI/**'
+      - '.github/workflows/ai-routing-audit.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'GunnAire Ops/**'
+      - 'Backend/**'
+      - 'LocalAI/**'
+      - 'ImageAI/**'
+      - 'VisualAI/**'
+      - '.github/workflows/ai-routing-audit.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test AI routing policy
+        run: python3 -m unittest LocalAI/tests/test_audit_ai_routing.py -v
+      - name: Enforce local-first provider routing
+        run: |
+          python3 LocalAI/audit_ai_routing.py \
+            --root . \
+            --policy LocalAI/config/routing_policy.json \
+            --output ai-routing-audit.json \
+            --max-findings 250 \
+            --strict
+          cat ai-routing-audit.json
+      - name: Retain routing audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-routing-audit
+          path: ai-routing-audit.json
+          if-no-files-found: error

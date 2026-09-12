@@ -1,0 +1,97 @@
+import Foundation
+import LoadSightKit
+
+do {
+    let args = Array(CommandLine.arguments.dropFirst())
+    guard let command = args.first, (["review", "csv", "validate", "ingest", "air-review", "envelope-review", "room-review", "change-review", "ops-review", "catalog-review", "extract-text", "extract-review", "schedule-map-review", "schedule-discover", "schedule-discover-review"].contains(command) && args.count == 2) || (["apply", "rfi-docx", "co-docx"].contains(command) && args.count == 4) || (["draft-pdf", "xlsx", "catalog-compare", "schedule-review", "schedule-text", "schedule-saved"].contains(command) && args.count == 3) else {
+        throw LoadSightError.invalid("Usage: loadsight schedule-discover drawing.pdf; loadsight schedule-discover-review project.json; loadsight schedule-map-review project.json; loadsight schedule-saved project.json map-uuid; loadsight schedule-review project.json mapping.json; loadsight schedule-text drawing.pdf mapping.json; loadsight extract-text drawing.pdf; loadsight extract-review project.json; loadsight catalog-compare project.json supplied-catalog.json; loadsight review|csv|validate|air-review|envelope-review|room-review|change-review|ops-review|catalog-review project.json; loadsight ingest drawing.pdf; loadsight xlsx|draft-pdf project.json new-output-file; loadsight rfi-docx|co-docx project.json record-id new-output.docx; loadsight apply project.json request.json new-project.json")
+    }
+    if command == "ingest" || command == "extract-text" || command == "schedule-text" || command == "schedule-discover" {
+        let archive = try await DrawingIngestor().ingest(url: URL(fileURLWithPath: args[1]))
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if command == "schedule-discover" {
+            print(String(decoding: try encoder.encode(EquipmentScheduleDiscoverer.discover(archive)), as: UTF8.self))
+        } else if command == "schedule-text" {
+            let request = try EquipmentScheduleRequest.decode(Data(contentsOf: URL(fileURLWithPath: args[2])))
+            print(String(decoding: try encoder.encode(EquipmentScheduleExtractor.extract(archive, request: request)), as: UTF8.self))
+        } else if command == "extract-text" {
+            print(String(decoding: try encoder.encode(MechanicalTextExtractor.extract(archive)), as: UTF8.self))
+        } else { print(String(decoding: try encoder.encode(archive.records), as: UTF8.self)) }
+        exit(0)
+    }
+    let project = try ProjectDocument(data: Data(contentsOf: URL(fileURLWithPath: args[1])))
+    try project.validatePortableProject()
+    switch command {
+    case "co-docx":
+        try ChangeOrderWordDocument.docx(project, changeOrderID: args[2]).write(to: URL(fileURLWithPath: args[3]), options: .withoutOverwriting)
+        print("Change-order Word copy saved: \(args[3])")
+    case "rfi-docx":
+        try RFIWordDocument.docx(project, rfiID: args[2]).write(to: URL(fileURLWithPath: args[3]), options: .withoutOverwriting)
+        print("RFI Word copy saved: \(args[3])")
+    case "schedule-discover-review":
+        let archive = try DrawingArchive(projectJSON: project.root["nativeDrawings"])
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        print(String(decoding: try encoder.encode(EquipmentScheduleDiscoverer.discover(archive)), as: UTF8.self))
+    case "schedule-map-review":
+        let value = JSONValue.object(["maps": project.root["scheduleMaps"], "history": project.root["scheduleMapHistory"], "editFingerprint": .string(try project.scheduleMapEditFingerprint()), "scope": .string("Saved column mappings and local history; no approved equipment associations or quantities")])
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        print(String(decoding: try encoder.encode(value), as: UTF8.self))
+    case "schedule-saved":
+        guard let id = UUID(uuidString: args[2]), let map = try project.scheduleMaps().first(where: { $0.id == id }) else { throw LoadSightError.invalid("Saved schedule map not found.") }
+        let archive = try DrawingArchive(projectJSON: project.root["nativeDrawings"])
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        print(String(decoding: try encoder.encode(EquipmentScheduleExtractor.extract(archive, request: map.columnMap())), as: UTF8.self))
+    case "schedule-review":
+        let archive = try DrawingArchive(projectJSON: project.root["nativeDrawings"])
+        let request = try EquipmentScheduleRequest.decode(Data(contentsOf: URL(fileURLWithPath: args[2])))
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        print(String(decoding: try encoder.encode(EquipmentScheduleExtractor.extract(archive, request: request)), as: UTF8.self))
+    case "extract-review":
+        let archive = try DrawingArchive(projectJSON: project.root["nativeDrawings"])
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        print(String(decoding: try encoder.encode(MechanicalTextExtractor.extract(archive)), as: UTF8.self))
+    case "catalog-compare":
+        let available = try CatalogComparisonInput.decode(Data(contentsOf: URL(fileURLWithPath: args[2])))
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        print(String(decoding: try encoder.encode(project.catalogComparisonReview(available: available)), as: UTF8.self))
+    case "catalog-review":
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        print(String(decoding: try encoder.encode(project.catalogMaterialReview()), as: UTF8.self))
+    case "ops-review":
+        let value = JSONValue.object(["context": project.root["opsContext"], "history": project.root["opsContextHistory"], "editFingerprint": .string(try project.opsContextEditFingerprint()), "authority": .string("Recorded local snapshot; not authenticated approval or billing publication")])
+        print(String(decoding: try JSONEncoder().encode(value), as: UTF8.self))
+    case "change-review":
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        print(String(decoding: try encoder.encode(project.changeOrderReview()), as: UTF8.self))
+    case "room-review":
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        print(String(decoding: try encoder.encode(project.roomTransmissionReview()), as: UTF8.self))
+    case "envelope-review":
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        print(String(decoding: try encoder.encode(project.envelopeReview()), as: UTF8.self))
+    case "air-review":
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        print(String(decoding: try encoder.encode(project.airProcessReview()), as: UTF8.self))
+    case "xlsx":
+        try TakeoffWorkbook.xlsx(project).write(to: URL(fileURLWithPath: args[2]), options: .withoutOverwriting)
+        print("Workbook saved: \(args[2])")
+    case "draft-pdf":
+        try DraftProposal.pdf(project).write(to: URL(fileURLWithPath: args[2]), options: .withoutOverwriting)
+        print("Draft PDF saved: \(args[2])")
+    case "apply":
+        let request = try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: URL(fileURLWithPath: args[2])))
+        let result = try ProjectEditing.apply(request, to: project)
+        let output = URL(fileURLWithPath: args[3]).standardizedFileURL
+        try ProjectEditing.writeNew(result.project, to: output)
+        let summary: JSONValue = .object(["output": .string(output.path), "recordID": result.recordID.map(JSONValue.string) ?? .null, "operation": request["operation"], "status": .string("saved")])
+        print(String(decoding: try JSONEncoder().encode(summary), as: UTF8.self))
+    case "review":
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        print(String(decoding: try encoder.encode(EstimatePricing.review(project)), as: UTF8.self))
+    case "csv": print(TakeoffExport.csv(project), terminator: "")
+    default: print("Valid project: \(project.name); \(project.items.count) takeoff rows.")
+    }
+} catch {
+    FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8))
+    exit(1)
+}

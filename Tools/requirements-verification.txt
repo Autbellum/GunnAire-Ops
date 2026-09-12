@@ -1,0 +1,2 @@
+# Used only by commit-bound configuration verification, never by the runtime.
+PyYAML>=6,<7

@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "observed_date": "2026-09-12",
+  "status": "PARTIALLY DEPLOYED",
+  "targets": [
+    {"target": "repository", "status": "SOURCE COMPLETE", "evidence": "PRODUCTION_CLOSEOUT.md", "limitations": "Final remote CI and merge recorded separately; archive binds its exact commit."},
+    {"target": "Mac Studio", "status": "PARTIALLY DEPLOYED", "evidence": "DEPLOYMENT_EVIDENCE/mac-services.json", "limitations": "Service restart verified, not FileVault reboot recovery."},
+    {"target": "GunnAire Ops", "status": "PARTIALLY DEPLOYED", "evidence": "DEPLOYMENT_EVIDENCE/real-local-ai-gateway.json", "limitations": "Actual isolated HTTP sessions and Ollama; not a signed native app using a persistent production gateway."},
+    {"target": "Synology", "status": "PARTIALLY DEPLOYED", "evidence": "DEPLOYMENT_EVIDENCE/dsm-snapshot-restore.json", "limitations": "Separate shares, six daily seven-snapshot schedules, real snapshot-file recovery and login blocking verified. Log/backup packages installed. Configuration/application recovery, off-NAS backup and external log ingestion still require acceptance."},
+    {"target": "OPNsense", "status": "BLOCKED BY PHYSICAL ACCESS", "limitations": "Observed Eero default gateway; no identified OPNsense console or verified cutover rollback route."},
+    {"target": "managed switch/access points", "status": "BLOCKED BY PHYSICAL ACCESS", "limitations": "No verified VLAN-capable hardware management and console recovery access."}
+  ],
+  "prerequisites": [
+    "FileVault-unlock operator or verified out-of-band recovery before Mac reboot",
+    "Identified OPNsense appliance, managed VLAN switch/APs, configuration exports and physical rollback route",
+    "Private authenticated route from the production backend/app to the Mac; no public Ollama exposure",
+    "Verified DSM recovery administrator/MFA enrollment, configuration-export download, off-NAS destination and notification credentials"
+  ],
+  "unresolved_blockers": [
+    {"id": "mac-reboot", "status": "BLOCKED BY PHYSICAL ACCESS", "detail": "FileVault is on; no verified unlock/recovery route for an unattended reboot."},
+    {"id": "network-cutover", "status": "BLOCKED BY PHYSICAL ACCESS", "detail": "Actual OPNsense/switch/AP management targets and physical rollback access are not available in current evidence."},
+    {"id": "production-private-ai-route", "status": "BLOCKED BY CREDENTIAL", "detail": "Render production backend remains separate from Mac loopback; an authenticated private gateway route is not configured or verified."},
+    {"id": "dsm-recovery", "status": "BLOCKED BY CREDENTIAL", "detail": "Authenticated DSM management is available, but independent recovery login/MFA, a usable configuration export and off-NAS destination are not yet verified. Do not disable access or claim full restore."}
+  ]
+}

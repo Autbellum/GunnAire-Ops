@@ -5,7 +5,7 @@ import SwiftData
 /// short audit summary; full message bodies and mailbox data remain in Gmail.
 @Model
 final class CustomerCommunication {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var customer: Customer!
     var serviceCallID: UUID?
     var invoiceID: UUID?
@@ -94,6 +94,7 @@ final class CustomerCommunication {
     }
 
     var needsSharedCompanySync: Bool {
+        ["sent", "failed", "suppressed"].contains(normalizedDeliveryStatus) &&
         backendCommunicationID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
     }
 

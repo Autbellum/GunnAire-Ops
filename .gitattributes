@@ -1,0 +1,3 @@
+# PDF cross-reference records contain significant fixed-width whitespace.
+# Preserve fixture bytes; do not normalize or treat their records as source lines.
+*.pdf binary

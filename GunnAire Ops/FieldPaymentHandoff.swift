@@ -2,6 +2,57 @@ import Foundation
 import Combine
 import UIKit
 
+enum FieldPaymentVerificationOutcome: Equatable {
+    case settled(confirmedPayment: Double)
+    case partial(confirmedPayment: Double, balanceDue: Double)
+    case unchanged(balanceDue: Double)
+    case balanceChanged(balanceDue: Double)
+
+    static func resolve(
+        previousBalance: Double,
+        refreshedBalance: Double,
+        newlyLinkedPaymentAmount: Double
+    ) -> Self {
+        let previous = max(previousBalance, 0)
+        let refreshed = max(refreshedBalance, 0)
+        let confirmedPayment = max(newlyLinkedPaymentAmount, 0)
+        let difference = previous - refreshed
+
+        if difference > 0.009, confirmedPayment > 0.009 {
+            if refreshed <= 0.009 {
+                return .settled(confirmedPayment: confirmedPayment)
+            }
+            return .partial(confirmedPayment: confirmedPayment, balanceDue: refreshed)
+        }
+        if abs(difference) > 0.009 {
+            return .balanceChanged(balanceDue: refreshed)
+        }
+        return .unchanged(balanceDue: refreshed)
+    }
+
+    var statusMessage: String {
+        switch self {
+        case .settled(let confirmedPayment):
+            return "QuickBooks confirmed \(confirmedPayment.formatted(.currency(code: "USD"))) in newly linked payment records. This invoice is paid."
+        case .partial(let confirmedPayment, let balanceDue):
+            return "QuickBooks confirmed \(confirmedPayment.formatted(.currency(code: "USD"))) in newly linked payment records. \(balanceDue.formatted(.currency(code: "USD"))) remains due."
+        case .unchanged(let balanceDue):
+            return "QuickBooks still reports \(balanceDue.formatted(.currency(code: "USD"))) due. No new payment was confirmed; do not record the card again."
+        case .balanceChanged(let balanceDue):
+            return "QuickBooks now reports \(balanceDue.formatted(.currency(code: "USD"))) due, but no newly linked payment explains the balance change. Review the invoice before collecting again."
+        }
+    }
+
+    var confirmsCollection: Bool {
+        switch self {
+        case .settled, .partial:
+            return true
+        case .unchanged, .balanceChanged:
+            return false
+        }
+    }
+}
+
 /// Hands a payment-collection context from the office iPad or Mac to a company
 /// iPhone through Apple's Handoff. No card data, customer contact details, or
 /// payment credentials leave the originating device in the activity payload.
@@ -11,6 +62,7 @@ final class FieldPaymentHandoff: ObservableObject {
     static let requirementsDetail = "Handoff requires the nearby iPad or Mac and iPhone to use the same approved business Apple Account, with Wi-Fi, Bluetooth, and Handoff enabled."
     static let quickBooksTapToPayDetail = "For contactless payment, open the matching QuickBooks invoice in QuickBooks Mobile or GoPayment on the field iPhone. Intuit currently provides Tap to Pay on iPhone there, rather than as an embedded custom-app capture flow."
     static let quickBooksTapToPaySteps = [
+        "Before first use, a QuickBooks owner or company admin must enable Tap to Pay on iPhone in QuickBooks Mobile or GoPayment Settings. After setup, approved team members can collect.",
         "Open or install QuickBooks Mobile or GoPayment on this iPhone.",
         "Open Invoice payments from the app's Menu or Sales area.",
         "Find and select the invoice using the reference below.",
@@ -48,7 +100,7 @@ final class FieldPaymentHandoff: ObservableObject {
 
     @discardableResult
     func begin(invoiceID: UUID, amount: Double) -> Bool {
-        guard canStartFromCurrentDevice, amount > 0 else { return false }
+        guard canStartFromCurrentDevice, amount.isFinite, amount > 0 else { return false }
 
         end()
         let activity = Self.makeActivity(invoiceID: invoiceID)
@@ -97,6 +149,27 @@ final class FieldPaymentHandoff: ObservableObject {
         return UUID(uuidString: rawID)
     }
 
+    /// Stores a valid continuation at the application boundary so an iPhone
+    /// can receive Handoff before the technician has signed in. The payload is
+    /// still limited to an expiring local invoice identifier; `ContentView`
+    /// re-resolves the invoice and enforces the signed-in user's assignment and
+    /// role before it presents any customer or collection details.
+    @discardableResult
+    static func storeContinuationRoute(
+        from activity: NSUserActivity,
+        now: Date = Date()
+    ) -> Bool {
+        guard let invoiceID = invoiceID(from: activity, now: now) else {
+            return false
+        }
+        GunnAireAppIntentRouter.storePaymentCollectionRoute(
+            invoiceID,
+            prefersContactlessGuide: true,
+            expiresAt: activity.expirationDate
+        )
+        return true
+    }
+
     static func invoiceReference(quickBooksID: String?, localID: UUID) -> String {
         let normalizedQuickBooksID = quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return normalizedQuickBooksID.isEmpty
@@ -111,5 +184,38 @@ final class FieldPaymentHandoff: ObservableObject {
     static func quickBooksInvoiceReference(_ quickBooksID: String?) -> String? {
         let normalized = quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return normalized.isEmpty ? nil : normalized
+    }
+
+    /// True when QuickBooks has assigned a searchable invoice reference that
+    /// Tap to Pay / GoPayment can look up. Aligns with `quickBooksInvoiceReference`.
+    static func quickBooksPublicationReady(_ quickBooksID: String?) -> Bool {
+        quickBooksInvoiceReference(quickBooksID) != nil
+    }
+
+    /// Prefer the contactless Tap to Pay guide when the user intent is field
+    /// collection / Tap to Pay / Handoff continuation. Leave false for ordinary
+    /// invoice navigation and accounting review.
+    static func prefersContactlessGuide(forFieldCollectionIntent intent: Bool) -> Bool {
+        intent
+    }
+
+    /// Origin-device status after "Send to Field iPhone". Never includes customer,
+    /// amount, or card data — only publication readiness and a normalized QBO ID.
+    static func originStartMessage(didStart: Bool, invoiceQuickBooksID: String?) -> String {
+        guard didStart else {
+            return "Payment handoff could not start on this device."
+        }
+        if let reference = quickBooksInvoiceReference(invoiceQuickBooksID) {
+            return "Handoff started. A nearby iPhone can open GunnAire Ops via Handoff within 30 minutes and the contactless Tap to Pay guide will open. Match QuickBooks invoice reference \(reference)."
+        }
+        return "Handoff started. A nearby iPhone can open GunnAire Ops and the collection task, but QuickBooks Tap to Pay needs this invoice published to QuickBooks first (Accounting should publish)."
+    }
+
+    /// Compact caption under the active handoff status chip.
+    static func activeHandoffStatusCaption(invoiceQuickBooksID: String?) -> String {
+        if quickBooksPublicationReady(invoiceQuickBooksID) {
+            return "Open GunnAire Ops from Handoff within 30 minutes. This invoice's contactless collection guide opens automatically."
+        }
+        return "Open GunnAire Ops from Handoff within 30 minutes. Collection opens on the iPhone, but QuickBooks Tap to Pay still needs Accounting to publish this invoice."
     }
 }

@@ -73,7 +73,7 @@ enum InvoicePaymentTerms: String, Codable, CaseIterable, Identifiable {
 
 @Model
 final class Invoice {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var serviceCallID: UUID?
     var serviceLocationID: UUID?
     var siteAddress: String?
@@ -86,6 +86,9 @@ final class Invoice {
     var quickBooksSyncStatus: String = "pending"
     var quickBooksSyncDetail: String?
     var quickBooksLastSyncedAt: Date?
+    /// Latest invoice-scoped accounting observation, not a cash/processor receipt.
+    /// Optional for existing CloudKit records. Capture history remains in Payment.
+    var quickBooksPaymentReviewJSON: String?
     var workTypeRaw: String = InvoiceWorkType.service.rawValue
     var lineItemSummary: String = ""
     var catalogSnapshotJSON: String?
@@ -100,6 +103,9 @@ final class Invoice {
     /// contract allocation. This prevents two equal draws on one job from being
     /// deduplicated and keeps QBO reconciliation traceable to field progress.
     var projectMilestoneID: UUID?
+    /// Additive CloudKit receipt; preserves an office-reviewed unused draft and
+    /// its original relationships without treating it as a second customer debt.
+    var milestoneDraftReceiptJSON: String?
     var projectMilestoneSequence: Int?
     var projectMilestoneTitle: String?
     var projectContractAmount: Double?
@@ -290,8 +296,31 @@ final class Invoice {
         )
     }
 
+    var quickBooksIdentityReviewMessage: String? {
+        quickBooksSyncState == QuickBooksBillingIdentity.invoiceReviewState
+            ? QuickBooksBillingIdentity.invoiceReviewMessage : nil
+    }
+
+    var quickBooksBalanceReviewMessage: String? {
+        quickBooksSyncState == QuickBooksBalanceReconciliation.reviewState
+            ? (quickBooksSyncDetail ?? QuickBooksBalanceReconciliation.refreshMessage) : nil
+    }
+
+    var quickBooksReconciliationReviewMessage: String? {
+        quickBooksIdentityReviewMessage ?? quickBooksBalanceReviewMessage ?? FieldPaymentReceiptReconciliation.reviewMessage(for: self)
+    }
+
     var paymentCollectionBlockedMessage: String? {
-        BillingTaxPolicy.customerCommitmentBlockedMessage(
+        if let message = CatalogSnapshotPayload.reviewMessage(catalogSnapshotJSON) { return message }
+        if milestoneDraftReceiptJSON != nil { return BillingMilestoneReconciliation.retainedMessage }
+        if let stage = projectMilestoneID, let customer {
+            let related = customer.invoices.filter { $0.projectMilestoneID == stage }
+            if BillingMilestoneReconciliation.project(related, payments: related.flatMap(\.payments)).needsReview {
+                return BillingMilestoneReconciliation.reviewMessage
+            }
+        }
+        if let message = quickBooksReconciliationReviewMessage { return message }
+        return BillingTaxPolicy.customerCommitmentBlockedMessage(
             status: taxCalculationStatus,
             documentName: "invoice"
         )
@@ -347,15 +376,7 @@ final class Invoice {
     /// QBO receives plain operator notes plus immutable project-allocation
     /// evidence. The local UUID is safe operational metadata, not a credential.
     var accountingPrivateNote: String? {
-        let entries = [
-            notes?.trimmingCharacters(in: .whitespacesAndNewlines),
-            projectBillingAuditSummary.map { "GunnAire project billing: \($0); milestone ID \(projectMilestoneID?.uuidString ?? "unknown")" }
-        ]
-        .compactMap { value -> String? in
-            guard let value, !value.isEmpty else { return nil }
-            return value
-        }
-        return entries.isEmpty ? nil : String(entries.joined(separator: "\n").prefix(4_000))
+        BillingMilestoneIdentity.privateNote(notes: notes, milestoneID: projectMilestoneID, summary: projectBillingAuditSummary)
     }
 
     static func draft(
@@ -394,10 +415,12 @@ final class Invoice {
     }
 
     var needsQuickBooksAttention: Bool {
-        quickBooksSyncState == "needs_attention"
+        quickBooksSyncState == "needs_attention" || quickBooksReconciliationReviewMessage != nil
     }
 
     static func outstandingBalance(for invoice: Invoice, payments: [Payment]) -> Double {
+        if let customer = invoice.customer,
+           BillingMilestoneReconciliation.original(for: invoice, in: customer.invoices, payments: payments) != nil { return 0 }
         if let quickBooksBalanceDue = invoice.quickBooksBalanceDue,
            invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
             return max(quickBooksBalanceDue, 0)
@@ -414,6 +437,8 @@ final class Invoice {
     }
 
     static func isPaid(_ invoice: Invoice, payments: [Payment]) -> Bool {
+        if invoice.milestoneDraftReceiptJSON != nil { return false }
+        guard invoice.quickBooksReconciliationReviewMessage == nil else { return false }
         if invoice.hasQuickBooksBalance {
             return outstandingBalance(for: invoice, payments: payments) <= 0.009
         }
@@ -422,6 +447,8 @@ final class Invoice {
     }
 
     static func resolvedStatus(for invoice: Invoice, payments: [Payment]) -> String {
+        if invoice.milestoneDraftReceiptJSON != nil { return "retained draft" }
+        guard invoice.quickBooksReconciliationReviewMessage == nil else { return "review" }
         let balance = outstandingBalance(for: invoice, payments: payments)
         if balance <= 0.009 {
             return "paid"
@@ -473,29 +500,16 @@ final class Invoice {
     }
 
     private static func displayDedupeKey(for invoice: Invoice) -> String {
-        if let projectMilestoneID = invoice.projectMilestoneID {
-            return "milestone:\(projectMilestoneID.uuidString.lowercased())"
-        }
-        if let serviceCallID = invoice.serviceCallID {
-            return "call:\(serviceCallID.uuidString.lowercased()):\(String(format: "%.2f", invoice.amount))"
-        }
-        if let quickBooksID = invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !quickBooksID.isEmpty {
-            return "qb:\(quickBooksID.lowercased())"
-        }
-        guard let customer = invoice.customer else {
-            return "unresolved-customer:\(invoice.id.uuidString.lowercased())"
-        }
-        let customerKey = customer.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let day = Calendar.current.startOfDay(for: invoice.createdAt).timeIntervalSince1970
-        return "local:\(customerKey):\(String(format: "%.2f", invoice.amount)):\(Int(day))"
+        // Two draws, repairs, or drafts on one job are independent documents.
+        // Only replicas of the same durable local UUID may share a display row.
+        "customer:\(invoice.customer?.id.uuidString ?? "unresolved"):invoice:\(invoice.id.uuidString)"
     }
 
     private static func preferredDisplayInvoice(_ lhs: Invoice, _ rhs: Invoice) -> Invoice {
-        let lhsRank = rank(for: resolvedStatus(for: lhs, payments: []))
-        let rhsRank = rank(for: resolvedStatus(for: rhs, payments: []))
-        if lhsRank != rhsRank {
-            return rhsRank > lhsRank ? rhs : lhs
+        if lhs.quickBooksIdentityReviewMessage != nil { return lhs }
+        if rhs.quickBooksIdentityReviewMessage != nil { return rhs }
+        if lhs.quickBooksLastSyncedAt != rhs.quickBooksLastSyncedAt {
+            return (rhs.quickBooksLastSyncedAt ?? .distantPast) > (lhs.quickBooksLastSyncedAt ?? .distantPast) ? rhs : lhs
         }
         let lhsHasQuickBooks = lhs.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         let rhsHasQuickBooks = rhs.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false

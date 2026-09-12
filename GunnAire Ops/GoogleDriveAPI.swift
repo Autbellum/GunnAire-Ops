@@ -254,14 +254,15 @@ final class GoogleDriveAPI {
     static let shared = GoogleDriveAPI()
 
     private let authManager: GoogleAuthManager
-    private let session: URLSession
+    private let requestTransport: WorkspaceProviderOperation.Transport
 
     init(
         authManager: GoogleAuthManager,
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        transport: WorkspaceProviderOperation.Transport? = nil
     ) {
         self.authManager = authManager
-        self.session = session
+        requestTransport = transport ?? { try await session.data(for: $0) }
     }
 
     convenience init(session: URLSession = .shared) {
@@ -269,9 +270,10 @@ final class GoogleDriveAPI {
     }
 
     func generateFileID() async throws -> String {
-        let token = try await validAccessToken()
+        let operation = try authManager.captureProviderOperation()
+        let token = try await validAccessToken(operation: operation)
         let request = try GoogleDriveRequestFactory.generateFileID(accessToken: token)
-        let (data, response) = try await send(request)
+        let (data, response) = try await send(request, operation: operation)
         guard (200...299).contains(response.statusCode) else {
             throw providerError(data: data, statusCode: response.statusCode)
         }
@@ -291,7 +293,8 @@ final class GoogleDriveAPI {
         data: Data
     ) async throws -> GoogleDriveFile {
         guard !data.isEmpty else { throw GoogleDriveAPIError.emptyFile }
-        let token = try await validAccessToken()
+        let operation = try authManager.captureProviderOperation()
+        let token = try await validAccessToken(operation: operation)
 
         let metadata = GoogleDriveUploadMetadata.document(
             fileID: try GoogleDriveRequestFactory.validatedFileID(fileID),
@@ -301,7 +304,7 @@ final class GoogleDriveAPI {
             documentKind: documentKind
         )
 
-        if let existing = try await fetchFileIfPresent(fileID: fileID, accessToken: token) {
+        if let existing = try await fetchFileIfPresent(fileID: fileID, accessToken: token, operation: operation) {
             return try validatedArchiveFile(existing, expected: metadata)
         }
 
@@ -310,9 +313,9 @@ final class GoogleDriveAPI {
             contentLength: data.count,
             accessToken: token
         )
-        let (initiationData, initiationResponse) = try await send(initiation)
+        let (initiationData, initiationResponse) = try await send(initiation, operation: operation)
         if initiationResponse.statusCode == 409,
-           let existing = try await fetchFileIfPresent(fileID: fileID, accessToken: token) {
+           let existing = try await fetchFileIfPresent(fileID: fileID, accessToken: token, operation: operation) {
             return try validatedArchiveFile(existing, expected: metadata)
         }
         guard (200...299).contains(initiationResponse.statusCode) else {
@@ -327,24 +330,27 @@ final class GoogleDriveAPI {
             data: data,
             mimeType: metadata.mimeType,
             accessToken: token,
-            expectedMetadata: metadata
+            expectedMetadata: metadata,
+            operation: operation
         )
     }
 
     func fetchFileIfPresent(fileID: String) async throws -> GoogleDriveFile? {
-        let token = try await validAccessToken()
-        return try await fetchFileIfPresent(fileID: fileID, accessToken: token)
+        let operation = try authManager.captureProviderOperation()
+        let token = try await validAccessToken(operation: operation)
+        return try await fetchFileIfPresent(fileID: fileID, accessToken: token, operation: operation)
     }
 
     private func fetchFileIfPresent(
         fileID: String,
-        accessToken: String
+        accessToken: String,
+        operation: WorkspaceProviderOperation
     ) async throws -> GoogleDriveFile? {
         let request = try GoogleDriveRequestFactory.fetchFile(
             fileID: fileID,
             accessToken: accessToken
         )
-        let (data, response) = try await send(request)
+        let (data, response) = try await send(request, operation: operation)
         if response.statusCode == 404 { return nil }
         guard (200...299).contains(response.statusCode) else {
             throw providerError(data: data, statusCode: response.statusCode)
@@ -357,7 +363,8 @@ final class GoogleDriveAPI {
         data: Data,
         mimeType: String,
         accessToken: String,
-        expectedMetadata: GoogleDriveUploadMetadata
+        expectedMetadata: GoogleDriveUploadMetadata,
+        operation: WorkspaceProviderOperation
     ) async throws -> GoogleDriveFile {
         var offset = 0
         var shouldQueryStatus = false
@@ -382,7 +389,7 @@ final class GoogleDriveAPI {
                     )
                 }
 
-                let (responseData, response) = try await send(request)
+                let (responseData, response) = try await send(request, operation: operation)
                 switch response.statusCode {
                 case 200, 201:
                     let file = try decode(GoogleDriveFile.self, from: responseData)
@@ -425,7 +432,8 @@ final class GoogleDriveAPI {
         return file
     }
 
-    private func validAccessToken() async throws -> String {
+    private func validAccessToken(operation: WorkspaceProviderOperation) async throws -> String {
+        try operation.check()
         switch authManager.googleDriveAuthorizationState {
         case .disconnected:
             throw GoogleDriveAPIError.notAuthenticated
@@ -448,18 +456,23 @@ final class GoogleDriveAPI {
               !token.isEmpty else {
             throw GoogleDriveAPIError.authorizationChanged
         }
+        try operation.check()
         return token
     }
 
-    private func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    private func send(_ request: URLRequest, operation: WorkspaceProviderOperation) async throws -> (Data, HTTPURLResponse) {
         do {
-            let (data, response) = try await session.data(for: request)
+            let (data, response) = try await operation.data(for: request, transport: requestTransport)
             guard let response = response as? HTTPURLResponse else {
                 throw GoogleDriveAPIError.invalidResponse
             }
             return (data, response)
         } catch let error as GoogleDriveAPIError {
             throw error
+        } catch let error as WorkspaceProviderAccessError {
+            throw error
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw GoogleDriveAPIError.network
         }
