@@ -11,6 +11,15 @@ import verify_release as release
 
 
 class ReleaseVerificationTests(unittest.TestCase):
+    def test_all_python_scopes_are_network_isolated_on_mac(self):
+        with patch.object(release.sys, 'platform', 'darwin'):
+            for scope in ('LocalAI/tests-tests', 'Firewall/tests-tests', 'Tools-tests', 'Backend-tests'):
+                command = release.isolate_python_tests(scope, ['python', '-m', 'unittest'])
+                self.assertEqual(command[0], '/usr/bin/sandbox-exec')
+                self.assertIn('(deny network*)', command[2])
+                self.assertIn('localhost:*', command[2])
+            self.assertEqual(release.isolate_python_tests('native-app-logic', ['xcodebuild']), ['xcodebuild'])
+
     def test_source_drift_fails_closed(self):
         for values in ((b'b' * 40, b''), (b'a' * 40, b' M changed.py')):
             with patch.object(release, 'git', side_effect=values):

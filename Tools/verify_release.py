@@ -48,6 +48,14 @@ def source_unchanged(commit: str) -> bool:
     return git('rev-parse', 'HEAD').decode().strip() == commit and not git('status', '--porcelain').strip()
 
 
+def isolate_python_tests(scope: str, command: list[str]) -> list[str]:
+    if sys.platform == 'darwin' and scope.endswith('-tests'):
+        return ['/usr/bin/sandbox-exec', '-p',
+                '(version 1)(allow default)(deny network*)(allow network-inbound (local tcp "localhost:*"))(allow network-outbound (remote tcp "localhost:*"))',
+                *command]
+    return command
+
+
 def source_checks(files: dict[str, bytes]) -> list[str]:
     try:
         import yaml
@@ -161,10 +169,7 @@ def main() -> int:
         problems.append('Native app tests require an explicit --native-destination; no silent skip allowed')
     for index, (scope, command, timeout) in enumerate(commands):
         print(f'Checking {scope}', flush=True)
-        if scope == 'Backend-tests' and sys.platform == 'darwin':
-            command = ['/usr/bin/sandbox-exec', '-p',
-                       '(version 1)(allow default)(deny network*)(allow network-inbound (local tcp "localhost:*"))(allow network-outbound (remote tcp "localhost:*"))',
-                       *command]
+        command = isolate_python_tests(scope, command)
         result = run_command(command, cwd=ROOT, timeout_seconds=timeout, environment=env)
         result['command'] = [str(value).replace(str(output), '<release-output>').replace(str(ROOT), '<repository>') for value in result['command']]
         log = f'{index:02d}.log'

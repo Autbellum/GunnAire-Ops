@@ -41,3 +41,27 @@ Model benchmark scores are heuristic, not factual-accuracy certificates. Some ge
 commands and tests were incorrect or invented; none were executed as deployment work.
 Devstral scored 84.8%, GPT-OSS and Qwen3 71.4%, Qwen2.5 60.7%, each across six fixed cases.
 The measured configuration retains independent review and mandatory approval.
+
+## Later target execution, 2026-09-12
+
+A development-signed iOS archive for source `95d2ff00cd2b3b2645e3809f669a471921b1a9f8`
+was produced at `dist/GunnAire-2026.09.12.1-development.xcarchive`.
+`codesign --verify --deep --strict` passed. Identifier: `com.gunnaire.businesssuite`;
+team: `7C4B3RR7RD`; authority: Apple Development. This is not an App Store distribution
+archive, upload, physical-device acceptance, or production publication.
+
+DSM now has separate FirewallBackups, SecurityLogs, LocalAIReports, ReleaseEvidence,
+and BusinessBackups shares on its encrypted Btrfs volume, with data-integrity checks,
+guest denial and administrator access. ReleaseEvidence mounts on the Mac.
+Daily snapshots with seven latest retained are saved and show Scheduled for these
+five shares and GunnAireLocalAI. Personal homes were not changed. Immutable/WORM
+locking remains disabled. Log Center 1.3.2-2074, Snapshot Replication 7.5.1-1915 and
+Hyper Backup 4.2.2-4262 were installed; package installation alone is not log receipt
+or backup acceptance. Further dated target receipts are retained on the dedicated
+ReleaseEvidence share under `production-closeout-20260912`.
+
+An actual snapshot-file restore passed: a synthetic canary was snapshotted, changed,
+and copied back from that snapshot into a separate empty folder. Restored SHA-256
+matched the pre-change original and differed from the live modified file. See
+`DEPLOYMENT_EVIDENCE/dsm-snapshot-restore.json`. No whole share or business record
+was reverted. This still does not prove configuration/application or off-NAS restore.

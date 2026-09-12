@@ -6,7 +6,7 @@
     {"target": "repository", "status": "SOURCE COMPLETE", "evidence": "PRODUCTION_CLOSEOUT.md", "limitations": "Final remote CI and merge recorded separately; archive binds its exact commit."},
     {"target": "Mac Studio", "status": "PARTIALLY DEPLOYED", "evidence": "DEPLOYMENT_EVIDENCE/mac-services.json", "limitations": "Service restart verified, not FileVault reboot recovery."},
     {"target": "GunnAire Ops", "status": "PARTIALLY DEPLOYED", "evidence": "DEPLOYMENT_EVIDENCE/real-local-ai-gateway.json", "limitations": "Actual isolated HTTP sessions and Ollama; not a signed native app using a persistent production gateway."},
-    {"target": "Synology", "status": "PARTIALLY DEPLOYED", "evidence": "DEPLOYMENT_EVIDENCE/nas-file-restore.json", "limitations": "SMB file restore and login blocking verified; snapshots, configuration restore, off-NAS backup and log ingestion not accepted."},
+    {"target": "Synology", "status": "PARTIALLY DEPLOYED", "evidence": "DEPLOYMENT_EVIDENCE/dsm-snapshot-restore.json", "limitations": "Separate shares, six daily seven-snapshot schedules, real snapshot-file recovery and login blocking verified. Log/backup packages installed. Configuration/application recovery, off-NAS backup and external log ingestion still require acceptance."},
     {"target": "OPNsense", "status": "BLOCKED BY PHYSICAL ACCESS", "limitations": "Observed Eero default gateway; no identified OPNsense console or verified cutover rollback route."},
     {"target": "managed switch/access points", "status": "BLOCKED BY PHYSICAL ACCESS", "limitations": "No verified VLAN-capable hardware management and console recovery access."}
   ],

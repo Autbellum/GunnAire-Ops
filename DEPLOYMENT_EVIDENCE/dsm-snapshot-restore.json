@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-09-12T06:55:39Z",
+  "status": "PARTIALLY DEPLOYED",
+  "share": "ReleaseEvidence",
+  "volume": "Volume 1, Btrfs, encrypted",
+  "snapshot": "GMT-05-2026.09.12-01.49.48",
+  "snapshot_description": "GunnAire closeout synthetic recovery test 20260912",
+  "original_sha256": "37ad03222831a467186161f7db9c82c9cade0239ed801d43fdff17440b4207bf",
+  "modified_live_sha256": "d8f50938bdd068cdad8c725a8521898c52f850d489c8421876c36ba0c22821d9",
+  "restored_sha256": "37ad03222831a467186161f7db9c82c9cade0239ed801d43fdff17440b4207bf",
+  "restored_relative_path": "production-closeout-20260912/restored/recovery-canary.txt",
+  "method": "Created synthetic canary over SMB, took actual DSM snapshot, modified only live canary, used File Station to copy snapshot original into empty restored directory with Paste-Skip, verified restored bytes over SMB.",
+  "snapshot_file_restore_passed": true,
+  "whole_share_reverted": false,
+  "production_records_used": false,
+  "immutable_lock_enabled": false,
+  "configuration_restore_tested": false,
+  "off_nas_backup_tested": false,
+  "daily_seven_snapshot_schedules_verified": ["ReleaseEvidence", "GunnAireLocalAI", "FirewallBackups", "SecurityLogs", "LocalAIReports", "BusinessBackups"],
+  "personal_homes_changed": false,
+  "snapshot_browsing_enabled_for": ["ReleaseEvidence"]
+}
