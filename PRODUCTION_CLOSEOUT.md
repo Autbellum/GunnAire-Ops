@@ -11,12 +11,10 @@ packaged as a release.
 ## Reconciliation
 
 - PR 19 is already merged in main.
-- PR 18 (`c6406b6ee4a5fad78efd4547276da2d317506750`) supplies the cumulative business application/backend.
-- PR 21 (`65fe64244376d3b746437c7e333e09a37269543d`) supplies authenticated local-AI application integration and routing policy.
-- PR 22 (`765527295bea6f6850f545e7c562ae669fb1bb47`) contributes the Synology guide and reporting installer. Its older AI API is not substituted for PR 21's interface. Reviewed corrections are applied to the combined implementation.
-- PR 20 (`16fc22737615f86c121b93cf7307f44f45c05a99`) is the older competing Infrastructure/split-archive approach. It must not delete the current application integration or become a second release.
-- PR 17's estimate-response work is present in the cumulative backend, including response identity and transactional resolution checks. It is not a Git ancestor of PR 18; reconciliation is content-based, not an ancestry claim.
-- PRs 17, 18, 20, 21 and 22 are closed and explicitly superseded by PR 23. Their original branches and head references are retained. PR 23 is the only active closeout PR; closure is not a claim of production acceptance.
+- PR 19 (`fca1d6cb5d57a6af5d4a9f84ccf4d2c2f1d8f4b`) is merged to main and is included in this cumulative scope.
+- PR 17, 18, 20, 21 and 22 are closed and not merged; their substantive content was reconciled by content into PR 23.
+- PR 23 (`0376c09541894517b7fb6fe70cec9c6cb1b85195`) is the current active closeout PR and head branch.
+- PR 23 is the only active closeout PR; closure of duplicates is not a production acceptance claim.
 
 ## Corrected review classes
 
