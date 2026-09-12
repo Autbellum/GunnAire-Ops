@@ -4,7 +4,7 @@ Status: PARTIALLY DEPLOYED. Updated during closeout on 2026-09-12.
 
 | Target | Verified evidence | Remaining acceptance |
 |---|---|---|
-| Repository | Cumulative PR 23 committed and pushed; first full commit-bound release run passed all 12 scopes | Follow-up release run, remote CI, merge |
+| Repository | Cumulative PR 23 committed and pushed. Latest full commit-bound release run passed all 12 scopes for commit `9b027fc2efe33e00794672a513efa59b810fe416` (`dist/closeout-2026.09.12.1-wq_uo1jd/RELEASE_MANIFEST.json`) | Remote CI gate, merge, and final PR completion |
 | Mac Studio | Four candidates installed and benchmarked; guarded tooling installed; workbench and Synology bridge restarted on independent Python runtime; scheduled health agent exited 0; exact model digests in `DEPLOYMENT_EVIDENCE/mac-services.json` | Native production gateway connection and FileVault reboot recovery |
 | GunnAire Ops | Combined authenticated route tests pass; 322 LoadSight tests pass; unsigned simulator build and 2,377 iPad logic tests pass (`DEPLOYMENT_EVIDENCE/ipad-logic-summary.json`) | Configured private gateway, signed artifact and live business smoke tests |
 | Synology | Mounted 100 GiB share; real synthetic file restore hashes match (`DEPLOYMENT_EVIDENCE/nas-file-restore.json`); auto-block enabled and reloaded (`DEPLOYMENT_EVIDENCE/dsm-login-protection.json`) | DSM snapshot/configuration restore, off-NAS backup, security log receipt, notification and least-privilege service-account checks |
