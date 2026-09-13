@@ -980,12 +980,6 @@ struct BillingDocumentsView: View {
             .filter { $0.customer != nil }.sorted { $0.createdAt > $1.createdAt }
     }
 
-    private var unresolvedInvoiceRelationshipCount: Int {
-        Invoice.displayDeduplicated(invoices)
-            .filter { $0.customer == nil }
-            .count
-    }
-
     private var visibleBillingServiceCallIDsForFieldUser: Set<UUID> {
         AppAccess.visibleBillingServiceCallIDs(
             email: currentUserEmail,
@@ -6889,7 +6883,6 @@ GunnAire
                         }
                         .frame(minHeight: 44)
                     }
-                    .frame(minHeight: 44)
                 }
                 .font(.caption)
                 .buttonStyle(.borderless)

@@ -116,75 +116,6 @@ struct GunnAireIPadKeyCommandBridge: UIViewRepresentable {
     }
 }
 
-/// Registers the numbered workspace shortcuts with UIKit on native iPadOS.
-/// SwiftUI scene commands render correctly in the Mac menu bar, but they are
-/// not consistently inserted into the responder chain for an iPad split view.
-private struct GunnAireIPadKeyCommandBridge: UIViewRepresentable {
-    let onRoute: (GunnAireAppRoute) -> Void
-
-    func makeUIView(context: Context) -> KeyCommandResponderView {
-        let view = KeyCommandResponderView()
-        view.onRoute = onRoute
-        return view
-    }
-
-    func updateUIView(_ uiView: KeyCommandResponderView, context: Context) {
-        uiView.onRoute = onRoute
-        uiView.activateIfAvailable()
-    }
-
-    final class KeyCommandResponderView: UIView {
-        var onRoute: ((GunnAireAppRoute) -> Void)?
-
-        override var canBecomeFirstResponder: Bool { true }
-
-        override var keyCommands: [UIKeyCommand]? {
-            let definitions = GunnAireNavigationCommandDefinition.primary.compactMap { definition -> (String, String)? in
-                guard let shortcutKey = definition.shortcutKey else { return nil }
-                return (shortcutKey.description, definition.title)
-            }
-            return definitions.map { input, title in
-                let command = UIKeyCommand(
-                    title: title,
-                    action: #selector(handleKeyCommand(_:)),
-                    input: input,
-                    modifierFlags: .command
-                )
-                command.wantsPriorityOverSystemBehavior = true
-                return command
-            }
-        }
-
-        override func didMoveToWindow() {
-            super.didMoveToWindow()
-            guard window != nil, !isFirstResponder else { return }
-            // The command host can become visible before SwiftUI's next update
-            // pass. Claim the responder synchronously so an attached keyboard
-            // works as soon as the workspace is visible, with the async retry
-            // retained for UIKit transitions that temporarily reject it.
-            if !becomeFirstResponder() {
-                activateIfAvailable()
-            }
-        }
-
-        func activateIfAvailable() {
-            guard window != nil, !isFirstResponder else { return }
-            DispatchQueue.main.async { [weak self] in
-                _ = self?.becomeFirstResponder()
-            }
-        }
-
-        @objc private func handleKeyCommand(_ command: UIKeyCommand) {
-            guard let input = command.input else { return }
-            let route = GunnAireNavigationCommandDefinition.primary.first {
-                $0.shortcutKey?.description == input
-            }?.route
-            guard let route else { return }
-            onRoute?(route)
-        }
-    }
-}
-
 // MARK: - ContentView with NavigationSplitView Sidebar
 
 struct ContentView: View {
@@ -1045,41 +976,6 @@ private struct InvoiceWorkspaceTransitionHost: View {
             withTransaction(transaction) {
                 isReady = true
             }
-        }
-    }
-}
-
-/// Keeps the split-view selection transition shallow before constructing the
-/// full invoice workspace. The billing builder intentionally remains feature
-/// complete, but its large SwiftUI metadata tree must not be materialized in
-/// the same render pass that removes the previous sidebar destination on a
-/// physical iPad. Doing both at once can exhaust Swift's metadata-resolution
-/// stack before the first invoice row is presented.
-private struct InvoiceWorkspaceTransitionHost: View {
-    @State private var isReady = false
-
-    var body: some View {
-        Group {
-            if isReady {
-                AnyView(BillingDocumentsView(workspaceMode: .invoices))
-            } else {
-                ProgressView("Loading invoices…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .navigationTitle("Invoices")
-                    .accessibilityIdentifier("InvoiceWorkspaceTransitionGuard")
-            }
-        }
-        .transition(.identity)
-        .task {
-            guard !isReady else { return }
-            await Task.yield()
-            do {
-                try await Task.sleep(for: .milliseconds(200))
-            } catch {
-                return
-            }
-            guard !Task.isCancelled else { return }
-            isReady = true
         }
     }
 }

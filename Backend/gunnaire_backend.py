@@ -1582,13 +1582,14 @@ def supplier_connector_text(
 
 def supplier_connector_amount(payload: dict[str, object], key: str, *, positive: bool = False) -> float:
     value = payload.get(key)
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"Invalid {key}")
-    amount = float(value)
     minimum = 0.0001 if positive else 0.0
-    if not math.isfinite(amount) or amount < minimum or amount > 1_000_000:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not minimum <= value <= 1_000_000
+    ):
         raise ValueError(f"Invalid {key}")
-    return amount
+    return float(value)
 
 
 def supplier_connector_timestamp(value: object, key: str, *, required: bool = True) -> str | None:
@@ -5105,18 +5106,12 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             if (
                 isinstance(raw_estimate_amount, bool)
                 or not isinstance(raw_estimate_amount, (int, float))
-            ):
-                self.write_json({"error": "Estimate amount is invalid"}, status=HTTPStatus.BAD_REQUEST)
-                return
-            estimate_amount = float(raw_estimate_amount)
-            if (
-                not math.isfinite(estimate_amount)
-                or not 0 <= estimate_amount <= 999_999_999.99
+                or not 0 <= raw_estimate_amount <= 999_999_999.99
                 or re.fullmatch(r"[0-9a-f]{64}", estimate_revision or "") is None
             ):
                 self.write_json({"error": "Estimate approval snapshot is invalid"}, status=HTTPStatus.BAD_REQUEST)
                 return
-            estimate_amount = round(estimate_amount, 2)
+            estimate_amount = round(float(raw_estimate_amount), 2)
 
         requested_days = payload.get("expiresInDays", 14)
         if isinstance(requested_days, bool):
