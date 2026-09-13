@@ -2141,6 +2141,8 @@ struct OnsiteDocumentationView: View {
                                                 }
                                             } label: {
                                                 Label("Documents", systemImage: "doc.on.doc")
+                                                    .lineLimit(1)
+                                                    .fixedSize()
                                             }
                                             .buttonStyle(.bordered)
                                             .accessibilityLabel("Document actions for \(invoiceAccessibilityContext(for: invoice))")
@@ -2262,6 +2264,8 @@ struct OnsiteDocumentationView: View {
                                 }
                             } label: {
                                 Label("Documents", systemImage: "doc.on.doc")
+                                    .lineLimit(1)
+                                    .fixedSize()
                             }
                             .buttonStyle(.bordered)
                             .accessibilityLabel("Document actions for \(documentationAccessibilityContext(for: call))")

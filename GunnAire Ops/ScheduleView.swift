@@ -326,16 +326,9 @@ struct ScheduleView: View {
                                     )
                                 }
 
-                                LazyVStack(spacing: 10) {
-                                    if canManageDispatch {
-                                        ForEach(selectedDayCalls) { call in
-                                            selectedDayCallRow(for: call)
-                                        }
-                                        .onDelete(perform: deleteCalls)
-                                    } else {
-                                        ForEach(selectedDayCalls) { call in
-                                            selectedDayCallRow(for: call)
-                                        }
+                                VStack(spacing: 10) {
+                                    ForEach(selectedDayCalls) { call in
+                                        selectedDayCallRow(for: call)
                                     }
                                 }
                             }
@@ -1419,39 +1412,6 @@ struct ScheduleView: View {
     @ViewBuilder
     private func selectedDayCallRow(for call: ServiceCall) -> some View {
         serviceCallCard(for: call)
-            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                if canCollectFieldPayments, let invoice = invoice(for: call), invoice.isReadyForPaymentCollection, !isInvoicePaid(invoice) {
-                    Button {
-                        openDocumentation(call, at: tapToPayReady ? .tapToPay : .collectPayment)
-                    } label: {
-                        Label(tapToPayReady ? "Tap to Pay on iPhone" : "Take Payment", systemImage: "creditcard")
-                    }
-                    .tint(.green)
-                }
-
-                if isAdminUser || canCollectFieldPayments {
-                    let opensCloseout = shouldPrioritizeCloseout(for: call)
-                    Button {
-                        openDocumentation(call, at: opensCloseout ? .closeout : .recommended)
-                    } label: {
-                        Label(
-                            opensCloseout ? "Closeout" : documentationActionTitle(for: call, compact: true),
-                            systemImage: opensCloseout ? "checklist" : "doc.text"
-                        )
-                    }
-                    .tint(Color.brandGold)
-                }
-            }
-            .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                if hasNavigableAddress(for: call) {
-                    Button {
-                        openMaps(for: call)
-                    } label: {
-                        Label("Navigate", systemImage: "map")
-                    }
-                    .tint(.blue)
-                }
-            }
     }
 
     @ViewBuilder
@@ -1749,22 +1709,6 @@ struct ScheduleView: View {
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty && !$0.localizedCaseInsensitiveContains("Calendar event:") }
-    }
-
-    private func deleteCalls(offsets: IndexSet) {
-        guard AppAccess.canPerformScheduleMutation(
-            .deleteServiceCall,
-            email: AppIdentity.currentEmail,
-            users: users
-        ) else {
-            syncMessage = "Dispatcher or administrator access is required to delete schedule entries."
-            return
-        }
-        withAnimation(GunnAireAccessibilityMotionPolicy.standardAnimation(reduceMotion: reduceMotion)) {
-            for index in offsets.sorted(by: >) {
-                deleteCall(selectedDayCalls[index])
-            }
-        }
     }
 
     private func deleteCall(_ call: ServiceCall) {
