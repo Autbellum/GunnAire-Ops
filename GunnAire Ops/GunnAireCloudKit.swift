@@ -107,6 +107,11 @@ enum GunnAireCloudKit {
 
     static func modelConfiguration(for schema: Schema) -> ModelConfiguration {
         if usesTestDatabase {
+            #if DEBUG
+            if let name = isolatedUITestStoreName(arguments: ProcessInfo.processInfo.arguments) {
+                return ModelConfiguration(name, schema: schema, isStoredInMemoryOnly: false, cloudKitDatabase: .none)
+            }
+            #endif
             return ModelConfiguration(schema: schema, isStoredInMemoryOnly: false, cloudKitDatabase: .none)
         }
 
@@ -121,6 +126,18 @@ enum GunnAireCloudKit {
 
         return productionModelConfiguration(for: schema)
     }
+
+    #if DEBUG
+    /// A test may retain one named local store across its own relaunches without
+    /// inheriting records created by another test. No path or account is accepted.
+    static func isolatedUITestStoreName(arguments: [String]) -> String? {
+        guard arguments.contains("-disableCloudKitForTesting"),
+              arguments.filter({ $0 == "-uiTestIsolatedStore" }).count == 1,
+              let index = arguments.firstIndex(of: "-uiTestIsolatedStore"), index + 1 < arguments.count,
+              let id = UUID(uuidString: arguments[index + 1]), id.uuidString == arguments[index + 1] else { return nil }
+        return "GunnAireUITest-" + id.uuidString
+    }
+    #endif
 }
 
 enum CloudKitMirroringOperation: String, CaseIterable, Codable, Hashable, Sendable {
@@ -930,7 +947,7 @@ enum GunnAireCloudKitRoundTripProbe {
 enum GunnAireCloudKitSchemaBootstrap {
     static let initializeArgument = "-initializeCloudKitSchema"
     static let cleanupArgument = "-cleanupCloudKitSchemaBootstrap"
-    static let schemaVersion = 23
+    static let schemaVersion = 27
 
     private static let marker = "__GUNNAIRE_CLOUDKIT_SCHEMA_BOOTSTRAP__"
     private static let bootstrapEmail = "schema-bootstrap@gunnaire.invalid"
@@ -1097,6 +1114,11 @@ enum GunnAireCloudKitSchemaBootstrap {
             flatRateAssemblyJSON: assemblyDefinition.encodedJSON,
             createdAt: now
         )
+        // Schema-only marker. It is deliberately not a valid application
+        // receipt and must never be used as accounting evidence.
+        item.quickBooksCatalogReceiptJSON = marker
+        item.quickBooksInventorySetupJSON = marker
+        item.quickBooksCatalogDetailsJSON = marker
         let bootstrapCatalogSnapshot = CatalogLineItemSnapshot.encoded(from: [item]) ?? "[]"
         let serviceLocation = CustomerServiceLocation(
             customer: customer,
@@ -1220,6 +1242,8 @@ enum GunnAireCloudKitSchemaBootstrap {
             completionNotes: marker,
             finalizedAt: now
         )
+        invoice.milestoneDraftReceiptJSON = marker
+        invoice.quickBooksPaymentReviewJSON = marker
         let estimate = Estimate(
             serviceCallID: serviceCall.id,
             serviceLocationID: serviceLocation.id,

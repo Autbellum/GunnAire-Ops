@@ -182,7 +182,7 @@ enum AttachmentMarkupCopyPolicy {
 
 @Model
 final class ServiceDocumentAttachment {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var customer: Customer?
     var serviceCallID: UUID?
     var customerEquipmentID: UUID?
@@ -443,10 +443,13 @@ final class ServiceDocumentAttachment {
     }
 
     func canUploadToQuickBooksInvoice(_ invoice: Invoice) -> Bool {
-        guard canLinkToQuickBooksInvoiceDocument,
+        guard invoice.customer != nil,
+            invoice.quickBooksIdentityReviewMessage == nil,
+            canLinkToQuickBooksInvoiceDocument,
             invoiceID == invoice.id &&
             invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
-            customerMatches(invoice.customer),
+            customer === invoice.customer,
+            serviceCallID == nil || invoice.serviceCallID == nil || serviceCallID == invoice.serviceCallID,
             let reference = quickBooksInvoiceReference(for: invoice) else {
             return false
         }
@@ -454,10 +457,13 @@ final class ServiceDocumentAttachment {
     }
 
     func canBePendingQuickBooksInvoiceAttachment(for invoice: Invoice) -> Bool {
-        guard canLinkToQuickBooksInvoiceDocument,
+        guard invoice.customer != nil,
+            invoice.quickBooksIdentityReviewMessage == nil,
+            canLinkToQuickBooksInvoiceDocument,
             (invoiceID == nil || invoiceID == invoice.id) &&
             invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
-            customerMatches(invoice.customer),
+            customer === invoice.customer,
+            serviceCallID == nil || invoice.serviceCallID == nil || serviceCallID == invoice.serviceCallID,
             let reference = quickBooksInvoiceReference(for: invoice) else {
             return false
         }
@@ -465,10 +471,13 @@ final class ServiceDocumentAttachment {
     }
 
     func canUploadToQuickBooksEstimate(_ estimate: Estimate) -> Bool {
-        guard canLinkToQuickBooksEstimateDocument,
+        guard estimate.customer != nil,
+            canLinkToQuickBooksEstimateDocument,
             estimateID == estimate.id &&
             estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
-            customerMatches(estimate.customer),
+            customer === estimate.customer,
+            EstimateJobLineage.matches(jobID: serviceCallID, diagnosticJobID: estimate.serviceCallID,
+                                      scheduledJobID: estimate.scheduledServiceCallID),
             let reference = quickBooksEstimateReference(for: estimate) else {
             return false
         }

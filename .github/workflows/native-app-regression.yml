@@ -1,0 +1,238 @@
+
+name: Native app regression
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-app-regression-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.name }} native tests
+    runs-on: macos-26
+    timeout-minutes: ${{ matrix.platform == 'iPad' && 90 || 45 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: iPad 1 of 2
+            platform: iPad
+            shard: 0
+          - name: iPad 2 of 2
+            platform: iPad
+            shard: 1
+          - name: Mac
+            platform: Mac
+            shard: 0
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      CI_PLATFORM: ${{ matrix.platform }}
+      CI_SHARD: ${{ matrix.shard }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Verify pinned Xcode and shared scheme
+        run: |
+          mkdir -p "$RUNNER_TEMP/native-results"
+          xcodebuild -version
+          xcodebuild -list -json -project "GunnAire Ops.xcodeproj" |
+            tee "$RUNNER_TEMP/native-results/project.json" |
+            jq -e '.project.schemes | index("GunnAire Ops") != null'
+
+      - name: Prepare the pinned iPad simulator
+        if: matrix.platform == 'iPad'
+        timeout-minutes: 10
+        run: bash Tools/prepare_ci_ipad.sh
+
+      - name: Run app logic and selected iPad interface regressions
+        run: |
+          selectors=(-only-testing:"GunnAire OpsTests")
+          if [[ "$CI_PLATFORM" == "iPad" ]]; then
+            if [[ ! "${CI_IPAD_UDID:-}" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]]; then
+              echo "::error::The pinned iPad simulator has not been prepared."
+              exit 64
+            fi
+            destination="platform=iOS Simulator,id=$CI_IPAD_UDID"
+            if [[ "$CI_SHARD" != "0" && "$CI_SHARD" != "1" ]]; then
+              exit 64
+            fi
+            index=0
+            for test in \
+              testInvoiceWorkspaceOpensWithoutTerminating \
+              testMailWorkspaceUsesASimpleInboxInterface \
+              testMailSendFailureKeepsTheEditableDraftAndInboxSimple \
+              testMailUnconfirmedSendRetainsDraftWithoutOfferingDuplicateSend \
+              testMailAttachmentPreviewAndForwardRetainTheOriginalFile \
+              testMailOlderMessagesSentAndArchiveHaveNaturalMailboxHandoffs \
+              testMailTrashRestoresTheOriginalMessageInsideTheApp \
+              testMailDraftWithAttachmentsSurvivesRelaunchAndExplicitDeletion \
+              testMailUncertainSendStaysReadOnlyAfterRelaunch \
+              testMailAutosavedDraftSurvivesTerminationWithoutClosingComposer \
+              testGoogleAccessRecoversOriginalApprovalAfterRelaunchAndReturnsToSettings \
+              testGoogleAccessShowsOnlyConfirmedPermissionsWithoutTechnicalDetails \
+              testSharedMailInboxReadsOriginalMessageAndReturnsNaturally \
+              testSharedMailLostSendRecoversOriginalAfterRelaunchWithoutAnotherCopy \
+              testCustomerAccountStatementGeneratesFromTheExistingFilesWorkspace \
+              testCustomerSyncReviewCancelsOnlyUnsentProposalAndReturnsToOriginalCustomer \
+              testCustomerSyncReviewRecoversOriginalLinkWithoutAnotherCustomerCreate \
+              testJobBillingReviewUsesSavedCrewAndReturnsToTheSameJob \
+              testJobBillingReviewRecoversLostReplyWithoutAnotherApproval \
+              testTaxAddressReviewKeepsDraftPricesAndReturnsToBilling \
+              testExistingQuickBooksLinkReviewCancelsAndReturnsToManagement \
+              testExistingQuickBooksLinkReviewRecoversConfirmedDecisionWithoutAnotherPost \
+              testExistingQuickBooksLinkReviewCancelsAfterReconnection \
+              testExistingQuickBooksLinksOfferOfflineRecoveryWithoutDeviceOAuth \
+              testUnverifiedBusinessRoleOffersRecoveryWithoutAdministratorWorkspaces \
+              testStaffCloudKitRequestRecoversAfterRelaunchWithoutOpeningAnotherWorkspace \
+              testStaffCloudKitAdministratorReviewReturnsToSettingsAndRetainsOriginalInvitation \
+              testNativeBillingReviewCancelsUnsentProposalAndReturnsToOriginalInvoice \
+              testNativeBillingBundleReviewShowsRepeatedComponentsAndCancelsOriginalProposal \
+              testNativeBillingReviewRecoversAcceptedInvoiceWithoutPublishingAgain \
+              testMilestoneBillingReviewOpensOriginalInvoiceAndReturnsWithoutDuplicating \
+              testMilestoneBillingReviewRetainsDraftWhileOriginalCloudKitRecordIsMissing \
+              testOfficeRetainsUnusedMilestoneDraftAndReopensOriginalFromInvoices \
+              testRetainedMilestoneScheduleCollectsTheOriginalInvoice \
+              testRetainedMilestoneDocumentationQueueCollectsTheOriginalInvoice \
+              testDocumentationQueueShowsUnresolvedCloudKitBillingWithoutClaimingPaid \
+              testDocumentationQueueRetainsJobsWhileTheirCustomersSync \
+              testDocumentationBillingReviewReturnsToTheOriginalWorkspace \
+              testReceiptJobAndTransactionChangesKeepAttachmentTypeAndIDTogether \
+              testReceiptsBillsUsesRoleAwareOperationalWorkspaces \
+              testOriginalFileRecoverySurvivesLostReplyRelaunchAndExportCancellation \
+              testOriginalFileCancellationRetainsBytesAndCannotResendAfterRelaunch \
+              testOriginalFileRecoveryRequiresVerifiedBusinessAccess \
+              testSharedOriginalFileRestoresAndExportsOfflineAfterRelaunchWithoutResending \
+              testSharedOriginalHistoryOfflineFailureReturnsToRecoveryWithoutAnEmptySuccess \
+              testFieldCollectionPromptOpensAuthorizedInvoiceFromAnyWorkspace \
+              testFinancialContactlessGuideKeepsVerificationBesideTheHandoff \
+              testSharedContactlessReviewHandlesOfflineMissingNumberAndOpenPayment \
+              testContactlessCollectionExplainsQuickBooksPublicationAndRecoversToVerifiedEntry \
+              testManagementBillingComposerCancelsWithoutCreatingOrSending \
+              testManagementBillingComposerSavesOriginalInvoiceAndEstimateOffline \
+              testSharedTimeReviewCancelsOnlyUnsentProposalAndReturnsToApprovedHours \
+              testSharedTimeWorkerReviewConfirmsReturnedWorkerAndReturnsToOriginalTime \
+              testSharedTimeLostConfirmationRecoversAfterRelaunchWithoutAnotherPublish \
+              testAdministratorCanMapTechnicianToAnExplicitQuickBooksTimeWorker \
+              testInvoiceComposerBrowsesCategoriesEditsRepeatedBundleMembersAndSavesOriginal \
+              testEstimateBundleComposerSavesEditsWithKeyboardActive \
+              testBundleComposerSavesAfterHardwareKeyboardSelectAll \
+              testAdministratorCreatesExactLockedProgressInvoiceFromApprovedProjectMilestone \
+              testAdministratorCreatesLockedBundleMilestoneInvoiceAndReturnsToOriginalJob \
+              testBillingIdentityReviewKeepsReportsSafeAndHandsOffToInvoices \
+              testCatalogPublicationReviewCancelsOnlyAnUnsentProposalAndReturnsToCatalog \
+              testAdministratorCreatesInventoryOfflineAndReopensExactSetup \
+              testPricebookReviewCorrectsFieldItemBeforeApprovalWithoutLosingDocumentPriority \
+              testScheduleDeletionRetainsTheConfirmedTargetAndProtectsBilledJobs \
+              testUnreconciledStatementExplainsReviewAndHandsOffToInvoices \
+              testReceiptRejectsAnotherJobsScheduledEstimateAndRecoversOriginalTarget \
+              testCatalogEditingControlsStayInsideTheSheetAcrossRotation; do
+              if (( index % 2 == CI_SHARD )); then
+                selectors+=("-only-testing:GunnAire OpsUITests/GunnAire_OpsUITests/$test")
+              fi
+              index=$((index + 1))
+            done
+            if [[ "$CI_SHARD" == "0" ]]; then
+              selectors+=("-only-testing:GunnAire OpsUITests/LoadSightIntegrationUITests/testEmbeddedWorkspaceOpensFromEstimates")
+              selectors+=("-only-testing:GunnAire OpsUITests/LoadSightIntegrationUITests/testCustomerJobLinkAndUnsavedProjectGuard")
+              selectors+=("-only-testing:GunnAire OpsUITests/LoadSightIntegrationUITests/testLocalDraftRecoversAfterTermination")
+            fi
+          else
+            destination="platform=macOS,variant=Mac Catalyst,arch=arm64"
+          fi
+
+          xcodebuild \
+            -project "GunnAire Ops.xcodeproj" \
+            -scheme "GunnAire Ops" \
+            -configuration Debug \
+            -destination "$destination" \
+            -destination-timeout 120 \
+            -derivedDataPath "$RUNNER_TEMP/native-derived" \
+            -resultBundlePath "$RUNNER_TEMP/native-results/$CI_PLATFORM.xcresult" \
+            -parallel-testing-enabled NO \
+            "${selectors[@]}" \
+            CODE_SIGNING_ALLOWED=NO test 2>&1 |
+            tee "$RUNNER_TEMP/native-results/test.log"
+
+          xcrun xcresulttool get test-results summary \
+            --path "$RUNNER_TEMP/native-results/$CI_PLATFORM.xcresult" |
+            tee "$RUNNER_TEMP/native-results/summary.json" |
+            jq -e '.failedTests == 0 and .passedTests > 0'
+
+          xcrun xcresulttool get test-results tests \
+            --path "$RUNNER_TEMP/native-results/$CI_PLATFORM.xcresult" |
+            tee "$RUNNER_TEMP/native-results/tests.json" > /dev/null
+          python3 Tools/verify_native_test_execution.py \
+            --summary "$RUNNER_TEMP/native-results/summary.json" \
+            --tests "$RUNNER_TEMP/native-results/tests.json" \
+            -- "${selectors[@]}"
+
+      - name: Verify largest-text catalog editing
+        if: matrix.platform == 'iPad' && matrix.shard == 1
+        run: |
+          if [[ ! "${CI_IPAD_UDID:-}" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]]; then
+            exit 64
+          fi
+          original_size=$(xcrun simctl ui "$CI_IPAD_UDID" content_size)
+          case "$original_size" in
+            extra-small|small|medium|large|extra-large|extra-extra-large|extra-extra-extra-large|accessibility-medium|accessibility-large|accessibility-extra-large|accessibility-extra-extra-large|accessibility-extra-extra-extra-large) ;;
+            *) exit 70 ;;
+          esac
+          trap 'xcrun simctl ui "$CI_IPAD_UDID" content_size "$original_size"' EXIT
+          xcrun simctl ui "$CI_IPAD_UDID" content_size accessibility-extra-extra-extra-large
+          evidence="$RUNNER_TEMP/native-results/catalog-large-text"
+          mkdir -p "$evidence"
+          xcrun simctl ui "$CI_IPAD_UDID" content_size | tee "$evidence/content-size.txt"
+          selectors=(
+            '-only-testing:GunnAire OpsUITests/GunnAire_OpsUITests/testAdministratorCreatesInventoryOfflineAndReopensExactSetup'
+            '-only-testing:GunnAire OpsUITests/GunnAire_OpsUITests/testCatalogEditingControlsStayInsideTheSheetAcrossRotation'
+          )
+          xcodebuild -project "GunnAire Ops.xcodeproj" -scheme "GunnAire Ops" -configuration Debug \
+            -destination "platform=iOS Simulator,id=$CI_IPAD_UDID" -destination-timeout 120 \
+            -derivedDataPath "$RUNNER_TEMP/native-derived" -resultBundlePath "$evidence/iPad.xcresult" \
+            -parallel-testing-enabled NO "${selectors[@]}" CODE_SIGNING_ALLOWED=NO test 2>&1 |
+            tee "$evidence/test.log"
+          xcrun xcresulttool get test-results summary --path "$evidence/iPad.xcresult" > "$evidence/summary.json"
+          xcrun xcresulttool get test-results tests --path "$evidence/iPad.xcresult" > "$evidence/tests.json"
+          python3 Tools/verify_native_test_execution.py --summary "$evidence/summary.json" \
+            --tests "$evidence/tests.json" -- "${selectors[@]}"
+
+      - name: Build universal Mac Release
+        if: matrix.platform == 'Mac'
+        run: |
+          xcodebuild \
+            -project "GunnAire Ops.xcodeproj" \
+            -scheme "GunnAire Ops" \
+            -configuration Release \
+            -destination "generic/platform=macOS,variant=Mac Catalyst" \
+            -derivedDataPath "$RUNNER_TEMP/native-derived" \
+            ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO build 2>&1 |
+            tee "$RUNNER_TEMP/native-results/release.log"
+          xcrun lipo \
+            "$RUNNER_TEMP/native-derived/Build/Products/Release-maccatalyst/GunnAire Ops.app/Contents/MacOS/GunnAire Ops" \
+            -verify_arch arm64 x86_64
+
+      - name: Retain native test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.platform }}-${{ matrix.shard }}-native-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-results/
+          if-no-files-found: warn
+          retention-days: 7

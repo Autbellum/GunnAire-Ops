@@ -118,10 +118,16 @@ final class QuickBooksAccountingConfigurationStore: ObservableObject {
     @Published private(set) var statusMessage: String?
 
     private let defaults: UserDefaults
+    private let fetchConfiguration: () async throws -> BackendQuickBooksAccountingConfiguration?
     private var loadingContext: String?
+    private var refreshID: UUID?
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard,
+         fetchConfiguration: @escaping () async throws -> BackendQuickBooksAccountingConfiguration? = {
+             try await GunnAireBackendService.fetchQuickBooksAccountingConfiguration()
+         }) {
         self.defaults = defaults
+        self.fetchConfiguration = fetchConfiguration
     }
 
     func configuration(
@@ -144,8 +150,10 @@ final class QuickBooksAccountingConfigurationStore: ObservableObject {
     func refresh(
         realmID: String?,
         environment: String,
-        force: Bool = false
+        force: Bool = false,
+        validate: () throws -> Void = {}
     ) async {
+        do { try validate() } catch { return }
         guard let realmID = normalizedRealmID(realmID) else {
             statusMessage = QuickBooksAccountingConfigurationError.missingConnectionContext.localizedDescription
             return
@@ -154,15 +162,22 @@ final class QuickBooksAccountingConfigurationStore: ObservableObject {
             return
         }
         let context = cacheKey(realmID: realmID, environment: environment)
-        guard loadingContext != context else { return }
+        guard force || loadingContext != context else { return }
+        let requestID = UUID()
+        refreshID = requestID
         loadingContext = context
         isLoading = true
         defer {
-            isLoading = false
-            loadingContext = nil
+            if refreshID == requestID {
+                isLoading = false
+                loadingContext = nil
+                refreshID = nil
+            }
         }
         do {
-            let remote = try await GunnAireBackendService.fetchQuickBooksAccountingConfiguration()
+            let remote = try await fetchConfiguration()
+            try validate()
+            guard refreshID == requestID else { return }
             if let remote {
                 guard remote.matches(realmID: realmID, environment: environment), remote.isComplete else {
                     throw QuickBooksAccountingConfigurationError.contextMismatch
@@ -176,6 +191,8 @@ final class QuickBooksAccountingConfigurationStore: ObservableObject {
                 statusMessage = QuickBooksAccountingConfigurationError.unavailable.localizedDescription
             }
         } catch {
+            do { try validate() } catch { return }
+            guard refreshID == requestID else { return }
             statusMessage = error.localizedDescription
         }
     }

@@ -56,7 +56,7 @@ struct ScheduleView: View {
     @State private var navigationPath = NavigationPath()
     @State private var isSyncingGoogleCalendar = false
     @State private var syncMessage: String?
-    @State private var deleteConfirmationCall: ServiceCall?
+    @State private var deleteConfirmationCall: ScheduleDeletionConfirmation?
     @State private var jobSearchText = ""
     @State private var showingNewRequestSheet = false
     @State private var showingAvailabilityBlocks = false
@@ -196,8 +196,8 @@ struct ScheduleView: View {
     private var quickBooksAttentionPayments: [Payment] {
         payments
             .filter { payment in
-                payment.needsQuickBooksAttention &&
-                callsForSignedInUser.contains { $0.linkedInvoiceID == payment.invoice.id }
+                guard payment.needsQuickBooksAttention, let invoiceID = payment.invoice?.id else { return false }
+                return callsForSignedInUser.contains { invoice(for: $0)?.id == invoiceID }
             }
             .sorted { $0.date > $1.date }
     }
@@ -216,8 +216,9 @@ struct ScheduleView: View {
 
     private var callsForSignedInUser: [ServiceCall] {
         let email = AppIdentity.currentEmail
-        let visibleIDs = AppAccess.visibleServiceCallIDs(email: email, users: users, serviceCalls: serviceCalls, technicians: technicians)
-        return serviceCalls.filter { visibleIDs.contains($0.id) }
+        let liveCalls = serviceCalls.filter { ScheduleCallIdentity.isLive($0, context: modelContext) }
+        let visibleIDs = AppAccess.visibleServiceCallIDs(email: email, users: users, serviceCalls: liveCalls, technicians: technicians)
+        return liveCalls.filter { visibleIDs.contains($0.id) }
     }
 
     private var nextFieldRouteCall: ServiceCall? {
@@ -340,19 +341,14 @@ struct ScheduleView: View {
                             }
                         }
 
-                        if let syncMessage {
-                            Text(syncMessage)
+                        if let message = googleAuth.calendarSyncMessage ?? syncMessage {
+                            Text(message)
+                                .accessibilityIdentifier("ScheduleSyncStatus")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 2)
                         }
 
-                        if googleAuth.isAuthenticated {
-                            Text("If Google Calendar sync was connected before the calendar permission update, disconnect Google in Settings and reconnect it once so the app can request fresh calendar permission.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 2)
-                        }
                     }
                 }
                 .padding(.horizontal)
@@ -562,19 +558,22 @@ struct ScheduleView: View {
                         get: { deleteConfirmationCall != nil },
                         set: { if !$0 { deleteConfirmationCall = nil } }
                     ),
-                    titleVisibility: .visible
-                ) {
+                    titleVisibility: .visible,
+                    presenting: deleteConfirmationCall
+                ) { confirmation in
                     Button("Delete Event", role: .destructive) {
-                        if let call = deleteConfirmationCall {
-                            deleteCall(call)
-                        }
                         deleteConfirmationCall = nil
+                        guard let call = confirmation.identity.resolve(in: callsForSignedInUser, context: modelContext) else {
+                            syncMessage = "This appointment changed or is no longer available. Review the current schedule."
+                            return
+                        }
+                        deleteCall(call)
                     }
                     Button("Cancel", role: .cancel) {
                         deleteConfirmationCall = nil
                     }
-                } message: {
-                    Text("This removes the event from the app. If it came from Google Calendar, sync will remember not to import it again.")
+                } message: { confirmation in
+                    Text("Delete \(confirmation.title)? App-managed Google events are checked first. Jobs with work or billing history must be cancelled instead.")
                 }
             }
         }
@@ -910,7 +909,15 @@ struct ScheduleView: View {
     }
 
     private var snapshotSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        // Materialize every preview value before constructing lazy row closures.
+        // Old closures may be rendered after a successful SwiftData deletion.
+        let nextID = nextFieldRouteCall?.id
+        let previews = snapshotCalls.compactMap { call in
+            ScheduleCallPreview(call: call, context: modelContext,
+                isNextStop: call.id == nextID && hasNavigableAddress(for: call),
+                title: displayTitle, subtitle: displaySubtitle)
+        }
+        return VStack(alignment: .leading, spacing: 12) {
             HStack {
                 sectionTitle("Upcoming Snapshot")
                 Spacer()
@@ -921,23 +928,24 @@ struct ScheduleView: View {
                 }
             }
 
-            if snapshotCalls.isEmpty {
+            if previews.isEmpty {
                 Text("No upcoming jobs scheduled.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(snapshotCalls) { job in
+                ForEach(previews) { job in
                     HStack(spacing: 10) {
                         Button {
-                            selectedDate = Calendar.current.startOfDay(for: job.scheduledDate)
-                            navigationPath.append(job)
+                            guard let call = job.identity.resolve(in: callsForSignedInUser, context: modelContext) else { return }
+                            selectedDate = Calendar.current.startOfDay(for: call.scheduledDate)
+                            navigationPath.append(call)
                         } label: {
                             HStack(spacing: 12) {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(displayTitle(for: job))
+                                    Text(job.title)
                                         .font(.subheadline.weight(.semibold))
                                         .foregroundStyle(.primary)
-                                    Text(displaySubtitle(for: job))
+                                    Text(job.subtitle)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
@@ -949,10 +957,12 @@ struct ScheduleView: View {
                         }
                         .buttonStyle(.plain)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("SchedulePreview-\(job.id.uuidString)")
 
-                        if job.id == nextFieldRouteCall?.id, hasNavigableAddress(for: job) {
+                        if job.isNextStop {
                             Button {
-                                openMaps(for: job)
+                                guard let call = job.identity.resolve(in: callsForSignedInUser, context: modelContext) else { return }
+                                openMaps(for: call)
                             } label: {
                                 ViewThatFits(in: .horizontal) {
                                     Label("Next Stop", systemImage: "car.fill")
@@ -967,7 +977,7 @@ struct ScheduleView: View {
                             .accessibilityIdentifier("NavigateNextStop")
                         }
                     }
-                    if job.id != snapshotCalls.last?.id {
+                    if job.id != previews.last?.id {
                         Divider()
                     }
                 }
@@ -1410,7 +1420,7 @@ struct ScheduleView: View {
     private func selectedDayCallRow(for call: ServiceCall) -> some View {
         serviceCallCard(for: call)
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                if canCollectFieldPayments, let invoice = invoice(for: call), !isInvoicePaid(invoice) {
+                if canCollectFieldPayments, let invoice = invoice(for: call), invoice.isReadyForPaymentCollection, !isInvoicePaid(invoice) {
                     Button {
                         openDocumentation(call, at: tapToPayReady ? .tapToPay : .collectPayment)
                     } label: {
@@ -1472,7 +1482,7 @@ struct ScheduleView: View {
                     .accessibilityIdentifier("EditSchedule-\(call.id.uuidString)")
 
                     Button(role: .destructive) {
-                        deleteConfirmationCall = call
+                        deleteConfirmationCall = ScheduleDeletionConfirmation(call: call, context: modelContext)
                     } label: {
                         Image(systemName: "trash")
                             .frame(width: 34, height: 34)
@@ -1510,7 +1520,7 @@ struct ScheduleView: View {
                     .accessibilityIdentifier("OpenDocumentation-\(call.id.uuidString)")
                 }
 
-                if canCollectFieldPayments, let invoice = invoice(for: call), !isInvoicePaid(invoice) {
+                if canCollectFieldPayments, let invoice = invoice(for: call), invoice.isReadyForPaymentCollection, !isInvoicePaid(invoice) {
                     Button(tapToPayReady ? "Pay" : "Collect") {
                         openDocumentation(call, at: tapToPayReady ? .tapToPay : .collectPayment)
                     }
@@ -1631,7 +1641,9 @@ struct ScheduleView: View {
                     Label("+\(call.additionalTechnicianIDs.count) crew", systemImage: "person.2.fill")
                 }
                 if call.googleEventID != nil {
-                    Label("Google", systemImage: "calendar.badge.checkmark")
+                    // A retained link can also be an unconfirmed reservation.
+                    // Its existence is not fresh provider-sync evidence.
+                    Label("Google", systemImage: "calendar")
                 }
                 if call.documentationStartedAt != nil {
                     Label("Started", systemImage: "doc.text")
@@ -1649,15 +1661,18 @@ struct ScheduleView: View {
                     Label(estimate.status.capitalized, systemImage: "list.clipboard.fill")
                 }
                 if (isAdminUser || canCollectFieldPayments), let invoice = invoice(for: call) {
-                    Label(invoice.status.capitalized, systemImage: isInvoicePaid(invoice) ? "checkmark.circle.fill" : "creditcard.fill")
+                    Label(invoice.paymentCollectionBlockedMessage == nil
+                          ? Invoice.resolvedStatus(for: invoice, payments: payments).capitalized : "Invoice review",
+                          systemImage: invoice.paymentCollectionBlockedMessage != nil ? "exclamationmark.triangle.fill"
+                          : isInvoicePaid(invoice) ? "checkmark.circle.fill" : "creditcard.fill")
+                } else if (isAdminUser || canCollectFieldPayments), call.linkedInvoiceID != nil {
+                    Label("Invoice pending sync", systemImage: "icloud")
                 }
                 if (isAdminUser || canCollectFieldPayments) && isCollectionOverdue(for: call) {
                     Label("Overdue", systemImage: "exclamationmark.triangle.fill")
                 }
                 if (isAdminUser || canCollectFieldPayments), let balanceDue = balanceDue(for: call), balanceDue > 0 {
                     Text("Due \(balanceDue, format: .currency(code: "USD"))")
-                } else if (isAdminUser || canCollectFieldPayments) && call.linkedInvoiceID != nil {
-                    Text("Paid")
                 }
             }
             .font(.caption2)
@@ -1753,63 +1768,26 @@ struct ScheduleView: View {
     }
 
     private func deleteCall(_ call: ServiceCall) {
-        guard AppAccess.canPerformScheduleMutation(
-            .deleteServiceCall,
-            email: AppIdentity.currentEmail,
-            users: users
-        ) else {
-            syncMessage = "Dispatcher or administrator access is required to delete schedule entries."
-            return
-        }
-        let shouldTryGoogleDelete = GoogleCalendarScheduleSync.shouldAttemptManagedCalendarDeletion(for: call)
-        if call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-            GoogleCalendarScheduleSync.markCalendarEventDeleted(calendarID: call.googleCalendarID, eventID: call.googleEventID)
-        }
-
-        let calendarID = call.googleCalendarID
-        let eventID = call.googleEventID
-        let hasGoogleEventID = eventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-        let isLocallyMarkedManagedByApp = call.googleEventManagedByApp
-        modelContext.delete(call)
-        try? modelContext.save()
-        syncMessage = "Event deleted from the app."
-
-        guard shouldTryGoogleDelete,
-              googleAuth.isAuthenticated,
-              let eventID,
-              !eventID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return
-        }
-
-        googleAuth.fetchCalendarEvent(calendarID: calendarID ?? "primary", eventID: eventID) { fetchResult in
-            switch fetchResult {
-            case .failure(let error):
-                DispatchQueue.main.async {
-                    syncMessage = "Event deleted from the app. Google Calendar was not changed: \(error.localizedDescription)"
-                }
-            case .success(let remoteEvent):
-                guard GoogleCalendarScheduleSync.shouldDeleteExistingGoogleCalendarEvent(
-                    hasGoogleEventID: hasGoogleEventID,
-                    isLocallyMarkedManagedByApp: isLocallyMarkedManagedByApp,
-                    remoteEvent: remoteEvent
-                ) else {
-                    DispatchQueue.main.async {
-                        syncMessage = "Event deleted from the app. Google-owned calendar details were left unchanged."
-                    }
+        do {
+            try GoogleCalendarWorkflow.requireDispatchAccess(context: modelContext, email: AppIdentity.currentEmail)
+            try GoogleCalendarScheduleSync.validateRemoval(call, context: modelContext)
+            if GoogleCalendarScheduleSync.shouldAttemptManagedCalendarDeletion(for: call) {
+                guard googleAuth.isAuthenticated else {
+                    syncMessage = "Reconnect Google before deleting this linked event. The appointment has been retained."
                     return
                 }
-                googleAuth.deleteCalendarEvent(calendarID: calendarID ?? "primary", eventID: eventID) { result in
-                    DispatchQueue.main.async {
-                        switch result {
-                        case .success:
-                            syncMessage = "Event deleted from the app and Google Calendar."
-                        case .failure(let error):
-                            syncMessage = "Event deleted from the app. Google Calendar did not delete it: \(error.localizedDescription)"
-                        }
+                syncMessage = "Checking the original Google Calendar event..."
+                GoogleCalendarScheduleSync.deleteImmediately(call: call, auth: googleAuth, modelContext: modelContext) { result in
+                    switch result {
+                    case .success(let message): syncMessage = message
+                    case .failure(let error): syncMessage = error.localizedDescription
                     }
                 }
+            } else {
+                try GoogleCalendarScheduleSync.removeLocalEntry(call, context: modelContext)
+                syncMessage = "Deleted the local calendar entry. Externally managed Google events were left unchanged."
             }
-        }
+        } catch { syncMessage = error.localizedDescription }
     }
 
     private func sectionTitle(_ title: String) -> some View {
@@ -1858,7 +1836,7 @@ struct ScheduleView: View {
             email: AppIdentity.currentEmail,
             users: users
         ) else {
-            syncMessage = "Dispatcher or administrator access is required to import Google Calendar appointments."
+            syncMessage = "Dispatcher or administrator access is required to sync Google Calendar appointments."
             return
         }
         guard googleAuth.isAuthenticated else {
@@ -1911,8 +1889,7 @@ struct ScheduleView: View {
     }
 
     private func invoice(for call: ServiceCall) -> Invoice? {
-        guard let invoiceID = call.linkedInvoiceID else { return nil }
-        return invoices.first { $0.id == invoiceID }
+        BillingMilestoneReconciliation.linkedInvoice(for: call, in: invoices, payments: payments)
     }
 
     private func estimate(for call: ServiceCall) -> Estimate? {
@@ -1921,7 +1898,7 @@ struct ScheduleView: View {
     }
 
     private func balanceDue(for call: ServiceCall) -> Double? {
-        guard let invoice = invoice(for: call) else { return nil }
+        guard let invoice = invoice(for: call), invoice.isReadyForPaymentCollection else { return nil }
         return Invoice.outstandingBalance(for: invoice, payments: payments)
     }
 
@@ -2370,8 +2347,11 @@ GunnAire
     }
 
     private func publishToGoogleCalendar(_ call: ServiceCall) {
-        guard googleAuth.isAuthenticated else { return }
-        try? modelContext.save()
+        do { try modelContext.save() }
+        catch {
+            googleAuth.calendarSyncMessage = "Appointment changes could not be saved. No Google update was sent."
+            return
+        }
         let signedInEmail = AppIdentity.currentEmail
         GoogleCalendarScheduleSync.exportImmediately(
             call: call,
@@ -2483,6 +2463,10 @@ GunnAire
     }
 
     private func assign(_ call: ServiceCall, to technician: Technician) {
+        assign(call, to: technician, reschedulingTo: nil)
+    }
+
+    private func assign(_ call: ServiceCall, to technician: Technician, reschedulingTo newStart: Date?) {
         guard AppAccess.canPerformScheduleMutation(
             .assignTechnician,
             email: AppIdentity.currentEmail,
@@ -2491,61 +2475,41 @@ GunnAire
             syncMessage = "Dispatcher or administrator access is required to assign technicians."
             return
         }
-        let previousTechnician = call.assignedTechnician?.name
+        let originalBilling: JobBillingTarget
+        do { originalBilling = try JobBillingTarget.capture(call, context: modelContext).1 }
+        catch { syncMessage = JobBillingDispatchError.changed.localizedDescription; return }
+        let originalTechnician = call.assignedTechnician
+        let originalCrew = call.additionalTechnicianIDs
+        let originalCalendar = call.googleCalendarID
+        let originalStart = call.scheduledDate
+        let previousTechnician = originalTechnician?.name
         call.assignedTechnician = technician
         var additionalCrew = call.additionalTechnicianIDs
         additionalCrew.remove(technician.id)
         call.additionalTechnicianIDs = additionalCrew
         let assignmentDetail = previousTechnician.map { "Reassigned from \($0) to \(technician.name)." } ?? "Assigned to \(technician.name)."
-        ServiceCallActivity.record(
+        let activity = ServiceCallActivity.record(
             for: call,
-            action: previousTechnician == nil ? "Technician assigned" : "Technician reassigned",
-            detail: assignmentDetail,
+            action: newStart == nil ? (previousTechnician == nil ? "Technician assigned" : "Technician reassigned") : "Assignment and schedule updated",
+            detail: assignmentDetail + (newStart.map { " Moved from \(originalStart.formatted(date: .abbreviated, time: .shortened)) to \($0.formatted(date: .abbreviated, time: .shortened))." } ?? ""),
             actorEmail: AppIdentity.currentEmail,
             in: modelContext
         )
-        if GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call) {
-            call.googleCalendarID = ServiceCalendarRouting.assignedCalendarID(for: technician)
-        }
-        guard GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call) else {
-            try? modelContext.save()
+        // Keep the selected calendar; staff delivery uses invitations rather
+        // than guessing write access to the newly assigned person's calendar.
+        if let newStart { call.scheduledDate = newStart }
+        do {
+            try JobBillingDispatch.shared.save(call, original: originalBilling, context: modelContext)
+        } catch {
+            call.assignedTechnician = originalTechnician
+            call.additionalTechnicianIDs = originalCrew
+            call.googleCalendarID = originalCalendar
+            call.scheduledDate = originalStart
+            modelContext.delete(activity)
+            syncMessage = (error as? JobBillingDispatchError)?.localizedDescription ?? JobBillingDispatchError.save.localizedDescription
             return
         }
-        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(call)
-        publishToGoogleCalendar(call)
-    }
-
-    private func assign(_ call: ServiceCall, to technician: Technician, reschedulingTo newStart: Date) {
-        guard AppAccess.canPerformScheduleMutation(
-            .assignTechnician,
-            email: AppIdentity.currentEmail,
-            users: users
-        ) else {
-            syncMessage = "Dispatcher or administrator access is required to assign or reschedule technicians."
-            return
-        }
-        let originalStart = call.scheduledDate
-        let previousTechnician = call.assignedTechnician?.name
-        call.assignedTechnician = technician
-        var additionalCrew = call.additionalTechnicianIDs
-        additionalCrew.remove(technician.id)
-        call.additionalTechnicianIDs = additionalCrew
-        if GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call) {
-            call.googleCalendarID = ServiceCalendarRouting.assignedCalendarID(for: technician)
-        }
-        call.scheduledDate = newStart
-        let technicianDetail = previousTechnician.map { "Reassigned from \($0) to \(technician.name)." } ?? "Assigned to \(technician.name)."
-        ServiceCallActivity.record(
-            for: call,
-            action: "Assignment and schedule updated",
-            detail: "\(technicianDetail) Moved from \(originalStart.formatted(date: .abbreviated, time: .shortened)) to \(newStart.formatted(date: .abbreviated, time: .shortened)).",
-            actorEmail: AppIdentity.currentEmail,
-            in: modelContext
-        )
-        guard GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call) else {
-            try? modelContext.save()
-            return
-        }
+        guard GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call) else { return }
         GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(call)
         publishToGoogleCalendar(call)
     }

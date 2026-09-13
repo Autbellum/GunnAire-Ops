@@ -2,7 +2,7 @@ import Foundation
 import SwiftData
 import SwiftUI
 
-enum FieldFormQuestionKind: String, Codable, CaseIterable, Identifiable {
+nonisolated enum FieldFormQuestionKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case toggle
     case text
     case choice
@@ -26,7 +26,7 @@ enum FieldFormQuestionKind: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-struct FieldFormQuestion: Codable, Identifiable, Equatable {
+nonisolated struct FieldFormQuestion: Codable, Identifiable, Equatable, Sendable {
     var id: UUID = UUID()
     var label: String
     var kind: FieldFormQuestionKind
@@ -34,7 +34,7 @@ struct FieldFormQuestion: Codable, Identifiable, Equatable {
     var choices: [String] = []
 }
 
-struct FieldFormAnswerRow: Identifiable, Equatable {
+nonisolated struct FieldFormAnswerRow: Codable, Identifiable, Equatable, Sendable {
     let questionID: UUID
     let label: String
     let kind: FieldFormQuestionKind
@@ -46,7 +46,12 @@ struct FieldFormAnswerRow: Identifiable, Equatable {
     var displayAnswer: String {
         switch kind {
         case .toggle:
-            return answer == "true" ? "Yes" : "No"
+            switch answer {
+            case "true": return "Yes"
+            case "false": return "No"
+            case "": return "Not answered"
+            default: return "Needs review"
+            }
         case .text, .choice:
             let value = answer.trimmingCharacters(in: .whitespacesAndNewlines)
             return value.isEmpty ? "Not answered" : value
@@ -54,16 +59,26 @@ struct FieldFormAnswerRow: Identifiable, Equatable {
     }
 }
 
-private struct FieldFormAnswerSnapshot {
-    let version: Int
-    let rows: [FieldFormAnswerRow]
-}
-
 enum FieldFormCompletionPolicy {
     static func validationIssue(
         questions: [FieldFormQuestion],
         answers: [UUID: String]
     ) -> String? {
+        guard !questions.isEmpty, Set(questions.map(\.id)).count == questions.count else {
+            return "This form needs review before it can be completed. Ask the office to revise it."
+        }
+        guard Set(answers.keys).isSubset(of: Set(questions.map(\.id))) else {
+            return "Some answers do not belong to this form. Reopen the original form before saving."
+        }
+        for question in questions {
+            let answer = answers[question.id] ?? ""
+            if question.kind == .toggle, !["", "true", "false"].contains(answer) {
+                return "Review the confirmation for “\(question.label)” before saving."
+            }
+            if question.kind == .choice, !answer.isEmpty, !question.choices.contains(answer) {
+                return "Choose a listed answer for “\(question.label)” before saving."
+            }
+        }
         let missing = questions.compactMap { question -> String? in
             guard question.required else { return nil }
             let answer = answers[question.id]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -105,6 +120,9 @@ enum FieldFormTemplatePolicy {
         guard !questions.isEmpty else {
             return "Add at least one field."
         }
+        guard Set(questions.map(\.id)).count == questions.count else {
+            return "Each field needs its own identity. Remove the duplicate field and add it again."
+        }
         guard questions.allSatisfy({ !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
             return "Every field needs a label."
         }
@@ -139,7 +157,7 @@ nonisolated private struct FieldFormAssignmentEnvelope: Codable, Sendable {
 
 @Model
 final class FieldFormTemplate {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var title: String = ""
     var questionsJSON: String = "[]"
     var applicableServiceTypesJSON: String?
@@ -167,30 +185,49 @@ final class FieldFormTemplate {
     }
 
     var questions: [FieldFormQuestion] {
-        Self.decode(questionsJSON) ?? []
+        (try? FieldFormPayload.questions(questionsJSON)) ?? []
     }
 
     var applicableServiceTypes: Set<ServiceCallType> {
-        if let envelope = Self.assignmentEnvelope(from: applicableServiceTypesJSON) {
-            return Set(envelope.serviceTypes.compactMap(ServiceCallType.init(rawValue:)))
-        }
-        return Set((Self.decode(applicableServiceTypesJSON) ?? []).compactMap(ServiceCallType.init(rawValue:)))
+        (try? FieldFormPayload.assignment(applicableServiceTypesJSON).serviceTypes) ?? []
     }
 
     var requiresCompletionForCloseout: Bool {
-        Self.assignmentEnvelope(from: applicableServiceTypesJSON)?.requiredForCloseout ?? false
+        (try? FieldFormPayload.assignment(applicableServiceTypesJSON).required) ?? false
     }
 
     var hasVersionedAssignment: Bool {
-        Self.assignmentEnvelope(from: applicableServiceTypesJSON) != nil
+        (try? FieldFormPayload.assignment(applicableServiceTypesJSON).isLegacy) == false
+    }
+
+    var dataReviewIssue: String? {
+        guard (try? FieldFormPayload.assignment(applicableServiceTypesJSON)) != nil,
+              let decoded = try? FieldFormPayload.questions(questionsJSON),
+              FieldFormTemplatePolicy.validationIssue(title: title, questions: decoded) == nil else {
+            return "This form needs office review. Its original setup has been kept; revise it before use."
+        }
+        return nil
     }
 
     func applies(to type: ServiceCallType) -> Bool {
-        let types = applicableServiceTypes
+        guard let assignment = try? FieldFormPayload.assignment(applicableServiceTypesJSON) else { return false }
+        let types = assignment.serviceTypes
         return types.isEmpty || types.contains(type)
     }
 
+    func isListed(for type: ServiceCallType) -> Bool {
+        // Keep an unreadable assignment reachable for review, not silently
+        // hidden behind an empty "no forms" state.
+        applies(to: type) || (try? FieldFormPayload.assignment(applicableServiceTypesJSON)) == nil
+    }
+
+    func closeoutRequirementApplies(to type: ServiceCallType) -> Bool {
+        guard let assignment = try? FieldFormPayload.assignment(applicableServiceTypesJSON) else { return true }
+        return assignment.required && (assignment.serviceTypes.isEmpty || assignment.serviceTypes.contains(type))
+    }
+
     var scopeSummary: String {
+        guard dataReviewIssue == nil else { return "Setup needs review" }
         let types = applicableServiceTypes
         guard !types.isEmpty else { return "All job types" }
         return ServiceCallType.allCases
@@ -299,7 +336,7 @@ final class FieldFormTemplate {
             if let installed = existingByTitle[key]?.sorted(by: { $0.createdAt > $1.createdAt }).first {
                 // Upgrade only the legacy array payload. Once an administrator
                 // saves a versioned assignment, startup never overwrites it.
-                if !installed.hasVersionedAssignment {
+                if (try? FieldFormPayload.assignment(installed.applicableServiceTypesJSON).isLegacy) == true {
                     installed.updateAssignment(
                         serviceTypes: starter.applicableServiceTypes,
                         requiredForCloseout: true
@@ -314,14 +351,6 @@ final class FieldFormTemplate {
     private static func normalizedStarterTitle(_ title: String) -> String {
         title.trimmingCharacters(in: .whitespacesAndNewlines)
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-    }
-
-    private static func assignmentEnvelope(from value: String?) -> FieldFormAssignmentEnvelope? {
-        guard let envelope: FieldFormAssignmentEnvelope = decode(value),
-              envelope.version == FieldFormAssignmentEnvelope.currentVersion else {
-            return nil
-        }
-        return envelope
     }
 
     private static func assignmentJSON(
@@ -343,15 +372,11 @@ final class FieldFormTemplate {
         return String(data: data, encoding: .utf8)
     }
 
-    private static func decode<T: Decodable>(_ value: String?) -> T? {
-        guard let value, let data = value.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(T.self, from: data)
-    }
 }
 
 @Model
 final class FieldFormResponse {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var serviceCallID: UUID = UUID()
     var templateID: UUID = UUID()
     var templateTitle: String = ""
@@ -364,33 +389,34 @@ final class FieldFormResponse {
         self.serviceCallID = serviceCallID
         self.templateID = template.id
         self.templateTitle = template.title
-        let snapshot = FieldFormAnswerSnapshot(
-            version: 1,
-            rows: FieldFormCompletionPolicy.answerRows(questions: template.questions, answers: answers)
+        let snapshot = FieldFormPayload.Snapshot(
+            version: 2,
+            rows: FieldFormCompletionPolicy.answerRows(questions: template.questions, answers: answers),
+            questions: template.questions
         )
-        self.answersJSON = Self.encodeSnapshot(snapshot) ?? Self.encode(answers) ?? "{}"
+        let ids = Set(template.questions.map(\.id))
+        self.answersJSON = ids.isSuperset(of: answers.keys)
+            ? (Self.encode(snapshot) ?? Self.encode(answers) ?? "{}")
+            : (Self.encode(answers) ?? "{}")
         self.completedByEmail = completedByEmail
         self.completedAt = completedAt
     }
 
     var answers: [UUID: String] {
-        if let snapshot = Self.decodeSnapshot(answersJSON) {
-            return Dictionary(uniqueKeysWithValues: snapshot.rows.map { ($0.questionID, $0.answer) })
-        }
-        return Self.decode(answersJSON) ?? [:]
+        (try? FieldFormPayload.response(answersJSON).answers) ?? [:]
     }
 
     var snapshotAnswerRows: [FieldFormAnswerRow] {
-        let snapshot = Self.decodeSnapshot(answersJSON)
-        return snapshot?.rows ?? []
+        guard case .snapshot(let snapshot)? = try? FieldFormPayload.response(answersJSON) else { return [] }
+        return snapshot.rows
     }
 
     func answerRows(resolving template: FieldFormTemplate?) -> [FieldFormAnswerRow] {
-        if !snapshotAnswerRows.isEmpty {
-            return snapshotAnswerRows
-        }
-        let legacyAnswers = answers
-        if let template {
+        guard let payload = try? FieldFormPayload.response(answersJSON) else { return [] }
+        if case .snapshot(let snapshot) = payload { return snapshot.rows }
+        let legacyAnswers = payload.answers
+        if let template, template.id == templateID,
+           (try? FieldFormPayload.validate(payload, against: template.questions)) != nil {
             return FieldFormCompletionPolicy.answerRows(
                 questions: template.questions,
                 answers: legacyAnswers
@@ -410,64 +436,41 @@ final class FieldFormResponse {
             }
     }
 
+    /// Versioned snapshots are immutable evidence. Legacy answers need their
+    /// exact original template, never a same-title revision's questions.
+    func completionReviewIssue(resolving template: FieldFormTemplate?) -> String? {
+        let review = "This saved form needs review before it can count as complete. The original record has been kept."
+        guard !templateTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let payload = try? FieldFormPayload.response(answersJSON) else { return review }
+        let original = template.flatMap { $0.id == templateID ? $0 : nil }
+        if let original {
+            guard original.title == templateTitle,
+                  let questions = try? FieldFormPayload.questions(original.questionsJSON),
+                  (try? FieldFormPayload.validate(payload, against: questions)) != nil else { return review }
+        }
+        switch payload {
+        case .snapshot(let snapshot):
+            // Version 1 omitted choice options. Do not manufacture them from
+            // the answer or substitute options from a newer template revision.
+            if snapshot.questions == nil, original == nil, snapshot.rows.contains(where: { $0.kind == .choice }) {
+                return "The original choice list is needed to verify this saved form. Ask the office to restore its original template."
+            }
+            let questions = snapshot.questions ?? original?.questions ?? snapshot.rows.map {
+                FieldFormQuestion(id: $0.questionID, label: $0.label, kind: $0.kind,
+                                  required: $0.required)
+            }
+            return FieldFormCompletionPolicy.validationIssue(questions: questions, answers: payload.answers)
+        case .legacy:
+            guard let original, original.dataReviewIssue == nil else { return review }
+            return FieldFormCompletionPolicy.validationIssue(questions: original.questions, answers: payload.answers)
+        }
+    }
+
     private static func encode<T: Encodable>(_ value: T) -> String? {
         guard let data = try? JSONEncoder().encode(value) else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
-    private static func decode<T: Decodable>(_ value: String) -> T? {
-        guard let data = value.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(T.self, from: data)
-    }
-
-    private static func encodeSnapshot(_ snapshot: FieldFormAnswerSnapshot) -> String? {
-        let object: [String: Any] = [
-            "version": snapshot.version,
-            "rows": snapshot.rows.map { row in
-                [
-                    "questionID": row.questionID.uuidString,
-                    "label": row.label,
-                    "kind": row.kind.rawValue,
-                    "required": row.required,
-                    "answer": row.answer
-                ]
-            }
-        ]
-        guard JSONSerialization.isValidJSONObject(object),
-              let data = try? JSONSerialization.data(withJSONObject: object) else {
-            return nil
-        }
-        return String(data: data, encoding: .utf8)
-    }
-
-    private static func decodeSnapshot(_ value: String) -> FieldFormAnswerSnapshot? {
-        guard let data = value.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let version = object["version"] as? Int,
-              let rawRows = object["rows"] as? [[String: Any]] else {
-            return nil
-        }
-        let rows = rawRows.compactMap { raw -> FieldFormAnswerRow? in
-            guard let idValue = raw["questionID"] as? String,
-                  let questionID = UUID(uuidString: idValue),
-                  let label = raw["label"] as? String,
-                  let kindValue = raw["kind"] as? String,
-                  let kind = FieldFormQuestionKind(rawValue: kindValue),
-                  let required = raw["required"] as? Bool,
-                  let answer = raw["answer"] as? String else {
-                return nil
-            }
-            return FieldFormAnswerRow(
-                questionID: questionID,
-                label: label,
-                kind: kind,
-                required: required,
-                answer: answer
-            )
-        }
-        guard rows.count == rawRows.count else { return nil }
-        return FieldFormAnswerSnapshot(version: version, rows: rows)
-    }
 }
 
 struct FieldFormCloseoutRequirement: Identifiable, Equatable {
@@ -501,7 +504,11 @@ enum FieldFormCloseoutPolicy {
         templates: [FieldFormTemplate],
         responses: [FieldFormResponse]
     ) -> FieldFormCloseoutReadiness {
-        let scopedResponses = responses.filter { $0.serviceCallID == serviceCallID }
+        let scopedResponses = responses.filter { response in
+            response.serviceCallID == serviceCallID && response.completionReviewIssue(
+                resolving: templates.first { $0.id == response.templateID }
+            ) == nil
+        }
         let completedTemplateIDs = Set(scopedResponses.map(\.templateID))
         let completedTitles = Set(scopedResponses.map { normalizedTitle($0.templateTitle) })
 
@@ -509,8 +516,7 @@ enum FieldFormCloseoutPolicy {
         let requirements = templates
             .filter {
                 $0.isActive &&
-                    $0.requiresCompletionForCloseout &&
-                    $0.applies(to: serviceType)
+                    $0.closeoutRequirementApplies(to: serviceType)
             }
             .sorted {
                 let titleOrder = $0.title.localizedCaseInsensitiveCompare($1.title)
@@ -518,13 +524,18 @@ enum FieldFormCloseoutPolicy {
             }
             .compactMap { template -> FieldFormCloseoutRequirement? in
                 let titleKey = normalizedTitle(template.title)
-                guard !titleKey.isEmpty, seenTitles.insert(titleKey).inserted else { return nil }
+                if template.dataReviewIssue != nil {
+                    return FieldFormCloseoutRequirement(templateID: template.id,
+                        title: titleKey.isEmpty ? "Unnamed form needs review" : template.title)
+                }
+                guard seenTitles.insert(titleKey).inserted else { return nil }
                 return FieldFormCloseoutRequirement(templateID: template.id, title: template.title)
             }
 
         let missing = requirements.filter { requirement in
-            !completedTemplateIDs.contains(requirement.templateID) &&
-                !completedTitles.contains(normalizedTitle(requirement.title))
+            templates.first(where: { $0.id == requirement.templateID })?.dataReviewIssue != nil ||
+                (!completedTemplateIDs.contains(requirement.templateID) &&
+                !completedTitles.contains(normalizedTitle(requirement.title)))
         }
         return FieldFormCloseoutReadiness(
             requirements: requirements,
@@ -535,25 +546,31 @@ enum FieldFormCloseoutPolicy {
     static func responseCompletes(
         _ template: FieldFormTemplate,
         serviceCallID: UUID,
-        responses: [FieldFormResponse]
+        responses: [FieldFormResponse],
+        originalTemplates: [FieldFormTemplate] = []
     ) -> Bool {
         latestResponse(
             completing: template,
             serviceCallID: serviceCallID,
-            responses: responses
+            responses: responses,
+            originalTemplates: originalTemplates
         ) != nil
     }
 
     static func latestResponse(
         completing template: FieldFormTemplate,
         serviceCallID: UUID,
-        responses: [FieldFormResponse]
+        responses: [FieldFormResponse],
+        originalTemplates: [FieldFormTemplate] = []
     ) -> FieldFormResponse? {
+        guard template.dataReviewIssue == nil else { return nil }
         let titleKey = normalizedTitle(template.title)
         return responses
             .filter { response in
                 response.serviceCallID == serviceCallID &&
-                    (response.templateID == template.id || normalizedTitle(response.templateTitle) == titleKey)
+                    (response.templateID == template.id || normalizedTitle(response.templateTitle) == titleKey) &&
+                    response.completionReviewIssue(resolving:
+                        originalTemplates.first { $0.id == response.templateID } ?? template) == nil
             }
             .max(by: { $0.completedAt < $1.completedAt })
     }
@@ -561,188 +578,6 @@ enum FieldFormCloseoutPolicy {
     private static func normalizedTitle(_ title: String) -> String {
         title.trimmingCharacters(in: .whitespacesAndNewlines)
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-    }
-}
-
-struct FieldFormResponseEditor: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.modelContext) private var modelContext
-    let template: FieldFormTemplate
-    let serviceCall: ServiceCall
-    let actorEmail: String?
-    @State private var answers: [UUID: String] = [:]
-    @State private var validationMessage: String?
-    @State private var isSaving = false
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Job") {
-                    LabeledContent("Customer", value: serviceCall.customer.name)
-                    LabeledContent("Work", value: serviceCall.type.displayName)
-                    if template.requiresCompletionForCloseout {
-                        Label("Required for closeout", systemImage: "checkmark.seal")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.orange)
-                    }
-                    Text("Saving creates a read-only PDF in this job’s Files. If the job is linked to an estimate or invoice, the file keeps that transaction link for QuickBooks attachment recovery.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Section(template.title) {
-                    ForEach(template.questions) { question in
-                        questionView(question)
-                    }
-                }
-                if let validationMessage {
-                    Section {
-                        Label(validationMessage, systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.orange)
-                    }
-                }
-            }
-            .navigationTitle("Complete Form")
-            .interactiveDismissDisabled(isSaving)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                        .disabled(isSaving)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(isSaving ? "Saving…" : "Save") { save() }
-                        .disabled(isSaving)
-                        .accessibilityIdentifier("SaveCompletedFieldForm")
-                }
-            }
-        }
-    }
-
-    @ViewBuilder private func questionView(_ question: FieldFormQuestion) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(question.label)
-                    .font(.subheadline.weight(.semibold))
-                if question.required {
-                    Text("Required")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.red)
-                }
-            }
-            switch question.kind {
-            case .toggle:
-                Toggle(
-                    question.required ? "Confirmed" : "Yes",
-                    isOn: Binding(
-                        get: { answers[question.id] == "true" },
-                        set: { answers[question.id] = $0 ? "true" : "false" }
-                    )
-                )
-            case .text:
-                TextField(
-                    "Enter response",
-                    text: Binding(
-                        get: { answers[question.id] ?? "" },
-                        set: { answers[question.id] = $0 }
-                    ),
-                    axis: .vertical
-                )
-                .lineLimit(2...6)
-            case .choice:
-                Picker(
-                    "Response",
-                    selection: Binding(
-                        get: { answers[question.id] ?? "" },
-                        set: { answers[question.id] = $0 }
-                    )
-                ) {
-                    Text("Select").tag("")
-                    ForEach(question.choices, id: \.self) { Text($0).tag($0) }
-                }
-            }
-        }
-        .accessibilityElement(children: .contain)
-    }
-
-    private func save() {
-        if let issue = FieldFormCompletionPolicy.validationIssue(
-            questions: template.questions,
-            answers: answers
-        ) {
-            validationMessage = issue
-            return
-        }
-        isSaving = true
-        validationMessage = nil
-        let response = FieldFormResponse(
-            serviceCallID: serviceCall.id,
-            template: template,
-            answers: answers,
-            completedByEmail: actorEmail
-        )
-        var insertedAttachment: ServiceDocumentAttachment?
-        do {
-            let url = try CustomerDocumentExporter.exportFieldFormResponse(
-                response,
-                serviceCall: serviceCall,
-                template: template
-            )
-            let data = try Data(contentsOf: url)
-            let attachment = ServiceDocumentAttachment(
-                customer: serviceCall.customer,
-                serviceCallID: serviceCall.id,
-                invoiceID: serviceCall.linkedInvoiceID,
-                estimateID: serviceCall.linkedEstimateID,
-                kind: .customerDocument,
-                displayName: url.lastPathComponent,
-                caption: "Completed field form: \(template.title) [FieldFormResponse:\(response.id.uuidString)]",
-                localFilePath: url.path,
-                contentType: "application/pdf",
-                fileSizeBytes: data.count
-            )
-            insertedAttachment = attachment
-            modelContext.insert(response)
-            modelContext.insert(attachment)
-            try modelContext.save()
-            ServiceCallActivity.record(
-                for: serviceCall,
-                action: "Field form completed",
-                detail: "Completed \(template.title); saved a PDF in job Files.",
-                actorEmail: actorEmail,
-                in: modelContext
-            )
-            try? modelContext.save()
-            syncAttachmentIfPossible(attachment, data: data)
-            dismiss()
-        } catch {
-            modelContext.delete(response)
-            if let insertedAttachment {
-                modelContext.delete(insertedAttachment)
-            }
-            isSaving = false
-            validationMessage = "Could not save the completed form and PDF: \(error.localizedDescription)"
-        }
-    }
-
-    private func syncAttachmentIfPossible(_ attachment: ServiceDocumentAttachment, data: Data) {
-        guard GunnAireBackendService.isConfigured else { return }
-        Task { @MainActor in
-            do {
-                let stored = try await GunnAireBackendService.uploadDocument(
-                    data: data,
-                    filename: attachment.displayName,
-                    contentType: attachment.contentType,
-                    kind: attachment.kindRaw,
-                    serviceCallID: attachment.serviceCallID,
-                    invoiceID: attachment.invoiceID,
-                    estimateID: attachment.estimateID,
-                    customerName: attachment.customer?.name
-                )
-                attachment.markSharedCompanyStored(id: stored.id)
-            } catch {
-                attachment.markSharedCompanyUploadFailed(error.localizedDescription)
-            }
-            try? modelContext.save()
-        }
     }
 }
 
@@ -755,22 +590,40 @@ struct FieldFormResponseDetailView: View {
     @State private var exportMessage: String?
 
     private var rows: [FieldFormAnswerRow] {
-        response.answerRows(resolving: template)
+        guard response.serviceCallID == serviceCall.id else { return [] }
+        return response.answerRows(resolving: template)
+    }
+
+    private var reviewIssue: String? {
+        guard response.serviceCallID == serviceCall.id else { return "Open this form from its original job." }
+        return response.completionReviewIssue(resolving: template)
     }
 
     var body: some View {
         Form {
-            Section("Completion") {
+            if let reviewIssue {
+                Section("Needs review") {
+                    Label(reviewIssue, systemImage: "exclamationmark.triangle")
+                        .accessibilityIdentifier("FieldFormHistoryNeedsReview")
+                }
+            }
+            Section(reviewIssue == nil ? "Completion" : "Original record") {
                 LabeledContent("Form", value: response.templateTitle)
                 LabeledContent("Customer", value: serviceCall.customer.name)
                 LabeledContent("Job", value: serviceCall.type.displayName)
-                LabeledContent("Completed", value: response.completedAt.formatted(date: .abbreviated, time: .shortened))
+                LabeledContent(reviewIssue == nil ? "Completed" : "Recorded",
+                               value: response.completedAt.formatted(date: .abbreviated, time: .shortened))
                 if let completedByEmail = response.completedByEmail?.trimmingCharacters(in: .whitespacesAndNewlines),
                    !completedByEmail.isEmpty {
-                    LabeledContent("Completed by", value: completedByEmail)
+                    LabeledContent(reviewIssue == nil ? "Completed by" : "Recorded by", value: completedByEmail)
                 }
             }
             Section("Responses") {
+                if rows.isEmpty {
+                    Text("The saved answers cannot be displayed. The original record is still kept; ask the office to review it.")
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("FieldFormUnreadableAnswers")
+                }
                 ForEach(rows) { row in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(row.label)
@@ -785,6 +638,7 @@ struct FieldFormResponseDetailView: View {
                 Section {
                     Label(exportMessage, systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.orange)
+                        .accessibilityIdentifier("FieldFormExportIssue")
                 }
             }
         }
@@ -805,10 +659,23 @@ struct FieldFormResponseDetailView: View {
     }
 
     private func prepareExportURL() {
+        exportURL = nil
+        exportMessage = nil
+        guard response.serviceCallID == serviceCall.id else {
+            return
+        }
         if let attachment,
+           attachment.serviceCallID == serviceCall.id,
+           attachment.customer?.id == serviceCall.customer.id,
+           attachment.caption?.contains("[FieldFormResponse:\(response.id.uuidString)]") == true,
            FileManager.default.fileExists(atPath: attachment.localFilePath) {
             exportURL = attachment.localFileURL
             exportMessage = nil
+            return
+        }
+        guard reviewIssue == nil else {
+            // The review notice already explains why this is not a completion.
+            // Keep the PDF action unavailable without a second error banner.
             return
         }
         do {
@@ -824,6 +691,16 @@ struct FieldFormResponseDetailView: View {
     }
 }
 
+enum FieldFormHistoryPolicy {
+    static func responses(_ values: [FieldFormResponse], for serviceCallID: UUID) -> [FieldFormResponse] {
+        values.filter { $0.serviceCallID == serviceCallID }.sorted {
+            $0.completedAt == $1.completedAt
+                ? $0.id.uuidString < $1.id.uuidString
+                : $0.completedAt > $1.completedAt
+        }
+    }
+}
+
 struct CompletedFieldFormsView: View {
     let responses: [FieldFormResponse]
     let templates: [FieldFormTemplate]
@@ -831,7 +708,7 @@ struct CompletedFieldFormsView: View {
     let attachments: [ServiceDocumentAttachment]
 
     var body: some View {
-        List(responses) { response in
+        List(FieldFormHistoryPolicy.responses(responses, for: serviceCall.id)) { response in
             NavigationLink {
                 FieldFormResponseDetailView(
                     response: response,
@@ -846,16 +723,50 @@ struct CompletedFieldFormsView: View {
                     Text(response.completedAt.formatted(date: .abbreviated, time: .shortened))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if response.completionReviewIssue(resolving: templates.first { $0.id == response.templateID }) != nil {
+                        Label("Needs review", systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                    }
                 }
             }
+            .accessibilityIdentifier("SavedFieldFormResponse-\(response.id.uuidString)")
         }
-        .navigationTitle("Completed Forms")
+        .navigationTitle("Saved Forms")
     }
 
     private func attachment(for response: FieldFormResponse) -> ServiceDocumentAttachment? {
         let marker = "[FieldFormResponse:\(response.id.uuidString)]"
         return attachments.first {
             $0.serviceCallID == serviceCall.id && ($0.caption?.contains(marker) ?? false)
+        }
+    }
+}
+
+/// Undo only this editor's changes on failure. A context-wide rollback would
+/// also discard unrelated field work waiting to be saved.
+enum FieldFormTemplatePersistence {
+    static func insert(_ template: FieldFormTemplate, retiring source: FieldFormTemplate?,
+                       in context: ModelContext, persist: () throws -> Void) throws {
+        let wasActive = source?.isActive
+        source?.isActive = false
+        context.insert(template)
+        do {
+            try persist()
+        } catch {
+            context.delete(template)
+            if let source, let wasActive { source.isActive = wasActive }
+            throw error
+        }
+    }
+
+    static func setActive(_ value: Bool, for template: FieldFormTemplate,
+                          persist: () throws -> Void) throws {
+        let wasActive = template.isActive
+        template.isActive = value
+        do { try persist() }
+        catch {
+            template.isActive = wasActive
+            throw error
         }
     }
 }
@@ -886,6 +797,8 @@ struct FieldFormTemplateManagerView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \FieldFormTemplate.createdAt, order: .forward) private var templates: [FieldFormTemplate]
     @State private var editorMode: FieldFormTemplateEditorMode?
+    @State private var savedTemplateID: UUID?
+    @State private var saveError: String?
 
     private var orderedTemplates: [FieldFormTemplate] {
         templates.sorted { lhs, rhs in
@@ -899,6 +812,7 @@ struct FieldFormTemplateManagerView: View {
 
     var body: some View {
         NavigationStack {
+            ScrollViewReader { proxy in
             Form {
                 Section("Reusable Forms") {
                     if orderedTemplates.isEmpty {
@@ -910,6 +824,7 @@ struct FieldFormTemplateManagerView: View {
                     }
                     ForEach(orderedTemplates) { template in
                         templateRow(template)
+                            .id(template.id)
                     }
                 }
                 Section("Version Safety") {
@@ -918,6 +833,7 @@ struct FieldFormTemplateManagerView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .accessibilityIdentifier("FieldFormTemplateList")
             .navigationTitle("Field Form Templates")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -932,14 +848,31 @@ struct FieldFormTemplateManagerView: View {
                     .accessibilityIdentifier("CreateFieldFormTemplate")
                 }
             }
-            .sheet(item: $editorMode) { mode in
-                FieldFormTemplateEditor(mode: mode)
+            .sheet(item: $editorMode, onDismiss: { revealSavedTemplate(using: proxy) }) { mode in
+                FieldFormTemplateEditor(mode: mode) { savedTemplateID = $0 }
+            }
+            .onChange(of: orderedTemplates.map(\.id)) {
+                if editorMode == nil { revealSavedTemplate(using: proxy) }
+            }
+            .alert("Could not update form", isPresented: Binding(
+                get: { saveError != nil }, set: { if !$0 { saveError = nil } }
+            )) {
+                Button("OK", role: .cancel) { saveError = nil }
+            } message: {
+                Text(saveError ?? "The previous status has been kept. Try again.")
             }
             .onAppear {
                 FieldFormTemplate.ensureStarterTemplates(in: modelContext)
                 try? modelContext.save()
             }
+            }
         }
+    }
+
+    private func revealSavedTemplate(using proxy: ScrollViewProxy) {
+        guard let savedTemplateID, orderedTemplates.contains(where: { $0.id == savedTemplateID }) else { return }
+        proxy.scrollTo(savedTemplateID, anchor: .center)
+        self.savedTemplateID = nil
     }
 
     private func templateRow(_ template: FieldFormTemplate) -> some View {
@@ -950,6 +883,7 @@ struct FieldFormTemplateManagerView: View {
                 Text("\(template.questions.count) \(template.questions.count == 1 ? "field" : "fields") • \(template.scopeSummary)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("FieldFormTemplateSummary-\(template.id.uuidString)")
                 if template.requiresCompletionForCloseout {
                     Text("Required for closeout")
                         .font(.caption2.weight(.semibold))
@@ -967,8 +901,13 @@ struct FieldFormTemplateManagerView: View {
                 isOn: Binding(
                     get: { template.isActive },
                     set: { newValue in
-                        template.isActive = newValue
-                        try? modelContext.save()
+                        do {
+                            try FieldFormTemplatePersistence.setActive(newValue, for: template) {
+                                try modelContext.save()
+                            }
+                        } catch {
+                            saveError = "The previous status has been kept. Try again. \(error.localizedDescription)"
+                        }
                     }
                 )
             )
@@ -998,14 +937,17 @@ private struct FieldFormTemplateEditor: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     let mode: FieldFormTemplateEditorMode
+    let onSaved: (UUID) -> Void
     @State private var title: String
     @State private var questions: [FieldFormQuestion]
     @State private var selectedTypes: Set<ServiceCallType>
     @State private var requiresCompletionForCloseout: Bool
     @State private var validationMessage: String?
+    @State private var hasReviewedOriginalSetup = false
 
-    init(mode: FieldFormTemplateEditorMode) {
+    init(mode: FieldFormTemplateEditorMode, onSaved: @escaping (UUID) -> Void) {
         self.mode = mode
+        self.onSaved = onSaved
         let source = mode.sourceTemplate
         let initialTitle: String
         switch mode {
@@ -1030,6 +972,13 @@ private struct FieldFormTemplateEditor: View {
     var body: some View {
         NavigationStack {
             Form {
+                if mode.sourceTemplate?.dataReviewIssue != nil {
+                    Section("Review original setup") {
+                        Text("The original setup could not be fully read. Check the fields, job types, and closeout requirement before saving a new version. The original saved record will be kept.")
+                        Toggle("I've reviewed the fields and job requirements", isOn: $hasReviewedOriginalSetup)
+                            .accessibilityIdentifier("FieldFormOriginalSetupReviewed")
+                    }
+                }
                 Section("Form") {
                     TextField("Form title", text: $title)
                         .accessibilityIdentifier("FieldFormTemplateTitle")
@@ -1098,6 +1047,7 @@ private struct FieldFormTemplateEditor: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { save() }
                         .accessibilityIdentifier("SaveFieldFormTemplate")
+                        .disabled(mode.sourceTemplate?.dataReviewIssue != nil && !hasReviewedOriginalSetup)
                 }
             }
         }
@@ -1163,6 +1113,10 @@ private struct FieldFormTemplateEditor: View {
     }
 
     private func save() {
+        guard mode.sourceTemplate?.dataReviewIssue == nil || hasReviewedOriginalSetup else {
+            validationMessage = "Review the original setup and confirm the job requirements before saving."
+            return
+        }
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanQuestions = questions.map { question in
             FieldFormQuestion(
@@ -1180,24 +1134,17 @@ private struct FieldFormTemplateEditor: View {
             return
         }
 
-        switch mode {
-        case .create, .duplicate:
-            modelContext.insert(FieldFormTemplate(
-                title: cleanTitle,
-                questions: cleanQuestions,
-                applicableServiceTypes: selectedTypes,
-                requiresCompletionForCloseout: requiresCompletionForCloseout
-            ))
-        case .revise(let source):
-            modelContext.insert(source.makeRevision(
-                title: cleanTitle,
-                questions: cleanQuestions,
-                applicableServiceTypes: selectedTypes,
-                requiresCompletionForCloseout: requiresCompletionForCloseout
-            ))
-        }
+        let template = FieldFormTemplate(
+            title: cleanTitle, questions: cleanQuestions, applicableServiceTypes: selectedTypes,
+            requiresCompletionForCloseout: requiresCompletionForCloseout
+        )
+        let source: FieldFormTemplate?
+        if case .revise(let original) = mode { source = original } else { source = nil }
         do {
-            try modelContext.save()
+            try FieldFormTemplatePersistence.insert(template, retiring: source, in: modelContext) {
+                try modelContext.save()
+            }
+            onSaved(template.id)
             dismiss()
         } catch {
             validationMessage = "Could not save this form: \(error.localizedDescription)"

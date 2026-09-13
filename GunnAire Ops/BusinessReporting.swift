@@ -137,6 +137,7 @@ struct BusinessReportSnapshot {
     let period: BusinessReportPeriod
     let interval: DateInterval
     let generatedAt: Date
+    let billingIdentityReviewMessage: String?
     let invoicedRevenue: Double
     let collectedRevenue: Double
     let openBalance: Double
@@ -217,7 +218,7 @@ enum BusinessReporting {
         now: Date = Date(),
         serviceCalls: [ServiceCall],
         estimates: [Estimate],
-        invoices: [Invoice],
+        invoices allInvoices: [Invoice],
         payments: [Payment],
         timeEntries: [TimeEntry],
         technicians: [Technician],
@@ -228,9 +229,11 @@ enum BusinessReporting {
         calendar: Calendar = .current
     ) -> BusinessReportSnapshot {
         let interval = period.interval(containing: now, calendar: calendar)
+        let milestoneProjection = BillingMilestoneReconciliation.project(allInvoices, payments: payments)
+        let invoices = milestoneProjection.activeInvoices
         let periodCalls = uniqueServiceCalls(serviceCalls.filter { interval.contains($0.scheduledDate) })
-        let periodInvoices = Invoice.displayDeduplicated(invoices).filter { interval.contains($0.createdAt) }
-        let periodEstimates = Estimate.displayDeduplicated(estimates).filter { interval.contains($0.createdAt) }
+        let periodInvoices = Invoice.displayDeduplicated(invoices.filter { interval.contains($0.createdAt) })
+        let periodEstimates = Estimate.displayDeduplicated(estimates.filter { interval.contains($0.createdAt) })
         let periodPayments = payments.filter { interval.contains($0.date) }
         let periodTimeEntries = timeEntries.filter { interval.contains($0.clockIn) && $0.clockOut != nil }
         let periodServiceRequests = uniqueServiceRequests(
@@ -261,9 +264,9 @@ enum BusinessReporting {
         let projectContractValue = projectGroups.values.reduce(0) { partial, milestones in
             partial + milestones.reduce(0) { $0 + $1.plannedAmount }
         }
-        let milestoneInvoiceIDs = Set(periodProjectMilestones.compactMap(\.invoiceID))
+        let milestoneInvoiceIDs = Set(periodProjectMilestones.compactMap { $0.linkedInvoice(in: allInvoices)?.id ?? $0.invoiceID })
         let projectInvoices = invoices.filter { milestoneInvoiceIDs.contains($0.id) }
-        let projectInvoicedAmount = projectInvoices.reduce(0) { $0 + $1.amount }
+        let projectInvoicedAmount = projectInvoices.reduce(0) { $0 + $1.subtotalAmount }
         let projectReadyToBillCount = periodProjectMilestones.filter { milestone in
             milestone.invoiceID == nil && (milestone.completedAt != nil || milestone.billingTrigger == .customerApproval)
         }.count
@@ -300,7 +303,7 @@ enum BusinessReporting {
         var materialCost = 0.0
         var missingMaterialCostLineCount = 0
         for invoice in periodInvoices {
-            let lines = invoice.catalogLineSnapshots
+            let lines = invoice.catalogLineSnapshots.flatMap(\.soldLeaves)
             if lines.isEmpty && invoice.amount > 0 {
                 missingMaterialCostLineCount += 1
             }
@@ -465,6 +468,12 @@ enum BusinessReporting {
             period: period,
             interval: interval,
             generatedAt: now,
+            billingIdentityReviewMessage: (
+                milestoneProjection.needsReview ||
+                invoices.contains { $0.quickBooksReconciliationReviewMessage != nil } ||
+                QuickBooksBillingIdentity.hasAmbiguousMapping(invoices.map { ($0.id, $0.customer?.id, $0.quickBooksID) }) ||
+                QuickBooksBillingIdentity.hasAmbiguousMapping(estimates.map { ($0.id, $0.customer?.id, $0.quickBooksID) })
+            ) ? "Billing records need reconciliation. Refresh QuickBooks and review the affected invoices or estimates before using financial totals or CSV export. Operational counts remain available." : nil,
             invoicedRevenue: invoicedRevenue,
             collectedRevenue: collectedRevenue,
             openBalance: openBalance,
@@ -622,7 +631,7 @@ enum BusinessReporting {
             var materialCost = 0.0
             var missingMaterialCostLineCount = 0
             for invoice in groupedInvoices {
-                let lines = invoice.catalogLineSnapshots
+                let lines = invoice.catalogLineSnapshots.flatMap(\.soldLeaves)
                 if lines.isEmpty && invoice.amount > 0 {
                     missingMaterialCostLineCount += 1
                 }
@@ -727,6 +736,10 @@ enum BusinessReporting {
 
 enum BusinessReportCSV {
     static func render(_ snapshot: BusinessReportSnapshot) -> String {
+        if let message = snapshot.billingIdentityReviewMessage {
+            return [["Report status", "Billing review required"], ["Review", message]]
+                .map { $0.map(escape).joined(separator: ",") }.joined(separator: "\n") + "\n"
+        }
         var rows: [[String]] = [
             ["GunnAire Business Report", snapshot.period.displayName],
             ["Period Start", snapshot.interval.start.formatted(.iso8601)],

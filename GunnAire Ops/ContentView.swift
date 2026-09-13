@@ -33,7 +33,7 @@ struct AppStoreScreenshotPrivacyPolicy: Equatable, Sendable {
 /// Registers the numbered workspace shortcuts with UIKit on native iPadOS.
 /// SwiftUI scene commands render correctly in the Mac menu bar, but they are
 /// not consistently inserted into the responder chain for an iPad split view.
-private struct GunnAireIPadKeyCommandBridge: UIViewRepresentable {
+struct GunnAireIPadKeyCommandBridge: UIViewRepresentable {
     let onRoute: (GunnAireAppRoute) -> Void
 
     func makeUIView(context: Context) -> KeyCommandResponderView {
@@ -47,8 +47,9 @@ private struct GunnAireIPadKeyCommandBridge: UIViewRepresentable {
         uiView.activateIfAvailable()
     }
 
-    final class KeyCommandResponderView: UIView {
+    class KeyCommandResponderView: UIView {
         var onRoute: ((GunnAireAppRoute) -> Void)?
+        private var activationRetryScheduled = false
 
         override var canBecomeFirstResponder: Bool { true }
 
@@ -71,21 +72,37 @@ private struct GunnAireIPadKeyCommandBridge: UIViewRepresentable {
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
-            guard window != nil, !isFirstResponder else { return }
-            // The command host can become visible before SwiftUI's next update
-            // pass. Claim the responder synchronously so an attached keyboard
-            // works as soon as the workspace is visible, with the async retry
-            // retained for UIKit transitions that temporarily reject it.
-            if !becomeFirstResponder() {
-                activateIfAvailable()
-            }
+            activateIfAvailable()
         }
 
         func activateIfAvailable() {
-            guard window != nil, !isFirstResponder else { return }
+            // SwiftUI updates this bridge while a field is being edited, too.
+            // A shortcut fallback must never evict that field's responder or
+            // intercept navigation while a sheet owns the interaction.
+            guard mayActivate, !becomeFirstResponder(), !activationRetryScheduled else { return }
+            activationRetryScheduled = true
             DispatchQueue.main.async { [weak self] in
-                _ = self?.becomeFirstResponder()
+                guard let self else { return }
+                self.activationRetryScheduled = false
+                // Focus/window/presentation may have changed since scheduling.
+                guard self.mayActivate else { return }
+                _ = self.becomeFirstResponder()
             }
+        }
+
+        private var mayActivate: Bool {
+            guard let window, window.isKeyWindow, !isFirstResponder,
+                  !containsFirstResponder(window) else { return false }
+            return !hasPresentedController(window.rootViewController)
+        }
+
+        private func containsFirstResponder(_ view: UIView) -> Bool {
+            view.isFirstResponder || view.subviews.contains(where: containsFirstResponder)
+        }
+
+        private func hasPresentedController(_ controller: UIViewController?) -> Bool {
+            guard let controller else { return false }
+            return controller.presentedViewController != nil || controller.children.contains(where: hasPresentedController)
         }
 
         @objc private func handleKeyCommand(_ command: UIKeyCommand) {
@@ -124,8 +141,7 @@ struct ContentView: View {
     @State private var isRetryingCustomerCommunicationUploads = false
     @State private var cloudKitReadiness: GunnAireCloudKit.AccountReadiness?
     @State private var showingCloudKitContinuityDetails = false
-    @State private var didInspectCompanyOperationalRecords = false
-    @State private var hasCompanyOperationalRecords = false
+    @State private var isCheckingBusinessRole = false
     
     // Authentication states
     @State private var isQuickBooksAuthenticated = false
@@ -182,8 +198,8 @@ struct ContentView: View {
 
         return OperationalDataContinuity.workspaceAccess(
             role: currentUserRole,
-            didInspectLocalRecords: didInspectCompanyOperationalRecords,
-            hasLocalCompanyRecords: hasCompanyOperationalRecords
+            didCheckIdentity: true,
+            hasVerifiedCompanyStore: CompanyWorkspaceAccessController.shared.authorizedContainer != nil
         )
     }
 
@@ -259,11 +275,25 @@ struct ContentView: View {
     private var selectedWorkspaceDetail: AnyView {
         guard !visibleSidebarItems.isEmpty else {
             return AnyView(
-                ContentUnavailableView(
-                    "Account setup required",
-                    systemImage: "person.badge.key",
-                    description: Text("Your signed-in business account has not been assigned an active role. Ask an administrator to activate your access, then reopen GunnAire Ops.")
-                )
+                ContentUnavailableView {
+                    Label("Verify business access", systemImage: "person.badge.key")
+                } description: {
+                    Text("Your business permissions could not be confirmed. Your saved work is unchanged. Check again, or ask your administrator to review your access.")
+                } actions: {
+                    Button(isCheckingBusinessRole ? "Checking…" : "Check Again") {
+                        guard !isCheckingBusinessRole else { return }
+                        isCheckingBusinessRole = true
+                        Task {
+                            defer { isCheckingBusinessRole = false }
+                            await CompanyWorkspaceAccessController.shared.refresh()
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isCheckingBusinessRole)
+                    .accessibilityIdentifier("BusinessRoleCheckAgain")
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("BusinessRoleAccessGate")
             )
         }
 
@@ -394,7 +424,7 @@ struct ContentView: View {
                             .accessibilityIdentifier("SidebarAccountIdentity")
                     }
                     if visibleSidebarItems.isEmpty {
-                        Label("Account setup required", systemImage: "person.badge.key")
+                        Label("Verify business access", systemImage: "person.badge.key")
                             .font(.footnote)
                             .foregroundColor(.orange)
                     }
@@ -447,8 +477,6 @@ struct ContentView: View {
             QuickBooksDataAPI.shared.loadTokens()
             isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
             isGoogleAuthenticated = GoogleAuthManager.shared.isAuthenticated
-            ensurePrimaryAdminExists()
-            refreshCompanyOperationalRecordState()
             collapseCloudKitUserDuplicatesIfNeeded()
             cleanupCalendarCreatedCustomersIfNeeded()
             refreshGoogleAccountIdentityIfNeeded()
@@ -484,9 +512,6 @@ struct ContentView: View {
         .task {
             await refreshOperationalContinuityState()
             await StaffPushNotificationManager.shared.activateForCurrentSessionIfNeeded()
-        }
-        .onChange(of: cloudKitEventMonitor.state) { _, _ in
-            refreshCompanyOperationalRecordState()
         }
         .sheet(isPresented: $showingSettings) {
             SettingsView(
@@ -615,42 +640,7 @@ struct ContentView: View {
 
     @MainActor
     private func refreshOperationalContinuityState() async {
-        refreshCompanyOperationalRecordState()
         await refreshCloudKitContinuityReadiness()
-        refreshCompanyOperationalRecordState()
-    }
-
-    @MainActor
-    private func refreshCompanyOperationalRecordState() {
-        func containsRecord<Model: PersistentModel>(_: Model.Type) -> Bool {
-            let count = (try? modelContext.fetchCount(FetchDescriptor<Model>())) ?? 0
-            return count > 0
-        }
-
-        // AppUser and Technician are intentionally excluded because business
-        // authentication can create them before the private CloudKit store has
-        // received any actual company operations. Starter form templates are
-        // also created locally on first launch and therefore prove nothing
-        // about the selected iCloud replica.
-        hasCompanyOperationalRecords =
-            containsRecord(Customer.self) ||
-            containsRecord(CustomerServiceLocation.self) ||
-            containsRecord(CustomerEquipment.self) ||
-            containsRecord(ServiceCall.self) ||
-            containsRecord(Estimate.self) ||
-            containsRecord(Invoice.self) ||
-            containsRecord(Payment.self) ||
-            containsRecord(TimeEntry.self) ||
-            containsRecord(Item.self) ||
-            containsRecord(Vendor.self) ||
-            containsRecord(PurchaseOrder.self) ||
-            containsRecord(InventoryMovement.self) ||
-            containsRecord(RecurringMaintenanceContract.self) ||
-            containsRecord(FieldFormResponse.self) ||
-            containsRecord(FleetVehicle.self) ||
-            containsRecord(FieldExpenseClaim.self) ||
-            containsRecord(BusinessTask.self)
-        didInspectCompanyOperationalRecords = true
     }
 
     @ViewBuilder
@@ -753,11 +743,6 @@ struct ContentView: View {
         case .syncIntegrations: return "arrow.triangle.2.circlepath"
         case .onsiteDocumentation: return "book"
         }
-    }
-
-    private func ensurePrimaryAdminExists() {
-        guard !users.contains(where: { $0.email == AppAccess.primaryAdminEmail }) else { return }
-        modelContext.insert(AppUser(email: AppAccess.primaryAdminEmail, role: .admin))
     }
 
     private func collapseCloudKitUserDuplicatesIfNeeded() {
@@ -1247,11 +1232,11 @@ struct ServiceCallDetailView: View {
     }
 
     private var availableFieldFormTemplates: [FieldFormTemplate] {
-        fieldFormTemplates.filter { $0.isActive && $0.applies(to: call.type) }
+        fieldFormTemplates.filter { $0.isActive && $0.isListed(for: call.type) }
     }
 
     private var completedFieldFormResponses: [FieldFormResponse] {
-        fieldFormResponses.filter { $0.serviceCallID == call.id }
+        FieldFormHistoryPolicy.responses(fieldFormResponses, for: call.id)
     }
 
     private var fieldFormCloseoutReadiness: FieldFormCloseoutReadiness {
@@ -1363,13 +1348,12 @@ GunnAire
     }
 
     private var linkedPayments: [Payment] {
-        guard let invoiceID = call.linkedInvoiceID else { return [] }
+        guard let invoiceID = linkedInvoice?.id else { return [] }
         return payments.filter { $0.invoice.id == invoiceID }
     }
 
     private var linkedInvoice: Invoice? {
-        guard let invoiceID = call.linkedInvoiceID else { return nil }
-        return invoices.first { $0.id == invoiceID }
+        BillingMilestoneReconciliation.linkedInvoice(for: call, in: invoices, payments: payments)
     }
 
     private var linkedEstimate: Estimate? {
@@ -2451,6 +2435,10 @@ GunnAire
                         jobActionsSection
                     }
 
+                    if selectedWorkspace == .overview && canScheduleApprovedWork {
+                        JobBillingAccessRow(call: call)
+                    }
+
                     if selectedWorkspace == .overview {
                         CustomerOperationalAlertInlineSummary(
                             alerts: activeOperationalAlerts,
@@ -2730,18 +2718,21 @@ GunnAire
                                     let isCompleted = FieldFormCloseoutPolicy.responseCompletes(
                                         template,
                                         serviceCallID: call.id,
-                                        responses: fieldFormResponses
+                                        responses: fieldFormResponses,
+                                        originalTemplates: fieldFormTemplates
                                     )
-                                    NavigationLink {
-                                        FieldFormResponseEditor(template: template, serviceCall: call, actorEmail: currentActivityActor)
-                                    } label: {
+                                    FieldFormDraftNavigationLink(template: template, serviceCall: call, actorEmail: currentActivityActor) {
                                         HStack {
                                             Label(
                                                 template.title,
                                                 systemImage: isCompleted ? "checkmark.circle.fill" : "checklist"
                                             )
                                             Spacer()
-                                            if template.requiresCompletionForCloseout {
+                                            if template.dataReviewIssue != nil {
+                                                Text("Needs review")
+                                                    .font(.caption2.weight(.semibold))
+                                                    .foregroundStyle(.orange)
+                                            } else if template.requiresCompletionForCloseout {
                                                 Text(isCompleted ? "Complete" : "Required")
                                                     .font(.caption2.weight(.semibold))
                                                     .foregroundStyle(isCompleted ? Color.green : Color.orange)
@@ -2751,13 +2742,14 @@ GunnAire
                                     .buttonStyle(.bordered)
                                 }
                             }
+                            FieldFormDraftLinks(serviceCallID: call.id, actorEmail: currentActivityActor)
                             if completedFieldFormResponses.isEmpty {
                                 Text("No reusable field forms completed for this job yet.")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             } else {
                                 Divider()
-                                Text("Completed")
+                                Text("Saved forms")
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(.secondary)
                                 ForEach(completedFieldFormResponses.prefix(3)) { response in
@@ -2775,8 +2767,13 @@ GunnAire
                                             Text(response.completedAt.formatted(date: .abbreviated, time: .shortened))
                                                 .font(.caption2)
                                                 .foregroundStyle(.secondary)
+                                            if response.completionReviewIssue(resolving: fieldFormTemplates.first { $0.id == response.templateID }) != nil {
+                                                Label("Needs review", systemImage: "exclamationmark.triangle")
+                                                    .font(.caption2)
+                                            }
                                         }
                                     }
+                                    .accessibilityIdentifier("SavedFieldFormResponse-\(response.id.uuidString)")
                                 }
                                 if completedFieldFormResponses.count > 3 {
                                     NavigationLink {
@@ -3565,8 +3562,8 @@ GunnAire
                     if selectedWorkspace == .billing && canViewFinancials && hasOpenInvoiceBalance {
                         VStack(spacing: 10) {
                             Button {
-                                if let linkedInvoiceID = call.linkedInvoiceID {
-                                    GunnAireAppIntentRouter.storePaymentCollectionRoute(linkedInvoiceID)
+                                if let linkedInvoiceID = linkedInvoice?.id {
+                                    GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(linkedInvoiceID)
                                 } else {
                                     GunnAireAppIntentRouter.storeDocumentationRoute(call.id)
                                 }
@@ -4182,6 +4179,7 @@ struct AddServiceCallView: View {
     @AppStorage("defaultJobDurationMinutes") private var defaultJobDurationMinutes = 90
     
     @State private var callType: ServiceCallType = .service
+    @State private var jobSaveMessage: String?
     @State private var dispatchUrgency: ServiceRequestUrgency = .normal
     @State private var eventTitle = ""
     @State private var customer: Customer?
@@ -4707,6 +4705,9 @@ struct AddServiceCallView: View {
             }
         }
         .tint(Color.brandGold) // Accent color gold for form controls using Color
+        .alert("Job not saved", isPresented: Binding(get: { jobSaveMessage != nil }, set: { if !$0 { jobSaveMessage = nil } })) {
+            Button("Keep Editing", role: .cancel) { jobSaveMessage = nil }
+        } message: { Text(jobSaveMessage ?? "Keep this form open and try Save again.") }
         .sheet(isPresented: $showingEquipmentNameplateCapture) {
             EquipmentNameplateCaptureSheet { draft in
                 applyEquipmentNameplateDraft(draft)
@@ -4811,6 +4812,15 @@ struct AddServiceCallView: View {
             equipment.applyTechnicalBaselines(to: call)
         }
         modelContext.insert(call)
+        do {
+            try JobBillingDispatch.shared.save(call, original: nil, context: modelContext)
+        } catch {
+            // Only the just-inserted unsaved job is removed; form values and
+            // unrelated model changes are retained. Never dismiss on failure.
+            modelContext.delete(call)
+            jobSaveMessage = (error as? JobBillingDispatchError)?.localizedDescription ?? JobBillingDispatchError.save.localizedDescription
+            return
+        }
         publishToGoogleCalendar(call)
         dismiss()
         if openDocumentationAfterSave {
@@ -4903,8 +4913,6 @@ struct AddServiceCallView: View {
     }
 
     private func publishToGoogleCalendar(_ call: ServiceCall) {
-        guard googleAuth.isAuthenticated else { return }
-        try? modelContext.save()
         let signedInEmail = AppIdentity.currentEmail
         GoogleCalendarScheduleSync.exportImmediately(
             call: call,
@@ -4963,6 +4971,9 @@ struct EditServiceCallView: View {
 
     let call: ServiceCall
 
+    @State private var jobSaveMessage: String?
+    @State private var billingEditRevision: JobBillingLocalRevision
+
     @State private var callType: ServiceCallType
     @State private var dispatchUrgency: ServiceRequestUrgency
     @State private var eventTitle: String
@@ -5006,6 +5017,7 @@ struct EditServiceCallView: View {
 
     init(call: ServiceCall) {
         self.call = call
+        _billingEditRevision = State(initialValue: JobBillingLocalRevision(call))
         let storedEventTitle = call.eventTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
         let recoveredEventTitle = GoogleCalendarScheduleSync.calendarEventSummary(from: call.notes)
         let initialEventTitle: String
@@ -5431,6 +5443,9 @@ struct EditServiceCallView: View {
             }
             .disabled(!canManageDispatch)
             .navigationTitle("Edit Service Call")
+            .alert("Job not saved", isPresented: Binding(get: { jobSaveMessage != nil }, set: { if !$0 { jobSaveMessage = nil } })) {
+                Button("Keep Editing", role: .cancel) { jobSaveMessage = nil }
+            } message: { Text(jobSaveMessage ?? "Keep this form open and try Save again.") }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -5575,6 +5590,17 @@ struct EditServiceCallView: View {
         guard !workLogBlocksRequestedStatus else { return }
         guard let customer else { return }
         guard !serviceRestrictionBlocksSave else { return }
+        let originalBillingTarget: JobBillingTarget
+        let restoreFailedEdit: () -> Void
+        do {
+            let (revision, target) = try JobBillingTarget.capture(call, context: modelContext)
+            guard revision == billingEditRevision else { throw JobBillingDispatchError.changed }
+            originalBillingTarget = target
+            restoreFailedEdit = try ServiceCallEditRollback.capture(call, context: modelContext)
+        } catch {
+            jobSaveMessage = JobBillingDispatchError.changed.localizedDescription
+            return
+        }
         let originalStart = call.scheduledDate
         let originalArrivalWindow = call.promisedArrivalWindowSummary
         let originalStatus = call.status
@@ -5673,10 +5699,18 @@ struct EditServiceCallView: View {
             ServiceCallActivity.record(for: call, action: "Dispatch priority updated", detail: "Priority changed from \(originalDispatchUrgency.displayName) to \(dispatchUrgency.displayName).", actorEmail: actorEmail, in: modelContext)
         }
         let shouldPublishCalendarChanges = GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call)
+        billingEditRevision = JobBillingLocalRevision(call)
+        do {
+            try JobBillingDispatch.shared.save(call, original: originalBillingTarget, context: modelContext)
+        } catch {
+            restoreFailedEdit()
+            billingEditRevision = JobBillingLocalRevision(call)
+            jobSaveMessage = (error as? JobBillingDispatchError)?.localizedDescription ?? JobBillingDispatchError.save.localizedDescription
+            return
+        }
         if shouldPublishCalendarChanges {
             GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(call)
         }
-        try? modelContext.save()
         if status == .cancelled {
             cancelManagedGoogleCalendarEvent(for: call)
         } else if shouldPublishCalendarChanges {
@@ -5686,7 +5720,6 @@ struct EditServiceCallView: View {
     }
 
     private func publishToGoogleCalendar(_ call: ServiceCall) {
-        guard googleAuth.isAuthenticated else { return }
         let signedInEmail = AppIdentity.currentEmail
         GoogleCalendarScheduleSync.exportImmediately(
             call: call,
@@ -5698,7 +5731,6 @@ struct EditServiceCallView: View {
     }
 
     private func cancelManagedGoogleCalendarEvent(for call: ServiceCall) {
-        guard googleAuth.isAuthenticated else { return }
         GoogleCalendarScheduleSync.cancelManagedEventImmediately(
             for: call,
             auth: googleAuth,

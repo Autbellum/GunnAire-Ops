@@ -89,7 +89,11 @@ struct AppRootView: View {
                 }
             } else {
                 if hasAuthenticatedUser {
-                    ContentView()
+                    if GunnAireCloudKit.usesTestDatabase && !ProcessInfo.processInfo.arguments.contains("-uiTestWorkspaceProofMismatch") {
+                        ContentView()
+                    } else {
+                        CompanyWorkspaceHost(hasAuthenticatedUser: $hasAuthenticatedUser)
+                    }
                 } else {
                     LoginView(hasAuthenticatedUser: $hasAuthenticatedUser)
                 }
@@ -119,6 +123,12 @@ struct AppRootView: View {
         }
         .task {
             await validatePersistedAuthenticationIfNeeded()
+        }
+        .onChange(of: hasAuthenticatedUser) { _, isAuthenticated in
+            if !isAuthenticated {
+                StaffReplicaReceiveController.shared.stopRecovery()
+                CompanyWorkspaceAccessController.shared.invalidate()
+            }
         }
         .onContinueUserActivity(FieldPaymentHandoff.activityType) { activity in
             // Capture the minimal, expiring route even when the receiving

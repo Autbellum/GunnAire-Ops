@@ -7,8 +7,10 @@ enum QuickBooksInvoiceAttachmentSync {
         invoices: [Invoice],
         attachments: [ServiceDocumentAttachment]
     ) -> [(attachment: ServiceDocumentAttachment, invoice: Invoice)] {
-        attachments.compactMap { attachment in
-            guard let invoice = invoices.first(where: { attachment.canUploadToQuickBooksInvoice($0) }) else {
+        uniqueAttachments(attachments).compactMap { attachment in
+            guard let id = attachment.invoiceID,
+                  let invoice = JobBillingDocumentLinks.invoice(id: id, in: invoices),
+                  attachment.canUploadToQuickBooksInvoice(invoice) else {
                 return nil
             }
             return (attachment, invoice)
@@ -19,8 +21,10 @@ enum QuickBooksInvoiceAttachmentSync {
         estimates: [Estimate],
         attachments: [ServiceDocumentAttachment]
     ) -> [(attachment: ServiceDocumentAttachment, estimate: Estimate)] {
-        attachments.compactMap { attachment in
-            guard let estimate = estimates.first(where: { attachment.canUploadToQuickBooksEstimate($0) }) else {
+        uniqueAttachments(attachments).compactMap { attachment in
+            guard let id = attachment.estimateID,
+                  let estimate = JobBillingDocumentLinks.estimate(id: id, in: estimates),
+                  attachment.canUploadToQuickBooksEstimate(estimate) else {
                 return nil
             }
             return (attachment, estimate)
@@ -38,13 +42,15 @@ enum QuickBooksInvoiceAttachmentSync {
         estimates: [Estimate] = [],
         invoices: [Invoice],
         serviceCalls: [ServiceCall] = [],
+        payments: [Payment] = [],
         attachments: [ServiceDocumentAttachment],
         modelContext: ModelContext
-    ) {
-        syncPendingServiceReports(
+    ) throws {
+        try syncPendingServiceReports(
             estimates: estimates,
             invoices: invoices,
             serviceCalls: serviceCalls,
+            payments: payments,
             attachments: attachments,
             modelContext: modelContext,
             api: QuickBooksDataAPI.shared
@@ -55,19 +61,35 @@ enum QuickBooksInvoiceAttachmentSync {
         estimates: [Estimate] = [],
         invoices: [Invoice],
         serviceCalls: [ServiceCall] = [],
+        payments: [Payment] = [],
         attachments: [ServiceDocumentAttachment],
         modelContext: ModelContext,
-        api: QuickBooksDataAPI
-    ) {
+        api: QuickBooksDataAPI,
+        save: (ModelContext) throws -> Void = { try $0.save() }
+    ) throws {
         guard api.isAuthenticated else { return }
+
+        let originalLinks = attachments.map { attachment in
+            (attachment, attachment.invoiceID, attachment.estimateID, attachment.quickBooksAttachableID,
+             attachment.quickBooksAttachedEntityKeysRaw, attachment.quickBooksSyncError)
+        }
 
         if linkServiceCallAttachmentsToBillingDocuments(
             estimates: estimates,
             invoices: invoices,
             serviceCalls: serviceCalls,
+            payments: payments,
             attachments: attachments
         ) > 0 {
-            try? modelContext.save()
+            do { try save(modelContext) }
+            catch {
+                for (attachment, invoice, estimate, provider, keys, error) in originalLinks {
+                    attachment.invoiceID = invoice; attachment.estimateID = estimate
+                    attachment.quickBooksAttachableID = provider; attachment.quickBooksAttachedEntityKeysRaw = keys
+                    attachment.quickBooksSyncError = error
+                }
+                throw QBODocumentError.storage
+            }
         }
 
         for attachment in pendingQuickBooksAttachmentUploads(estimates: estimates, invoices: invoices, attachments: attachments) {
@@ -76,23 +98,7 @@ enum QuickBooksInvoiceAttachmentSync {
                 continue
             }
 
-            api.uploadDocument(
-                fileURL: attachment.localFileURL,
-                note: attachment.caption,
-                attachableReferences: references
-            ) { result in
-                DispatchQueue.main.async {
-                    switch result {
-                    case .success(let attachableID):
-                        attachment.quickBooksAttachableID = attachableID
-                        attachment.markQuickBooksAttached(to: references)
-                        attachment.quickBooksSyncError = nil
-                    case .failure(let error):
-                        attachment.quickBooksSyncError = error.localizedDescription
-                    }
-                    try? modelContext.save()
-                }
-            }
+            QBODocumentNativeWorkflow.enqueue(attachment, references: references, context: modelContext, api: api)
         }
     }
 
@@ -101,13 +107,16 @@ enum QuickBooksInvoiceAttachmentSync {
         invoices: [Invoice],
         attachments: [ServiceDocumentAttachment]
     ) -> [ServiceDocumentAttachment] {
-        var seenAttachmentIDs: Set<UUID> = []
-        return attachments.filter { attachment in
-            guard !missingQuickBooksAttachableReferences(for: attachment, estimates: estimates, invoices: invoices).isEmpty,
-                  seenAttachmentIDs.insert(attachment.id).inserted else {
-                return false
-            }
-            return true
+        uniqueAttachments(attachments).filter { attachment in
+            !missingQuickBooksAttachableReferences(for: attachment, estimates: estimates, invoices: invoices).isEmpty
+        }
+    }
+
+    private static func uniqueAttachments(_ attachments: [ServiceDocumentAttachment]) -> [ServiceDocumentAttachment] {
+        let groups = Dictionary(grouping: attachments, by: \.id)
+        var seen = Set<UUID>()
+        return attachments.filter {
+            JobBillingDocumentLinks.unique(groups[$0.id] ?? []) != nil && seen.insert($0.id).inserted
         }
     }
 
@@ -117,11 +126,15 @@ enum QuickBooksInvoiceAttachmentSync {
         invoices: [Invoice]
     ) -> [QuickBooksAttachableReference] {
         var references: [QuickBooksAttachableReference] = []
-        if let invoice = invoices.first(where: { attachment.canUploadToQuickBooksInvoice($0) }),
+        if let id = attachment.invoiceID,
+           let invoice = JobBillingDocumentLinks.invoice(id: id, in: invoices),
+           attachment.canUploadToQuickBooksInvoice(invoice),
            let reference = attachment.quickBooksInvoiceReference(for: invoice) {
             references.append(reference)
         }
-        if let estimate = estimates.first(where: { attachment.canUploadToQuickBooksEstimate($0) }),
+        if let id = attachment.estimateID,
+           let estimate = JobBillingDocumentLinks.estimate(id: id, in: estimates),
+           attachment.canUploadToQuickBooksEstimate(estimate),
            let reference = attachment.quickBooksEstimateReference(for: estimate) {
             references.append(reference)
         }
@@ -142,47 +155,41 @@ enum QuickBooksInvoiceAttachmentSync {
         estimates: [Estimate],
         invoices: [Invoice],
         serviceCalls: [ServiceCall] = [],
+        payments: [Payment] = [],
         attachments: [ServiceDocumentAttachment]
     ) -> Int {
-        let invoicesByServiceCallID = Dictionary(
-            invoices.compactMap { invoice -> (UUID, Invoice)? in
-                guard let serviceCallID = invoice.serviceCallID else { return nil }
-                return (serviceCallID, invoice)
-            },
-            uniquingKeysWith: { existing, candidate in
-                existing.createdAt >= candidate.createdAt ? existing : candidate
-            }
-        )
-        let estimatesByServiceCallID = Dictionary(
-            estimates.compactMap { estimate -> (UUID, Estimate)? in
-                guard let serviceCallID = estimate.serviceCallID else { return nil }
-                return (serviceCallID, estimate)
-            },
-            uniquingKeysWith: { existing, candidate in
-                existing.createdAt >= candidate.createdAt ? existing : candidate
-            }
-        )
-        let invoicesByID = Dictionary(invoices.map { ($0.id, $0) }, uniquingKeysWith: { existing, _ in existing })
-        let estimatesByID = Dictionary(estimates.map { ($0.id, $0) }, uniquingKeysWith: { existing, _ in existing })
-        let serviceCallsByID = Dictionary(serviceCalls.map { ($0.id, $0) }, uniquingKeysWith: { existing, _ in existing })
-
+        let activeInvoices = BillingMilestoneReconciliation.project(invoices, payments: payments).activeInvoices
         var changed = 0
-        for attachment in attachments where attachment.canLinkToQuickBooksInvoiceAttachment {
-            guard let serviceCallID = attachment.serviceCallID else { continue }
-            let linkedCall = serviceCallsByID[serviceCallID]
+        for attachment in uniqueAttachments(attachments) where attachment.canLinkToQuickBooksInvoiceAttachment {
+            guard let serviceCallID = attachment.serviceCallID, let customer = attachment.customer else { continue }
+            let calls = serviceCalls.filter { $0.id == serviceCallID }
+            let invoice: Invoice?
+            let estimate: Estimate?
+            if !calls.isEmpty {
+                guard let call = JobBillingDocumentLinks.unique(calls), call.customer === customer else { continue }
+                invoice = JobBillingDocumentLinks.invoice(for: call, in: invoices, payments: payments)
+                estimate = JobBillingDocumentLinks.estimate(for: call, in: estimates)
+            } else {
+                // Legacy files can precede the operational record. Only an exact,
+                // unique back-reference can fill an absent link; never pick a date.
+                invoice = JobBillingDocumentLinks.unique(activeInvoices.filter { $0.serviceCallID == serviceCallID && $0.customer === customer })
+                estimate = JobBillingDocumentLinks.unique(estimates.filter {
+                    ($0.serviceCallID == serviceCallID || $0.scheduledServiceCallID == serviceCallID) && $0.customer === customer
+                })
+            }
 
             if attachment.canLinkToQuickBooksInvoiceDocument,
                attachment.invoiceID == nil,
-               let invoice = invoicesByServiceCallID[serviceCallID] ?? linkedCall?.linkedInvoiceID.flatMap({ invoicesByID[$0] }),
-               attachment.customerMatches(invoice.customer) {
+               let invoice, invoice.quickBooksIdentityReviewMessage == nil,
+               JobBillingDocumentLinks.invoice(id: invoice.id, in: invoices) === invoice {
                 attachment.linkToInvoiceIfNeeded(invoice)
                 changed += 1
             }
 
             if attachment.canLinkToQuickBooksEstimateDocument,
                attachment.estimateID == nil,
-               let estimate = estimatesByServiceCallID[serviceCallID] ?? linkedCall?.linkedEstimateID.flatMap({ estimatesByID[$0] }),
-               attachment.customerMatches(estimate.customer) {
+               let estimate,
+               JobBillingDocumentLinks.estimate(id: estimate.id, in: estimates) === estimate {
                 attachment.linkToEstimateIfNeeded(estimate)
                 changed += 1
             }

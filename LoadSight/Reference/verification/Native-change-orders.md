@@ -1,0 +1,13 @@
+# Native change order authoring
+
+The Change orders workspace lists saved drafts and opens a full read-only record detail. New change order opens a native form for CO number/date/customer/author, supplied entitlement classification and source, original/proposed mechanical scope, drawing/specification revision, audit/RFI references, original/proposed quantity rows, all four cost categories, markup basis, tax/bond, time impact, exclusions and approval language.
+
+Text entry remains separate from the shared numeric model. Blank numbers become unknown; malformed, nonfinite and unsourced known values fail without erasing the draft. Signed USD costs support credits. Quantities remain independent of quoted cost deltas. A live review shows known entries, complete subtotal, markup and total, missing fields and draft limitations. Saving invokes Core creation, retains the original estimate and reopens QA. Saved records display their sources and recorded author. Existing-record correction/history and CO DOCX remain pending.
+
+Unsaved edits disable interactive sheet dismissal. Cancel opens an alert with explicit Keep editing and Discard draft actions. Clean forms cancel directly. Save errors preserve the form. Multiline fields have persistent accessibility labels.
+
+Model verification: `output/verification/change-order-ui-tests.log` records 131 tests with zero failures. Two new form-state tests verify blank/zero/credit distinction, rejection of malformed text and missing sources, complete numeric/quantity mapping, and preservation of typed values on errors. Mac build evidence is `output/verification/change-order-ui-mac-build.log`.
+
+Native runtime test: `testChangeOrderDraftSaveAndReopen` in `Native/UITests/LoadSightUITests.swift`. The first run, `output/verification/native-ui/20260910T162300728489Z`, reached the discard prompt but failed because the popover had multiple dismissal-region matches. This prompted replacement of the confirmation popover with an alert containing explicit buttons. Final run `output/verification/native-ui/20260910T162417764747Z` passed on the dedicated iOS 26.2 iPad simulator. It entered the number/author/original/proposed scopes, chose Keep editing, saved, closed and reopened the document, and opened the saved detail. Both saved-list and reopened-detail screenshots were inspected: readable layout, recorded author and explicit unknown total. `Verified-change-order.loadsight` and `persistence-check.json` preserve actual native output; source inspection confirms all cost values remain unknown and QA is open. iOS build and test exited successfully.
+
+No physical-device, Mac interaction, complete pricing-entry interaction or final-release acceptance is implied. The full application objective remains active.

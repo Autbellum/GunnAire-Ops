@@ -8,6 +8,7 @@
 import Testing
 @testable import GunnAire_Ops
 import CoreImage
+import CoreML
 import Foundation
 import PDFKit
 import SwiftData
@@ -975,29 +976,48 @@ struct GunnAire_OpsTests {
         request.symbologies = [.qr]
 
         do {
+            #if targetEnvironment(simulator)
+            for (stage, devices) in try request.supportedComputeStageDevices {
+                if let cpu = devices.first(where: { if case .cpu = $0 { return true }; return false }) {
+                    request.setComputeDevice(cpu, for: stage)
+                }
+            }
+            #endif
             try VNImageRequestHandler(cgImage: image).perform([request])
-            return request.results?.compactMap(\.payloadStringValue).first
+            if let payload = request.results?.compactMap(\.payloadStringValue).first {
+                return payload
+            }
         } catch let error as NSError {
             #if targetEnvironment(simulator)
-            // Current iOS simulators can reject Vision barcode requests before decoding
-            // with an unavailable inference context. Keep real devices on the production
-            // Vision path while still proving the generated QR payload in simulator CI.
-            guard error.domain == "com.apple.Vision", error.code == 9 else {
-                throw error
-            }
-            let detector = CIDetector(
-                ofType: CIDetectorTypeQRCode,
-                context: CIContext(),
-                options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]
-            )
-            return detector?
-                .features(in: CIImage(cgImage: image))
-                .compactMap { ($0 as? CIQRCodeFeature)?.messageString }
-                .first
+            guard error.domain == "com.apple.Vision", error.code == 9 else { throw error }
             #else
             throw error
             #endif
         }
+        #if targetEnvironment(simulator)
+        // Vision in a VM can return no observations as well as inference error 9.
+        // Independently decode the actual image; never substitute the expected
+        // payload. Physical camera/Vision acceptance remains a separate gate.
+        print("QR fixture: simulator Vision unavailable or empty; verifying with software QR decoding.")
+        let detector = CIDetector(
+            ofType: CIDetectorTypeQRCode,
+            context: CIContext(options: [.useSoftwareRenderer: true]),
+            options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]
+        )
+        return detector?
+            .features(in: CIImage(cgImage: image))
+            .compactMap { ($0 as? CIQRCodeFeature)?.messageString }
+            .first
+        #else
+        return nil
+        #endif
+    }
+
+    @Test func equipmentQRCodeDecoderRejectsAnImageWithoutACode() throws {
+        let blank = CIImage(color: .white).cropped(to: CGRect(x: 0, y: 0, width: 128, height: 128))
+        let image = try #require(CIContext(options: [.useSoftwareRenderer: true])
+            .createCGImage(blank, from: blank.extent))
+        #expect(try decodedQRCodePayload(from: image) == nil)
     }
 
     @Test func equipmentAssetLabelExportsAReadableSinglePagePDF() throws {
@@ -1045,8 +1065,8 @@ struct GunnAire_OpsTests {
         #expect(configuration.cloudKitContainerIdentifier == GunnAireCloudKit.containerIdentifier)
         #expect(configuration.isStoredInMemoryOnly == false)
         #expect(configuration.url.lastPathComponent == GunnAireCloudKitSchemaBootstrap.storeFileName)
-        #expect(GunnAireCloudKitSchemaBootstrap.schemaVersion == 23)
-        #expect(GunnAireCloudKitSchemaBootstrap.storeFileName.contains("V23"))
+        #expect(GunnAireCloudKitSchemaBootstrap.schemaVersion == 27)
+        #expect(GunnAireCloudKitSchemaBootstrap.storeFileName.contains("V27"))
     }
     #endif
 
@@ -1079,15 +1099,15 @@ struct GunnAire_OpsTests {
         #expect(
             OperationalDataContinuity.workspaceAccess(
                 role: .fieldTechnician,
-                didInspectLocalRecords: false,
-                hasLocalCompanyRecords: false
+                didCheckIdentity: false,
+                hasVerifiedCompanyStore: false
             ) == .checking
         )
 
         let emptyReplica = OperationalDataContinuity.workspaceAccess(
             role: .dispatcher,
-            didInspectLocalRecords: true,
-            hasLocalCompanyRecords: false
+            didCheckIdentity: true,
+            hasVerifiedCompanyStore: false
         )
         #expect(emptyReplica == .emptyReplica)
         #expect(!emptyReplica.allowsOperationalWork)
@@ -1103,22 +1123,22 @@ struct GunnAire_OpsTests {
         #expect(notice.recoveryDetail.localizedCaseInsensitiveContains("same approved business iCloud account"))
     }
 
-    @Test func existingOfflineReplicaRemainsUsableAndAdminCanBootstrapTheCompany() {
+    @Test func onlyVerifiedReplicaRemainsUsableAndAdminCannotBypassProof() {
         let offlineStaff = OperationalDataContinuity.workspaceAccess(
             role: .fieldTechnician,
-            didInspectLocalRecords: true,
-            hasLocalCompanyRecords: true
+            didCheckIdentity: true,
+            hasVerifiedCompanyStore: true
         )
         #expect(offlineStaff == .ready)
         #expect(offlineStaff.allowsOperationalWork)
 
         let firstAdmin = OperationalDataContinuity.workspaceAccess(
             role: .admin,
-            didInspectLocalRecords: true,
-            hasLocalCompanyRecords: false
+            didCheckIdentity: true,
+            hasVerifiedCompanyStore: false
         )
-        #expect(firstAdmin == .ready)
-        #expect(firstAdmin.allowsOperationalWork)
+        #expect(firstAdmin == .emptyReplica)
+        #expect(!firstAdmin.allowsOperationalWork)
     }
 
     @Test func cloudKitMirroringFailureRemainsVisibleUntilThatOperationSucceeds() throws {
@@ -1657,25 +1677,27 @@ struct GunnAire_OpsTests {
             )
         )
 
-        try QuickBooksLocalSync.importSnapshot(
-            customers: [],
-            items: [],
-            estimates: [],
-            invoices: [],
-            payments: [remotePayment],
-            vendors: [],
-            into: context
-        )
+        #expect(throws: QuickBooksBillingImportReview.self) {
+            try QuickBooksLocalSync.importSnapshot(
+                customers: [],
+                items: [],
+                estimates: [],
+                invoices: [],
+                payments: [remotePayment],
+                vendors: [],
+                into: context
+            )
+        }
 
         let imported = try context.fetch(FetchDescriptor<Payment>())
         #expect(imported.count == 2)
         #expect(imported.first { $0.invoice.id == firstInvoice.id }?.amount == 100)
         #expect(imported.first { $0.invoice.id == secondInvoice.id }?.amount == 200)
         #expect(Set(imported.compactMap(\.quickBooksID)) == ["payment-300"])
-        #expect(firstInvoice.quickBooksBalanceDue == 0)
-        #expect(secondInvoice.quickBooksBalanceDue == 0)
-        #expect(firstInvoice.status == "paid")
-        #expect(secondInvoice.status == "paid")
+        #expect(firstInvoice.quickBooksBalanceDue == nil)
+        #expect(secondInvoice.quickBooksBalanceDue == nil)
+        #expect(!firstInvoice.isReadyForPaymentCollection)
+        #expect(!secondInvoice.isReadyForPaymentCollection)
     }
 
     @Test func invoicePaymentTermsProvideOneDeterministicOverdueBoundary() throws {
@@ -3285,8 +3307,8 @@ struct GunnAire_OpsTests {
         context.insert(second)
         try context.save()
 
-        #expect(AppAccess.activeRole(email: first.email, users: [first, second]) == .standard)
-        #expect(AppAccess.isAuthorized(email: first.email, users: [first, second]))
+        #expect(AppAccess.activeRole(email: first.email, users: [first, second]) == nil)
+        #expect(!AppAccess.isAuthorized(email: first.email, users: [first, second]))
         #expect(AppAccess.isAdmin(email: first.email, users: [first, second]) == false)
         #expect(AppAccess.canManageDispatch(email: first.email, users: [first, second]) == false)
         #expect(AppAccess.canViewFinancialManagement(email: first.email, users: [first, second]) == false)
@@ -5242,7 +5264,8 @@ struct GunnAire_OpsTests {
         let dispatch = AppUser(email: "dispatch-progress@gunnaire.com", role: .dispatcher)
         let standard = AppUser(email: "standard-progress@gunnaire.com", role: .standard)
         let accounting = AppUser(email: "accounting-progress@gunnaire.com", role: .accounting)
-        let users = [field, dispatch, standard, accounting]
+        let admin = AppUser(email: AppAccess.primaryAdminEmail, role: .admin)
+        let users = [field, dispatch, standard, accounting, admin]
 
         #expect(AppAccess.canUpdateJobProgress(email: field.email, users: users))
         #expect(AppAccess.canUpdateJobProgress(email: dispatch.email, users: users))
@@ -17075,7 +17098,7 @@ struct GunnAire_OpsTests {
     }
 
     @MainActor
-    @Test func quickBooksLocalSyncLinksImportedInvoiceToMatchingServiceCall() async throws {
+    @Test func quickBooksLocalSyncDoesNotInferInvoiceJobFromDateAndAmount() async throws {
         let schema = GunnAireModelSchema.schema
         let container = try ModelContainer(
             for: schema,
@@ -17137,17 +17160,17 @@ struct GunnAire_OpsTests {
         let invoices = try context.fetch(FetchDescriptor<Invoice>())
         let importedInvoice = try #require(invoices.first { $0.quickBooksID == "QB-INV-1" })
 
-        #expect(importedInvoice.serviceCallID == call.id)
-        #expect(importedInvoice.serviceLocationID == serviceLocationID)
+        #expect(importedInvoice.serviceCallID == nil)
+        #expect(importedInvoice.serviceLocationID == nil)
         #expect(importedInvoice.siteAddress == "515 Imported Service Way")
-        #expect(call.linkedInvoiceID == importedInvoice.id)
-        #expect(call.status == .invoiced)
+        #expect(call.linkedInvoiceID == nil)
+        #expect(call.status != .invoiced)
         #expect(importedInvoice.quickBooksBalanceDue == 0)
         #expect(importedInvoice.status == "paid")
     }
 
     @MainActor
-    @Test func quickBooksLocalSyncReconcilesInvoiceStatusFromImportedPaymentOnlySnapshot() async throws {
+    @Test func quickBooksLocalSyncRequiresInvoiceRefreshAfterPaymentOnlySnapshot() async throws {
         let schema = GunnAireModelSchema.schema
         let container = try ModelContainer(
             for: schema,
@@ -17185,27 +17208,29 @@ struct GunnAire_OpsTests {
         }
         """.utf8))
 
-        try QuickBooksLocalSync.importSnapshot(
-            customers: [],
-            items: [],
-            estimates: [],
-            invoices: [],
-            payments: [quickBooksPayment],
-            vendors: [],
-            into: context
-        )
+        #expect(throws: QuickBooksBillingImportReview.self) {
+            try QuickBooksLocalSync.importSnapshot(
+                customers: [],
+                items: [],
+                estimates: [],
+                invoices: [],
+                payments: [quickBooksPayment],
+                vendors: [],
+                into: context
+            )
+        }
 
         let payments = try context.fetch(FetchDescriptor<Payment>())
         let importedPayment = try #require(payments.first { $0.quickBooksID == "QB-PAY-1" })
 
         #expect(importedPayment.invoice.id == invoice.id)
         #expect(importedPayment.method == "card")
-        #expect(invoice.status == "paid")
-        #expect(Invoice.resolvedStatus(for: invoice, payments: payments) == "paid")
+        #expect(invoice.status == "unpaid")
+        #expect(Invoice.resolvedStatus(for: invoice, payments: payments) == "review")
     }
 
     @MainActor
-    @Test func quickBooksLocalSyncReconcilesStaleQuickBooksBalanceFromPaymentOnlySnapshot() async throws {
+    @Test func quickBooksLocalSyncPreservesLastBalanceUntilInvoiceRefresh() async throws {
         let schema = GunnAireModelSchema.schema
         let container = try ModelContainer(
             for: schema,
@@ -17244,25 +17269,27 @@ struct GunnAire_OpsTests {
         }
         """.utf8))
 
-        try QuickBooksLocalSync.importSnapshot(
-            customers: [],
-            items: [],
-            estimates: [],
-            invoices: [],
-            payments: [quickBooksPayment],
-            vendors: [],
-            into: context
-        )
+        #expect(throws: QuickBooksBillingImportReview.self) {
+            try QuickBooksLocalSync.importSnapshot(
+                customers: [],
+                items: [],
+                estimates: [],
+                invoices: [],
+                payments: [quickBooksPayment],
+                vendors: [],
+                into: context
+            )
+        }
 
         let payments = try context.fetch(FetchDescriptor<Payment>())
 
-        #expect(invoice.quickBooksBalanceDue == 0)
-        #expect(invoice.status == "paid")
-        #expect(Invoice.outstandingBalance(for: invoice, payments: payments) == 0)
+        #expect(invoice.quickBooksBalanceDue == 500)
+        #expect(invoice.status == "unpaid")
+        #expect(Invoice.outstandingBalance(for: invoice, payments: payments) == 500)
     }
 
     @MainActor
-    @Test func quickBooksLocalSyncLinksImportedEstimateToMatchingServiceCall() async throws {
+    @Test func quickBooksLocalSyncDoesNotInferEstimateJobFromDateAndAmount() async throws {
         let schema = GunnAireModelSchema.schema
         let container = try ModelContainer(
             for: schema,
@@ -17313,8 +17340,8 @@ struct GunnAire_OpsTests {
         let estimates = try context.fetch(FetchDescriptor<Estimate>())
         let importedEstimate = try #require(estimates.first { $0.quickBooksID == "QB-EST-LINK-1" })
 
-        #expect(importedEstimate.serviceCallID == call.id)
-        #expect(call.linkedEstimateID == importedEstimate.id)
+        #expect(importedEstimate.serviceCallID == nil)
+        #expect(call.linkedEstimateID == nil)
         #expect(importedEstimate.amount == 875)
         #expect(importedEstimate.siteAddress == "515 Imported Service Way")
     }
@@ -17521,7 +17548,7 @@ struct GunnAire_OpsTests {
     }
 
     @MainActor
-    @Test func googleCalendarExportPrefersAssignedTechnicianCalendar() async throws {
+    @Test func googleCalendarExportRetainsTheExplicitOriginalCalendar() async throws {
         let customer = Customer(name: "Route Customer")
         let technician = Technician(name: "Route Tech", contactInfo: "route.tech@example.com")
         let call = ServiceCall(
@@ -17539,7 +17566,7 @@ struct GunnAire_OpsTests {
             writableCalendarIDs: ["previous.tech@example.com", "route.tech@example.com", "primary"]
         )
 
-        #expect(selected == "route.tech@example.com")
+        #expect(selected == "previous.tech@example.com")
     }
 
     @MainActor
@@ -18267,6 +18294,10 @@ struct GunnAire_OpsTests {
             maintenanceContractID: maintenanceContractID,
             workflow: .maintenanceRenewal
         )
+        // Consume navigation as the real handoff does, not just its draft.
+        // Leaving Mail pending causes the next Accounting launch to correctly
+        // present an access-restriction alert over its otherwise valid Find UI.
+        #expect(GunnAireAppIntentRouter.consumePendingRoute() == .mail)
         let draft = GunnAireAppIntentRouter.consumePendingMailDraft()
 
         #expect(draft?.to == "customer@example.com")
@@ -18278,6 +18309,7 @@ struct GunnAire_OpsTests {
         #expect(draft?.invoiceID == invoiceID)
         #expect(draft?.maintenanceContractID == maintenanceContractID)
         #expect(draft?.workflow == .maintenanceRenewal)
+        #expect(GunnAireAppIntentRouter.consumePendingRoute() == nil)
     }
 
     @MainActor
@@ -18623,7 +18655,7 @@ struct GunnAire_OpsTests {
         #expect(Invoice.mostResolvedStatus("", "unpaid") == "unpaid")
     }
 
-    @Test func invoiceDisplayDeduplicationPrefersPaidQuickBooksRecord() async throws {
+    @Test func invoiceDisplayPreservesIndependentLocalAndPaidQuickBooksRecords() async throws {
         let customer = Customer(name: "Display Customer")
         let serviceCallID = UUID()
         let localDuplicate = Invoice(
@@ -18644,12 +18676,11 @@ struct GunnAire_OpsTests {
 
         let displayed = Invoice.displayDeduplicated([localDuplicate, quickBooksPaid])
 
-        #expect(displayed.count == 1)
-        #expect(displayed.first === quickBooksPaid)
-        #expect(displayed.first?.normalizedStatus == "paid")
+        #expect(displayed.count == 2)
+        #expect(Set(displayed.map(\.id)) == Set([localDuplicate.id, quickBooksPaid.id]))
     }
 
-    @Test func invoiceDisplayDeduplicationCollapsesLocalAndQuickBooksCopiesForSameServiceCall() async throws {
+    @Test func invoiceDisplayPreservesIndependentPaidAndUnpaidInvoicesOnOneJob() async throws {
         let customer = Customer(name: "Display Customer")
         let serviceCallID = UUID()
         let localPaidCopy = Invoice(
@@ -18671,9 +18702,8 @@ struct GunnAire_OpsTests {
 
         let displayed = Invoice.displayDeduplicated([localPaidCopy, quickBooksUnpaidCopy])
 
-        #expect(displayed.count == 1)
-        #expect(displayed.first === localPaidCopy)
-        #expect(Invoice.resolvedStatus(for: displayed.first!, payments: []) == "paid")
+        #expect(displayed.count == 2)
+        #expect(Set(displayed.map(\.id)) == Set([localPaidCopy.id, quickBooksUnpaidCopy.id]))
     }
 
     @Test func billingInvoiceQueuesDoNotRepeatCollectionInvoicesInOverdueSection() async throws {
@@ -18721,7 +18751,7 @@ struct GunnAire_OpsTests {
         #expect(collectible.contains { $0.id == paidInvoice.id } == false)
     }
 
-    @Test func estimateDisplayDeduplicationPrefersQuickBooksRecord() async throws {
+    @Test func estimateDisplayPreservesIndependentEqualValueProposals() async throws {
         let customer = Customer(name: "Estimate Display Customer")
         let serviceCallID = UUID()
         let localDuplicate = Estimate(
@@ -18742,9 +18772,8 @@ struct GunnAire_OpsTests {
 
         let displayed = Estimate.displayDeduplicated([localDuplicate, quickBooksEstimate])
 
-        #expect(displayed.count == 1)
-        #expect(displayed.first === quickBooksEstimate)
-        #expect(displayed.first?.status == "accepted")
+        #expect(displayed.count == 2)
+        #expect(Set(displayed.map(\.id)) == Set([localDuplicate.id, quickBooksEstimate.id]))
     }
 
     @Test func invoicePaymentHistoryRowsLabelRefundsClearly() async throws {
@@ -23202,7 +23231,9 @@ struct GunnAire_OpsTests {
 
         #expect(AppAccess.canOfferMaintenanceAgreements(email: field.email, users: [field]))
         #expect(AppAccess.canOfferMaintenanceAgreements(email: dispatcher.email, users: [dispatcher]))
-        #expect(AppAccess.canOfferMaintenanceAgreements(email: AppAccess.primaryAdminEmail, users: []))
+        let admin = AppUser(email: AppAccess.primaryAdminEmail, role: .admin)
+        #expect(AppAccess.canOfferMaintenanceAgreements(email: admin.email, users: [admin]))
+        #expect(!AppAccess.canOfferMaintenanceAgreements(email: admin.email, users: []))
         #expect(!AppAccess.canOfferMaintenanceAgreements(email: accounting.email, users: [accounting]))
         #expect(!AppAccess.canOfferMaintenanceAgreements(email: standard.email, users: [standard]))
     }
@@ -25730,10 +25761,10 @@ struct GunnAire_OpsTests {
             QuickBooksInvoice.self,
             from: Data(#"{"Id":"qbo-invoice-81","DocNumber":"INV-81","CustomerRef":{"value":"customer-22","name":"Payment Customer"},"TotalAmt":125,"Balance":125}"#.utf8)
         )
-        let customer = Customer(name: "Payment Customer")
+        let customer = Customer(quickBooksID: "customer-22", name: "Payment Customer")
         let linkedInvoice = Invoice(
             customer: customer,
-            quickBooksID: " QBO-INVOICE-81 ",
+            quickBooksID: " qbo-invoice-81 ",
             lineItemSummary: "Service",
             amount: 125
         )
@@ -25768,7 +25799,7 @@ struct GunnAire_OpsTests {
             QuickBooksTrackedPaymentPolicy.linkedLocalInvoice(
                 for: remoteInvoice,
                 in: [documentNumberLink]
-            ) === documentNumberLink
+            ) == nil
         )
         #expect(
             QuickBooksTrackedPaymentPolicy.linkedLocalInvoice(
@@ -25799,24 +25830,30 @@ struct GunnAire_OpsTests {
         )
         payment.invoice = nil
 
+        var sends = 0
+        let api = QuickBooksDataAPI(
+            testTokens: .init(accessToken: "fixture-bearer", expiration: .distantFuture),
+            realmID: "fixture-realm", environment: Config.QuickBooks.environment
+        ) { _ in
+            sends += 1
+            throw URLError(.notConnectedToInternet)
+        }
+        let service = QuickBooksPaymentsService(api: api, journal: FixturePaymentJournal())
         await #expect(throws: QuickBooksPaymentsServiceError.invoiceRelationshipUnavailable) {
-            try await QuickBooksPaymentsService.shared.retryAccountingSync(for: payment)
+            try await service.syncAndRecordAccountingFollowUp(for: payment)
         }
         await #expect(throws: QuickBooksPaymentsServiceError.invoiceRelationshipUnavailable) {
-            try await QuickBooksPaymentsService.shared.syncManualAccountingPayment(for: payment)
+            try await service.syncAndRecordAccountingFollowUp(for: payment, manual: true)
         }
         await #expect(throws: QuickBooksPaymentsServiceError.invoiceRelationshipUnavailable) {
-            try await QuickBooksPaymentsService.shared.refundPayment(
-                payment: payment,
-                amount: 25,
-                note: "Customer refund"
-            )
+            try await service.refundPayment(payment: payment, amount: 25, note: "Customer refund")
         }
 
         payment.isRefund = true
         await #expect(throws: QuickBooksPaymentsServiceError.invoiceRelationshipUnavailable) {
-            try await QuickBooksPaymentsService.shared.retryRefundReceiptSync(for: payment)
+            try await service.syncAndRecordAccountingFollowUp(for: payment)
         }
+        #expect(sends == 0)
         #expect(
             QuickBooksPaymentsServiceError.invoiceRelationshipUnavailable.errorDescription?
                 .contains("no QuickBooks request was sent") == true
@@ -25924,7 +25961,10 @@ struct GunnAire_OpsTests {
         original.setValue("payments-request-42", forHTTPHeaderField: "Request-Id")
         original.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let retry = QuickBooksRateLimitRetryPolicy.requestForRetry(original)
+        let context = QuickBooksRetryContext(realmID: "realm-1", environment: "production")
+        let retry = try #require(QuickBooksRateLimitRetryPolicy.requestForRetry(
+            original, accessToken: "current-token", originalContext: context, currentContext: context
+        ))
 
         #expect(retry.url == original.url)
         #expect(retry.httpMethod == original.httpMethod)
@@ -25934,6 +25974,42 @@ struct GunnAire_OpsTests {
             .queryItems?
             .first(where: { $0.name.lowercased() == "requestid" })?
             .value == "accounting-request-42")
+    }
+
+    @Test func quickBooksRetryRefreshesBearerWithoutChangingMutationOrCompany() throws {
+        let context = QuickBooksRetryContext(realmID: "realm-1", environment: "production")
+        for path in ["v3/company/realm-1/invoice?requestid=invoice-42", "quickbooks/v4/payments/charges", "v3/company/realm-1/upload?requestid=upload-42"] {
+            var original = URLRequest(url: try #require(URL(string: "https://quickbooks.api.intuit.com/\(path)")))
+            original.httpMethod = "POST"
+            original.timeoutInterval = 45
+            original.httpBody = Data("--preserved-boundary\r\noriginal-body\r\n--preserved-boundary--".utf8)
+            original.setValue("Bearer expired-token", forHTTPHeaderField: "Authorization")
+            original.setValue("stable-request-42", forHTTPHeaderField: "Request-Id")
+            original.setValue("multipart/form-data; boundary=preserved-boundary", forHTTPHeaderField: "Content-Type")
+
+            let retry = try #require(QuickBooksRateLimitRetryPolicy.requestForRetry(
+                original, accessToken: "refreshed-token", originalContext: context, currentContext: context
+            ))
+            #expect(retry.value(forHTTPHeaderField: "Authorization") == "Bearer refreshed-token")
+            #expect(original.value(forHTTPHeaderField: "Authorization") == "Bearer expired-token")
+            #expect(retry.url == original.url)
+            #expect(retry.httpBody == original.httpBody)
+            #expect(retry.httpMethod == original.httpMethod)
+            #expect(retry.timeoutInterval == original.timeoutInterval)
+            #expect(retry.allHTTPHeaderFields?.filter { $0.key.lowercased() != "authorization" }
+                == original.allHTTPHeaderFields?.filter { $0.key.lowercased() != "authorization" })
+            #expect(QuickBooksRateLimitRetryPolicy.requestForRetry(
+                retry, accessToken: "other-company-token", originalContext: context,
+                currentContext: QuickBooksRetryContext(realmID: "realm-2", environment: "production")
+            ) == nil)
+            #expect(QuickBooksRateLimitRetryPolicy.requestForRetry(
+                retry, accessToken: "sandbox-token", originalContext: context,
+                currentContext: QuickBooksRetryContext(realmID: "realm-1", environment: "sandbox")
+            ) == nil)
+            #expect(QuickBooksRateLimitRetryPolicy.requestForRetry(
+                retry, accessToken: "", originalContext: context, currentContext: context
+            ) == nil)
+        }
     }
 
     @Test func quickBooksWriteResponsesRequireRealProviderIdentifiers() throws {
@@ -25952,7 +26028,7 @@ struct GunnAire_OpsTests {
     }
 
     @Test func quickBooksAttachmentUploadRequiresConfirmedAttachableIdentifier() throws {
-        let confirmed = Data(#"{"AttachableResponse":[{"Id":"  attachment-42  "}]}"#.utf8)
+        let confirmed = Data(#"{"AttachableResponse":[{"Attachable":{"Id":"  attachment-42  "}}]}"#.utf8)
         #expect(try QuickBooksUploadResponsePolicy.attachmentID(from: confirmed) == "attachment-42")
 
         #expect(throws: QuickBooksProviderResponseError.self) {
@@ -25962,7 +26038,7 @@ struct GunnAire_OpsTests {
         }
         #expect(throws: QuickBooksProviderResponseError.self) {
             try QuickBooksUploadResponsePolicy.attachmentID(
-                from: Data(#"{"AttachableResponse":[{"Id":" "}]}"#.utf8)
+                from: Data(#"{"AttachableResponse":[{"Attachable":{"Id":" "}}]}"#.utf8)
             )
         }
     }
@@ -28420,8 +28496,8 @@ struct GunnAire_OpsTests {
             for: customer,
             invoices: [current, tenDays, fortyFiveDays, seventyFiveDays, oneHundredTwentyDays, paid, unrelated],
             payments: [partialPayment, partialRefund, staleLocalQuickBooksPayment, fullPayment],
-            asOf: asOf,
-            calendar: calendar
+            calendar: calendar,
+            now: asOf
         )
 
         #expect(snapshot.openInvoiceCount == 5)
@@ -28474,7 +28550,7 @@ struct GunnAire_OpsTests {
             customer: customer,
             invoices: [invoice],
             payments: [payment],
-            asOf: asOf
+            now: asOf
         )
         let text = try #require(PDFDocument(url: url)?.string)
 

@@ -8,16 +8,6 @@ struct ReceiptsAndBillsView: View {
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "GunnAireOps", category: "ReceiptsAndBills")
     @Environment(\.modelContext) private var modelContext
 
-    private struct LegacyPendingUploadRecord: Codable {
-        let id: UUID
-        let filePath: String
-        let displayName: String
-        let entityTypeRaw: String?
-        let entityID: String?
-        let createdAt: Date
-        let lastError: String?
-    }
-
     private struct WarrantyClaimQueueRow: Identifiable {
         let equipment: CustomerEquipment
         let claim: EquipmentWarrantyClaim
@@ -25,26 +15,10 @@ struct ReceiptsAndBillsView: View {
         var id: UUID { claim.id }
     }
 
-    struct PendingUploadRecord: Codable, Identifiable {
-        let id: UUID
-        let filePath: String
-        let displayName: String
-        let entityTypeRaw: String?
-        let entityID: String?
-        let createdAt: Date
-        var retryCount: Int
-        var lastAttemptAt: Date?
-        var nextRetryAt: Date?
-        var isTerminalFailure: Bool
-        var lastError: String?
-    }
-
-    private let pendingUploadsStorageKey = "ReceiptsBillsPendingUploads.v1"
-    private let maxAutoRetryCount = 8
-
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
+    @Query private var payments: [Payment]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query(sort: \Vendor.name, order: .forward) private var vendors: [Vendor]
     @Query(sort: \Item.name, order: .forward) private var catalogItems: [Item]
@@ -74,16 +48,11 @@ struct ReceiptsAndBillsView: View {
     @State private var attachEntityID: String = ""
     @State private var selectedServiceCallID: UUID?
     @State private var selectedJobDocumentStage: JobDocumentStage = .supporting
-    @State private var isLoadingAttachTargets = false
-    @State private var attachTargetOptions: [AttachTargetOption] = []
-    @State private var selectedAttachTargetID: String = ""
+    @StateObject private var transactionBrowser = ReceiptTransactionBrowser()
+    @State private var showingTransactionPicker = false
+    @State private var advancedLinkingExpanded = false
+    @State private var chosenTransaction: ReceiptTransactionChoice?
     @State private var attachLookupMessage: String?
-    @State private var pendingUploads: [PendingUploadRecord] = []
-    @State private var selectedPendingUploadForDetail: PendingUploadRecord?
-    @State private var pendingUploadForDeletion: PendingUploadRecord?
-    @State private var showingClearQueueConfirmation = false
-    @State private var queueFilter: QueueFilter = .all
-    @State private var queueSort: QueueSort = .nextRetry
     @State private var isUploadingReceiptToBackend = false
     @State private var backendUploadMessage: String?
     @State private var newPurchaseOrderVendorID: UUID?
@@ -119,20 +88,6 @@ struct ReceiptsAndBillsView: View {
     @State private var inventoryCountItem: Item?
     @State private var manualInventoryMovementExpanded = false
 
-    private enum QueueFilter: String, CaseIterable, Identifiable {
-        case all = "All"
-        case due = "Due"
-        case terminal = "Terminal"
-        var id: String { rawValue }
-    }
-
-    private enum QueueSort: String, CaseIterable, Identifiable {
-        case nextRetry = "Next Retry"
-        case retries = "Retries"
-        case oldest = "Oldest"
-        var id: String { rawValue }
-    }
-
     private enum JobDocumentStage: String, CaseIterable, Identifiable {
         case before = "Before Photos"
         case after = "After Photos"
@@ -143,56 +98,7 @@ struct ReceiptsAndBillsView: View {
 
     private var selectedServiceCall: ServiceCall? {
         guard let selectedServiceCallID else { return nil }
-        return serviceCalls.first { $0.id == selectedServiceCallID }
-    }
-
-    private var duePendingUploadsCount: Int {
-        let now = Date()
-        return pendingUploads.filter { record in
-            guard !record.isTerminalFailure else { return false }
-            guard let nextRetryAt = record.nextRetryAt else { return true }
-            return nextRetryAt <= now
-        }.count
-    }
-
-    private var terminalPendingUploadsCount: Int {
-        pendingUploads.filter(\.isTerminalFailure).count
-    }
-
-    private var filteredPendingUploads: [PendingUploadRecord] {
-        let now = Date()
-        let filtered: [PendingUploadRecord]
-        switch queueFilter {
-        case .all:
-            filtered = pendingUploads
-        case .due:
-            filtered = pendingUploads.filter { record in
-                guard !record.isTerminalFailure else { return false }
-                guard let nextRetryAt = record.nextRetryAt else { return true }
-                return nextRetryAt <= now
-            }
-        case .terminal:
-            filtered = pendingUploads.filter(\.isTerminalFailure)
-        }
-
-        switch queueSort {
-        case .nextRetry:
-            return filtered.sorted { lhs, rhs in
-                let lhsNext = lhs.nextRetryAt ?? .distantFuture
-                let rhsNext = rhs.nextRetryAt ?? .distantFuture
-                if lhsNext != rhsNext { return lhsNext < rhsNext }
-                return lhs.createdAt < rhs.createdAt
-            }
-        case .retries:
-            return filtered.sorted { lhs, rhs in
-                if lhs.retryCount != rhs.retryCount { return lhs.retryCount > rhs.retryCount }
-                return lhs.createdAt < rhs.createdAt
-            }
-        case .oldest:
-            return filtered.sorted { lhs, rhs in
-                lhs.createdAt < rhs.createdAt
-            }
-        }
+        return JobBillingDocumentLinks.unique(serviceCalls.filter { $0.id == selectedServiceCallID })
     }
 
     private var isAdminUser: Bool {
@@ -433,16 +339,18 @@ struct ReceiptsAndBillsView: View {
                     }
 
                     if selectedWorkspace == .documents {
-                    Section(header: Text("Sync and Transactions")
+                    Section(header: Text("File Destination")
                         .font(.headline)
                         .foregroundColor(Color.brandGold)) {
                         Picker("Service Call", selection: $selectedServiceCallID) {
                             Text("None").tag(UUID?.none)
                             ForEach(serviceCalls) { call in
-                                Text("\(call.customer.name) • \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))")
+                                Text("\(call.customer?.name ?? "Customer pending sync") • \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))")
                                     .tag(UUID?.some(call.id))
+                                    .accessibilityIdentifier("DocumentServiceCall-\(call.id.uuidString)")
                             }
                         }
+                        .accessibilityIdentifier("DocumentServiceCallPicker")
 
                         Picker("Documentation Type", selection: $selectedJobDocumentStage) {
                             ForEach(JobDocumentStage.allCases) { stage in
@@ -452,8 +360,8 @@ struct ReceiptsAndBillsView: View {
 
                         if let selectedServiceCall {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("Linked job: \(selectedServiceCall.customer.name)")
-                                if let address = selectedServiceCall.siteAddress ?? selectedServiceCall.customer.address,
+                                Text("Linked job: \(selectedServiceCall.customer?.name ?? "Customer pending sync")")
+                                if let address = selectedServiceCall.siteAddress ?? selectedServiceCall.customer?.address,
                                    !address.isEmpty {
                                     Text(address)
                                         .font(.caption)
@@ -462,51 +370,15 @@ struct ReceiptsAndBillsView: View {
                                 Text("Current photos: \(selectedServiceCall.beforePhotoCount) before • \(selectedServiceCall.afterPhotoCount) after")
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
-                                if selectedServiceCall.linkedInvoiceID == nil {
-                                    Text("This job does not have a linked invoice yet. QuickBooks attachment sync may still require a manual entity ID.")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
                             }
                         }
 
                         if isAdminUser {
-                            Picker("Attach To", selection: $selectedAttachEntityType) {
-                                ForEach(QuickBooksAttachableEntityType.allCases, id: \.self) { type in
-                                    Text(type.rawValue).tag(type)
-                                }
-                            }
-                            TextField("QuickBooks Entity ID (optional)", text: $attachEntityID)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled(true)
-
-                            Button("Load QuickBooks IDs") {
-                                loadAttachableTargets()
-                            }
-                            .disabled(isLoadingAttachTargets)
+                            receiptTransactionControls
                         } else {
                             Text("QuickBooks receipt and bill sync is admin-only. Field users can upload receipts to company storage from this screen.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                        }
-
-                        if isLoadingAttachTargets {
-                            ProgressView("Loading IDs...")
-                                .tint(Color.brandGold)
-                        }
-
-                        if !attachTargetOptions.isEmpty {
-                            Picker("Select Existing ID", selection: $selectedAttachTargetID) {
-                                Text("Manual Entry").tag("")
-                                ForEach(attachTargetOptions) { option in
-                                    Text(option.label).tag(option.idValue)
-                                }
-                            }
-                            .onChange(of: selectedAttachTargetID) { _, newValue in
-                                if !newValue.isEmpty {
-                                    attachEntityID = newValue
-                                }
-                            }
                         }
 
                         if let attachLookupMessage {
@@ -520,7 +392,7 @@ struct ReceiptsAndBillsView: View {
                                 syncDocuments()
                             }
                             .tint(Color.brandGold)
-                            .disabled(isSyncing || (receiptURL == nil && billURL == nil))
+                            .disabled(isSyncing || (receiptURL == nil && billURL == nil) || !receiptJobTargetIsCurrent)
                         }
 
                         if isSyncing {
@@ -531,103 +403,15 @@ struct ReceiptsAndBillsView: View {
                     }
 
                     if selectedWorkspace == .recovery, isAdminUser {
-                        Section(header: Text("Failed Upload Queue")
-                            .font(.headline)
-                            .foregroundColor(Color.brandGold)) {
-                            if pendingUploads.isEmpty {
-                                Text("No pending uploads.")
-                                    .foregroundColor(.secondary)
-                                    .italic()
-                            } else {
-                                Text("Queued: \(pendingUploads.count) • Due now: \(duePendingUploadsCount) • Terminal: \(terminalPendingUploadsCount)")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Picker("View", selection: $queueFilter) {
-                                    ForEach(QueueFilter.allCases) { filter in
-                                        Text(filter.rawValue).tag(filter)
-                                    }
-                                }
-                                .pickerStyle(.segmented)
-                                Picker("Sort", selection: $queueSort) {
-                                    ForEach(QueueSort.allCases) { sort in
-                                        Text(sort.rawValue).tag(sort)
-                                    }
-                                }
-                                .pickerStyle(.menu)
-                                Text("Showing \(filteredPendingUploads.count) item(s)")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-
-                                ForEach(filteredPendingUploads) { pending in
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(pending.displayName)
-                                            .font(.subheadline)
-                                        Text("Queued: \(pending.createdAt.formatted(date: .abbreviated, time: .shortened))")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                        Text("Retries: \(pending.retryCount)")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                        if let entityTypeRaw = pending.entityTypeRaw, let entityID = pending.entityID {
-                                            Text("Target: \(entityTypeRaw) \(entityID)")
-                                                .font(.caption2)
-                                                .foregroundColor(.secondary)
-                                        }
-                                        if let nextRetryAt = pending.nextRetryAt, nextRetryAt > Date() {
-                                            Text("Next retry: \(nextRetryAt.formatted(date: .abbreviated, time: .shortened))")
-                                                .font(.caption2)
-                                                .foregroundColor(.secondary)
-                                        }
-                                        if pending.isTerminalFailure {
-                                            Text("Status: Terminal failure (auto retry disabled)")
-                                                .font(.caption2)
-                                                .foregroundColor(.orange)
-                                        }
-                                        if let lastError = pending.lastError, !lastError.isEmpty {
-                                            Text("Last error: \(lastError)")
-                                                .font(.caption2)
-                                                .foregroundColor(.red)
-                                        }
-
-                                        HStack {
-                                            Button("Details") {
-                                                selectedPendingUploadForDetail = pending
-                                            }
-                                            .buttonStyle(.bordered)
-                                            .disabled(isSyncing)
-
-                                            Button("Retry Now") {
-                                                retryPendingUpload(pending, ignoreBackoff: true)
-                                            }
-                                            .buttonStyle(.bordered)
-                                            .disabled(isSyncing)
-
-                                            Button("Delete", role: .destructive) {
-                                                pendingUploadForDeletion = pending
-                                            }
-                                            .buttonStyle(.bordered)
-                                            .disabled(isSyncing)
-                                        }
-                                        .padding(.top, 4)
-                                    }
-                                }
-                            }
-
-                            Button("Retry Pending Uploads") {
-                                retryPendingUploads()
-                            }
-                            .disabled(isSyncing || pendingUploads.isEmpty)
-
-                            Button("Clear Queue", role: .destructive) {
-                                showingClearQueueConfirmation = true
-                            }
-                            .disabled(isSyncing || pendingUploads.isEmpty)
-
-                            Button("Purge Missing Files", role: .destructive) {
-                                purgeMissingFileEntries()
-                            }
-                            .disabled(isSyncing || pendingUploads.isEmpty)
+                        #if DEBUG
+                        if QBODocumentRecoveryFixture.enabled {
+                            QBODocumentRecoverySection(dependencies: QBODocumentRecoveryFixture.dependencies)
+                        } else {
+                            QBODocumentRecoverySection()
                         }
+                        #else
+                        QBODocumentRecoverySection()
+                        #endif
                     }
 
                     if selectedWorkspace == .documents {
@@ -651,9 +435,10 @@ struct ReceiptsAndBillsView: View {
                     }
                 }
                 .scrollContentBackground(.hidden)
-                .background(Color.primaryBlack)
+                .background(Color(uiColor: .systemBackground))
                 .navigationTitle("Receipts & Bills")
-                .foregroundColor(Color.brandGold)
+                .foregroundStyle(Color(uiColor: .label))
+                .tint(Color.brandGold)
             }
         }
         .fileImporter(isPresented: $showingReceiptPicker,
@@ -665,10 +450,10 @@ struct ReceiptsAndBillsView: View {
                 } catch {
                     receiptURL = nil
                     receiptImage = nil
-                    receiptImportMessage = "Failed to read file: \(error.localizedDescription)"
+                    receiptImportMessage = QBODocumentNativeWorkflow.message(error)
                 }
-            case .failure(let error):
-                Self.logger.error("Receipt file import error: \(error.localizedDescription, privacy: .public)")
+            case .failure:
+                receiptImportMessage = "No receipt was imported. Your original file has not been changed."
             }
         }
         .fileImporter(isPresented: $showingBillPicker,
@@ -680,10 +465,10 @@ struct ReceiptsAndBillsView: View {
                 } catch {
                     billURL = nil
                     billImage = nil
-                    billImportMessage = "Failed to read file: \(error.localizedDescription)"
+                    billImportMessage = QBODocumentNativeWorkflow.message(error)
                 }
-            case .failure(let error):
-                Self.logger.error("Bill file import error: \(error.localizedDescription, privacy: .public)")
+            case .failure:
+                billImportMessage = "No bill was imported. Your original file has not been changed."
             }
         }
         .sheet(isPresented: $showingReceiptCamera) {
@@ -691,46 +476,21 @@ struct ReceiptsAndBillsView: View {
                 handleCapturedReceiptImage(image)
             }
         }
+        .sheet(isPresented: $showingTransactionPicker, onDismiss: { transactionBrowser.cancel() }) {
+            ReceiptTransactionPicker(browser: transactionBrowser, load: loadAttachableTargets,
+                select: { choice in
+                    guard isAdminUser, selectedServiceCallID == nil,
+                          let selected = transactionBrowser.select(choice) else { return }
+                    selectedAttachEntityType = selected.type
+                    attachEntityID = selected.providerID
+                    chosenTransaction = selected
+                    showingTransactionPicker = false
+                }, cancel: { showingTransactionPicker = false })
+        }
         .alert("Camera Not Available", isPresented: $showCameraUnavailableAlert) {
             Button("OK", role: .cancel) {}
         } message: {
             Text("This device/simulator does not provide camera capture.")
-        }
-        .confirmationDialog(
-            "Delete queued upload?",
-            isPresented: Binding(
-                get: { pendingUploadForDeletion != nil },
-                set: { if !$0 { pendingUploadForDeletion = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("Delete Queue Entry", role: .destructive) {
-                if requireAdministrator(for: "Deleting QuickBooks retry records"),
-                   let pendingUploadForDeletion {
-                    removePendingUpload(pendingUploadForDeletion.id)
-                }
-                pendingUploadForDeletion = nil
-            }
-            Button("Cancel", role: .cancel) {
-                pendingUploadForDeletion = nil
-            }
-        } message: {
-            Text("This removes the retry record for \(pendingUploadForDeletion?.displayName ?? "this file"). The source file is not deleted, but it will no longer retry automatically.")
-        }
-        .confirmationDialog(
-            "Clear the failed upload queue?",
-            isPresented: $showingClearQueueConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("Clear \(pendingUploads.count) Queue Entries", role: .destructive) {
-                if requireAdministrator(for: "Clearing the QuickBooks retry queue") {
-                    pendingUploads = []
-                    savePendingUploads()
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This removes every QuickBooks retry record. Source files are not deleted, but failed uploads will no longer retry automatically.")
         }
         .confirmationDialog(
             "Publish reviewed vendor bill?",
@@ -768,11 +528,6 @@ struct ReceiptsAndBillsView: View {
         } message: { context in
             Text("Vendor: \(context.order.vendorName)\nCredit: \(context.evidence.reference)\nAP account: \(quickBooksAccountingConfiguration?.defaultAPAccountName ?? "Not configured")\n\nThis creates one QuickBooks Vendor Credit only after checking for a matching GunnAire marker. It does not apply the credit to a bill.")
         }
-        .onChange(of: selectedAttachEntityType) { _, _ in
-            attachTargetOptions = []
-            selectedAttachTargetID = ""
-            attachLookupMessage = nil
-        }
         .onChange(of: selectedServiceCallID) { _, _ in
             applyLinkedServiceCallDefaults()
         }
@@ -783,251 +538,26 @@ struct ReceiptsAndBillsView: View {
             ).contains(selectedWorkspace) {
                 selectedWorkspace = .documents
             }
-            if newIsAdminUser {
-                loadPendingUploads()
-            } else {
-                pendingUploads = []
-                selectedPendingUploadForDetail = nil
-                pendingUploadForDeletion = nil
+            if !newIsAdminUser {
+                attachEntityID = ""
+                advancedLinkingExpanded = false
+                clearAttachLookup()
             }
         }
         .onAppear {
             if !availableWorkspaces.contains(selectedWorkspace) {
                 selectedWorkspace = .documents
             }
-            if isAdminUser {
-                loadPendingUploads()
-            }
             applyLinkedServiceCallDefaults()
             refreshQuickBooksAccountingMappings()
         }
         .onReceive(NotificationCenter.default.publisher(for: .quickBooksAuthenticationDidChange)) { _ in
+            attachEntityID = ""
+            clearAttachLookup()
             refreshQuickBooksAccountingMappings(force: true)
         }
-        .sheet(item: $selectedPendingUploadForDetail) { pending in
-            PendingUploadDetailSheet(
-                pending: refreshPendingUploadDetails(for: pending),
-                isSyncing: isSyncing,
-                onRetryNow: {
-                    guard requireAdministrator(for: "Retrying QuickBooks uploads") else { return }
-                    retryPendingUpload(pending, ignoreBackoff: true)
-                    if pendingUploads.contains(where: { $0.id == pending.id }) {
-                        selectedPendingUploadForDetail = refreshPendingUploadDetails(for: pending)
-                    } else {
-                        selectedPendingUploadForDetail = nil
-                    }
-                },
-                onDelete: {
-                    if requireAdministrator(for: "Deleting QuickBooks retry records") {
-                        pendingUploadForDeletion = refreshPendingUploadDetails(for: pending)
-                    }
-                    selectedPendingUploadForDetail = nil
-                },
-                onToggleTerminal: {
-                    guard requireAdministrator(for: "Changing QuickBooks retry state") else { return }
-                    setPendingUploadTerminalStatus(
-                        id: pending.id,
-                        isTerminal: !refreshPendingUploadDetails(for: pending).isTerminalFailure
-                    )
-                    selectedPendingUploadForDetail = refreshPendingUploadDetails(for: pending)
-                },
-                onClose: {
-                    selectedPendingUploadForDetail = nil
-                }
-            )
-        }
-        .sheet(item: $purchaseOrderPendingConfirmation) { order in
-            SupplierOrderConfirmationSheet(
-                order: order,
-                onConfirm: { channel, reference, location, lineCosts, shippingCost in
-                    confirmPurchaseOrder(
-                        order,
-                        channel: channel,
-                        reference: reference,
-                        supplierLocation: location,
-                        confirmedLineUnitCosts: lineCosts,
-                        confirmedShippingCost: shippingCost
-                    )
-                },
-                onConnectorConfirm: { connectorKind, location in
-                    await confirmPurchaseOrderThroughConnector(
-                        order,
-                        connectorKind: connectorKind,
-                        supplierLocation: location
-                    )
-                }
-            )
-            .tint(Color.brandGold)
-        }
-        .sheet(item: $purchaseOrderPendingReceipt) { order in
-            let openLines = order.purchaseOrderLines.filter {
-                order.remainingQuantity(for: $0.id) > 0.0001
-            }
-            let defaultDestinations = Dictionary(uniqueKeysWithValues: openLines.map { line in
-                (
-                    line.id,
-                    PurchaseOrderReceiving.defaultDestination(
-                        for: order,
-                        lineID: line.id,
-                        catalogItems: catalogItems
-                    )
-                )
-            })
-            let inventoryTrackedLineIDs = Set(openLines.compactMap { line in
-                PurchaseOrderReceiving.matchedItem(
-                    for: order,
-                    lineID: line.id,
-                    catalogItems: catalogItems
-                )?.tracksInventory == true ? line.id : nil
-            })
-            PurchaseOrderReceiptSheet(
-                order: order,
-                defaultDestinations: defaultDestinations,
-                inventoryTrackedLineIDs: inventoryTrackedLineIDs,
-                onReceive: { lineID, quantity, destination, note, serialNumbers, manufacturer, modelNumber in
-                    receivePurchaseOrder(
-                        order,
-                        lineID: lineID,
-                        quantity: quantity,
-                        destinationLocation: destination,
-                        note: note,
-                        serialNumbers: serialNumbers,
-                        manufacturer: manufacturer,
-                        modelNumber: modelNumber
-                    )
-                }
-            )
-            .tint(Color.brandGold)
-        }
-        .sheet(item: $purchaseOrderPendingAssetInstallation) { context in
-            PurchaseOrderEquipmentInstallationSheet(
-                context: context,
-                onInstall: { equipmentType, name, location, installDate, warrantyExpiration in
-                    installPurchaseOrderAsset(
-                        context,
-                        equipmentType: equipmentType,
-                        name: name,
-                        location: location,
-                        installDate: installDate,
-                        warrantyExpiration: warrantyExpiration
-                    )
-                }
-            )
-            .tint(Color.brandGold)
-        }
-        .sheet(item: $purchaseOrderPendingBill) { order in
-            PurchaseOrderVendorBillSheet(
-                order: order,
-                initialDocumentName: billURL?.lastPathComponent,
-                onRecord: {
-                    invoiceNumber,
-                    invoiceDate,
-                    lineAllocations,
-                    shippingCost,
-                    taxAmount,
-                    otherCharges,
-                    sourceDocumentName,
-                    quickBooksBillID,
-                    note in
-                    recordVendorBill(
-                        on: order,
-                        invoiceNumber: invoiceNumber,
-                        invoiceDate: invoiceDate,
-                        lineAllocations: lineAllocations,
-                        shippingCost: shippingCost,
-                        taxAmount: taxAmount,
-                        otherCharges: otherCharges,
-                        sourceDocumentName: sourceDocumentName,
-                        quickBooksBillID: quickBooksBillID,
-                        note: note
-                    )
-                }
-            )
-            .tint(Color.brandGold)
-        }
-        .sheet(item: $purchaseOrderPendingVendorReturn) { order in
-            PurchaseOrderVendorReturnSheet(
-                order: order,
-                onCreate: { reference, sourceLocation, reason, allocations in
-                    createVendorReturn(
-                        on: order,
-                        reference: reference,
-                        sourceLocation: sourceLocation,
-                        reason: reason,
-                        lineAllocations: allocations
-                    )
-                }
-            )
-            .tint(Color.brandGold)
-        }
-        .sheet(item: $purchaseOrderPendingVendorReturnAction) { context in
-            PurchaseOrderVendorReturnActionSheet(
-                context: context,
-                onConfirm: { note in
-                    updateVendorReturn(context, note: note)
-                }
-            )
-            .tint(Color.brandGold)
-        }
-        .sheet(item: $purchaseOrderPendingVendorCredit) { context in
-            PurchaseOrderVendorCreditSheet(
-                context: context,
-                onRecord: {
-                    reference,
-                    creditDate,
-                    creditAmount,
-                    restockingFee,
-                    taxCredit,
-                    shippingCredit,
-                    sourceDocumentName,
-                    quickBooksVendorCreditID,
-                    note in
-                    recordVendorCredit(
-                        context,
-                        reference: reference,
-                        creditDate: creditDate,
-                        creditAmount: creditAmount,
-                        restockingFee: restockingFee,
-                        taxCredit: taxCredit,
-                        shippingCredit: shippingCredit,
-                        sourceDocumentName: sourceDocumentName,
-                        quickBooksVendorCreditID: quickBooksVendorCreditID,
-                        note: note
-                    )
-                }
-            )
-            .tint(Color.brandGold)
-        }
-        .sheet(item: $warrantyClaimsEquipment) { equipment in
-            EquipmentWarrantyClaimsSheet(equipment: equipment)
-                .tint(Color.brandGold)
-        }
-        .sheet(item: $inventoryCountItem) { item in
-            InventoryCycleCountSheet(
-                item: item,
-                initialLocation: item.defaultInventoryLocation ?? "Warehouse",
-                reservedQuantity: InventoryLedger.reservedQuantity(
-                    for: item.id,
-                    movements: inventoryMovements
-                ),
-                expectedQuantity: { location in
-                    InventoryLedger.onHandQuantity(
-                        for: item.id,
-                        at: location,
-                        movements: inventoryMovements
-                    )
-                },
-                onSave: { location, count, reason in
-                    reconcileInventoryCount(
-                        for: item,
-                        location: location,
-                        countedQuantity: count,
-                        reason: reason
-                    )
-                }
-            )
-            .tint(Color.brandGold)
-        }
+        .onDisappear { clearAttachLookup() }
+
     }
 
     @ViewBuilder
@@ -3827,72 +3357,80 @@ private struct InventoryCycleCountSheet: View {
 }
 
 private extension ReceiptsAndBillsView {
-    struct AttachTargetOption: Identifiable {
-        let idValue: String
-        let label: String
-        var id: String { idValue }
+    var originalJobTransaction: ReceiptTransactionChoice? {
+        guard let selectedServiceCall else { return nil }
+        return ReceiptTransactionChoice.linked(to: selectedServiceCall,
+            invoices: invoices, estimates: estimates, payments: payments)
     }
 
-    struct PendingUploadDetailSheet: View {
-        let pending: PendingUploadRecord
-        let isSyncing: Bool
-        let onRetryNow: () -> Void
-        let onDelete: () -> Void
-        let onToggleTerminal: () -> Void
-        let onClose: () -> Void
+    var receiptJobTargetIsCurrent: Bool {
+        guard selectedServiceCallID != nil else { return true }
+        guard let original = originalJobTransaction else { return false }
+        return original.type == selectedAttachEntityType &&
+            original.providerID == QuickBooksBillingIdentity.identifier(attachEntityID)
+    }
 
-        var body: some View {
-            NavigationStack {
-                Form {
-                    Section("File") {
-                        Text(pending.displayName)
-                        Text(pending.filePath)
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                            .textSelection(.enabled)
-                    }
+    var receiptTransactionSummary: ReceiptTransactionChoice? {
+        let choice = selectedServiceCallID == nil ? chosenTransaction : originalJobTransaction
+        guard let choice, choice.type == selectedAttachEntityType,
+              choice.providerID == QuickBooksBillingIdentity.identifier(attachEntityID) else { return nil }
+        return choice
+    }
 
-                    Section("Queue State") {
-                        Text("Created: \(pending.createdAt.formatted(date: .abbreviated, time: .shortened))")
-                        Text("Retries: \(pending.retryCount)")
-                        if let lastAttemptAt = pending.lastAttemptAt {
-                            Text("Last attempt: \(lastAttemptAt.formatted(date: .abbreviated, time: .shortened))")
-                        }
-                        if let nextRetryAt = pending.nextRetryAt {
-                            Text("Next retry: \(nextRetryAt.formatted(date: .abbreviated, time: .shortened))")
-                        }
-                        Text("Terminal failure: \(pending.isTerminalFailure ? "Yes" : "No")")
-                            .foregroundColor(pending.isTerminalFailure ? .orange : .secondary)
-                        if let error = pending.lastError, !error.isEmpty {
-                            Text("Last error: \(error)")
-                                .foregroundColor(.red)
-                                .font(.caption)
-                        }
-                    }
-
-                    if let entityType = pending.entityTypeRaw, let entityID = pending.entityID {
-                        Section("Linked Entity") {
-                            Text("Type: \(entityType)")
-                            Text("ID: \(entityID)")
-                        }
-                    }
-
-                    Section("Actions") {
-                        Button("Retry Now") { onRetryNow() }
-                            .disabled(isSyncing)
-                        Button(pending.isTerminalFailure ? "Mark As Retryable" : "Mark As Terminal") { onToggleTerminal() }
-                            .disabled(isSyncing)
-                        Button("Delete Entry", role: .destructive) { onDelete() }
-                            .disabled(isSyncing)
-                    }
+    @ViewBuilder var receiptTransactionControls: some View {
+        if let choice = receiptTransactionSummary {
+            ReceiptTransactionLabel(choice: choice)
+                .accessibilityIdentifier("ReceiptSelectedTransaction")
+        } else if selectedServiceCallID == nil {
+            Text(QuickBooksBillingIdentity.identifier(attachEntityID) == nil
+                 ? "No QuickBooks transaction selected."
+                 : "\(ReceiptTransactionChoice.title(for: selectedAttachEntityType)) selected using an advanced ID.")
+                .font(.subheadline).foregroundStyle(.secondary)
+        }
+        if selectedServiceCallID == nil {
+            Button(QuickBooksBillingIdentity.identifier(attachEntityID) == nil
+                   ? "Choose a QuickBooks transaction" : "Change transaction") {
+                showingTransactionPicker = true
+                loadAttachableTargets(selectedAttachEntityType)
+            }
+            .accessibilityIdentifier("ReceiptChooseTransaction")
+            if QuickBooksBillingIdentity.identifier(attachEntityID) != nil {
+                Button("Clear selection") {
+                    attachEntityID = ""
+                    clearAttachLookup()
                 }
-                .navigationTitle("Queue Item")
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { onClose() }
-                    }
+                .accessibilityIdentifier("ReceiptRemoveTransaction")
+            }
+        } else if !receiptJobTargetIsCurrent {
+            if originalJobTransaction != nil {
+                Text("Restore this job’s original transaction before syncing its files.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                Button("Restore job transaction") { applyLinkedServiceCallDefaults() }
+                    .accessibilityIdentifier("ReceiptRestoreJobTransaction")
+            } else if attachLookupMessage == nil {
+                Text("This job needs a linked, synced invoice or estimate before its files can go to QuickBooks. Company receipt storage remains available.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
+        DisclosureGroup(isExpanded: $advancedLinkingExpanded) {
+            Picker("Attach To", selection: Binding(get: { selectedAttachEntityType }, set: {
+                selectedAttachEntityType = $0
+                attachEntityID = ""
+                clearAttachLookup()
+            })) {
+                ForEach(QuickBooksAttachableEntityType.allCases, id: \.self) { type in
+                    Text(type.rawValue).tag(type)
                 }
             }
+            .accessibilityIdentifier("DocumentAttachTypePicker")
+            TextField("QuickBooks Entity ID (optional)", text: $attachEntityID)
+                .accessibilityIdentifier("DocumentAttachEntityID")
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled(true)
+            Text("Use an exact QuickBooks ID only when needed. A job file must keep the job’s original invoice or estimate link.")
+                .font(.caption).foregroundStyle(.secondary)
+        } label: {
+            Text("Advanced QuickBooks linking")
         }
     }
 
@@ -3945,7 +3483,7 @@ private extension ReceiptsAndBillsView {
                 estimateID: nil,
                 customerEquipmentID: selectedServiceCall?.customerEquipmentID,
                 equipmentName: selectedServiceCall?.equipmentSummary,
-                customerName: selectedServiceCall?.customer.name
+                customerName: selectedServiceCall?.customer?.name
             )
             backendUploadMessage = "Receipt uploaded to company storage: \(response.filename)."
         } catch {
@@ -3954,7 +3492,7 @@ private extension ReceiptsAndBillsView {
     }
 
     func importDocument(from url: URL, as type: DocumentType) throws {
-        let data = try Data(contentsOf: url)
+        let data = try QBODocumentNativeWorkflow.fileData(url)
         let extensionName = url.pathExtension.lowercased()
         let image = UIImage(data: data)
 
@@ -3997,507 +3535,72 @@ private extension ReceiptsAndBillsView {
     }
 
     func syncDocuments() {
-        guard requireAdministrator(for: "QuickBooks document sync") else { return }
-        let selectedFiles = [receiptURL, billURL].compactMap { $0 }
-        guard !selectedFiles.isEmpty else {
-            syncMessage = "Select at least one file before syncing."
-            return
-        }
-
-        isSyncing = true
-        syncMessage = nil
-
-        let referenceID = attachEntityID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let entityType = referenceID.isEmpty ? nil : selectedAttachEntityType
-
-        guard QuickBooksDataAPI.shared.isAuthenticated else {
-            let queuedRecords = selectedFiles.map { url in
-                PendingUploadRecord(
-                    id: UUID(),
-                    filePath: url.path,
-                    displayName: url.lastPathComponent,
-                    entityTypeRaw: entityType?.rawValue,
-                    entityID: referenceID.isEmpty ? nil : referenceID,
-                    createdAt: Date(),
-                    retryCount: 0,
-                    lastAttemptAt: nil,
-                    nextRetryAt: Date(),
-                    isTerminalFailure: false,
-                    lastError: "QuickBooks was disconnected when this file was selected."
-                )
+        guard requireAdministrator(for: "QuickBooks document upload"), !isSyncing else { return }
+        let urls = [receiptURL, billURL].compactMap { $0 }
+        guard !urls.isEmpty else { syncMessage = "Select a file first."; return }
+        do {
+            let access = try QBODocumentNativeWorkflow.access(context: modelContext)
+            let reference = attachEntityID.trimmingCharacters(in: .whitespacesAndNewlines)
+            let targets: [QBODocumentTarget] = reference.isEmpty ? [] : [.init(type: selectedAttachEntityType.rawValue, id: reference)]
+            let call = selectedServiceCall
+            guard selectedServiceCallID == nil || call != nil else { throw QBODocumentError.jobDestination }
+            let stage = selectedJobDocumentStage == .before ? "before" : selectedJobDocumentStage == .after ? "after" : "supporting"
+            let captured = try urls.map {
+                try QBODocumentNativeWorkflow.captureManual(access: access, url: $0, call: call, stage: stage, targets: targets, context: modelContext)
             }
-            appendPendingUploads(queuedRecords)
-            isSyncing = false
-            syncMessage = "QuickBooks is not connected. Queued \(queuedRecords.count) file(s) for live upload after reconnect."
-            return
-        }
-
-        let group = DispatchGroup()
-        var uploadedIDs: [String] = []
-        var failures: [String] = []
-        var failedPendingRecords: [PendingUploadRecord] = []
-        let resultQueue = DispatchQueue(label: "com.gunnaire.receipts.sync-results")
-
-        for url in selectedFiles {
-            group.enter()
-            QuickBooksDataAPI.shared.uploadDocument(
-                fileURL: url,
-                note: nil,
-                attachToEntityType: entityType,
-                attachToEntityID: referenceID.isEmpty ? nil : referenceID
-            ) { result in
-                switch result {
-                case .success(let id):
-                    resultQueue.sync { uploadedIDs.append(id) }
-                case .failure(let error):
-                    resultQueue.sync {
-                        let message = "\(url.lastPathComponent): \(error.localizedDescription)"
-                        failures.append(message)
-                        failedPendingRecords.append(
-                            PendingUploadRecord(
-                                id: UUID(),
-                                filePath: url.path,
-                                displayName: url.lastPathComponent,
-                                entityTypeRaw: entityType?.rawValue,
-                                entityID: referenceID.isEmpty ? nil : referenceID,
-                                createdAt: Date(),
-                                retryCount: 0,
-                                lastAttemptAt: nil,
-                                nextRetryAt: Date(),
-                                isTerminalFailure: false,
-                                lastError: error.localizedDescription
-                            )
-                        )
-                    }
-                }
-                group.leave()
-            }
-        }
-
-        group.notify(queue: .main) {
-            isSyncing = false
-            if failures.isEmpty {
-                applyDocumentationProgress(forUploadedFileCount: uploadedIDs.count)
-                syncMessage = "Upload complete. Synced \(uploadedIDs.count) file(s) to QuickBooks."
-            } else {
-                if uploadedIDs.count > 0 {
-                    applyDocumentationProgress(forUploadedFileCount: uploadedIDs.count)
-                }
-                appendPendingUploads(failedPendingRecords)
-                syncMessage = "Partial sync: \(uploadedIDs.count) uploaded, \(failures.count) failed.\n\(failures.joined(separator: "\n"))"
-            }
-        }
-    }
-
-    func retryPendingUploads() {
-        guard requireAdministrator(for: "Retrying QuickBooks uploads") else { return }
-        guard !pendingUploads.isEmpty else { return }
-        guard QuickBooksDataAPI.shared.isAuthenticated else {
-            syncMessage = "Connect QuickBooks before retrying queued uploads."
-            return
-        }
-
-        isSyncing = true
-        syncMessage = nil
-
-        let group = DispatchGroup()
-        let now = Date()
-        var succeededCount = 0
-        var remaining: [PendingUploadRecord] = []
-        var deferredCount = 0
-        let resultQueue = DispatchQueue(label: "com.gunnaire.receipts.retry-results")
-
-        for pending in pendingUploads {
-            if pending.isTerminalFailure {
-                remaining.append(pending)
-                continue
-            }
-            if let nextRetryAt = pending.nextRetryAt, nextRetryAt > now {
-                deferredCount += 1
-                remaining.append(pending)
-                continue
-            }
-
-            group.enter()
-
-            let fileURL = URL(fileURLWithPath: pending.filePath)
-            let entityType = pending.entityTypeRaw.flatMap { QuickBooksAttachableEntityType(rawValue: $0) }
-
-            guard FileManager.default.fileExists(atPath: pending.filePath) else {
-                resultQueue.sync {
-                    var updated = pending
-                    updated.lastError = "File no longer exists at path."
-                    updated.lastAttemptAt = Date()
-                    updated.retryCount += 1
-                    updated.nextRetryAt = Date().addingTimeInterval(backoffInterval(forRetryCount: updated.retryCount))
-                    if updated.retryCount >= maxAutoRetryCount {
-                        updated.isTerminalFailure = true
-                        updated.nextRetryAt = nil
-                    }
-                    remaining.append(updated)
-                }
-                group.leave()
-                continue
-            }
-
-            QuickBooksDataAPI.shared.uploadDocument(
-                fileURL: fileURL,
-                note: nil,
-                attachToEntityType: entityType,
-                attachToEntityID: pending.entityID
-            ) { result in
-                resultQueue.sync {
-                    switch result {
-                    case .success:
-                        succeededCount += 1
-                    case .failure(let error):
-                        var updated = pending
-                        updated.lastError = error.localizedDescription
-                        updated.lastAttemptAt = Date()
-                        updated.retryCount += 1
-                        updated.nextRetryAt = Date().addingTimeInterval(backoffInterval(forRetryCount: updated.retryCount))
-                        if updated.retryCount >= maxAutoRetryCount {
-                            updated.isTerminalFailure = true
-                            updated.nextRetryAt = nil
+            var seen = Set<UUID>()
+            let records = captured.filter { seen.insert($0.id).inserted }
+            isSyncing = true; syncMessage = "Original files saved. Checking QuickBooks…"
+            Task { @MainActor in
+                defer { isSyncing = false }
+                var confirmed = 0, needsReview = 0
+                for row in records {
+                    do {
+                        let check = {
+                            try access.check()
+                            try QBODocumentNativeWorkflow.checkLocalOriginal(row, context: modelContext)
                         }
-                        remaining.append(updated)
+                        let session = try QBODocumentCaptureSession(record: row, store: .device, check: check)
+                        let client = GunnAireBackendService.documentUploadClient(check: check)
+                        if row.dispatchStarted || (row.server.map { [.sending, .uncertain, .confirmed].contains($0.state) } ?? false) {
+                            try await session.recover(client: client)
+                        } else { try await session.send(client: client) }
+                        try check()
+                        guard session.record.server?.state == .confirmed else { throw QBODocumentError.review }
+                        try QBODocumentNativeWorkflow.applyConfirmed(session.record, context: modelContext)
+                        try session.markLocalApplied()
+                        confirmed += 1
+                    } catch {
+                        needsReview += 1
+                        syncMessage = QBODocumentNativeWorkflow.message(error)
                     }
                 }
-                group.leave()
+                if needsReview == 0 {
+                    syncMessage = "Saved \(confirmed) file(s) in QuickBooks."
+                } else {
+                    syncMessage = "\(confirmed) saved in QuickBooks. \(needsReview) original file(s) retained in File Recovery. " + (syncMessage ?? "")
+                }
             }
-        }
-
-        group.notify(queue: .main) {
-            isSyncing = false
-            pendingUploads = remaining
-            sortPendingUploads()
-            savePendingUploads()
-            if remaining.isEmpty {
-                syncMessage = "Retry complete. Uploaded \(succeededCount) queued file(s)."
-            } else {
-                let terminals = remaining.filter(\.isTerminalFailure).count
-                syncMessage = "Retry complete. Uploaded \(succeededCount), deferred \(deferredCount), terminal \(terminals), still queued \(remaining.count)."
-            }
-        }
+        } catch { syncMessage = QBODocumentNativeWorkflow.message(error) }
     }
 
-    func retryPendingUpload(_ pending: PendingUploadRecord, ignoreBackoff: Bool) {
-        guard requireAdministrator(for: "Retrying QuickBooks uploads") else { return }
-        guard !isSyncing else { return }
-        guard QuickBooksDataAPI.shared.isAuthenticated else {
-            syncMessage = "Connect QuickBooks before retrying queued uploads."
+    func loadAttachableTargets(_ type: QuickBooksAttachableEntityType) {
+        guard isAdminUser, selectedServiceCallID == nil else { return }
+        #if DEBUG
+        if ReceiptTransactionPickerFixture.enabled {
+            transactionBrowser.load(type: type, checkAccess: {
+                guard isAdminUser, selectedServiceCallID == nil else { throw QBODocumentError.access }
+            }, using: ReceiptTransactionPickerFixture.load)
             return
         }
-
-        if !ignoreBackoff, let nextRetryAt = pending.nextRetryAt, nextRetryAt > Date() {
-            syncMessage = "This upload is deferred until \(nextRetryAt.formatted(date: .abbreviated, time: .shortened))."
-            return
-        }
-
-        isSyncing = true
-        syncMessage = "Retrying \(pending.displayName)..."
-
-        guard FileManager.default.fileExists(atPath: pending.filePath) else {
-            var updated = pending
-            updated.lastError = "File no longer exists at path."
-            updated.lastAttemptAt = Date()
-            updated.retryCount += 1
-            updated.nextRetryAt = Date().addingTimeInterval(backoffInterval(forRetryCount: updated.retryCount))
-            if updated.retryCount >= maxAutoRetryCount {
-                updated.isTerminalFailure = true
-                updated.nextRetryAt = nil
+        #endif
+        let workflow = try? QuickBooksDataAPI.shared.captureWorkspaceWorkflow()
+        transactionBrowser.load(type: type, checkAccess: {
+            guard isAdminUser, selectedServiceCallID == nil, let workflow else {
+                throw QBODocumentError.access
             }
-            upsertPendingUpload(updated)
-            isSyncing = false
-            syncMessage = "Retry failed: missing file."
-            return
-        }
-
-        let fileURL = URL(fileURLWithPath: pending.filePath)
-        let entityType = pending.entityTypeRaw.flatMap { QuickBooksAttachableEntityType(rawValue: $0) }
-
-        QuickBooksDataAPI.shared.uploadDocument(
-            fileURL: fileURL,
-            note: nil,
-            attachToEntityType: entityType,
-            attachToEntityID: pending.entityID
-        ) { result in
-            DispatchQueue.main.async {
-                isSyncing = false
-                switch result {
-                case .success:
-                    removePendingUpload(pending.id)
-                    syncMessage = "Retry succeeded for \(pending.displayName)."
-                case .failure(let error):
-                    var updated = pending
-                    updated.lastError = error.localizedDescription
-                    updated.lastAttemptAt = Date()
-                    updated.retryCount += 1
-                    updated.nextRetryAt = Date().addingTimeInterval(backoffInterval(forRetryCount: updated.retryCount))
-                    if updated.retryCount >= maxAutoRetryCount {
-                        updated.isTerminalFailure = true
-                        updated.nextRetryAt = nil
-                    } else {
-                        updated.isTerminalFailure = false
-                    }
-                    upsertPendingUpload(updated)
-                    syncMessage = "Retry failed for \(pending.displayName): \(error.localizedDescription)"
-                }
-            }
-        }
-    }
-
-    func backoffInterval(forRetryCount retryCount: Int) -> TimeInterval {
-        // 30s, 60s, 120s... capped at 1 hour.
-        let base: TimeInterval = 30
-        let exponent = max(0, retryCount - 1)
-        let multiplier = Double(1 << min(exponent, 20))
-        let raw = base * multiplier
-        return min(raw, 3600)
-    }
-
-    func appendPendingUploads(_ records: [PendingUploadRecord]) {
-        guard !records.isEmpty else { return }
-        for record in records {
-            let alreadyQueued = pendingUploads.contains {
-                $0.filePath == record.filePath &&
-                $0.entityTypeRaw == record.entityTypeRaw &&
-                $0.entityID == record.entityID
-            }
-            if !alreadyQueued {
-                pendingUploads.append(record)
-            }
-        }
-        sortPendingUploads()
-        savePendingUploads()
-    }
-
-    func removePendingUpload(_ id: UUID) {
-        pendingUploads.removeAll { $0.id == id }
-        sortPendingUploads()
-        savePendingUploads()
-    }
-
-    func upsertPendingUpload(_ updated: PendingUploadRecord) {
-        if let index = pendingUploads.firstIndex(where: { $0.id == updated.id }) {
-            pendingUploads[index] = updated
-        } else {
-            pendingUploads.append(updated)
-        }
-        sortPendingUploads()
-        savePendingUploads()
-    }
-
-    func setPendingUploadTerminalStatus(id: UUID, isTerminal: Bool) {
-        guard requireAdministrator(for: "Changing QuickBooks retry state") else { return }
-        guard let index = pendingUploads.firstIndex(where: { $0.id == id }) else { return }
-        pendingUploads[index].isTerminalFailure = isTerminal
-        if isTerminal {
-            pendingUploads[index].nextRetryAt = nil
-        } else if pendingUploads[index].nextRetryAt == nil {
-            pendingUploads[index].nextRetryAt = Date()
-        }
-        sortPendingUploads()
-        savePendingUploads()
-    }
-
-    func refreshPendingUploadDetails(for pending: PendingUploadRecord) -> PendingUploadRecord {
-        pendingUploads.first(where: { $0.id == pending.id }) ?? pending
-    }
-
-    func purgeMissingFileEntries() {
-        guard requireAdministrator(for: "Purging QuickBooks retry records") else { return }
-        let before = pendingUploads.count
-        pendingUploads.removeAll { !FileManager.default.fileExists(atPath: $0.filePath) }
-        sortPendingUploads()
-        savePendingUploads()
-        let removed = before - pendingUploads.count
-        syncMessage = removed > 0 ? "Purged \(removed) queue item(s) with missing files." : "No missing-file queue entries to purge."
-    }
-
-    func sortPendingUploads() {
-        pendingUploads.sort { lhs, rhs in
-            if lhs.isTerminalFailure != rhs.isTerminalFailure {
-                return !lhs.isTerminalFailure
-            }
-            let lhsNext = lhs.nextRetryAt ?? .distantPast
-            let rhsNext = rhs.nextRetryAt ?? .distantPast
-            if lhsNext != rhsNext {
-                return lhsNext < rhsNext
-            }
-            return lhs.createdAt < rhs.createdAt
-        }
-    }
-
-    func loadPendingUploads() {
-        guard let data = UserDefaults.standard.data(forKey: pendingUploadsStorageKey) else {
-            return
-        }
-        if let decoded = try? JSONDecoder().decode([PendingUploadRecord].self, from: data) {
-            pendingUploads = decoded
-            sortPendingUploads()
-            return
-        }
-        if let legacy = try? JSONDecoder().decode([LegacyPendingUploadRecord].self, from: data) {
-            pendingUploads = legacy.map {
-                PendingUploadRecord(
-                    id: $0.id,
-                    filePath: $0.filePath,
-                    displayName: $0.displayName,
-                    entityTypeRaw: $0.entityTypeRaw,
-                    entityID: $0.entityID,
-                    createdAt: $0.createdAt,
-                    retryCount: 0,
-                    lastAttemptAt: nil,
-                    nextRetryAt: Date(),
-                    isTerminalFailure: false,
-                    lastError: $0.lastError
-                )
-            }
-            sortPendingUploads()
-            savePendingUploads()
-        }
-    }
-
-    func savePendingUploads() {
-        guard let data = try? JSONEncoder().encode(pendingUploads) else { return }
-        UserDefaults.standard.set(data, forKey: pendingUploadsStorageKey)
-    }
-
-    func currencyString(_ amount: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = "USD"
-        formatter.locale = Locale(identifier: "en_US")
-        return formatter.string(from: NSNumber(value: amount)) ?? String(format: "$%.2f", amount)
-    }
-
-    func loadAttachableTargets() {
-        guard requireAdministrator(for: "Loading QuickBooks attachment targets") else { return }
-        isLoadingAttachTargets = true
-        attachLookupMessage = nil
-        attachTargetOptions = []
-        selectedAttachTargetID = ""
-
-        guard QuickBooksDataAPI.shared.isAuthenticated else {
-            isLoadingAttachTargets = false
-            attachLookupMessage = "Connect QuickBooks first to load existing IDs."
-            return
-        }
-
-        switch selectedAttachEntityType {
-        case .estimate:
-            QuickBooksDataAPI.shared.fetchEstimates { result in
-                DispatchQueue.main.async {
-                    isLoadingAttachTargets = false
-                    switch result {
-                    case .success(let estimates):
-                        attachTargetOptions = estimates.map {
-                            AttachTargetOption(
-                                idValue: $0.Id,
-                                label: "Estimate \($0.Id) • \(currencyString($0.TotalAmt)) • \($0.TxnDate ?? "No date")"
-                            )
-                        }
-                        attachLookupMessage = attachTargetOptions.isEmpty ? "No estimates found." : "Loaded \(attachTargetOptions.count) estimate ID(s)."
-                    case .failure(let error):
-                        attachLookupMessage = "Failed to load estimates: \(error.localizedDescription)"
-                    }
-                }
-            }
-        case .invoice:
-            QuickBooksDataAPI.shared.fetchInvoices { result in
-                DispatchQueue.main.async {
-                    isLoadingAttachTargets = false
-                    switch result {
-                    case .success(let invoices):
-                        attachTargetOptions = invoices.map {
-                            AttachTargetOption(
-                                idValue: $0.Id,
-                                label: "Invoice \($0.Id) • \(currencyString($0.TotalAmt)) • \($0.TxnDate ?? "No date")"
-                            )
-                        }
-                        attachLookupMessage = attachTargetOptions.isEmpty ? "No invoices found." : "Loaded \(attachTargetOptions.count) invoice ID(s)."
-                    case .failure(let error):
-                        attachLookupMessage = "Failed to load invoices: \(error.localizedDescription)"
-                    }
-                }
-            }
-        case .bill:
-            QuickBooksDataAPI.shared.fetchBills { result in
-                DispatchQueue.main.async {
-                    isLoadingAttachTargets = false
-                    switch result {
-                    case .success(let bills):
-                        attachTargetOptions = bills.map {
-                            AttachTargetOption(
-                                idValue: $0.Id,
-                                label: "Bill \($0.Id) • \(currencyString($0.TotalAmt)) • \($0.TxnDate ?? "No date")"
-                            )
-                        }
-                        attachLookupMessage = attachTargetOptions.isEmpty ? "No bills found." : "Loaded \(attachTargetOptions.count) bill ID(s)."
-                    case .failure(let error):
-                        attachLookupMessage = "Failed to load bills: \(error.localizedDescription)"
-                    }
-                }
-            }
-        case .payment:
-            QuickBooksDataAPI.shared.fetchPayments { result in
-                DispatchQueue.main.async {
-                    isLoadingAttachTargets = false
-                    switch result {
-                    case .success(let payments):
-                        attachTargetOptions = payments.map {
-                            let customer = $0.CustomerRef?.name ?? $0.CustomerRef?.value ?? "Unknown"
-                            return AttachTargetOption(
-                                idValue: $0.Id,
-                                label: "Payment \($0.Id) • \(customer) • \(currencyString($0.TotalAmt))"
-                            )
-                        }
-                        attachLookupMessage = attachTargetOptions.isEmpty ? "No payments found." : "Loaded \(attachTargetOptions.count) payment ID(s)."
-                    case .failure(let error):
-                        attachLookupMessage = "Failed to load payments: \(error.localizedDescription)"
-                    }
-                }
-            }
-        case .salesReceipt:
-            QuickBooksDataAPI.shared.fetchSalesReceipts { result in
-                DispatchQueue.main.async {
-                    isLoadingAttachTargets = false
-                    switch result {
-                    case .success(let salesReceipts):
-                        attachTargetOptions = salesReceipts.map {
-                            let customer = $0.CustomerRef?.displayName ?? "Walk-in customer"
-                            return AttachTargetOption(
-                                idValue: $0.Id,
-                                label: "Sales Receipt \($0.Id) • \(customer) • \(currencyString($0.TotalAmt))"
-                            )
-                        }
-                        attachLookupMessage = attachTargetOptions.isEmpty ? "No sales receipts found." : "Loaded \(attachTargetOptions.count) sales receipt ID(s)."
-                    case .failure(let error):
-                        attachLookupMessage = "Failed to load sales receipts: \(error.localizedDescription)"
-                    }
-                }
-            }
-        case .purchase:
-            QuickBooksDataAPI.shared.fetchPurchases { result in
-                DispatchQueue.main.async {
-                    isLoadingAttachTargets = false
-                    switch result {
-                    case .success(let purchases):
-                        attachTargetOptions = purchases.map {
-                            let vendor = $0.EntityRef?.displayName ?? "Expense purchase"
-                            return AttachTargetOption(
-                                idValue: $0.Id,
-                                label: "Purchase \($0.Id) • \(vendor) • \(currencyString($0.TotalAmt))"
-                            )
-                        }
-                        attachLookupMessage = attachTargetOptions.isEmpty ? "No purchases found." : "Loaded \(attachTargetOptions.count) purchase ID(s)."
-                    case .failure(let error):
-                        attachLookupMessage = "Failed to load purchases: \(error.localizedDescription)"
-                    }
-                }
-            }
-        }
+            try workflow.check()
+        })
     }
 
     func handleCapturedReceiptImage(_ image: UIImage) {
@@ -4523,24 +3626,23 @@ private extension ReceiptsAndBillsView {
     }
 
     func applyLinkedServiceCallDefaults() {
+        attachEntityID = ""
+        clearAttachLookup()
         guard let selectedServiceCall else { return }
-        if let linkedInvoiceID = selectedServiceCall.linkedInvoiceID,
-           let invoice = invoices.first(where: { $0.id == linkedInvoiceID }),
-           let quickBooksID = invoice.quickBooksID,
-           !quickBooksID.isEmpty {
-            selectedAttachEntityType = .invoice
-            if attachEntityID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                attachEntityID = quickBooksID
-            }
-        } else if let linkedEstimateID = selectedServiceCall.linkedEstimateID,
-                  let estimate = estimates.first(where: { $0.id == linkedEstimateID }),
-                  let quickBooksID = estimate.quickBooksID,
-                  !quickBooksID.isEmpty {
-            selectedAttachEntityType = .invoice
-            if attachEntityID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                attachEntityID = quickBooksID
-            }
+        if let target = JobBillingDocumentLinks.attachmentTarget(for: selectedServiceCall,
+            invoices: invoices, estimates: estimates, payments: payments) {
+            selectedAttachEntityType = target.type
+            attachEntityID = target.id
+        } else if selectedServiceCall.linkedInvoiceID != nil || selectedServiceCall.linkedEstimateID != nil {
+            attachLookupMessage = "The linked transaction needs sync or review. No QuickBooks transaction is selected."
         }
+    }
+
+    func clearAttachLookup() {
+        showingTransactionPicker = false
+        transactionBrowser.cancel()
+        chosenTransaction = nil
+        attachLookupMessage = nil
     }
 
     func applyPurchaseOrderItemDefaults() {
@@ -5300,19 +4402,7 @@ private extension ReceiptsAndBillsView {
         }
     }
 
-    func applyDocumentationProgress(forUploadedFileCount uploadedCount: Int) {
-        guard uploadedCount > 0, let selectedServiceCall else { return }
-        switch selectedJobDocumentStage {
-        case .before:
-            selectedServiceCall.beforePhotoCount += uploadedCount
-        case .after:
-            selectedServiceCall.afterPhotoCount += uploadedCount
-        case .supporting:
-            break
-        }
-        selectedServiceCall.documentationChecklist = true
-        selectedServiceCall.documentationStartedAt = selectedServiceCall.documentationStartedAt ?? Date()
-    }
+
 }
 
 enum ReceiptsBillsWorkspace: String, CaseIterable, Identifiable {

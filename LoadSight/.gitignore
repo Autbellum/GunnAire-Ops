@@ -1,0 +1,9 @@
+.build/
+.swiftpm/
+output/
+xcuserdata/
+*.xcuserstate
+
+# Local render previews and dependency links
+tmp/
+node_modules/

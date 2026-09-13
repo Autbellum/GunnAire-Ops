@@ -17,7 +17,7 @@ class CloudKitPromotionManifestTests(unittest.TestCase):
             for record_name in release_preflight.EXPECTED_CLOUDKIT_BASELINE_RECORD_TYPES
         }
         self.development = copy.deepcopy(self.production)
-        for record_name, fields in release_preflight.EXPECTED_CLOUDKIT_V23_ADDITIONS.items():
+        for record_name, fields in release_preflight.EXPECTED_CLOUDKIT_V27_ADDITIONS.items():
             self.development.setdefault(record_name, {}).update(fields)
 
         metadata = {
@@ -41,7 +41,7 @@ class CloudKitPromotionManifestTests(unittest.TestCase):
             production_sha256="production-hash",
         )
 
-    def test_exact_v23_delta_is_additive_and_safe_to_promote(self) -> None:
+    def test_exact_v27_delta_is_additive_and_safe_to_promote(self) -> None:
         manifest = self.manifest()
 
         self.assertTrue(manifest["summary"]["safeToPromote"])
@@ -51,7 +51,7 @@ class CloudKitPromotionManifestTests(unittest.TestCase):
             manifest["summary"]["addedFieldCount"],
             sum(
                 len(fields)
-                for fields in release_preflight.EXPECTED_CLOUDKIT_V23_ADDITIONS.values()
+                for fields in release_preflight.EXPECTED_CLOUDKIT_V27_ADDITIONS.values()
             ),
         )
         self.assertEqual(manifest["changes"]["changedOrRemovedFields"], [])
@@ -118,6 +118,81 @@ class CloudKitPromotionManifestTests(unittest.TestCase):
             restored = __import__("json").loads(path.read_text(encoding="utf-8"))
 
         self.assertEqual(restored, manifest)
+
+    def test_v25_still_requires_the_original_receipt_field(self) -> None:
+        production = copy.deepcopy(self.development)
+        production["CD_Item"].pop("CD_quickBooksCatalogReceiptJSON")
+        manifest = self.manifest(production=production, production_metadata=self.development_metadata)
+        self.assertTrue(manifest["summary"]["safeToPromote"])
+        self.assertEqual(manifest["summary"]["addedFieldCount"], 1)
+        self.assertEqual(manifest["summary"]["addedRecordTypeCount"], 0)
+        self.assertEqual(manifest["targetBootstrapVersion"], 27)
+
+    def test_v27_adds_only_optional_invoice_review_to_complete_v26(self) -> None:
+        production = copy.deepcopy(self.development)
+        production["CD_Invoice"].pop("CD_quickBooksPaymentReviewJSON")
+        manifest = self.manifest(production=production, production_metadata=self.development_metadata)
+        self.assertTrue(manifest["summary"]["safeToPromote"])
+        self.assertEqual(manifest["summary"]["addedFieldCount"], 1)
+        self.assertEqual(manifest["summary"]["addedRecordTypeCount"], 0)
+        for definition in [None, ("DOUBLE", "QUERYABLE")]:
+            development = copy.deepcopy(self.development)
+            development["CD_Invoice"].pop("CD_quickBooksPaymentReviewJSON")
+            if definition is not None:
+                development["CD_Invoice"]["CD_quickBooksPaymentReviewJSON"] = definition
+            candidate = self.manifest(development=development, production=production,
+                                      production_metadata=self.development_metadata)
+            self.assertFalse(candidate["summary"]["safeToPromote"])
+            self.assertIn("CD_Invoice.CD_quickBooksPaymentReviewJSON",
+                          candidate["changes"]["missingOrChangedDevelopmentV27Fields"])
+
+    def test_v25_adds_only_two_optional_item_fields_to_complete_v24(self) -> None:
+        production = copy.deepcopy(self.development)
+        production["CD_Item"].pop("CD_quickBooksInventorySetupJSON")
+        production["CD_Item"].pop("CD_quickBooksCatalogDetailsJSON")
+        manifest = self.manifest(production=production, production_metadata=self.development_metadata)
+        self.assertTrue(manifest["summary"]["safeToPromote"])
+        self.assertEqual(manifest["summary"]["addedFieldCount"], 2)
+        self.assertEqual(manifest["summary"]["addedRecordTypeCount"], 0)
+        for field in ["CD_quickBooksInventorySetupJSON", "CD_quickBooksCatalogDetailsJSON"]:
+            for definition in [None, ("DOUBLE", "QUERYABLE")]:
+                development = copy.deepcopy(self.development)
+                development["CD_Item"].pop(field)
+                if definition is not None:
+                    development["CD_Item"][field] = definition
+                candidate = self.manifest(development=development, production=production,
+                                          production_metadata=self.development_metadata)
+                self.assertFalse(candidate["summary"]["safeToPromote"])
+                self.assertIn("CD_Item." + field, candidate["changes"]["missingOrChangedDevelopmentV25Fields"])
+
+    def test_missing_or_malformed_receipt_field_blocks_promotion(self) -> None:
+        for definition in [None, ("DOUBLE", "QUERYABLE")]:
+            development = copy.deepcopy(self.development)
+            development["CD_Item"].pop("CD_quickBooksCatalogReceiptJSON")
+            if definition is not None:
+                development["CD_Item"]["CD_quickBooksCatalogReceiptJSON"] = definition
+            manifest = self.manifest(development=development)
+            self.assertFalse(manifest["summary"]["safeToPromote"])
+            self.assertIn("CD_Item.CD_quickBooksCatalogReceiptJSON",
+                          manifest["changes"]["missingOrChangedDevelopmentV24Fields"])
+
+    def test_v26_adds_only_optional_milestone_receipt_to_complete_v25(self) -> None:
+        production = copy.deepcopy(self.development)
+        production["CD_Invoice"].pop("CD_milestoneDraftReceiptJSON")
+        manifest = self.manifest(production=production, production_metadata=self.development_metadata)
+        self.assertTrue(manifest["summary"]["safeToPromote"])
+        self.assertEqual(manifest["summary"]["addedFieldCount"], 1)
+        self.assertEqual(manifest["summary"]["addedRecordTypeCount"], 0)
+        for definition in [None, ("DOUBLE", "QUERYABLE")]:
+            development = copy.deepcopy(self.development)
+            development["CD_Invoice"].pop("CD_milestoneDraftReceiptJSON")
+            if definition is not None:
+                development["CD_Invoice"]["CD_milestoneDraftReceiptJSON"] = definition
+            candidate = self.manifest(development=development, production=production,
+                                      production_metadata=self.development_metadata)
+            self.assertFalse(candidate["summary"]["safeToPromote"])
+            self.assertIn("CD_Invoice.CD_milestoneDraftReceiptJSON",
+                          candidate["changes"]["missingOrChangedDevelopmentV26Fields"])
 
 
 if __name__ == "__main__":

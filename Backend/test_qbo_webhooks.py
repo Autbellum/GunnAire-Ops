@@ -67,6 +67,29 @@ class QuickBooksWebhookTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             backend.parse_qbo_cloudevents(json.dumps({"eventNotifications": []}).encode("utf-8"))
 
+    def test_merge_and_alternative_ids_retain_only_reconciliation_metadata(self):
+        merged = self.cloud_event("merge", entity_type="customer", operation="merged", entity_id="survivor")
+        merged["data"] = {"deletedid": "removed", "privateCustomer": "not retained"}
+        employee = self.cloud_event("employee", entity_type="employee", operation="created")
+        employee["data"] = {"alternative_ids": [{"id": "employee:123", "namespace": "Intuit.Payroll"}], "name": "not retained"}
+        records = backend.parse_qbo_cloudevents(json.dumps([merged, employee]).encode())
+        self.assertEqual(records[0]["deletedEntityID"], "removed")
+        self.assertEqual(records[0]["entityID"], "survivor")
+        self.assertEqual(records[1]["alternativeIDs"], employee["data"]["alternative_ids"])
+        self.assertNotIn("not retained", json.dumps(records))
+
+    def test_invalid_merge_alternative_or_duplicate_json_fields_cannot_enter_queue(self):
+        for data in ({"deletedid": "42"}, {"deletedid": "../other"}, {"deletedid": 42},
+                     {"alternative_ids": "wrong"}, {"alternative_ids": [{"id": "42"}]},
+                     {"alternative_ids": [{"id": "42", "namespace": "not\na namespace"}]}):
+            event = self.cloud_event("invalid", entity_type="customer", operation="merged")
+            event["data"] = data
+            with self.subTest(data=data), self.assertRaises(ValueError):
+                backend.parse_qbo_cloudevents(json.dumps([event]).encode())
+        raw = json.dumps([self.cloud_event("valid")]).replace('"id": "valid"', '"id": "valid", "id": "different"')
+        with self.assertRaises(ValueError):
+            backend.parse_qbo_cloudevents(raw.encode())
+
     def test_signed_endpoint_deduplicates_binds_realm_and_acknowledges_exact_events(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -100,10 +123,20 @@ class QuickBooksWebhookTests(unittest.TestCase):
                         self.cloud_event("event-2", entity_type="item", operation="created", entity_id="84"),
                         self.cloud_event("event-other-realm", realm_id="999999"),
                     ]
+                    events[0]["type"] = "qbo.customer.merged.v1"
+                    events[0]["data"] = {"deletedid": "27", "name": "Private ignored content"}
                     with urllib.request.urlopen(self.signed_request(f"{base_url}/api/qbo/webhooks", events), timeout=5) as response:
                         accepted = json.loads(response.read().decode("utf-8"))
                     self.assertEqual(response.status, 200)
                     self.assertEqual(accepted["stored"], 2)
+                    with backend.db() as connection:
+                        stored = connection.execute("SELECT * FROM qbo_webhook_events WHERE event_id='event-1'").fetchone()
+                        company = connection.execute("SELECT company_id FROM company_identity").fetchone()[0]
+                    self.assertEqual(stored["deleted_entity_id"], "27")
+                    self.assertEqual(stored["company_id"], company)
+                    self.assertEqual(stored["environment"], "production")
+                    self.assertTrue(stored["grant_fingerprint"])
+                    self.assertNotIn("Private ignored content", str(dict(stored)))
 
                     with urllib.request.urlopen(self.signed_request(f"{base_url}/api/qbo/webhooks", events), timeout=5) as response:
                         duplicate = json.loads(response.read().decode("utf-8"))
@@ -119,6 +152,7 @@ class QuickBooksWebhookTests(unittest.TestCase):
                         pending = json.loads(response.read().decode("utf-8"))["events"]
                     self.assertEqual([event["id"] for event in pending], ["event-1", "event-2"])
                     self.assertNotIn("realmID", pending[0])
+                    self.assertEqual(pending[0]["deletedEntityID"], "27")
 
                     body = json.dumps({"eventIDs": ["event-1"]}).encode("utf-8")
                     acknowledge = urllib.request.Request(
@@ -138,6 +172,28 @@ class QuickBooksWebhookTests(unittest.TestCase):
                     server.shutdown()
                     server.server_close()
                     thread.join(timeout=5)
+
+    def test_migration_does_not_guess_legacy_event_company_or_environment(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "legacy.sqlite3"
+            with sqlite3.connect(database) as connection:
+                connection.execute("""CREATE TABLE qbo_webhook_events (
+                    event_id TEXT PRIMARY KEY, realm_id TEXT NOT NULL, entity_type TEXT NOT NULL,
+                    entity_id TEXT NOT NULL, operation TEXT NOT NULL, occurred_at TEXT NOT NULL,
+                    received_at TEXT NOT NULL, acknowledged_at TEXT, acknowledged_by TEXT)""")
+                connection.execute("INSERT INTO qbo_webhook_events VALUES ('old','123','item','42','updated','then','then',NULL,NULL)")
+            with mock.patch.multiple(backend, DB_PATH=database, STORAGE_ROOT=root / "storage"):
+                backend.initialize_database()
+                backend.initialize_database()
+                with backend.db() as connection:
+                    row = dict(connection.execute("SELECT * FROM qbo_webhook_events").fetchone())
+                self.assertEqual(row["event_id"], "old")
+                self.assertIsNone(row["company_id"])
+                self.assertIsNone(row["environment"])
+                self.assertIsNone(row["acknowledged_at"])
+                self.assertEqual(row["alternative_ids_json"], "[]")
 
     def test_invalid_signature_is_rejected_without_storing_content(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

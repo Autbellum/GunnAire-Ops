@@ -1,3 +1,105 @@
+Existing QBO links follow-up, September 7, 2026: candidate 2026.09.07.28 adds one
+focused administrator review page under QuickBooks Management. It preserves
+original Customer/Item/Invoice/Estimate links, retains the operation before
+POST, and confirms shared mappings atomically after exact provider rereads.
+It changes no QBO entity or sold price and retains cancellation/recovery after
+reconnection. Final acceptance passes 1174 logic tests per native platform,
+seven iPad journeys, 349 Backend, 37 Tools and unsigned universal Mac Release;
+three review screenshots were visually checked. See
+[QBO_EXISTING_LINK_ADOPTION.md](QBO_EXISTING_LINK_ADOPTION.md). This closes a
+reviewed-link prerequisite, not native invoice/estimate publication cutover,
+complete historical migration, signed CloudKit or full-suite acceptance.
+
+Prior native tax-address follow-up, September 7, 2026: the existing taxable billing
+editor now captures and retains reviewed service and sale/ship-from addresses,
+preserves sold prices and sends structured address fields on the current native
+QBO document path. Final acceptance passes 1159 logic tests per native platform,
+five iPad journeys and unsigned universal Mac Release. No stored schema change.
+See [NATIVE_BILLING_TAX_ADDRESSES.md](NATIVE_BILLING_TAX_ADDRESSES.md) for exact
+evidence, retained diagnostics and scope. Shared-server invoice/estimate cutover,
+legacy mapping and full-suite/CloudKit acceptance remain open.
+
+Prior native dispatch follow-up, September 7, 2026: candidate 2026.09.07.27 connects
+Add/Edit Job and dispatch-board assignment to encrypted original-account
+offline intents and revisioned server authority. The existing job Overview
+has a compact Field Billing review/recovery link. Reconnected-grant and newer
+dispatcher conflicts cannot be silently adopted. Failed form saves retain
+editing and stop calendar/access follow-up. See
+[NATIVE_JOB_BILLING_AUTHORITY.md](NATIVE_JOB_BILLING_AUTHORITY.md) for final
+acceptance and remaining automatic creation/import, billing-button cutover,
+CloudKit and full-suite requirements. Earlier schedule-gap claims below are
+historical; they remain true for entry paths not named in this checkpoint.
+
+Prior billing HTTP follow-up, September 7, 2026: candidate 2026.09.07.26 now exposes
+the shared engine through authenticated publish/recover/cancel/approve routes.
+Revisioned dispatcher/admin job authority permits assigned technicians' ordinary
+pricebook lines and retains exact-draft review for price exceptions. Stale
+offline roster edits cannot overwrite newer assignments. A typed native client
+checks original scope and returned identity without direct-provider fallback.
+**Existing native billing buttons and schedule writes have not switched yet.**
+Backend acceptance is 100 focused and 316 full tests, plus 37 Tools tests.
+Native acceptance passes 1120 logic tests per platform and two iPad UI regressions.
+Evidence and required address/mapping/offline/recovery handoffs:
+[QBO_BILLING_HTTP_CONTRACT.md](QBO_BILLING_HTTP_CONTRACT.md). This is concrete
+integration progress, not full-suite or signed CloudKit acceptance.
+
+Prior billing engine stage, September 7, 2026: candidate 2026.09.07.25 implements
+encrypted immutable invoice/estimate proposals, server role/exact-draft approval,
+one-time dispatch, original-attempt recovery, invoice/payment exclusion and
+explicit save-versus-send separation. **It is not exposed by HTTP or used by
+native billing yet.** Final local acceptance is 60 focused tests, 276 Backend
+and 37 Tools. Native assignment/approval/recovery handoffs, scalable legacy
+migration and provider acceptance remain required; see
+[QBO_SERVER_BILLING_ENGINE.md](QBO_SERVER_BILLING_ENGINE.md). This does not
+close the full-suite or signed CloudKit goal.
+
+Customer publication follow-up, September 7, 2026: production customer create
+and recovery now use the server-owned encrypted journal and one-to-one mapping
+in [QBO_SERVER_CUSTOMER_PUBLICATION.md](QBO_SERVER_CUSTOMER_PUBLICATION.md).
+Customer Actions has focused original-link recovery and confirmed unsent
+cancellation, without another modal stack or contact-data overwrite. Existing
+administrator-only customer sync is now enforced server-side; field documents
+remain saved while awaiting a missing customer link. Local acceptance passes
+1100 logic tests per native platform, ten selected iPad journeys, 216 Backend,
+37 Tools and the unsigned universal Mac Release. This is the customer phase,
+not server-owned invoice/estimate/
+payment dispatch, complete legacy customer migration or signed CloudKit proof.
+
+Current scope correction, September 7, 2026: earlier descriptions that only
+external acceptance gates remained were too broad. Current source review has
+also found and corrected internal billing-identity, partial-payment balance,
+payment-rail/timestamp and navigation issues. The ongoing implementation and
+explicit remaining internal work are recorded in
+[BILLING_IDENTITY_RECONCILIATION.md](BILLING_IDENTITY_RECONCILIATION.md) and
+[QBO_BALANCE_RECONCILIATION.md](QBO_BALANCE_RECONCILIATION.md).
+The active QuickBooks Management orchestration now retains its initiating
+workspace/provider/run through pages, mappings, local saves and webhook
+follow-up; unchanged credential reloads preserve that identity. See
+[QBO_SYNC_WORKFLOW_LIFECYCLE.md](QBO_SYNC_WORKFLOW_LIFECYCLE.md) for current
+acceptance and the distinct remaining publication, Google, tombstone and
+server-authority gaps.
+The Management catalog approval/retry and reviewed reconciliation directions
+now use one captured, one-shot workflow; the shared invoice-line boundary
+preserves and rejects conflicting local item identities. See
+[QBO_CATALOG_WORKFLOW_LIFECYCLE.md](QBO_CATALOG_WORKFLOW_LIFECYCLE.md).
+Billing Documents now uses the retained customer/item/document workflow in
+[QBO_BILLING_WORKFLOW_LIFECYCLE.md](QBO_BILLING_WORKFLOW_LIFECYCLE.md).
+Shared catalog dispatch moved to the server-owned intent workflow in
+[QBO_SERVER_CATALOG_PUBLICATION.md](QBO_SERVER_CATALOG_PUBLICATION.md), and
+Calendar schedule identity/deletion handling is documented in
+[GOOGLE_CALENDAR_WORKFLOW_LIFECYCLE.md](GOOGLE_CALENDAR_WORKFLOW_LIFECYCLE.md).
+Mail composition, attachment forwarding and confirmed-send recovery have
+checkpoint acceptance in [GMAIL_COMPOSITION_WORKFLOW.md](GMAIL_COMPOSITION_WORKFLOW.md).
+Mailbox pagination, Sent/All Mail/Trash and recoverable message actions are
+integrated in [GMAIL_MAILBOX_WORKFLOW.md](GMAIL_MAILBOX_WORKFLOW.md), with final
+logic/iPad evidence and an explicit unqualified Mac UI startup gate. These migrations
+do not establish server authority or production acceptance for all workflows.
+The ten-suite feature comparison is a coverage inventory, not proof of flawless
+end-to-end behavior. CloudKit/offline convergence, historical accounting,
+complete payment-event reconciliation, retained-context orchestration and
+provider/platform release acceptance still require verification. Historical
+checkpoint evidence below must not be generalized to newer source.
+
 Backend release candidate `2026.09.03.18` is now in reviewed pull request [#17](https://github.com/Autbellum/GunnAire-Ops/pull/17) from `codex/backend-20260903-18` into `main`. The exact head is `4273294dc3e0bf0ab71ddd2fa2e286965a3fdbc3`; the comparison against main contains two commits and exactly four files (`.github/workflows/backend-regression.yml`, `Backend/README.md`, `Backend/gunnaire_backend.py`, and `Backend/test_customer_portal.py`) with 462 additions and 16 deletions. GitHub **Backend regression** run [34001403596](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34001403596) completed successfully on Python 3.13 and 3.14, and both jobs ran the complete Backend and Tools suites. Production remains healthy on `2026.09.02.17`; merging this PR follows `main` into Render and is paused for deployment-owner confirmation. No deployment, provider/accounting mutation, or customer communication has occurred.
 
 Build `1.0 (2026090506)` revalidates the complete provider-independent suite rather than adding another overlapping workspace. The ten-suite comparison remains unchanged: GunnAire Ops already represents the core HVAC operating graph—customers and equipment history, dispatch and capacity, estimates/invoices/payments, service/repair/replacement files, agreements, pricebook/inventory/procurement, forms and attachments, communications, reporting, roles, offline continuity, and accounting integration boundaries. Exact acceptance passes **714/714** logic tests on both M5 iPad and Mac Catalyst, **114/115 logical UI tests** and **117/118 device executions** with one intentional physical-only skip, Backend **71/71**, and Tools **37/37**. Multiple direct Invoice creation, edit, payment, and navigation regressions pass without reproducing the reported crash. Universal optimized Release builds succeed for iOS Simulator and Mac Catalyst at `1.0 (2026090506)`; the only recorded Release issue is Xcode's known external Mac host Metal-toolchain search-path warning. Remaining gaps are external acceptance rather than missing honest in-app screens: Distribution/TestFlight/App Store processing, Production CloudKit promotion and controlled device acceptance, reviewed backend deployment, Intuit and Google production approval/realm tests, supplier contracts and credentials, a participating payment provider plus Apple's Tap to Pay entitlement, and physical-iPhone Handoff/payment validation. No live transaction, customer communication, provider configuration, or production state changed in this pass.

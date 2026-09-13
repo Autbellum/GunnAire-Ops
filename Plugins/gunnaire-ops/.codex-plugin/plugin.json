@@ -1,0 +1,25 @@
+{
+  "name": "gunnaire-ops",
+  "version": "0.1.0",
+  "description": "GunnAire mechanical takeoff, load calculation and Ops integration tools",
+  "author": {
+    "name": "GunnAire"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "GunnAire Ops",
+    "shortDescription": "Mechanical takeoff and LoadSight tools",
+    "longDescription": "Review mechanical drawings, preserve evidence, calculate entered engineering quantities, and prepare estimates through the local LoadSightKit package.",
+    "developerName": "GunnAire",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Review this mechanical takeoff for unresolved quantities.",
+      "Use LoadSightKit to validate my project and pricing.",
+      "Continue building the LoadSight app and GunnAire Ops SDK."
+    ]
+  }
+}

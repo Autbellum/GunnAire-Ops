@@ -5,6 +5,7 @@ enum CustomerIntelligenceAction: Equatable {
     case openDocumentation(UUID)
     case openSchedule(UUID)
     case openPayments
+    case reviewInvoices
     case completeProfile(UUID)
     case openCustomer(UUID)
 
@@ -16,7 +17,7 @@ enum CustomerIntelligenceAction: Equatable {
             return "Open Docs"
         case .openSchedule:
             return "Schedule"
-        case .openPayments:
+        case .openPayments, .reviewInvoices:
             return "Review"
         case .completeProfile:
             return "Update"
@@ -35,6 +36,8 @@ enum CustomerIntelligenceAction: Equatable {
             return "calendar"
         case .openPayments:
             return "arrow.triangle.2.circlepath"
+        case .reviewInvoices:
+            return "doc.text.magnifyingglass"
         case .completeProfile:
             return "person.text.rectangle"
         case .openCustomer:
@@ -64,6 +67,7 @@ struct CustomerIntelligenceSnapshot: Identifiable {
     let primaryAction: CustomerIntelligenceAction
     let actionDetail: String
     let priorityScore: Double
+    let billingReviewMessage: String?
 
     var hasOpenWork: Bool {
         nextJob != nil || readyToBillCount > 0 || followUpCount > 0
@@ -200,8 +204,9 @@ enum CustomerIntelligence {
         let customerCalls = serviceCalls
             .filter { $0.customer?.id == customer.id }
             .sorted { $0.scheduledDate > $1.scheduledDate }
-        let customerInvoices = invoices
-            .filter { $0.customer?.id == customer.id }
+        let milestoneProjection = BillingMilestoneReconciliation.project(
+            invoices.filter { $0.customer?.id == customer.id }, payments: payments)
+        let customerInvoices = milestoneProjection.activeInvoices
             .sorted { $0.createdAt > $1.createdAt }
         let invoiceIDs = Set(customerInvoices.map(\.id))
         let customerPayments = payments.filter {
@@ -215,7 +220,7 @@ enum CustomerIntelligence {
 
         let openInvoiceBalances = customerInvoices.compactMap { invoice -> (invoice: Invoice, balance: Double)? in
             let balance = outstandingBalance(for: invoice, payments: customerPayments)
-            guard balance > 0 else { return nil }
+            guard balance > 0, !milestoneProjection.needsReview else { return nil }
             return (invoice, balance)
         }
         let openBalance = openInvoiceBalances.reduce(0) { $0 + $1.balance }
@@ -310,9 +315,10 @@ enum CustomerIntelligence {
             nextContract: nextContract,
             nextJob: nextJob,
             lastCompletedJob: lastCompletedJob,
-            primaryAction: action.action,
-            actionDetail: action.detail,
-            priorityScore: priorityScore
+            primaryAction: milestoneProjection.needsReview ? .reviewInvoices : action.action,
+            actionDetail: milestoneProjection.needsReview ? "Review milestone invoices before collecting payment." : action.detail,
+            priorityScore: priorityScore + (milestoneProjection.needsReview ? 30 : 0),
+            billingReviewMessage: milestoneProjection.needsReview ? BillingMilestoneReconciliation.reviewMessage : nil
         )
     }
 

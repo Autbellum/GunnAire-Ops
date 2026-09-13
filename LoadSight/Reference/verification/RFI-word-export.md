@@ -1,0 +1,16 @@
+# RFI Word export verification
+
+The native RFI list offers Export Word copy for each saved RFI. It uses `RFIWordDocument.docx(project,rfiID:)` from LoadSightKit and the standard Word file exporter. The shared Swift CLI accepts `loadsight rfi-docx project.json rfi-id new-output.docx`. The installed GunnAire Ops wrapper accepts `rfi-docx project.json --rfi-id RFI-ID --output new-output.docx`.
+
+The editable DOCX preserves the current question, source, combined scope/cost/schedule impact, answer, respondent and source/date, affected item identities and quantities, linked attachment references, export fingerprint and before/after RFI history. Current evidence and export provenance precede the history appendix. It validates the portable project before exporting and rejects XML-incompatible text instead of dropping characters. Input text remains text; no macros, external relationships or executable fields are generated. Referenced attachment contents are not embedded. Export neither changes project state nor transmits or resolves an RFI. Editing the Word copy does not update LoadSight.
+
+Missing textual inputs are Not recorded; missing quantities remain Unknown. Optional to/from/date/requiredResponseDate/suggestedResolution values are reproduced from imported records. Native form editing and strict structured-edit support were added in the subsequent RFI communication pass; see RFI-communication.md for current behavior and evidence. No deadlines, sender identity, sheet/detail interpretation, response or cost approval is invented. Inherited dental records are used as format fixtures, not newly verified drawing findings.
+
+## Evidence
+
+- 118 XCTest tests pass, including 3 RFI Word tests for reopened-answer history, literal escaped text, line breaks, unchanged project, invalid characters/missing identity, and attachment references without payloads. `output/verification/rfi-word-tests.log`.
+- Final Mac and generic iOS Simulator builds pass: `rfi-word-mac-build.log` and `rfi-word-ios-build.log` in output/verification. Native export-button/save-dialog interaction is not yet runtime asserted.
+- Installed plugin 0.1.0+codex.20260910160351 passed manifest validation and the existing 20-operation fixture workflow: `output/verification/rfi-word-installed-plugin.json`. Its new export command produced two DOCX files, preserved both source hashes and rejected existing destinations; final ZIP CRC/XML checks passed in `output/verification/rfi-word/installed-plugin-export-check.json`.
+- Final rendered outputs: `output/verification/rfi-word/Drawing-release-check.docx` and `Resolved-release-check.docx`. Bundled renderer `render_docx.py` used the workspace dependency Python and bundled LibreOffice, not desktop LibreOffice. All 3 final PNG pages were inspected: Drawing-release-check-render/page-1.png and Resolved-release-check-render/page-1.png/page-2.png. The first is a one-page open RFI; the second has one current-record page and one history page. No clipping, broken glyphs or isolated final note remains. Earlier layouts are retained only as diagnostic iterations.
+
+This completes this exporter pass, not full RFI authoring, change-order DOCX, authenticated release or complete product acceptance. The broader goal remains active.

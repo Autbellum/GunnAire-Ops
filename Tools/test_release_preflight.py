@@ -69,7 +69,29 @@ class CloudKitV23PreflightTests(unittest.TestCase):
         results = self.check(self.development, self.production)
 
         self.assertEqual(results.failures, [])
-        self.assertEqual(results.warnings, 0)
+        self.assertEqual(results.warnings, 1)
+
+    def test_v24_item_receipt_addition_is_exact_and_rejects_extra_fields(self) -> None:
+        development = copy.deepcopy(self.development)
+        development["CD_Item"].update(release_preflight.EXPECTED_CLOUDKIT_V24_ADDITIONS["CD_Item"])
+        results = self.check(development, self.development,
+                             production_metadata=self.development_metadata)
+        self.assertEqual(results.failures, [])
+        self.assertEqual(results.warnings, 1)  # v25 inventory fields still need staging.
+        development["CD_Item"]["CD_unapproved"] = ("STRING", "QUERYABLE")
+        results = self.check(development, self.development,
+                             production_metadata=self.development_metadata)
+        self.assertTrue(results.failures)
+
+    def test_v25_inventory_additions_are_exact_and_reject_extra_fields(self) -> None:
+        development = copy.deepcopy(self.development)
+        development["CD_Item"].update(release_preflight.EXPECTED_CLOUDKIT_V25_ADDITIONS["CD_Item"])
+        results = self.check(development, self.development, production_metadata=self.development_metadata)
+        self.assertEqual(results.failures, [])
+        self.assertEqual(results.warnings, 1)  # v26 retained-draft field still needs staging.
+        development["CD_Item"]["CD_unapproved"] = ("STRING", "QUERYABLE")
+        results = self.check(development, self.development, production_metadata=self.development_metadata)
+        self.assertTrue(results.failures)
 
     def test_partial_time_off_record_pair_is_rejected(self) -> None:
         partial_development = copy.deepcopy(self.development)

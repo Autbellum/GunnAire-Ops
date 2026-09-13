@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        F0A110AD5100000000000001 /* LoadSightUI in Frameworks */ = {isa = PBXBuildFile; productRef = F0A110AD5100000000000002 /* LoadSightUI */; };
 		3F4B8A202FAD000100000001 /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3F4B8A212FAD000100000001 /* AppIntents.framework */; };
 		3F4B8A222FAD000100000001 /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3F4B8A212FAD000100000001 /* AppIntents.framework */; };
 		3F4B8A232FAD000100000001 /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3F4B8A212FAD000100000001 /* AppIntents.framework */; };
@@ -75,6 +76,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                F0A110AD5100000000000001 /* LoadSightUI in Frameworks */,
 				3F4B8A202FAD000100000001 /* AppIntents.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -158,6 +160,7 @@
 			);
 			name = "GunnAire Ops";
 			packageProductDependencies = (
+                F0A110AD5100000000000002 /* LoadSightUI */,
 			);
 			productName = "GunnAire Ops";
 			productReference = 642980E62F4CAB5900A62E15 /* GunnAire Ops.app */;
@@ -211,6 +214,20 @@
 		};
 /* End PBXNativeTarget section */
 
+/* Begin XCLocalSwiftPackageReference section */
+        F0A110AD5100000000000003 /* XCLocalSwiftPackageReference "LoadSight" */ = {
+            isa = XCLocalSwiftPackageReference;
+            relativePath = LoadSight;
+        };
+/* End XCLocalSwiftPackageReference section */
+/* Begin XCSwiftPackageProductDependency section */
+        F0A110AD5100000000000002 /* LoadSightUI */ = {
+            isa = XCSwiftPackageProductDependency;
+            package = F0A110AD5100000000000003 /* XCLocalSwiftPackageReference "LoadSight" */;
+            productName = LoadSightUI;
+        };
+/* End XCSwiftPackageProductDependency section */
+
 /* Begin PBXProject section */
 		642980DE2F4CAB5900A62E15 /* Project object */ = {
 			isa = PBXProject;
@@ -251,7 +268,10 @@
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 642980E72F4CAB5900A62E15 /* Products */;
-			projectDirPath = "";
+			packageReferences = (
+                F0A110AD5100000000000003 /* XCLocalSwiftPackageReference "LoadSight" */,
+            );
+            projectDirPath = "";
 			projectRoot = "";
 			targets = (
 				642980E52F4CAB5900A62E15 /* GunnAire Ops */,

@@ -80,11 +80,21 @@ struct BusinessReportsView: View {
                     .accessibilityIdentifier("BusinessReportWorkspacePicker")
 
                     Group {
-                        switch workspace {
-                        case .overview: overviewWorkspace
-                        case .sales: salesWorkspace
-                        case .operations: operationsWorkspace
-                        case .team: teamWorkspace
+                        if let message = snapshot.billingIdentityReviewMessage, workspace != .operations {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Label("Billing needs review", systemImage: "exclamationmark.triangle")
+                                    .font(.headline)
+                                Text(message).foregroundStyle(.secondary)
+                                Button("Review Invoices") { GunnAireAppIntentRouter.store(.invoices) }
+                            }
+                            .accessibilityIdentifier("BusinessReportBillingIdentityReview")
+                        } else {
+                            switch workspace {
+                            case .overview: overviewWorkspace
+                            case .sales: salesWorkspace
+                            case .operations: operationsWorkspace
+                            case .team: teamWorkspace
+                            }
                         }
                     }
                     .animation(
@@ -108,9 +118,10 @@ struct BusinessReportsView: View {
                         Label("Export CSV", systemImage: "square.and.arrow.up")
                     }
                     .disabled(
-                        !snapshot.hasFinancialActivity &&
+                        snapshot.billingIdentityReviewMessage != nil ||
+                        (!snapshot.hasFinancialActivity &&
                             !snapshot.hasOperationalActivity &&
-                            !snapshot.hasLeadSourceActivity
+                            !snapshot.hasLeadSourceActivity)
                     )
                 }
             }

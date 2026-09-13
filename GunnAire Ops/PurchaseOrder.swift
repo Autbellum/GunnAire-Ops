@@ -1094,7 +1094,7 @@ final class PurchaseOrder {
 
     private static let notesEnvelopePrefix = "GUNNAIRE_PO_METADATA_V1:"
 
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var number: String = ""
     var vendorName: String = ""
     var vendorQuickBooksID: String?

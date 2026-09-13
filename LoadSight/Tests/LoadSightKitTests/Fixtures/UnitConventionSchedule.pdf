@@ -1,0 +1,49 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+5 0 obj
+<< /Length 915 >>
+stream
+BT /F1 12 Tf 1 0 0 1 50 750 Tm (SYNTHETIC EQUIPMENT SCHEDULE - REVIEW ONLY) Tj ET
+BT /F1 12 Tf 1 0 0 1 50 700 Tm (TAG) Tj ET
+BT /F1 12 Tf 1 0 0 1 180 700 Tm (COOL MBH) Tj ET
+BT /F1 12 Tf 1 0 0 1 340 700 Tm (CFM) Tj ET
+BT /F1 12 Tf 1 0 0 1 450 700 Tm (MCA) Tj ET
+BT /F1 12 Tf 1 0 0 1 50 650 Tm (RTU-1) Tj ET
+BT /F1 12 Tf 1 0 0 1 180 650 Tm (12) Tj ET
+BT /F1 12 Tf 1 0 0 1 340 650 Tm (1,200) Tj ET
+BT /F1 12 Tf 1 0 0 1 450 650 Tm (18) Tj ET
+BT /F1 12 Tf 1 0 0 1 50 600 Tm (EF-2) Tj ET
+BT /F1 12 Tf 1 0 0 1 340 600 Tm (250) Tj ET
+BT /F1 12 Tf 1 0 0 1 50 550 Tm (RTU-1) Tj ET
+BT /F1 12 Tf 1 0 0 1 180 550 Tm (30) Tj ET
+BT /F1 12 Tf 1 0 0 1 340 550 Tm (1,400) Tj ET
+BT /F1 12 Tf 1 0 0 1 450 550 Tm (20) Tj ET
+BT /F1 12 Tf 1 0 0 1 50 450 Tm (PLAN TAGS: RTU-1 EF-2 AHU-9) Tj ET
+BT /F1 12 Tf 1 0 0 1 50 420 Tm (LEGEND: MBH = 1000 BTU_IT/H) Tj ET
+BT /F1 12 Tf 1 0 0 1 50 400 Tm (BTU denotes International Table units.) Tj ET
+endstream
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000000311 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+1277
+%%EOF

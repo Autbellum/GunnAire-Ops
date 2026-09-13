@@ -6,7 +6,7 @@ import SwiftData
 /// both this stable ID and their own address snapshot for offline history.
 @Model
 final class CustomerServiceLocation {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var customer: Customer?
     var name: String = ""
     var address: String = ""

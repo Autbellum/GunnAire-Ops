@@ -10,6 +10,9 @@ build/
 !default.perspectivev3
 project.xcworkspace/
 xcshareddata/
+!GunnAire Ops.xcodeproj/xcshareddata/
+GunnAire Ops.xcodeproj/xcshareddata/*
+!GunnAire Ops.xcodeproj/xcshareddata/xcschemes/
 .idea/
 *.moved-aside
 
@@ -59,3 +62,13 @@ Config/Local.xcconfig
 # Xcode user data
 *.xcuserdatad/
 *.xcuserstate
+
+# LoadSight shared scheme is source, not user data
+!LoadSight/Native/LoadSight.xcodeproj/xcshareddata/
+!LoadSight/Native/LoadSight.xcodeproj/xcshareddata/xcschemes/
+!LoadSight/Native/LoadSight.xcodeproj/xcshareddata/xcschemes/*.xcscheme
+
+# Python caches and native test evidence
+__pycache__/
+*.py[cod]
+*.xcresult/

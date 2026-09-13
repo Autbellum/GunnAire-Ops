@@ -1,0 +1,87 @@
+name: LoadSight regression
+
+on:
+  pull_request:
+    paths: ['LoadSight/**', 'Plugins/gunnaire-ops/**', '.github/workflows/loadsight-regression.yml', '.gitignore']
+  push:
+    branches: [main]
+    paths: ['LoadSight/**', 'Plugins/gunnaire-ops/**', '.github/workflows/loadsight-regression.yml', '.gitignore']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: loadsight-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Record toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          mkdir -p LoadSight/output/verification
+      - name: Check portable plugin boundaries
+        run: python3 -m unittest discover -s Plugins/gunnaire-ops/tests -v
+      - name: Test shared engine and native document models
+        run: swift test --package-path LoadSight 2>&1 | tee LoadSight/output/verification/ci-swift-tests.log
+      - name: Compile SDK host example
+        run: swift build --package-path LoadSight --target LoadSightSDKExample 2>&1 | tee LoadSight/output/verification/ci-sdk-example.log
+      - name: Exercise plugin edits against the shared engine
+        run: python3 LoadSight/Tools/verify_plugin_edits.py Plugins/gunnaire-ops > LoadSight/output/verification/ci-plugin-edits.json
+      - name: Verify Ops context link and removal
+        run: python3 LoadSight/Tools/verify_ops_context.py Plugins/gunnaire-ops LoadSight/output/verification/ci-ops-context
+      - name: Verify catalog material mapping and cost provenance
+        run: python3 LoadSight/Tools/verify_catalog_mapping.py Plugins/gunnaire-ops LoadSight/output/verification/ci-catalog-mapping
+      - name: Verify mechanical text extraction and RFI handoff
+        run: python3 LoadSight/Tools/verify_text_extraction.py Plugins/gunnaire-ops LoadSight/output/verification/ci-text-extraction
+      - name: Verify durable schedule maps and history
+        run: python3 LoadSight/Tools/verify_schedule_map_storage.py Plugins/gunnaire-ops LoadSight/output/verification/ci-schedule-map-storage
+      - name: Verify automatic schedule discovery
+        run: python3 LoadSight/Tools/verify_schedule_discovery.py Plugins/gunnaire-ops LoadSight/output/verification/ci-schedule-discovery
+      - name: Verify mapped equipment schedule extraction
+        run: python3 LoadSight/Tools/verify_equipment_schedules.py Plugins/gunnaire-ops LoadSight/output/verification/ci-equipment-schedules
+      - name: Verify conditional schedule consistency
+        run: python3 LoadSight/Tools/verify_schedule_consistency.py Plugins/gunnaire-ops LoadSight/output/verification/ci-schedule-consistency
+      - name: Verify sourced schedule RFI handoff
+        run: python3 LoadSight/Tools/verify_schedule_rfi.py Plugins/gunnaire-ops LoadSight/output/verification/ci-schedule-rfi
+      - name: Verify ordered schedule dimensions
+        run: python3 LoadSight/Tools/verify_schedule_dimensions.py Plugins/gunnaire-ops LoadSight/output/verification/ci-schedule-dimensions
+      - name: Verify sourced schedule unit conventions
+        run: python3 LoadSight/Tools/verify_schedule_unit_conventions.py Plugins/gunnaire-ops LoadSight/output/verification/ci-schedule-unit-conventions
+      - name: Verify supplier quote evidence and validity
+        run: python3 LoadSight/Tools/verify_supplier_quote.py Plugins/gunnaire-ops LoadSight/output/verification/ci-catalog-mapping/project-0.json LoadSight/output/verification/ci-supplier-quote
+      - name: Verify supplied catalog comparison
+        run: python3 LoadSight/Tools/verify_catalog_comparison.py Plugins/gunnaire-ops LoadSight/output/verification/ci-catalog-mapping/project-0.json LoadSight/output/verification/ci-catalog-comparison
+      - name: Verify native workbook catalog snapshots
+        run: |
+          for fixture in LoadSight/output/verification/ci-catalog-mapping/project-*.json; do
+            python3 Plugins/gunnaire-ops/scripts/loadsight.py xlsx "$fixture" --output "${fixture%.json}.xlsx"
+            python3 LoadSight/Tools/verify_catalog_workbook.py "$fixture" "${fixture%.json}.xlsx"
+          done > LoadSight/output/verification/ci-catalog-workbook.log
+      - name: Compile native iPad app
+        run: |
+          xcodebuild -project LoadSight/Native/LoadSight.xcodeproj -scheme LoadSight \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/loadsight-native" CODE_SIGNING_ALLOWED=NO build \
+            2>&1 | tee LoadSight/output/verification/ci-ipad-build.log
+      - name: Retain verification logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: loadsight-verification-${{ github.run_attempt }}
+          path: LoadSight/output/verification/ci-*
+          if-no-files-found: warn
+          retention-days: 7

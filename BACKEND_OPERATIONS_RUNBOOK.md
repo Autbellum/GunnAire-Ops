@@ -1,6 +1,6 @@
 # GunnAire backend operations runbook
 
-Last verified: 2026-09-05
+Last source verification: 2026-09-07 (production observations below retain their original dates)
 
 This runbook covers the shared GunnAire service at
 `https://gunnaire-api.onrender.com`. It does not authorize accounting changes,
@@ -15,6 +15,109 @@ credential rotation, production restores, or customer communications.
   automated off-host backup schedule is configured and observed.
 - Proposed recovery time objective: 4 hours. This is not proven until a timed
   restore drill is completed by the deployment owner.
+
+## 2026-09-07 billing HTTP and job authority
+
+Candidate **2026.09.07.27** requires a server-returned opaque
+`connectionRevision` for each assignment POST. A reconnect invalidates the old
+epoch, including never-sent offline creates. Deploy/verify the reviewed server
+before distributing the updated native client; old v26 assignment clients will
+receive a validation error rather than unsafe compatibility fallback. Existing
+native invoice/estimate buttons have not switched to the server publisher.
+
+Native queue files under Application Support/JobBillingDispatch-v1 are
+encrypted with a device-only Keychain key and excluded from backup. Do not
+clear them, reset keys or rebind them to another account to resolve a sync
+problem. First inspect the original job's Field Billing review. A lost reply
+can be resolved by reading current server authority; a newer assignment or
+connection requires explicit office review. Offline changes are not effective
+on other devices until confirmed. See
+[native job authority](NATIVE_JOB_BILLING_AUTHORITY.md) for exact boundaries.
+Current backend fixture acceptance is 319 Backend and 37 Tools tests.
+
+Candidate **2026.09.07.26** exposes the shared publisher/recovery engine over
+authenticated HTTP and adds revisioned dispatcher/admin job assignments.
+Preserve `billing_job_assignments`, `billing_assignment_mutations` and
+`billing_job_documents` along with all earlier billing/payment tables and the
+original encryption key. Roster changes/revocations use compare-and-set,
+stable operation identities and atomic audits. Never erase a revocation or
+replay a stale offline assignment over a newer dispatcher decision.
+
+Current local backend acceptance: 316 Backend and 37 Tools tests. Typed native
+requests are implemented, but native billing/schedule buttons have not switched.
+Read `QBO_BILLING_HTTP_CONTRACT.md` before any deployment or native cutover;
+structured tax addresses, legacy mappings and natural recovery/offline handoffs
+remain required. No live QBO request, customer send, merge or deployment occurred.
+
+## Prior 2026-09-07 staged billing engine
+
+Candidate **2026.09.07.25** adds `billing_publications`,
+`billing_entity_mappings`, `billing_draft_grants` and indexes. The engine/adapter
+are not exposed over HTTP or connected to native billing yet. The existing
+payment journal checks billing reservations before reserving/dispatching a
+payment. Current local acceptance: 276 Backend tests and 37 Tools tests.
+See `QBO_SERVER_BILLING_ENGINE.md` for the exact stage and remaining integration.
+
+Preserve these tables and the encryption key in backups; fixture backup/restore
+recovery retains the original attempt and never resends. Do not remove uncertain
+attempts or restore older data to enable a retry. Once billing intents are in
+use, older code ignoring their locks is not a safe financial rollback. Suspend
+publishing/collection and resolve original outcomes before rolling back that
+boundary. One authoritative transactional store is required. No deployment,
+native cutover, provider write or customer delivery occurred in this checkpoint.
+
+## 2026-09-07 customer publication candidate
+
+Candidate **2026.09.07.24** adds `customer_publications`,
+`customer_publication_keys`, `customer_entity_mappings` and indexes. Preserve
+all of them and the existing QBO encryption key in off-host backups, restore
+tests and code rollback. One authoritative transactional database is required;
+independent SQLite replicas do not coordinate customer dispatch.
+
+Use **Customers → customer record → Overview → Customer sync review** to recover
+the original provider result or explicitly cancel a never-sent proposal. Never
+clear sending/unknown attempts to force another create. Reconnected grants and
+unresolved outcomes still require further administrator-resolution tooling.
+This native candidate requires the new backend before distribution. Current
+local backend verification passes 216 tests; full native/release acceptance and
+remaining limits are tracked in `QBO_SERVER_CUSTOMER_PUBLICATION.md`. No live
+provider mutation or deployment is included. Render still follows `main`.
+
+## 2026-09-07 catalog publication candidate
+
+Candidate `2026.09.07.23` adds the server-owned catalog publisher required by
+the current native approval/retry workflow. Backend 173/173 and Tools 37/37
+tests pass; native acceptance is tracked separately in
+`QBO_SERVER_CATALOG_PUBLICATION.md`. This does not represent a deployment.
+
+Back up the entire SQLite database and preserve its existing encryption key
+before promotion. The three additive catalog tables and indexes hold immutable
+encrypted proposals, open publication locks and durable item mappings. Keep
+them during code rollback. Do not delete an unknown/sending attempt or restore
+an older database to make a retry available: the provider may have accepted it.
+Use one persistent authoritative database; independent per-instance SQLite
+copies do not coordinate dispatch and are not an approved scale-out configuration.
+Use the application's **Catalog publication review** for read-only recovery or
+explicit cancellation of an unsent proposal. Replaced-grant/unknown-outcome
+resolution still requires further implementation and approved evidence.
+
+This native candidate must not be distributed against an older backend lacking
+these routes. Provider requests in local tests are fixtures only. Older clients
+and externally issued accounting credentials remain a bypass boundary until
+broader server-authority migration is complete. Review PR #17 overlap before
+any merge; Render follows `main`.
+
+## 2026-09-06 source review follow-up
+
+Candidate `2026.09.06.20` in PR #18 includes portal approval concurrency,
+revocation/expiry, and oversized-amount fixes from `.19`, plus the company and
+CloudKit workspace API contract. The original `.19` verification passed 77/77
+Backend and 37/37 Tools tests. The `.20` suite adds ten workspace tests; current
+local verification passes the complete 87/87 Backend and 37/37 Tools suites. See
+`PORTAL_APPROVAL_REVIEW.md` and `CLOUDKIT_WORKSPACE_IDENTITY.md` for evidence and
+the native storage-boundary work still required before company isolation is fixed.
+The older PR #17 overlaps this branch and lacks these follow-up fixes; reconcile
+the overlap before selecting a deployment candidate.
 
 ## 2026-09-05 production pre-deployment reconciliation
 
@@ -85,10 +188,9 @@ credential rotation, production restores, or customer communications.
    python3 -m unittest discover -s Tools -p 'test_*.py' -v
    ```
 
-   Source `2026.09.03.18` has 71 expected backend tests. A different count
+   Source `2026.09.06.20` has 87 expected backend tests. A different count
    requires review before deployment even when the discovered subset is green.
-   The 2026-09-05 exact-branch preflight also ran the five applicable Tools
-   checks. Both suites must pass in the
+   The complete Tools suite has 37 tests. Both suites must pass in the
    **Backend regression** GitHub workflow on Python 3.13 and the
    production-aligned Python 3.14 job. The established status-check names remain
    unchanged even though each job now runs both suites. The workflow has
@@ -100,8 +202,10 @@ credential rotation, production restores, or customer communications.
    Confirm a recent verified off-host backup exists before a release that adds
    database tables. The `.12` Apple identity tables, `.13` supplier-attempt
    table/indexes, and `.15` Accounts Payable configuration columns are additive;
-   `.18` adds eleven nullable customer-portal columns. Rolling code back does
-   not require deleting them or restoring the database.
+   `.18` adds eleven nullable customer-portal columns; `.20` adds
+   `company_identity` and `cloudkit_workspace_bindings`. Preserve these identity
+   tables and approvals in backups and during code rollback. Rolling code back
+   does not require deleting them or restoring the database.
 5. Do not push release source directly to `main`. The repository's secret-free
    **Backend regression / Python 3.13** and **Backend regression / Python
    3.14** checks have unfiltered pull-request and push-to-`main` triggers.
@@ -122,7 +226,7 @@ credential rotation, production restores, or customer communications.
    part of a routine code deploy.
 6. After the authorized deployment, rerun the same preflight with `--online`.
    Confirm `/health` returns HTTP 200 and exact `serviceVersion`
-   `2026.09.03.18`.
+   `2026.09.06.20`.
 7. Confirm the new public Apple route is present without fabricating an Apple
    event or storing data:
 

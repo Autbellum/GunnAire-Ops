@@ -761,10 +761,643 @@ enum GunnAireBackendService {
         return try JSONDecoder().decode(BackendSessionRecord.self, from: data).user
     }
 
+
+    private struct CustomerPublicationList: Decodable { let publications: [CustomerPublicationRecord] }
+
+    static func publishCustomer(_ request: CustomerPublicationRequest) async throws -> CustomerPublicationResponse {
+        do {
+            let data = try await send(path: "/api/customer-publications", method: "POST", body: JSONEncoder().encode(request))
+            let result = try JSONDecoder().decode(CustomerPublicationResponse.self, from: data)
+            try result.validate(companyID: request.companyID, realmID: request.realmID,
+                                environment: request.environment, customerID: request.localCustomerID)
+            return result
+        } catch { throw customerPublicationError(error) }
+    }
+
+    static func customerPublications(companyID: UUID, customerID: UUID) async throws -> [CustomerPublicationRecord] {
+        do {
+            let path = "/api/customer-publications?companyID=\(companyID.uuidString.lowercased())&localCustomerID=\(customerID.uuidString.lowercased())"
+            return try JSONDecoder().decode(CustomerPublicationList.self, from: await send(path: path, method: "GET")).publications
+        } catch { throw customerPublicationError(error) }
+    }
+
+    static func recoverCustomerPublication(_ id: UUID) async throws -> CustomerPublicationResponse {
+        do {
+            return try JSONDecoder().decode(CustomerPublicationResponse.self,
+                from: await send(path: "/api/customer-publications/\(id.uuidString.lowercased())/recover", method: "POST", body: Data("{}".utf8)))
+        } catch { throw customerPublicationError(error) }
+    }
+
+    static func cancelCustomerPublication(_ id: UUID) async throws {
+        do {
+            _ = try await send(path: "/api/customer-publications/\(id.uuidString.lowercased())/cancel", method: "POST", body: Data("{}".utf8))
+        } catch { throw customerPublicationError(error) }
+    }
+
+    private static func customerPublicationError(_ error: Error) -> CustomerPublicationError {
+        if let error = error as? CustomerPublicationError { return error }
+        if case GunnAireBackendError.server(let status, _) = error {
+            if status == 400 { return .invalidProposal }
+            if status == 409 { return .needsReview }
+            if status == 401 || status == 403 { return .accessRequired }
+        }
+        return .unavailable
+    }
+
+    static var billingPublicationClient: BillingPublicationClient {
+        .init(transport: billingPublicationRequest)
+    }
+
+    static func billingPublicationRequest(path: String, method: String, body: Data?) async throws -> Data {
+        guard BillingPublicationTransportPolicy.allows(path: path, method: method, bodyBytes: body?.count)
+        else { throw BillingPublicationError.invalidProposal }
+        guard let identity = CompanyWorkspaceSession.current else { throw BillingPublicationError.accessRequired }
+        var request = try makeRequest(path: path, method: method, body: body)
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        guard bearer.hasPrefix("Bearer "), CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == identity.tokenFingerprint,
+              request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil else { throw BillingPublicationError.accessRequired }
+        request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
+        let controller = CompanyWorkspaceAccessController.shared, generation = controller.generation
+        func check() throws {
+            try Task.checkCancellation()
+            guard CompanyWorkspaceSession.current == identity, controller.generation == generation,
+                  controller.authorizedContainer != nil else { throw BillingPublicationError.accessRequired }
+        }
+        try check()
+        do {
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request,
+                maximum: URLComponents(string: path)?.path.hasSuffix("/connection") == true ? 16_384 : 2 * 1024 * 1024)
+            try check()
+            return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let status) = error {
+                throw GunnAireBackendError.server(statusCode: status, message: "Shared billing was not confirmed.")
+            }
+            if error is GmailServerHTTPError { throw BillingPublicationError.invalidResponse }
+            throw error
+        }
+    }
+
+    static func documentUploadClient(check: @escaping () throws -> Void) -> QBODocumentUploadClient {
+        .init(transport: documentUploadRequest, check: check)
+    }
+
+    static func documentUploadRequest(path: String, method: String, body: Data?) async throws -> Data {
+        let base = "/api/qbo-document-uploads"
+        guard let endpoint = URLComponents(string: path), endpoint.scheme == nil, endpoint.host == nil,
+              endpoint.fragment == nil, endpoint.path == base || endpoint.path.hasPrefix(base + "/"),
+              let identity = CompanyWorkspaceSession.current else { throw QBODocumentError.access }
+        let suffix = String(endpoint.path.dropFirst(base.count))
+        let parts = suffix.split(separator: "/", omittingEmptySubsequences: false)
+        let exactID = parts.count >= 2 && UUID(uuidString: String(parts[1])).map { $0.uuidString.lowercased() == parts[1] } == true
+        let collection = suffix.isEmpty
+        let read = method == "GET" && body == nil && (collection || (endpoint.query == nil && exactID &&
+            (parts.count == 2 || (parts.count == 3 && parts[2] == "file"))))
+        let write = method == "POST" && body != nil && endpoint.query == nil && (collection ||
+            (exactID && parts.count == 3 && ["send", "recover", "cancel"].contains(String(parts[2]))))
+        guard read || write, (body?.count ?? 0) <= (collection ? ((QBODocumentFileInfo.maximum + 2) / 3) * 4 + 8192 : 4096)
+        else { throw QBODocumentError.invalid }
+        var request = try makeRequest(path: path, method: method, body: body)
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        guard bearer.hasPrefix("Bearer "), CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == identity.tokenFingerprint,
+              request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil else { throw QBODocumentError.access }
+        request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
+        let controller = CompanyWorkspaceAccessController.shared, generation = controller.generation
+        func check() throws {
+            guard CompanyWorkspaceSession.current == identity, controller.generation == generation,
+                  controller.authorizedContainer != nil else { throw QBODocumentError.access }
+        }
+        try check()
+        do {
+            let maximum = endpoint.path.hasSuffix("/file") ? QBODocumentUploadClient.maximumResponseBytes : 512 * 1024
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: maximum)
+            try check()
+            return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let status) = error {
+                throw GunnAireBackendError.server(statusCode: status, message: "Original file recovery was not confirmed.")
+            }
+            if error is GmailServerHTTPError { throw QBODocumentError.invalid }
+            throw error
+        }
+    }
+
+    static var qboLinkReviewClient: QuickBooksLinkReviewClient {
+        .init(transport: qboLinkReviewRequest)
+    }
+
+    static func qboLinkReviewRequest(path: String, method: String, body: Data?) async throws -> Data {
+        guard LinkReviewTransportPolicy.allows(path: path, method: method, bodyBytes: body?.count) else { throw QuickBooksLinkReviewError.invalid }
+        guard let identity = CompanyWorkspaceSession.current else { throw QuickBooksLinkReviewError.access }
+        var request = try makeRequest(path: path, method: method, body: body)
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        guard bearer.hasPrefix("Bearer "), CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == identity.tokenFingerprint,
+              request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil else { throw QuickBooksLinkReviewError.access }
+        request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
+        let controller = CompanyWorkspaceAccessController.shared, generation = controller.generation
+        func check() throws {
+            try Task.checkCancellation()
+            guard CompanyWorkspaceSession.current == identity, controller.generation == generation,
+                  controller.authorizedContainer != nil else { throw QuickBooksLinkReviewError.access }
+        }
+        try check()
+        do {
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: 1024 * 1024)
+            try check(); return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let status) = error {
+                throw GunnAireBackendError.server(statusCode: status, message: "Existing link review was not confirmed.")
+            }
+            throw QuickBooksLinkReviewClient.safe(error)
+        }
+    }
+
+    /// Identity/setup-only transport for staff who cannot mount the owner's
+    /// private store. Its allowlist must never include operational endpoints.
+    static func staffCloudKitSetupRequest(path: String, method: String, body: Data?) async throws -> Data {
+        guard CloudKitStaffSetupPolicy.allows(path: path, method: method, bytes: body?.count),
+              Config.Backend.usesBusinessIdentity, let stamp = CloudKitStaffSetupStamp.current else { throw CloudKitStaffSharingError.access }
+        let candidates = [AppleAuthManager.shared.sessionToken, GoogleAuthManager.shared.applicationSessionToken].compactMap { $0 }
+        guard let token = candidates.first(where: { !$0.isEmpty && CompanyWorkspaceSession.digest($0) == stamp.session.tokenFingerprint })
+        else { throw CloudKitStaffSharingError.access }
+        var request = try baseRequest(path: path, method: method, body: body)
+        request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 45; request.cachePolicy = .reloadIgnoringLocalCacheData
+        func check() throws {
+            try Task.checkCancellation()
+            guard CloudKitStaffSetupStamp.current == stamp else { throw CloudKitStaffSharingError.access }
+        }
+        try check()
+        do {
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: 512 * 1024)
+            try check(); return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let status) = error {
+                throw GunnAireBackendError.server(statusCode: status, message: "Staff iCloud setup was not confirmed.")
+            }
+            throw CloudKitStaffSetupPolicy.safe(error)
+        }
+    }
+
+    /// Staff may read only projection metadata without mounting the owner's
+    /// private store. Payload bytes still require that verified owner store.
+    static func staffReplicaDeliveryRequest(path: String) async throws -> Data {
+        guard StaffReplicaDeliveryPolicy.allows(path: path), Config.Backend.usesBusinessIdentity,
+              let stamp = CloudKitStaffSetupStamp.current else { throw StaffReplicaDeliveryError.access }
+        let payload = URLComponents(string: path)?.path.hasSuffix("/cloud-payload") == true
+        let candidates = [AppleAuthManager.shared.sessionToken, GoogleAuthManager.shared.applicationSessionToken].compactMap { $0 }
+        guard let token = candidates.first(where: { !$0.isEmpty && CompanyWorkspaceSession.digest($0) == stamp.session.tokenFingerprint }) else {
+            throw StaffReplicaDeliveryError.access
+        }
+        let access = CompanyWorkspaceAccessController.shared, generation = access.generation
+        func check() throws {
+            try Task.checkCancellation()
+            guard CloudKitStaffSetupStamp.current == stamp, Date() < stamp.session.expiresAt,
+                  !payload || (access.generation == generation && access.authorizedContainer != nil && access.verifiedRole == .admin) else {
+                throw StaffReplicaDeliveryError.access
+            }
+        }
+        try check()
+        var request = try baseRequest(path: path, method: "GET", body: nil)
+        request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
+        do {
+            let maximum = payload ? ((StaffReplicaManifest.maximumPayloadBytes + 30) / 3) * 4 + 8192 : 8192
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: maximum)
+            try check(); return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let code) = error {
+                throw GunnAireBackendError.server(statusCode: code, message: "The original staff snapshot was not confirmed.")
+            }
+            throw StaffReplicaDeliveryPolicy.safe(error)
+        }
+    }
+
+    /// Only the author can read this bounded, read-only submission history.
+    static func staffWorkspaceFieldUpdatesRequest(path: String) async throws -> Data {
+        guard StaffWorkspaceFieldUpdatesHTTPPolicy.allows(path: path, method: "GET", body: nil),
+              Config.Backend.usesBusinessIdentity, let stamp = CloudKitStaffSetupStamp.current else {
+            throw StaffReplicaDeliveryError.access
+        }
+        let candidates = [AppleAuthManager.shared.sessionToken, GoogleAuthManager.shared.applicationSessionToken].compactMap { $0 }
+        guard let token = candidates.first(where: { !$0.isEmpty && CompanyWorkspaceSession.digest($0) == stamp.session.tokenFingerprint }) else {
+            throw StaffReplicaDeliveryError.access
+        }
+        func check() throws {
+            try Task.checkCancellation()
+            guard CloudKitStaffSetupStamp.current == stamp, Date() < stamp.session.expiresAt else { throw StaffReplicaDeliveryError.access }
+        }
+        try check()
+        var request = try baseRequest(path: path, method: "GET", body: nil)
+        request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 30; request.cachePolicy = .reloadIgnoringLocalCacheData
+        do {
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: StaffWorkspaceFieldUpdatesPage.maximumBytes)
+            try check(); return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let code) = error {
+                throw GunnAireBackendError.server(statusCode: code, message: "Field updates could not be verified. Your original submissions are retained.")
+            }
+            throw StaffReplicaDeliveryPolicy.safe(error)
+        }
+    }
+
+    /// Staff (and Admin) GET of an authenticated operational media grant or bytes.
+    /// Requires `/content/media` or `/content/media/bytes`; never uses owner-only helpers.
+    static func staffWorkspaceMediaRequest(path: String, maximum: Int = 8192) async throws -> Data {
+        guard StaffWorkspaceContentHTTPPolicy.allows(path: path, method: "GET", body: nil),
+              let components = URLComponents(string: path),
+              components.path.hasSuffix("/content/media") || components.path.hasSuffix("/content/media/bytes"),
+              Config.Backend.usesBusinessIdentity,
+              let stamp = CloudKitStaffSetupStamp.current else { throw StaffReplicaDeliveryError.access }
+        let candidates = [AppleAuthManager.shared.sessionToken, GoogleAuthManager.shared.applicationSessionToken].compactMap { $0 }
+        guard let token = candidates.first(where: { !$0.isEmpty && CompanyWorkspaceSession.digest($0) == stamp.session.tokenFingerprint }) else {
+            throw StaffReplicaDeliveryError.access
+        }
+        func check() throws {
+            try Task.checkCancellation()
+            guard CloudKitStaffSetupStamp.current == stamp, Date() < stamp.session.expiresAt else {
+                throw StaffReplicaDeliveryError.access
+            }
+        }
+        try check()
+        var request = try baseRequest(path: path, method: "GET", body: nil)
+        request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
+        do {
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: maximum)
+            try check(); return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let code) = error {
+                throw GunnAireBackendError.server(statusCode: code, message: "The original staff media grant was not confirmed.")
+            }
+            throw StaffReplicaDeliveryPolicy.safe(error)
+        }
+    }
+
+    /// Staff (and Admin) POST of an operational field command against prepared content.
+    /// Requires `/content/commands` with a decoded command body; never uses owner-only helpers.
+    static func staffWorkspaceCommandRequest(path: String, body: Data) async throws -> Data {
+        guard StaffWorkspaceContentHTTPPolicy.allows(path: path, method: "POST", body: body),
+              let components = URLComponents(string: path),
+              components.path.hasSuffix("/content/commands"),
+              components.query == nil,
+              body.count <= 8192,
+              Config.Backend.usesBusinessIdentity,
+              let stamp = CloudKitStaffSetupStamp.current else { throw StaffReplicaDeliveryError.access }
+        let candidates = [AppleAuthManager.shared.sessionToken, GoogleAuthManager.shared.applicationSessionToken].compactMap { $0 }
+        guard let token = candidates.first(where: { !$0.isEmpty && CompanyWorkspaceSession.digest($0) == stamp.session.tokenFingerprint }) else {
+            throw StaffReplicaDeliveryError.access
+        }
+        func check() throws {
+            try Task.checkCancellation()
+            guard CloudKitStaffSetupStamp.current == stamp, Date() < stamp.session.expiresAt else {
+                throw StaffReplicaDeliveryError.access
+            }
+        }
+        try check()
+        var request = try baseRequest(path: path, method: "POST", body: body)
+        request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
+        do {
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: 32 * 1024)
+            try check(); return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let code) = error {
+                throw GunnAireBackendError.server(statusCode: code, message: "The original staff operational command was not confirmed.")
+            }
+            throw StaffReplicaDeliveryPolicy.safe(error)
+        }
+    }
+
+    /// Financial intent only: immutable staff invoice-line requests for office review.
+    static func staffInvoiceRequest(path: String, body: Data) async throws -> Data {
+        guard StaffInvoiceHTTPPolicy.allows(path: path, method: "POST", body: body), Config.Backend.usesBusinessIdentity,
+              let stamp = CloudKitStaffSetupStamp.current else { throw StaffReplicaDeliveryError.access }
+        let candidates = [AppleAuthManager.shared.sessionToken, GoogleAuthManager.shared.applicationSessionToken].compactMap { $0 }
+        guard let token = candidates.first(where: { !$0.isEmpty && CompanyWorkspaceSession.digest($0) == stamp.session.tokenFingerprint }) else {
+            throw StaffReplicaDeliveryError.access
+        }
+        func check() throws {
+            try Task.checkCancellation()
+            guard CloudKitStaffSetupStamp.current == stamp, Date() < stamp.session.expiresAt else { throw StaffReplicaDeliveryError.access }
+        }
+        try check()
+        var request = try baseRequest(path: path, method: "POST", body: body)
+        request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
+        do {
+            let (bytes, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: 32 * 1024)
+            try check(); return bytes
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let code) = error {
+                throw GunnAireBackendError.server(statusCode: code, message: "The original invoice-line request was not confirmed. Keep the saved request for recovery.")
+            }
+            throw StaffReplicaDeliveryPolicy.safe(error)
+        }
+    }
+
+    /// Staff (and Admin) GET of an already-prepared full-workspace cloud-key.
+    /// Never returns sealed content bytes; never uses the Admin-only owner source helper.
+    static func staffWorkspaceCloudKeyRequest(path: String) async throws -> Data {
+        guard StaffWorkspaceContentHTTPPolicy.allows(path: path, method: "GET", body: nil),
+              URLComponents(string: path)?.path.hasSuffix("/content/cloud-key") == true,
+              Config.Backend.usesBusinessIdentity,
+              let stamp = CloudKitStaffSetupStamp.current else { throw StaffReplicaDeliveryError.access }
+        let candidates = [AppleAuthManager.shared.sessionToken, GoogleAuthManager.shared.applicationSessionToken].compactMap { $0 }
+        guard let token = candidates.first(where: { !$0.isEmpty && CompanyWorkspaceSession.digest($0) == stamp.session.tokenFingerprint }) else {
+            throw StaffReplicaDeliveryError.access
+        }
+        func check() throws {
+            try Task.checkCancellation()
+            guard CloudKitStaffSetupStamp.current == stamp, Date() < stamp.session.expiresAt else {
+                throw StaffReplicaDeliveryError.access
+            }
+        }
+        try check()
+        var request = try baseRequest(path: path, method: "GET", body: nil)
+        request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
+        do {
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: 8192)
+            try check(); return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let code) = error {
+                throw GunnAireBackendError.server(statusCode: code, message: "The original full-workspace cloud key was not confirmed.")
+            }
+            throw StaffReplicaDeliveryPolicy.safe(error)
+        }
+    }
+
+    /// Owner source reads and mutations never use the staff metadata exception.
+    static func staffReplicaSourceRequest(path: String, method: String, body: Data?) async throws -> Data {
+        guard (StaffReplicaSourceTransportPolicy.allows(path: path, method: method, body: body)
+               || StaffWorkspacePublicationTransportPolicy.allows(path: path, method: method, body: body)
+               || StaffOwnerFieldEditTransport.allows(path: path, method: method, body: body)
+               || StaffOwnerInvoiceTransport.allows(path: path, method: method, body: body)
+               || StaffWorkspaceContentHTTPPolicy.allows(path: path, method: method, body: body)),
+              let stamp = CompanyWorkspaceAccessController.shared.operationStamp,
+              CompanyWorkspaceAccessController.shared.verifiedRole == .admin else { throw StaffReplicaSourceSyncError.access }
+        var request = try makeRequest(path: path, method: method, body: body)
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        guard bearer.hasPrefix("Bearer "), CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == stamp.session.tokenFingerprint,
+              request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil else { throw StaffReplicaSourceSyncError.access }
+        func check() throws {
+            try Task.checkCancellation()
+            let access = CompanyWorkspaceAccessController.shared
+            guard access.operationStamp == stamp, access.verifiedRole == .admin, access.authorizedContainer != nil,
+                  Date() < stamp.session.expiresAt else {
+                throw StaffReplicaSourceSyncError.access
+            }
+        }
+        try check()
+        request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
+        do {
+            let invoiceRequest = StaffOwnerInvoiceTransport.allows(path: path, method: method, body: body)
+            let maximum = invoiceRequest ? StaffOwnerInvoiceTransport.maximumResponseBytes :
+                (StaffOwnerFieldEditTransport.allows(path: path, method: method, body: body)
+                    ? StaffOwnerFieldEditTransport.maximumResponseBytes : 8 * 1024 * 1024)
+            let (data, response) = try await GmailServerHTTPTransfer.data(for: request, maximum: maximum, acceptedStatusCodes: [200, 409])
+            try check()
+            if response.statusCode == 409 {
+                struct Rejection: Decodable { let code: String }
+                guard data.count <= 8192, let value = try? JSONDecoder().decode(Rejection.self, from: data),
+                      (["source_changed", "record_changed", "deletion_changed", "field_changed", "edit_claimed", "edit_changed", "edit_not_prepared", "edit_not_published", "edit_resolved", "edit_published"].contains(value.code)
+                       || (invoiceRequest && StaffOwnerInvoiceTransport.rejectionCodes.contains(value.code))) else { throw StaffReplicaSourceSyncError.invalid }
+                if method == "POST" { throw StaffReplicaSourceRejected(code: value.code) }
+                throw StaffReplicaSourceSyncError.sourceChanged
+            }
+            return data
+        } catch {
+            try check()
+            if error is StaffReplicaSourceRejected || error is StaffReplicaSourceSyncError { throw error }
+            throw StaffReplicaSourceSyncError.unavailable
+        }
+    }
+
+    /// Preparing snapshots requires the verified private owner store and a
+    /// business session. This is not part of the pre-store staff GET exception.
+    static func staffReplicaPreparationRequest(path: String, body: Data) async throws -> Data {
+        let access = CompanyWorkspaceAccessController.shared
+        guard StaffReplicaPreparationPolicy.allows(path: path, body: body), let stamp = access.operationStamp,
+              access.verifiedRole == .admin else { throw StaffReplicaDeliveryError.access }
+        var request = try makeRequest(path: path, method: "POST", body: body)
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        guard bearer.hasPrefix("Bearer "), CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == stamp.session.tokenFingerprint,
+              request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil else { throw StaffReplicaDeliveryError.access }
+        func check() throws {
+            try Task.checkCancellation()
+            guard access.operationStamp == stamp, access.verifiedRole == .admin, access.authorizedContainer != nil,
+                  Date() < stamp.session.expiresAt else { throw StaffReplicaDeliveryError.access }
+        }
+        try check(); request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
+        do {
+            let (data, response) = try await GmailServerHTTPTransfer.data(for: request, maximum: 8192, acceptedStatusCodes: [200, 409])
+            try check()
+            if response.statusCode == 409 {
+                struct Rejection: Decodable { let code: String }
+                guard let value = try? JSONDecoder().decode(Rejection.self, from: data), value.code == "source_changed" else {
+                    throw StaffReplicaDeliveryError.changed
+                }
+                throw StaffReplicaPreparationRejected()
+            }
+            return data
+        } catch {
+            try check()
+            if error is StaffReplicaPreparationRejected { throw error }
+            throw StaffReplicaDeliveryPolicy.safe(error)
+        }
+    }
+
+    static func sharedTimeRequest(path: String, method: String, body: Data?) async throws -> Data {
+        guard SharedTimeTransportPolicy.allows(path: path, method: method, bodyBytes: body?.count) else { throw SharedTimeError.invalid }
+        guard let identity = CompanyWorkspaceSession.current else { throw SharedTimeError.access }
+        var request = try makeRequest(path: path, method: method, body: body)
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        guard bearer.hasPrefix("Bearer "), CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == identity.tokenFingerprint,
+              request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil else { throw SharedTimeError.access }
+        request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
+        let controller = CompanyWorkspaceAccessController.shared, generation = controller.generation
+        func check() throws {
+            try Task.checkCancellation()
+            guard CompanyWorkspaceSession.current == identity, controller.generation == generation,
+                  controller.authorizedContainer != nil else { throw SharedTimeError.access }
+        }
+        try check()
+        do {
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: 512 * 1024)
+            try check(); return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let status) = error {
+                throw GunnAireBackendError.server(statusCode: status, message: "Shared time action was not confirmed.")
+            }
+            throw SharedTimeError.safe(error)
+        }
+    }
+
+    private struct CatalogPublicationList: Decodable { let publications: [CatalogPublicationRecord] }
+
+    static func catalogPublicationRequest(path: String, method: String, body: Data?) async throws -> Data {
+        guard CatalogPublicationTransportPolicy.allows(path: path, method: method, bodyBytes: body?.count)
+        else { throw CatalogPublicationError.invalidProposal }
+        guard let identity = CompanyWorkspaceSession.current else { throw CatalogPublicationError.accessRequired }
+        var request = try makeRequest(path: path, method: method, body: body)
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        guard bearer.hasPrefix("Bearer "), CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == identity.tokenFingerprint,
+              request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil else { throw CatalogPublicationError.accessRequired }
+        request.timeoutInterval = 100; request.cachePolicy = .reloadIgnoringLocalCacheData
+        let controller = CompanyWorkspaceAccessController.shared, generation = controller.generation
+        func check() throws {
+            try Task.checkCancellation()
+            guard CompanyWorkspaceSession.current == identity, controller.generation == generation,
+                  controller.authorizedContainer != nil else { throw CatalogPublicationError.accessRequired }
+        }
+        try check()
+        do {
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: 256 * 1024)
+            try check()
+            return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let status) = error {
+                throw GunnAireBackendError.server(statusCode: status, message: "Shared catalog action was not confirmed.")
+            }
+            throw SharedCatalogClient.safe(error)
+        }
+    }
+
+    static func publishCatalog(_ request: CatalogPublicationRequest) async throws -> CatalogPublicationResponse {
+        do {
+            let data = try await catalogPublicationRequest(path: "/api/catalog-publications", method: "POST", body: JSONEncoder().encode(request))
+            let result = try JSONDecoder().decode(CatalogPublicationResponse.self, from: data)
+            try result.validate(companyID: request.companyID, realmID: request.realmID,
+                                environment: request.environment, itemID: request.localItemID)
+            return result
+        } catch { throw catalogError(error) }
+    }
+
+    static func catalogPublications(companyID: UUID, itemID: UUID) async throws -> [CatalogPublicationRecord] {
+        do {
+            let path = "/api/catalog-publications?companyID=\(companyID.uuidString.lowercased())&localItemID=\(itemID.uuidString.lowercased())"
+            return try JSONDecoder().decode(CatalogPublicationList.self, from: await catalogPublicationRequest(path: path, method: "GET", body: nil)).publications
+        } catch { throw catalogError(error) }
+    }
+
+    static func recoverCatalogPublication(_ id: UUID) async throws -> CatalogPublicationResponse {
+        do {
+            return try JSONDecoder().decode(CatalogPublicationResponse.self,
+                from: await catalogPublicationRequest(path: "/api/catalog-publications/\(id.uuidString.lowercased())/recover",
+                                 method: "POST", body: Data("{}".utf8)))
+        } catch { throw catalogError(error) }
+    }
+
+    static func cancelCatalogPublication(_ id: UUID) async throws {
+        do {
+            _ = try await catalogPublicationRequest(path: "/api/catalog-publications/\(id.uuidString.lowercased())/cancel",
+                               method: "POST", body: Data("{}".utf8))
+        } catch { throw catalogError(error) }
+    }
+
+    private static func catalogError(_ error: Error) -> CatalogPublicationError {
+        if let error = error as? CatalogPublicationError { return error }
+        if case GunnAireBackendError.server(let status, _) = error {
+            if status == 400 { return .invalidProposal }
+            if status == 409 { return .needsReview }
+            if status == 401 || status == 403 { return .accessRequired }
+        }
+        return .unavailable
+    }
+
+
+    private struct PaymentAttemptEnvelope: Decodable { let attempt: PaymentAttemptRecord }
+    private struct PaymentAttemptListEnvelope: Decodable { let attempts: [PaymentAttemptRecord] }
+
+    static func reservePaymentAttempt(_ intent: PaymentAttemptIntent) async throws -> PaymentAttemptRecord {
+        do {
+            let data = try await send(path: "/api/payment-attempts", method: "POST", body: JSONEncoder().encode(intent))
+            return try JSONDecoder().decode(PaymentAttemptEnvelope.self, from: data).attempt
+        } catch let error as GunnAireBackendError {
+            if case .server(let status, _) = error, status == 409 { throw PaymentAttemptError.needsReview }
+            throw PaymentAttemptError.unavailable
+        } catch { throw PaymentAttemptError.unavailable }
+    }
+
+    static func updatePaymentAttempt(_ id: UUID, action: String, reference: String?) async throws -> PaymentAttemptRecord {
+        var payload: [String: String] = [:]
+        switch action {
+        case "begin", "cancel", "unknown":
+            guard reference == nil else { throw PaymentAttemptError.needsReview }
+        case "confirm", "complete":
+            guard let reference, PaymentAttemptRecord.isReference(reference) else { throw PaymentAttemptError.needsReview }
+            payload[action == "confirm" ? "providerID" : "accountingID"] = reference
+        default: throw PaymentAttemptError.needsReview
+        }
+        do {
+            let data = try await send(path: "/api/payment-attempts/\(id.uuidString.lowercased())/\(action)",
+                                      method: "POST", body: JSONEncoder().encode(payload))
+            return try JSONDecoder().decode(PaymentAttemptEnvelope.self, from: data).attempt
+        } catch { throw PaymentAttemptError.needsReview }
+    }
+
+    static func fetchPaymentAttempt(_ id: UUID) async throws -> PaymentAttemptRecord {
+        do {
+            let data = try await send(path: "/api/payment-attempts/\(id.uuidString.lowercased())", method: "GET")
+            return try JSONDecoder().decode(PaymentAttemptEnvelope.self, from: data).attempt
+        } catch { throw PaymentAttemptError.needsReview }
+    }
+
+    static func fetchPaymentAttempts(companyID: UUID, invoiceID: UUID) async throws -> [PaymentAttemptRecord] {
+        do {
+            let data = try await send(path: "/api/payment-attempts?companyID=\(companyID.uuidString.lowercased())&invoiceID=\(invoiceID.uuidString.lowercased())", method: "GET")
+            let records = try JSONDecoder().decode(PaymentAttemptListEnvelope.self, from: data).attempts
+            guard records.allSatisfy({ $0.intent.companyID == companyID && $0.intent.invoiceID == invoiceID }) else {
+                throw PaymentAttemptError.needsReview
+            }
+            return records
+        } catch { throw PaymentAttemptError.needsReview }
+    }
+
+    static func fetchCompanyWorkspace() async throws -> BackendCompanyWorkspaceResponse {
+        let data = try await send(path: "/api/workspace", method: "GET")
+        return try JSONDecoder().decode(BackendCompanyWorkspaceResponse.self, from: data)
+    }
+
+    /// Call only from explicit administrator onboarding, never as a side effect
+    /// of login or record discovery. The server rechecks recent authentication
+    /// and makes the first binding immutable. Existing data must be reviewed
+    /// before the UI passes ownership confirmation.
+    static func approveCompanyCloudKitWorkspace(
+        _ approval: CompanyCloudKitApprovalRequest
+    ) async throws -> CompanyCloudKitBinding {
+        let body = try JSONEncoder().encode(approval)
+        let data = try await send(path: "/api/workspace/bind", method: "POST", body: body)
+        let result = try JSONDecoder().decode(BackendCompanyCloudKitApprovalResponse.self, from: data).binding
+        guard result.isValid,
+              result.companyID.uuidString.lowercased() == approval.expectedCompanyID,
+              result.containerID == approval.containerID,
+              result.environment == approval.environment,
+              result.cloudAccountHash == approval.cloudAccountHash else {
+            throw GunnAireBackendError.invalidResponse
+        }
+        return result
+    }
+
     static func exchangeAppleIdentity(
         identityToken: String,
         nonce: String
     ) async throws -> BackendApplicationSessionResponse {
+        guard Config.Backend.isProductionReady else { throw GunnAireBackendError.notConfigured }
         let payload = AppleIdentityPayload(identityToken: identityToken, nonce: nonce)
         let body = try JSONEncoder().encode(payload)
         let data = try await sendUnauthenticated(path: "/api/auth/apple", method: "POST", body: body)
@@ -774,6 +1407,7 @@ enum GunnAireBackendService {
     static func exchangeGoogleIdentity(
         identityToken: String
     ) async throws -> BackendApplicationSessionResponse {
+        guard Config.Backend.isProductionReady else { throw GunnAireBackendError.notConfigured }
         let payload = GoogleIdentityPayload(identityToken: identityToken)
         let body = try JSONEncoder().encode(payload)
         let data = try await sendUnauthenticated(path: "/api/auth/google", method: "POST", body: body)
@@ -1219,8 +1853,28 @@ enum GunnAireBackendService {
     }
 
     static func downloadDocument(id: String) async throws -> Data {
-        let encodedID = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
-        return try await send(path: "/api/documents/\(encodedID)/download", method: "GET")
+        guard let identity = CompanyWorkspaceSession.current else { throw CompanyDocumentContentError.access }
+        let controller = CompanyWorkspaceAccessController.shared, generation = controller.generation
+        func check() throws {
+            guard CompanyWorkspaceSession.current == identity, controller.generation == generation,
+                  controller.authorizedContainer != nil else { throw CompanyDocumentContentError.access }
+        }
+        return try await CompanyDocumentContentClient(request: { path, maximum in
+            try check()
+            guard CompanyDocumentContentClient.allows(path, maximum: maximum) else { throw CompanyDocumentContentError.invalid }
+            var request = try makeRequest(path: path, method: "GET", body: nil)
+            let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+            guard bearer.hasPrefix("Bearer "), CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == identity.tokenFingerprint,
+                  request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil else { throw CompanyDocumentContentError.access }
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            do {
+                let (bytes, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: maximum)
+                try check(); return bytes
+            } catch {
+                try check()
+                throw CompanyDocumentContentError.transportFailure(error)
+            }
+        }, check: check).download(id: id)
     }
 
     @discardableResult
@@ -1263,18 +1917,6 @@ enum GunnAireBackendService {
                     knownTechnicians.append(technician)
                 }
             }
-        }
-
-        if !currentUsers.contains(where: { $0.email == AppAccess.primaryAdminEmail }) &&
-            !remoteUsers.contains(where: { AppAccess.normalizedEmail($0.email) == AppAccess.primaryAdminEmail }) {
-            let admin = AppUser(email: AppAccess.primaryAdminEmail, role: .admin)
-            modelContext.insert(admin)
-            let technician = AppAccess.ensureTechnicianRecord(
-                for: admin.email,
-                technicians: knownTechnicians,
-                modelContext: modelContext
-            )
-            knownTechnicians.append(technician)
         }
 
         try? modelContext.save()
@@ -1372,6 +2014,120 @@ enum GunnAireBackendService {
         )
     }
 
+    static func googleConnectionRequest(path: String, method: String, body: Data?) async throws -> Data {
+        guard let identity = CompanyWorkspaceSession.current else { throw GoogleServerConnectionError.access }
+        let request = try makeRequest(path: path, method: method, body: body)
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        guard bearer.hasPrefix("Bearer "), CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == identity.tokenFingerprint,
+              request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil else { throw GoogleServerConnectionError.access }
+        let generation = CompanyWorkspaceAccessController.shared.generation
+        let session = URLSession(configuration: .ephemeral, delegate: GoogleConnectionNoRedirect(), delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        let (data, response) = try await session.data(for: request)
+        guard CompanyWorkspaceSession.current == identity, CompanyWorkspaceAccessController.shared.generation == generation,
+              CompanyWorkspaceAccessController.shared.authorizedContainer != nil else { throw GoogleServerConnectionError.access }
+        guard let http = response as? HTTPURLResponse, data.count <= 32768 else { throw GoogleServerConnectionError.invalid }
+        guard (200..<300).contains(http.statusCode) else {
+            throw GunnAireBackendError.server(statusCode: http.statusCode, message: "Google connection request was not confirmed.")
+        }
+        return data
+    }
+
+    static func googleMailRequest(path: String, method: String, body: Data?, maximum: Int) async throws -> Data {
+        guard path.hasPrefix("/api/google/mail/"), ["GET", "POST"].contains(method),
+              (1...68 * 1024 * 1024).contains(maximum), (body?.count ?? 0) <= 48 * 1024 * 1024,
+              let identity = CompanyWorkspaceSession.current else { throw GmailServerMailError.access }
+        var request = try makeRequest(path: path, method: method, body: body)
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        guard bearer.hasPrefix("Bearer "), CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == identity.tokenFingerprint,
+              request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil else { throw GmailServerMailError.access }
+        request.timeoutInterval = 100
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        let controller = CompanyWorkspaceAccessController.shared
+        let generation = controller.generation
+        do {
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: maximum)
+            guard CompanyWorkspaceSession.current == identity, controller.generation == generation,
+                  controller.authorizedContainer != nil else { throw GmailServerMailError.access }
+            return data
+        } catch {
+            guard CompanyWorkspaceSession.current == identity, controller.generation == generation,
+                  controller.authorizedContainer != nil else { throw GmailServerMailError.access }
+            if case GmailServerHTTPError.status(let code) = error {
+                throw GunnAireBackendError.server(statusCode: code, message: "Mail request was not confirmed.")
+            }
+            if error is GmailServerHTTPError { throw GmailServerMailError.invalid }
+            throw error
+        }
+    }
+
+    static func quickBooksChangeHistoryRequest(path: String, method: String, body: Data?) async throws -> Data {
+        guard let endpoint = URLComponents(string: path), endpoint.scheme == nil, endpoint.host == nil,
+              endpoint.path == "/api/qbo/change-capture", endpoint.fragment == nil,
+              (method == "GET" && body == nil) || (method == "POST" && endpoint.query == nil),
+              (body?.count ?? 0) <= 4096,
+              let identity = CompanyWorkspaceSession.current else { throw QuickBooksChangeHistoryError.access }
+        var request = try makeRequest(path: path, method: method, body: body)
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        guard bearer.hasPrefix("Bearer "), CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == identity.tokenFingerprint,
+              request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil
+        else { throw QuickBooksChangeHistoryError.access }
+        request.timeoutInterval = 100
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        let controller = CompanyWorkspaceAccessController.shared
+        let generation = controller.generation
+        func check() throws {
+            guard CompanyWorkspaceSession.current == identity, controller.generation == generation,
+                  controller.authorizedContainer != nil else { throw QuickBooksChangeHistoryError.access }
+        }
+        try check()
+        do {
+            // Reuse the existing bounded, ephemeral, no-redirect transfer.
+            // It stops at the byte boundary before allocating a large reply.
+            let (data, _) = try await GmailServerHTTPTransfer.data(
+                for: request, maximum: QuickBooksChangeHistoryClient.maximumPageBytes)
+            try check()
+            return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let code) = error {
+                throw GunnAireBackendError.server(statusCode: code, message: "Accounting history was not confirmed.")
+            }
+            if error is GmailServerHTTPError { throw QuickBooksChangeHistoryError.invalid }
+            throw error
+        }
+    }
+
+    static func fieldPaymentReviewRequest(path: String) async throws -> Data {
+        guard let endpoint = URLComponents(string: path), endpoint.scheme == nil, endpoint.host == nil,
+              ["/api/field-payment-review", "/api/field-payment-review/context"].contains(endpoint.path),
+              endpoint.fragment == nil, path.utf8.count < 4096,
+              let identity = CompanyWorkspaceSession.current else { throw FieldPaymentReviewError.access }
+        var request = try makeRequest(path: path, method: "GET", body: nil)
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        guard bearer.hasPrefix("Bearer "), CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == identity.tokenFingerprint,
+              request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil else { throw FieldPaymentReviewError.access }
+        request.timeoutInterval = 75; request.cachePolicy = .reloadIgnoringLocalCacheData
+        let controller = CompanyWorkspaceAccessController.shared, generation = controller.generation
+        func check() throws {
+            try Task.checkCancellation()
+            guard CompanyWorkspaceSession.current == identity, controller.generation == generation,
+                  controller.authorizedContainer != nil else { throw FieldPaymentReviewError.access }
+        }
+        try check()
+        do {
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: FieldPaymentReviewClient.maximumBytes)
+            try check()
+            return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let status) = error {
+                throw FieldPaymentReviewError.safe(GunnAireBackendError.server(statusCode: status, message: "Payment review unavailable."))
+            }
+            throw FieldPaymentReviewError.safe(error)
+        }
+    }
+
     private static func send(
         path: String,
         method: String,
@@ -1379,12 +2135,12 @@ enum GunnAireBackendService {
         headers: [String: String] = [:]
     ) async throws -> Data {
         let request = try makeRequest(path: path, method: method, body: body, headers: headers)
-        return try await perform(request)
+        return try await perform(request, endpointPath: path)
     }
 
     private static func sendUnauthenticated(path: String, method: String, body: Data?) async throws -> Data {
         let request = try baseRequest(path: path, method: method, body: body)
-        return try await perform(request)
+        return try await perform(request, endpointPath: path)
     }
 
     private static func sendWithBearerToken(
@@ -1394,11 +2150,28 @@ enum GunnAireBackendService {
     ) async throws -> Data {
         var request = try baseRequest(path: path, method: method, body: nil)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        return try await perform(request)
+        let deviceID = path.hasPrefix("/api/push-devices/") ? String(path.dropFirst("/api/push-devices/".count)) : ""
+        let isCleanup = path == "/api/auth/logout" || (method == "DELETE" && UUID(uuidString: deviceID) != nil)
+        return try await perform(request, endpointPath: path, allowsSessionCleanup: isCleanup)
     }
 
-    private static func perform(_ request: URLRequest) async throws -> Data {
+    private static func perform(_ request: URLRequest, endpointPath: String, allowsSessionCleanup: Bool = false) async throws -> Data {
+        // Use the service-relative endpoint, not the URL path: deployments may
+        // host the API below a prefix without changing the identity boundary.
+        let requiresWorkspace = CompanyWorkspaceRequestPolicy.needsWorkspaceProof(path: endpointPath) && !allowsSessionCleanup && !GunnAireCloudKit.usesTestDatabase
+        let workspaceGeneration = CompanyWorkspaceAccessController.shared.generation
+        let workspaceSession = requiresWorkspace ? CompanyWorkspaceSession.current : nil
+        if requiresWorkspace, CompanyWorkspaceAccessController.shared.authorizedContainer == nil {
+            throw GunnAireBackendError.missingBusinessIdentity
+        }
         let (data, response) = try await URLSession.shared.data(for: request)
+        if requiresWorkspace {
+            guard CompanyWorkspaceAccessController.shared.generation == workspaceGeneration,
+                  CompanyWorkspaceSession.current == workspaceSession,
+                  CompanyWorkspaceAccessController.shared.authorizedContainer != nil else {
+                throw GunnAireBackendError.missingBusinessIdentity
+            }
+        }
         guard let httpResponse = response as? HTTPURLResponse else {
             throw GunnAireBackendError.invalidResponse
         }
@@ -1417,6 +2190,11 @@ enum GunnAireBackendService {
         body: Data?,
         headers: [String: String] = [:]
     ) throws -> URLRequest {
+        if CompanyWorkspaceRequestPolicy.needsWorkspaceProof(path: path),
+           !GunnAireCloudKit.usesTestDatabase,
+           CompanyWorkspaceAccessController.shared.authorizedContainer == nil {
+            throw GunnAireBackendError.missingBusinessIdentity
+        }
         var request = try baseRequest(path: path, method: method, body: body)
         if Config.Backend.usesBusinessIdentity {
             if let sessionToken = AppleAuthManager.shared.sessionToken,

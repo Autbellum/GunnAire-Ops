@@ -100,7 +100,7 @@ final class FieldPaymentHandoff: ObservableObject {
 
     @discardableResult
     func begin(invoiceID: UUID, amount: Double) -> Bool {
-        guard canStartFromCurrentDevice, amount > 0 else { return false }
+        guard canStartFromCurrentDevice, amount.isFinite, amount > 0 else { return false }
 
         end()
         let activity = Self.makeActivity(invoiceID: invoiceID)
@@ -184,5 +184,38 @@ final class FieldPaymentHandoff: ObservableObject {
     static func quickBooksInvoiceReference(_ quickBooksID: String?) -> String? {
         let normalized = quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return normalized.isEmpty ? nil : normalized
+    }
+
+    /// True when QuickBooks has assigned a searchable invoice reference that
+    /// Tap to Pay / GoPayment can look up. Aligns with `quickBooksInvoiceReference`.
+    static func quickBooksPublicationReady(_ quickBooksID: String?) -> Bool {
+        quickBooksInvoiceReference(quickBooksID) != nil
+    }
+
+    /// Prefer the contactless Tap to Pay guide when the user intent is field
+    /// collection / Tap to Pay / Handoff continuation. Leave false for ordinary
+    /// invoice navigation and accounting review.
+    static func prefersContactlessGuide(forFieldCollectionIntent intent: Bool) -> Bool {
+        intent
+    }
+
+    /// Origin-device status after "Send to Field iPhone". Never includes customer,
+    /// amount, or card data — only publication readiness and a normalized QBO ID.
+    static func originStartMessage(didStart: Bool, invoiceQuickBooksID: String?) -> String {
+        guard didStart else {
+            return "Payment handoff could not start on this device."
+        }
+        if let reference = quickBooksInvoiceReference(invoiceQuickBooksID) {
+            return "Handoff started. A nearby iPhone can open GunnAire Ops via Handoff within 30 minutes and the contactless Tap to Pay guide will open. Match QuickBooks invoice reference \(reference)."
+        }
+        return "Handoff started. A nearby iPhone can open GunnAire Ops and the collection task, but QuickBooks Tap to Pay needs this invoice published to QuickBooks first (Accounting should publish)."
+    }
+
+    /// Compact caption under the active handoff status chip.
+    static func activeHandoffStatusCaption(invoiceQuickBooksID: String?) -> String {
+        if quickBooksPublicationReady(invoiceQuickBooksID) {
+            return "Open GunnAire Ops from Handoff within 30 minutes. This invoice's contactless collection guide opens automatically."
+        }
+        return "Open GunnAire Ops from Handoff within 30 minutes. Collection opens on the iPhone, but QuickBooks Tap to Pay still needs Accounting to publish this invoice."
     }
 }

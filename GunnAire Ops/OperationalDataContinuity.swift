@@ -43,21 +43,16 @@ enum OperationalDataContinuity {
         "Field work is retained locally while offline. Reopen this device to finish or retry work; CloudKit merges the saved changes when it returns online. Confirm shared-file upload status before relying on another device."
     }
 
-    /// A verified app login grants a role, but it does not prove that the
-    /// device is using the company's existing private CloudKit replica. Keep
-    /// administrators able to establish the first company record while
-    /// preventing other roles from creating a second, isolated company data
-    /// set on an empty iCloud account. Devices that already hold operational
-    /// records remain usable offline.
+    /// Identity proof is supplied by the storage controller, never inferred
+    /// from a record count or administrator role.
     static func workspaceAccess(
         role: AppUserRole?,
-        didInspectLocalRecords: Bool,
-        hasLocalCompanyRecords: Bool
+        didCheckIdentity: Bool,
+        hasVerifiedCompanyStore: Bool
     ) -> OperationalWorkspaceAccess {
-        guard let role else { return .ready }
-        guard role != .admin else { return .ready }
-        guard didInspectLocalRecords else { return .checking }
-        return hasLocalCompanyRecords ? .ready : .emptyReplica
+        guard role != nil else { return .emptyReplica }
+        guard didCheckIdentity else { return .checking }
+        return hasVerifiedCompanyStore ? .ready : .emptyReplica
     }
 
     static func workspaceNotice(

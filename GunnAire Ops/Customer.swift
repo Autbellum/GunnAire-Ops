@@ -5,7 +5,7 @@ import SwiftData
 
 @Model
 final class Customer {
-    var id: UUID = UUID()
+    @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var quickBooksID: String?
     var name: String = ""
     var phone: String?

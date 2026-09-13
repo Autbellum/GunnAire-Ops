@@ -100,13 +100,17 @@ def build_manifest(
     ]
 
     expected_v23 = release_preflight.EXPECTED_CLOUDKIT_V23_ADDITIONS
+    expected_v24 = release_preflight.EXPECTED_CLOUDKIT_V24_ADDITIONS
+    expected_v25 = release_preflight.EXPECTED_CLOUDKIT_V25_ADDITIONS
+    expected_v26 = release_preflight.EXPECTED_CLOUDKIT_V26_ADDITIONS
+    expected_v27 = release_preflight.EXPECTED_CLOUDKIT_V27_ADDITIONS
     expected_remaining = {
         record_name: {
             field_name: definition
             for field_name, definition in expected_fields.items()
             if production.get(record_name, {}).get(field_name) != definition
         }
-        for record_name, expected_fields in expected_v23.items()
+        for record_name, expected_fields in expected_v27.items()
     }
     expected_remaining = {
         record_name: fields
@@ -118,6 +122,32 @@ def build_manifest(
         for record_name, expected_fields in expected_v23.items()
         for field_name, expected_definition in expected_fields.items()
         if development.get(record_name, {}).get(field_name) != expected_definition
+    )
+    missing_or_changed_development_v24_fields = sorted(
+        _field_path(record_name, field_name)
+        for record_name, fields in expected_v24.items()
+        for field_name, definition in fields.items()
+        if development.get(record_name, {}).get(field_name) != definition
+    )
+
+    missing_or_changed_development_v25_fields = sorted(
+        _field_path(record_name, field_name)
+        for record_name, fields in expected_v25.items()
+        for field_name, definition in fields.items()
+        if development.get(record_name, {}).get(field_name) != definition
+    )
+
+    missing_or_changed_development_v26_fields = sorted(
+        _field_path(record_name, field_name)
+        for record_name, fields in expected_v26.items()
+        for field_name, definition in fields.items()
+        if development.get(record_name, {}).get(field_name) != definition
+    )
+    missing_or_changed_development_v27_fields = sorted(
+        _field_path(record_name, field_name)
+        for record_name, fields in expected_v27.items()
+        for field_name, definition in fields.items()
+        if development.get(record_name, {}).get(field_name) != definition
     )
 
     checks = {
@@ -132,14 +162,19 @@ def build_manifest(
         "existingMetadataIsUnchanged": not changed_existing_metadata,
         "addedRecordMetadataIsApproved": not invalid_added_record_metadata,
         "developmentContainsExactV23Fields": not missing_or_changed_development_v23_fields,
-        "deltaExactlyMatchesRemainingV23Additions": actual_additions
+        "developmentContainsExactV24Fields": not missing_or_changed_development_v24_fields,
+        "developmentContainsExactV25Fields": not missing_or_changed_development_v25_fields,
+        "developmentContainsExactV26Fields": not missing_or_changed_development_v26_fields,
+        "developmentContainsExactV27Fields": not missing_or_changed_development_v27_fields,
+        "deltaExactlyMatchesRemainingV27Additions": actual_additions
         == expected_remaining,
     }
     safe_to_promote = all(checks.values())
     added_field_count = sum(len(fields) for fields in actual_additions.values())
 
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
+        "targetBootstrapVersion": 27,
         "operation": "CloudKit schema export comparison",
         "environmentDirection": "Development to Production",
         "privacy": {
@@ -184,6 +219,10 @@ def build_manifest(
             "missingOrChangedDevelopmentV23Fields": (
                 missing_or_changed_development_v23_fields
             ),
+            "missingOrChangedDevelopmentV24Fields": missing_or_changed_development_v24_fields,
+            "missingOrChangedDevelopmentV25Fields": missing_or_changed_development_v25_fields,
+            "missingOrChangedDevelopmentV26Fields": missing_or_changed_development_v26_fields,
+            "missingOrChangedDevelopmentV27Fields": missing_or_changed_development_v27_fields,
         },
     }
 

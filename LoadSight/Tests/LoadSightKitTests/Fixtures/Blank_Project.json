@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 1,
+  "appVersion": "1.0.0",
+  "created": "2026-09-10",
+  "company": "GunnAire Heating and Air Conditioning",
+  "name": "New mechanical project",
+  "location": "",
+  "projectNumber": "",
+  "sourceFile": "",
+  "sourceSha256": "",
+  "sourceDate": "",
+  "status": "PRELIMINARY - NOT FOR BID RELEASE",
+  "scopePolicy": "HVAC / mechanical work only. Plumbing and electrical excluded; conflicting assignments require written resolution. Do not silently delete mechanical interface obligations.",
+  "reviewer": "",
+  "sheets": [],
+  "items": [],
+  "devices": [],
+  "markers": [],
+  "requirements": [],
+  "rfis": [],
+  "zones": [],
+  "qa": [
+    {
+      "id": "QA-01",
+      "check": "Supplied mechanical sheet inventory and source fingerprint",
+      "status": "Open",
+      "note": "Review for this project.",
+      "reviewer": "",
+      "date": ""
+    },
+    {
+      "id": "QA-02",
+      "check": "Visual review of each supplied page and embedded schedules/details",
+      "status": "Open",
+      "note": "Review for this project.",
+      "reviewer": "",
+      "date": ""
+    },
+    {
+      "id": "QA-03",
+      "check": "Unique new-device count / duplicate-view check",
+      "status": "Open",
+      "note": "Review for this project.",
+      "reviewer": "",
+      "date": ""
+    },
+    {
+      "id": "QA-04",
+      "check": "New-plan zone airflow arithmetic",
+      "status": "Open",
+      "note": "Review for this project.",
+      "reviewer": "",
+      "date": ""
+    },
+    {
+      "id": "QA-05",
+      "check": "All relevant RFIs and trade responsibilities resolved",
+      "status": "Open",
+      "note": "Review for this project.",
+      "reviewer": "",
+      "date": ""
+    },
+    {
+      "id": "QA-06",
+      "check": "Calibrated per-view length / area measurements and fittings",
+      "status": "Open",
+      "note": "Review for this project.",
+      "reviewer": "",
+      "date": ""
+    },
+    {
+      "id": "QA-07",
+      "check": "Demolition leader endpoints, existing/new/reuse reconciliation",
+      "status": "Open",
+      "note": "Review for this project.",
+      "reviewer": "",
+      "date": ""
+    },
+    {
+      "id": "QA-08",
+      "check": "Site survey, baseline TAB and existing-condition evidence",
+      "status": "Open",
+      "note": "Review for this project.",
+      "reviewer": "",
+      "date": ""
+    },
+    {
+      "id": "QA-09",
+      "check": "Supplier / subcontract pricing and labor basis checked",
+      "status": "Open",
+      "note": "Review for this project.",
+      "reviewer": "",
+      "date": ""
+    },
+    {
+      "id": "QA-10",
+      "check": "Allowances, exclusions and proposal commercial terms approved",
+      "status": "Open",
+      "note": "Review for this project.",
+      "reviewer": "",
+      "date": ""
+    },
+    {
+      "id": "QA-11",
+      "check": "Current addenda / complete mechanical bid basis confirmed",
+      "status": "Open",
+      "note": "Review for this project.",
+      "reviewer": "",
+      "date": ""
+    },
+    {
+      "id": "QA-12",
+      "check": "Independent reviewer signoff and final purchasing check",
+      "status": "Open",
+      "note": "Review for this project.",
+      "reviewer": "",
+      "date": ""
+    }
+  ],
+  "measurements": [],
+  "calibrations": {},
+  "inputs": {
+    "laborRate": null,
+    "markupPct": null,
+    "taxAllowance": null,
+    "jobCosts": null,
+    "contingency": null,
+    "proposalTerms": "",
+    "customer": ""
+  },
+  "counts": {}
+}

@@ -3,6 +3,14 @@
 GunnAire Ops is the native iPad, iPhone, and Mac Catalyst HVAC field-service
 suite in [`GunnAire Ops.xcodeproj`](GunnAire%20Ops.xcodeproj).
 
+## Mechanical estimating and plugin
+
+[`LoadSight/`](LoadSight/README.md) contains the native Mac/iPad mechanical workspace,
+shared Swift engine, CLI and verification fixtures. Ops Estimates opens the shared
+workspace. [`Plugins/gunnaire-ops/`](Plugins/gunnaire-ops/README.md) contains the
+portable Codex plugin source. See [repository preparation](LoadSight/REPOSITORY_READY.md)
+for the reviewed GitHub revision, checks and remaining product work.
+
 ## Backend deployment
 
 The canonical shared-service implementation, configuration guide, and local

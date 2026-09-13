@@ -1,0 +1,9 @@
+# Local asynchronous SDK service
+
+The source package now exposes `LoadSightServicing` and the actor `LocalLoadSightService` for `ingestDrawings`, `reviewEstimate`, `reviewRecordedEngineering`, `draftProposal`, `draftRFI`, `draftCO` and `exportTakeoff`. These methods call the existing shared engine, take Sendable value snapshots and return values or bytes without external publication or file writes. Ingestion accepts local file URLs only and retains source bytes through the existing archive model.
+
+Use `LoadSightOperation` for an explicitly owned task, `result`, `cancel()` and a bounded AsyncStream of progress. Cancellation of a waiter forwards to the operation. Cancellation is cooperative at engine/page boundaries; cancelling observation or dropping a handle alone does not cancel work. One consumer owns each stream; use the MainActor `LoadSightProgressPublisher` adapter for multiple Combine subscribers. Progress is stage-local telemetry; output/error authority is the awaited result.
+
+A 40-line SwiftUI host component is at `Examples/SDKClient/ContentView.swift` in the selected LoadSight checkout. Build with `swift build --package-path <LoadSight-directory> --target LoadSightSDKExample`. Its README describes document-app, contractor-app and iPad-markup integration boundaries. The host retains document/session identity, Files/bookmarks, business authorization and publication control.
+
+The service does not implement semantic extraction, full building-load calculation, extracted-versus-calculated audit models, local REST or cloud processing. `reviewRecordedEngineering` reports only the existing air/envelope/room worksheets with their exclusions. Never describe those partial calculations as the complete requested pipeline. Read the checkout's `Reference/verification/SDK-service.md` and `BUILD_STATUS.md` for evidence and remaining scope.

@@ -2,6 +2,8 @@ import SwiftUI
 import SwiftData
 import UIKit
 import UniformTypeIdentifiers
+import LoadSightUI
+import LoadSightKit
 
 struct BillingDocumentsView: View {
     @Environment(\.dismiss) private var dismiss
@@ -40,6 +42,8 @@ struct BillingDocumentsView: View {
     private let openTapToPayOnAppear: Bool
     private let showsDismissButton: Bool
     private let dismissButtonTitle: String
+    private let startsNewDocument: Bool
+    private let focusedInvoiceID: UUID?
     private let liveAPI = QuickBooksDataAPI.shared
     private let googleAuth = GoogleAuthManager.shared
     private let byteCountFormatter: ByteCountFormatter = {
@@ -50,6 +54,12 @@ struct BillingDocumentsView: View {
 
     @State private var selectedDocumentKind: BillingDocumentKind
     @State private var invoiceWorkspaceLane: InvoiceWorkspaceLane = .overview
+    @State private var expandedInvoiceIDs: Set<UUID> = []
+    @State private var completedNewDocument: QuickBooksBillingDocument?
+    @State private var newDocumentSaveConfirmed = false
+    @State private var standaloneInvoiceWorkType: InvoiceWorkType = .service
+    @State private var showingNewDocumentDismissConfirmation = false
+    @State private var showingLoadSightWorkspace = false
     @State private var selectedJobStage: JobDocumentationStage = .work
     @State private var selectedCustomerID: UUID?
     @State private var selectedServiceLocationID: UUID?
@@ -74,8 +84,16 @@ struct BillingDocumentsView: View {
     @State private var selectedItemQuantities: [UUID: Double] = [:]
     @State private var selectedItemPriceAdjustments: [UUID: AuthorizedLinePriceAdjustment] = [:]
     @State private var selectedDocumentDiscount: AuthorizedDocumentDiscount?
+    @State private var selectedTaxAddresses: BillingTaxAddressContext?
+    @State private var taxAddressReview: BillingTaxAddressReviewRequest?
     @State private var selectedItemEquipmentIDs: [UUID: UUID] = [:]
     @State private var selectedItemAssemblySnapshots: [UUID: CatalogLineAssemblySnapshot] = [:]
+    @State private var selectedBundleSnapshots: [UUID: CatalogLineItemSnapshot] = [:]
+    @State private var bundleEquipmentCustomerID: UUID?
+    @State private var bundleSelectionError: String?
+    @State private var loadedCatalogIssue: String?
+    @State private var loadedCatalogSavedAmount: Double?
+    @State private var bundleEditRequest: CatalogBundleEditRequest?
     @State private var selectedItemizedAssemblyMemberships: [UUID: Set<UUID>] = [:]
     @State private var selectedInvoicePaymentTerms: InvoicePaymentTerms = .dueOnReceipt
     @State private var invoiceCustomDueDate = Calendar.current.startOfDay(for: Date())
@@ -95,7 +113,7 @@ struct BillingDocumentsView: View {
     @State private var actionMessage = ""
     @State private var isCreatingDocument = false
     @State private var isImportingQuickBooksItems = false
-    @State private var syncingEstimateIDs: Set<UUID> = []
+    @State private var billingSyncLifecycles: [String: QuickBooksSyncLifecycle] = [:]
     @State private var didLoadInitialContext = false
     @State private var didAttemptInitialCatalogImport = false
     @State private var openInvoiceAfterEstimateCreation = false
@@ -124,6 +142,7 @@ struct BillingDocumentsView: View {
     @State private var generatedCustomerDocumentEstimateID: UUID?
     @State private var generatedCustomerDocumentKind = "document"
     @State private var isEmailingGeneratedDocument = false
+    @State private var generatedEmailAttempts: [URL: GmailSendWorkflow] = [:]
     @State private var showingDocumentationFileImporter = false
     @State private var showingDocumentationCamera = false
     @State private var attachmentKind: ServiceDocumentAttachmentKind = .diagnosticPhoto
@@ -147,7 +166,9 @@ struct BillingDocumentsView: View {
         openCloseoutOnAppear: Bool = false,
         openTapToPayOnAppear: Bool = false,
         showsDismissButton: Bool = false,
-        dismissButtonTitle: String = "Minimize"
+        dismissButtonTitle: String = "Minimize",
+        startsNewDocument: Bool = false,
+        focusedInvoiceID: UUID? = nil
     ) {
         self.initialServiceCall = initialServiceCall
         self.initialJobStage = initialJobStage
@@ -155,6 +176,8 @@ struct BillingDocumentsView: View {
         self.openTapToPayOnAppear = openTapToPayOnAppear
         self.showsDismissButton = showsDismissButton
         self.dismissButtonTitle = dismissButtonTitle
+        self.startsNewDocument = startsNewDocument
+        self.focusedInvoiceID = focusedInvoiceID
         self.workspaceMode = workspaceMode
         let initialKind: BillingDocumentKind
         if let initialServiceCall {
@@ -163,6 +186,8 @@ struct BillingDocumentsView: View {
             initialKind = workspaceMode.defaultDocumentKind
         }
         _selectedDocumentKind = State(initialValue: initialKind)
+        _invoiceWorkspaceLane = State(initialValue: startsNewDocument ? .newInvoice : .overview)
+        _expandedInvoiceIDs = State(initialValue: focusedInvoiceID.map { [$0] } ?? [])
     }
 
     private var activeServiceCall: ServiceCall? {
@@ -187,7 +212,7 @@ struct BillingDocumentsView: View {
     }
 
     private var selectedGrossSubtotal: Double {
-        selectedLineItems.reduce(0) { $0 + effectiveUnitPrice(for: $1) * lineItemQuantity(for: $1) }
+        selectedLineItems.reduce(0) { $0 + selectedLineAmount($1) }
     }
 
     private var selectedDiscountAmount: Double? {
@@ -211,7 +236,47 @@ struct BillingDocumentsView: View {
     }
 
     private var selectedHasTaxableLines: Bool {
-        selectedLineItems.contains(where: \.isTaxable)
+        selectedLineItems.contains {
+            selectedBundleSnapshots[$0.id]?.soldLeaves.contains(where: \.isTaxable) ?? $0.isTaxable
+        }
+    }
+
+    private var loadSightRecoveryScope: String? {
+        guard canViewFinancials, let email = currentUserEmail?.trimmingCharacters(in: .whitespacesAndNewlines), !email.isEmpty else { return nil }
+        #if DEBUG
+        if let isolatedStore = GunnAireCloudKit.isolatedUITestStoreName(arguments: ProcessInfo.processInfo.arguments) {
+            return "Ops-LoadSight-test/" + isolatedStore
+        }
+        #endif
+        return ["Ops-LoadSight-v1", GunnAireCloudKit.containerIdentifier, email.lowercased(),
+                String(describing: Config.QuickBooks.environment), liveAPI.realmID ?? "local-account"].joined(separator: "\n")
+    }
+
+    /// Approved material records only. Unit and currency confirmation belong to the estimator.
+    private var loadSightCatalogMaterials: [OpsMaterialCatalogSnapshot] {
+        let counts = Dictionary(grouping: items, by: \.id).mapValues(\.count)
+        let source = ["GunnAire Ops local catalog", GunnAireCloudKit.containerIdentifier,
+                      String(describing: Config.QuickBooks.environment), liveAPI.realmID ?? "local-account"].joined(separator: " / ")
+        return items.filter { counts[$0.id] == 1 && $0.itemType.isMaterial && $0.pricebookReviewStatus == .approved && $0.quickBooksSyncStatus != "archived" }.compactMap { item in
+            let snapshot = OpsMaterialCatalogSnapshot(id: item.id, source: source, name: item.name, sku: item.sku ?? "",
+                supplier: item.preferredVendorName ?? "", supplierPartNumber: item.vendorPartNumber ?? "",
+                purchaseCost: item.purchaseCost, updatedAt: item.timestamp.ISO8601Format())
+            return (try? snapshot.validate()) != nil ? snapshot : nil
+        }
+    }
+
+    /// Ignore ambiguous IDs and unresolved relationships instead of guessing a link.
+    private var loadSightContextChoices: [OpsProjectContext] {
+        let customerCounts = Dictionary(grouping: customers, by: \.id).mapValues(\.count)
+        let jobCounts = Dictionary(grouping: serviceCalls, by: \.id).mapValues(\.count)
+        return customers.filter { customerCounts[$0.id] == 1 && !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.flatMap { customer in
+            let snapshot = OpsCustomerSnapshot(id: customer.id, name: customer.name, address: customer.address ?? "")
+            let jobs = serviceCalls.filter { jobCounts[$0.id] == 1 && $0.customer?.id == customer.id }.map { job in
+                OpsProjectContext(customer: snapshot, job: OpsJobSnapshot(id: job.id, customerID: customer.id,
+                    title: job.eventTitle ?? "", siteAddress: job.siteAddress ?? "", serviceLocationID: job.serviceLocationID))
+            }
+            return [OpsProjectContext(customer: snapshot)] + jobs
+        }
     }
 
     private var selectedCustomer: Customer? {
@@ -441,7 +506,7 @@ struct BillingDocumentsView: View {
     }
 
     private func lineItemQuantityAccessibilityValue(for item: Item) -> String {
-        lineItemQuantity(for: item).formatted(.number.precision(.fractionLength(0...2)))
+        lineItemQuantity(for: item).formatted(.number.precision(.fractionLength(0...5)))
     }
 
     private func paymentDisplayDetail(_ payment: Payment) -> String {
@@ -489,6 +554,9 @@ struct BillingDocumentsView: View {
 
     private var selectedCostTotal: Double {
         selectedLineItems.reduce(0) { partial, item in
+            if let bundle = selectedBundleSnapshots[item.id] {
+                return partial + bundle.soldLeaves.reduce(0) { $0 + ($1.purchaseCost ?? 0) * $1.quantity }
+            }
             let unitCost = selectedItemAssemblySnapshots[item.id]?.presentation == .flatRate
                 ? (selectedItemAssemblySnapshots[item.id]?.unitPurchaseCost ?? item.purchaseCost ?? 0)
                 : (item.purchaseCost ?? 0)
@@ -520,14 +588,25 @@ struct BillingDocumentsView: View {
     }
 
     private var selectedCatalogSnapshotJSON: String? {
-        CatalogLineItemSnapshot.encoded(
+        let json = CatalogLineItemSnapshot.encoded(
             from: selectedLineItems,
             quantities: selectedItemQuantities,
             priceAdjustments: selectedItemPriceAdjustments,
             servicedEquipment: selectedLineEquipmentSnapshots,
             assemblies: selectedItemAssemblySnapshots,
+            bundles: selectedBundleSnapshots,
             documentDiscount: selectedDocumentDiscount
         )
+        guard let json, let addresses = selectedTaxAddresses, let scope = selectedTaxAddressScope,
+              (try? addresses.validate(for: scope)) != nil else { return json }
+        return try? BillingTaxAddressContext.attaching(addresses, to: json)
+    }
+
+    private var selectedTaxAddressScope: BillingTaxAddressScope? {
+        guard let customer = selectedCustomer ?? activeServiceCall?.customer else { return nil }
+        return .init(customerID: customer.id,
+            serviceLocationID: activeServiceCall?.serviceLocationID ?? selectedServiceLocationID,
+            siteAddress: selectedSiteAddressSnapshot)
     }
 
     private var jobMaterialRequirements: [JobMaterialRequirement] {
@@ -555,7 +634,7 @@ struct BillingDocumentsView: View {
     }
 
     private func itemHasInventoryLedger(_ item: Item) -> Bool {
-        item.itemType == .nonInventory ||
+        item.itemType.isMaterial ||
             item.tracksInventory ||
             inventoryMovements.contains { $0.itemID == item.id }
     }
@@ -574,7 +653,7 @@ struct BillingDocumentsView: View {
             .compactMap { $0?.lowercased() }
             .joined(separator: " ")
             let matchesQuery = query.isEmpty || haystack.contains(query)
-            let canDisplay = CatalogItemSelectionPolicy.canDisplay(
+            let canDisplay = item.itemType == .group || CatalogItemSelectionPolicy.canDisplay(
                 item,
                 isSelected: isCatalogItemSelected(item),
                 documentScopedReviewItemIDs: documentScopedReviewItemIDs
@@ -604,8 +683,7 @@ struct BillingDocumentsView: View {
 
     private var currentJobInvoice: Invoice? {
         if let activeServiceCall {
-            guard let invoiceID = activeServiceCall.linkedInvoiceID else { return nil }
-            return invoices.first { $0.id == invoiceID }
+            return BillingMilestoneReconciliation.linkedInvoice(for: activeServiceCall, in: invoices, payments: payments)
         }
         guard let selectedInvoiceForEditingID else { return nil }
         return invoices.first { $0.id == selectedInvoiceForEditingID }
@@ -697,8 +775,10 @@ struct BillingDocumentsView: View {
 
     private var documentActionIsDisabled: Bool {
         isCreatingDocument ||
+            (startsNewDocument && (!canViewFinancials || completedNewDocument != nil)) ||
             customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
             selectedItems.isEmpty ||
+            loadedCatalogIssue != nil ||
             documentDiscountValidationMessage != nil ||
             (selectedDocumentKind == .invoice && invoiceWorkflowBlockedMessage != nil)
     }
@@ -707,6 +787,7 @@ struct BillingDocumentsView: View {
         isCreatingDocument ||
             customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
             selectedItems.isEmpty ||
+            loadedCatalogIssue != nil ||
             documentDiscountValidationMessage != nil ||
             invoiceWorkflowBlockedMessage != nil
     }
@@ -742,6 +823,10 @@ struct BillingDocumentsView: View {
             partial + invoiceBalanceDue(for: invoice)
         }
         return (openInvoices.count, overdueInvoices.count, balance)
+    }
+
+    private var milestoneBillingNeedsReview: Bool {
+        BillingMilestoneReconciliation.project(invoices, payments: payments).needsReview
     }
 
     private var estimatesNeedingFollowUp: [Estimate] {
@@ -852,41 +937,47 @@ struct BillingDocumentsView: View {
     }
 
     private var displayedEstimates: [Estimate] {
-        let displayEstimates = Estimate.displayDeduplicated(estimates)
-        guard !canViewFinancials else { return displayEstimates }
+        let resolved = estimates.filter { $0.customer != nil }
+        if canViewFinancials { return Estimate.displayDeduplicated(resolved) }
         guard canCollectFieldPayments else { return [] }
         let visibleCallIDs = visibleBillingServiceCallIDsForFieldUser
         let visibleEstimateIDs = visibleLinkedEstimateIDsForFieldUser
-        return displayEstimates.filter { estimate in
-            if let serviceCallID = estimate.serviceCallID, visibleCallIDs.contains(serviceCallID) {
-                return true
-            }
+        return Estimate.displayDeduplicated(resolved.filter { estimate in
+            if let serviceCallID = estimate.serviceCallID, visibleCallIDs.contains(serviceCallID) { return true }
             return visibleEstimateIDs.contains(estimate.id)
-        }
+        })
     }
 
     private var displayedInvoices: [Invoice] {
-        // CloudKit may briefly hydrate an invoice before its required customer
-        // relationship arrives. Keep that record in the store and surface a
-        // sync status, but never force-render the incomplete relationship.
-        let displayInvoices = Invoice.displayDeduplicated(invoices)
-            .filter { $0.customer != nil }
-        guard !canViewFinancials else { return displayInvoices }
+        // Authorize before coalescing replicas, so another user's row cannot
+        // suppress assigned field work. Keep unresolved CloudKit records saved.
+        let active = BillingMilestoneReconciliation.project(invoices, payments: payments).activeInvoices
+        let candidates: [Invoice]
+        if let focusedInvoiceID {
+            candidates = BillingFocusedInvoicePolicy.resolve(focusedInvoiceID, in: invoices)
+                .flatMap { invoice in active.contains(where: { $0 === invoice }) ? [invoice] : nil } ?? []
+        } else { candidates = active }
+        let resolved = candidates.filter { $0.customer != nil }
+        if canViewFinancials { return Invoice.displayDeduplicated(resolved) }
         guard canCollectFieldPayments else { return [] }
         let visibleCallIDs = visibleBillingServiceCallIDsForFieldUser
         let visibleInvoiceIDs = visibleLinkedInvoiceIDsForFieldUser
-        return displayInvoices.filter { invoice in
-            if let serviceCallID = invoice.serviceCallID, visibleCallIDs.contains(serviceCallID) {
-                return true
-            }
+        return Invoice.displayDeduplicated(resolved.filter { invoice in
+            if let serviceCallID = invoice.serviceCallID, visibleCallIDs.contains(serviceCallID) { return true }
             return visibleInvoiceIDs.contains(invoice.id)
-        }
+        })
     }
 
     private var unresolvedInvoiceRelationshipCount: Int {
         Invoice.displayDeduplicated(invoices)
             .filter { $0.customer == nil }
             .count
+    }
+
+    private var retainedMilestoneDrafts: [Invoice] {
+        guard canViewFinancials, focusedInvoiceID == nil else { return [] }
+        return BillingMilestoneReconciliation.project(invoices, payments: payments).retainedDrafts
+            .filter { $0.customer != nil }.sorted { $0.createdAt > $1.createdAt }
     }
 
     private var visibleBillingServiceCallIDsForFieldUser: Set<UUID> {
@@ -960,6 +1051,7 @@ struct BillingDocumentsView: View {
     private var selectedSummary: String {
         selectedLineItems
             .map { item in
+                if let bundle = selectedBundleSnapshots[item.id] { return bundle.customerSummary }
                 let quantity = lineItemQuantity(for: item)
                 let unitPrice = effectiveUnitPrice(for: item)
                 let quantityDescription = quantity == 1
@@ -995,6 +1087,12 @@ struct BillingDocumentsView: View {
         }
         #endif
         return liveAPI.isAuthenticated
+    }
+
+    private var canAttemptSharedBilling: Bool {
+        // Ordinary preview/UI fixtures never contact the real business server.
+        if GunnAireCloudKit.usesTestDatabase { return false }
+        return CompanyWorkspaceAccessController.shared.authorizedContainer === modelContext.container
     }
 
     private var accountingConfiguration: BackendQuickBooksAccountingConfiguration? {
@@ -1327,19 +1425,6 @@ GunnAire
             actionMessage = "Add a customer email before sending this generated document."
             return
         }
-        guard recipient.allowsTransactionalEmail else {
-            recordGeneratedCustomerDocumentCommunication(
-                customer: recipient,
-                recipient: email,
-                subject: "GunnAire \(generatedCustomerDocumentKind.capitalized) - \(recipient.name)",
-                attachmentNames: [],
-                deliveryStatus: "suppressed",
-                providerMessageID: nil,
-                providerStatusDetail: "Transactional email preference is off."
-            )
-            actionMessage = "Email was not sent because \(recipient.name)'s service and billing email preference is off."
-            return
-        }
         let subject = "GunnAire \(generatedCustomerDocumentKind.capitalized) - \(recipient.name)"
         let body = """
 Hello \(recipient.name),
@@ -1374,84 +1459,25 @@ GunnAire
             actionMessage = "Could not read the generated PDF attachment."
             return
         }
-        isEmailingGeneratedDocument = true
-        actionMessage = "Emailing \(generatedCustomerDocumentKind)..."
-        googleAuth.sendGmailMessage(
-            to: email,
-            subject: subject,
-            body: body,
-            attachments: gmailAttachments
-        ) { result in
-            DispatchQueue.main.async {
+        do {
+            if generatedEmailAttempts[url] == nil {
+                let outgoing = try GmailOutgoingMessage(to: email, subject: subject, body: body, attachments: gmailAttachments)
+                generatedEmailAttempts[url] = try GmailSendWorkflow(auth: googleAuth, context: modelContext,
+                    message: outgoing, business: GmailBusinessContext(customerID: recipient.id,
+                        serviceCallID: generatedCustomerDocumentServiceCallID,
+                        invoiceID: generatedCustomerDocumentInvoiceID,
+                        estimateID: generatedCustomerDocumentEstimateID, workflow: .customerDocument))
+            }
+            guard let attempt = generatedEmailAttempts[url] else { throw GmailComposeError.changed }
+            isEmailingGeneratedDocument = true
+            actionMessage = "Sending document..."
+            Task { @MainActor in
+                let result = await attempt.send()
                 isEmailingGeneratedDocument = false
-                switch result {
-                case .success(let sentMessage):
-                    recordGeneratedCustomerDocumentCommunication(
-                        customer: recipient,
-                        recipient: email,
-                        subject: subject,
-                        attachmentNames: gmailAttachments.map(\.fileName),
-                        deliveryStatus: "sent",
-                        providerMessageID: sentMessage.id,
-                        providerStatusDetail: nil
-                    )
-                    let attachmentSummary = gmailAttachments.count == 1 ? "" : " with onsite report"
-                    actionMessage = "\(generatedCustomerDocumentKind.capitalized) emailed to \(email)\(attachmentSummary)."
-                case .failure(let error):
-                    recordGeneratedCustomerDocumentCommunication(
-                        customer: recipient,
-                        recipient: email,
-                        subject: subject,
-                        attachmentNames: gmailAttachments.map(\.fileName),
-                        deliveryStatus: "failed",
-                        providerMessageID: nil,
-                        providerStatusDetail: error.localizedDescription
-                    )
-                    actionMessage = "Generated document email failed: \(error.localizedDescription)"
-                }
+                actionMessage = result.message
+                if result.canRetry { generatedEmailAttempts.removeValue(forKey: url) }
             }
-        }
-    }
-
-    private func recordGeneratedCustomerDocumentCommunication(
-        customer: Customer,
-        recipient: String,
-        subject: String,
-        attachmentNames: [String],
-        deliveryStatus: String,
-        providerMessageID: String?,
-        providerStatusDetail: String?
-    ) {
-        let now = Date()
-        let communication = CustomerCommunication(
-            customer: customer,
-            serviceCallID: generatedCustomerDocumentServiceCallID,
-            invoiceID: generatedCustomerDocumentInvoiceID,
-            estimateID: generatedCustomerDocumentEstimateID,
-            recipient: recipient,
-            subject: subject,
-            deliveryStatus: deliveryStatus,
-            workflow: .customerDocument,
-            actorEmail: googleAuth.signedInEmail,
-            consentSnapshot: CustomerCommunicationConsentSnapshot(customer: customer),
-            providerStatusDetail: providerStatusDetail,
-            deliveredAt: deliveryStatus == "sent" ? now : nil,
-            attachmentFileNames: attachmentNames,
-            providerMessageID: providerMessageID,
-            createdAt: now
-        )
-        modelContext.insert(communication)
-        try? modelContext.save()
-        guard GunnAireBackendService.isConfigured else { return }
-        Task {
-            do {
-                let remote = try await GunnAireBackendService.uploadCustomerCommunication(communication)
-                communication.markSharedCompanySynced(id: remote.id)
-            } catch {
-                communication.markSharedCompanySyncFailed(error.localizedDescription)
-            }
-            try? modelContext.save()
-        }
+        } catch { actionMessage = GmailSendOutcome.notSent(error).message }
     }
 
     private var isJobDocumentationMode: Bool {
@@ -1614,7 +1640,7 @@ GunnAire
     /// single generic type on a physical device can exhaust the main-thread
     /// stack before the first invoice row appears.
     private var usesStackSafeInvoiceWorkspace: Bool {
-        workspaceMode == .invoices && initialServiceCall == nil
+        (workspaceMode == .invoices || startsNewDocument) && initialServiceCall == nil
     }
 
     /// Keep the read-mostly overview and the mutation-heavy builder in
@@ -1626,10 +1652,16 @@ GunnAire
         AnyView(
             NavigationStack {
                 List {
-                    AnyView(stackSafeInvoiceLanePickerSection)
-                    AnyView(stackSafeInvoiceSnapshotSection)
+                    if focusedInvoiceID == nil {
+                        AnyView(stackSafeInvoiceLanePickerSection)
+                        AnyView(stackSafeInvoiceSnapshotSection)
+                        AnyView(invoiceActionQueues)
+                        AnyView(StaffOwnerInvoiceReviewLink())
+                    }
                     AnyView(stackSafeGeneratedInvoiceDocumentSection)
-                    AnyView(invoiceActionQueues)
+                    if focusedInvoiceID != nil, !actionMessage.isEmpty {
+                        Section { Text(actionMessage).accessibilityIdentifier("FocusedInvoiceStatus") }
+                    }
                     AnyView(invoicesWorkspaceSection)
                 }
                 .navigationTitle(navigationTitle)
@@ -1650,16 +1682,63 @@ GunnAire
         AnyView(
             NavigationStack {
                 List {
-                    AnyView(stackSafeInvoiceLanePickerSection)
-                    AnyView(builderDetailsWorkspaceSection)
+                    if startsNewDocument, let document = completedNewDocument {
+                        Section(newDocumentSaveConfirmed ? "\(document.label) Saved" : "Save Needs Review") {
+                            Text(document.customer?.name ?? "Customer syncing")
+                                .font(.headline)
+                                .accessibilityIdentifier("ManagementBillingSavedCustomer")
+                            if case .invoice(let invoice) = document {
+                                LabeledContent("Work type", value: invoice.workType.displayName)
+                                    .accessibilityElement(children: .ignore)
+                                    .accessibilityLabel("Work type")
+                                    .accessibilityValue(invoice.workType.displayName)
+                                    .accessibilityIdentifier("ManagementBillingSavedWorkType")
+                            }
+                            Text(newDocumentSaveConfirmed
+                                 ? "Your original document is saved in GunnAire. Review its QuickBooks status below. Email and payment remain separate actions."
+                                 : "The original draft is retained, but its local save was not confirmed. Retry saving this same draft before leaving. No replacement document will be created.")
+                                .foregroundStyle(.secondary)
+                            if newDocumentSaveConfirmed {
+                                LabeledContent("Saved subtotal", value: document.subtotal.formatted(.currency(code: "USD")))
+                                    .accessibilityIdentifier("ManagementBillingSavedSubtotal")
+                                DisclosureGroup("Saved Items") {
+                                    Text(document.snapshotJSON.map { CatalogLineItemSnapshot.decoded(from: $0).map(\.customerSummary).joined(separator: "\n") } ?? "")
+                                        .accessibilityIdentifier("ManagementBillingSavedItems")
+                                }
+                                BillingPublicationReviewLink(document: document, context: modelContext)
+                                Button("Sync Saved \(document.label)") { publishBillingDocument(document) }
+                                    .disabled(!canAttemptSharedBilling || billingSyncLifecycles["\(document.label)-\(document.id)"] != nil)
+                            } else {
+                                Button("Retry Saving Original Draft") { retryNewDocumentSave(document) }
+                                    .disabled(isCreatingDocument)
+                            }
+                        }
+                        if !actionMessage.isEmpty {
+                            Section { Text(actionMessage).accessibilityIdentifier("ManagementBillingSavedStatus") }
+                        }
+                    } else {
+                        if !startsNewDocument, focusedInvoiceID == nil { AnyView(stackSafeInvoiceLanePickerSection) }
+                        AnyView(builderDetailsWorkspaceSection)
+                    }
                 }
-                .navigationTitle(navigationTitle)
+                // A completed document is a new reading destination, not the
+                // old composer's scroll position near its final input fields.
+                .id(completedNewDocument?.id)
+                .navigationTitle(startsNewDocument ? "New \(selectedDocumentKind.rawValue)" : navigationTitle)
                 .toolbar {
+                    if startsNewDocument, completedNewDocument == nil {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button(documentActionTitle) { createDocument() }
+                                .disabled(documentActionIsDisabled)
+                                .accessibilityIdentifier("SaveBillingDocument")
+                        }
+                    }
                     if showsDismissButton {
                         ToolbarItem(placement: .cancellationAction) {
                             Button(dismissButtonTitle) {
-                                dismiss()
+                                requestNewDocumentDismissal()
                             }
+                            .accessibilityIdentifier("ManagementBillingClose")
                         }
                     }
                 }
@@ -1684,13 +1763,13 @@ GunnAire
         if canViewFinancials {
             Section("Workspace Snapshot") {
                 HStack {
-                    workspaceMetricView(title: "Open", value: "\(invoiceMetrics.open)")
+                    workspaceMetricView(title: "Open", value: milestoneBillingNeedsReview ? "Review" : "\(invoiceMetrics.open)")
                     Spacer()
-                    workspaceMetricView(title: "Overdue", value: "\(invoiceMetrics.overdue)")
+                    workspaceMetricView(title: "Overdue", value: milestoneBillingNeedsReview ? "Review" : "\(invoiceMetrics.overdue)")
                     Spacer()
                     workspaceMetricView(
                         title: "Outstanding",
-                        value: invoiceMetrics.outstandingBalance.formatted(.currency(code: "USD"))
+                        value: milestoneBillingNeedsReview ? "Review" : invoiceMetrics.outstandingBalance.formatted(.currency(code: "USD"))
                     )
                 }
                 if unresolvedInvoiceRelationshipCount > 0 {
@@ -1743,7 +1822,10 @@ GunnAire
                         selectedItems: selectedItems,
                         selectedItemizedAssemblyIDs: Set(selectedItemizedAssemblyMemberships.keys),
                         documentScopedReviewItemIDs: documentScopedReviewItemIDs,
-                        onToggle: toggleItem
+                        onToggle: toggleItem,
+                        catalogScope: bundleSelectionScope,
+                        priceLabel: catalogPriceLabel,
+                        selectionMessage: bundleSelectionError
                     )
                 }
         )
@@ -1817,7 +1899,7 @@ GunnAire
                             candidate: candidate,
                             billingItem: billingItem,
                             paymentTerms: configuredDefaultInvoicePaymentTerms,
-                            quickBooksConnected: isQuickBooksConnected
+                            quickBooksConnected: canAttemptSharedBilling
                         ) {
                             try createMaintenanceAgreementInvoice(for: candidate)
                         }
@@ -1897,6 +1979,68 @@ GunnAire
 
     @ViewBuilder
     var body: some View {
+        AnyView(billingBody)
+        .sheet(item: $bundleEditRequest) { request in
+            bundleEditSheet(request).id(request.id)
+                .presentationDetents([.large])
+                .presentationSizing(.page)
+        }
+        .sheet(item: $taxAddressReview) { request in
+            BillingTaxAddressReview(scope: request.scope, initial: request.initial) { value in
+                guard taxAddressReview?.id == request.id,
+                      value.scope == selectedTaxAddressScope,
+                      selectedHasTaxableLines, !isCreatingDocument else {
+                    throw BillingTaxAddressError.changed
+                }
+                try value.validate(for: request.scope)
+                selectedTaxAddresses = value
+            }
+            .id(request.id)
+        }
+        .onChange(of: selectedTaxAddressScope) { _, scope in
+            if let request = taxAddressReview, scope != request.scope { taxAddressReview = nil }
+        }
+        .interactiveDismissDisabled(startsNewDocument && (hasNewDocumentEdits || isCreatingDocument))
+        .alert("Discard unsaved document?", isPresented: $showingNewDocumentDismissConfirmation) {
+            Button("Discard Unsaved Document", role: .destructive) { dismiss() }
+            Button("Keep Editing", role: .cancel) {}
+        } message: {
+            Text("Only this unsaved document will be discarded. Saved customers, pricebook items and existing invoices or estimates are retained.")
+        }
+        .onDisappear {
+            for owner in billingSyncLifecycles.values { owner.cancel() }
+            billingSyncLifecycles.removeAll()
+        }
+    }
+
+    private var hasNewDocumentEdits: Bool {
+        startsNewDocument && !newDocumentSaveConfirmed &&
+            (completedNewDocument != nil || selectedCustomerID != nil || !selectedItems.isEmpty || !notes.isEmpty || !customerName.isEmpty || standaloneInvoiceWorkType != .service)
+    }
+
+    private func requestNewDocumentDismissal() {
+        guard !isCreatingDocument else { return }
+        if completedNewDocument != nil, !newDocumentSaveConfirmed {
+            actionMessage = "Retry saving the original draft before closing. Its save has not been confirmed."
+            return
+        }
+        if hasNewDocumentEdits { showingNewDocumentDismissConfirmation = true }
+        else { dismiss() }
+    }
+
+    private func retryNewDocumentSave(_ document: QuickBooksBillingDocument) {
+        guard startsNewDocument, canViewFinancials, !isCreatingDocument, !newDocumentSaveConfirmed,
+              completedNewDocument?.id == document.id else { return }
+        isCreatingDocument = true
+        defer { isCreatingDocument = false }
+        guard saveBillingContext(failureMessage: "Could not save the original draft") else { return }
+        newDocumentSaveConfirmed = true
+        actionMessage = "\(document.label) saved locally."
+        publishBillingDocument(document)
+    }
+
+    @ViewBuilder
+    private var billingBody: some View {
         if let invoice = requestedInitialCloseoutInvoice {
             AnyView(
                 RecordInvoicePaymentView(
@@ -1912,6 +2056,19 @@ GunnAire
                 NavigationStack {
                     AnyView(
             List {
+                if canViewFinancials && workspaceMode.showsEstimates && !isJobDocumentationMode {
+                    Section("Mechanical estimating") {
+                        Button("Open LoadSight workspace") { showingLoadSightWorkspace = true }
+                            .accessibilityIdentifier("OpenLoadSightWorkspace")
+                            .fullScreenCover(isPresented: $showingLoadSightWorkspace) {
+                                LoadSightFileWorkspaceView(opsContexts: loadSightContextChoices, recoveryScope: loadSightRecoveryScope, catalogMaterials: loadSightCatalogMaterials)
+                                    .id(loadSightRecoveryScope)
+                            }
+                        Text("Review mechanical takeoff, calculations, RFIs and change orders. Export the project to retain edits; billing uses the existing Ops review and approval workflow.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+
                 activeJobSections
 
                 AnyView(Group {
@@ -1925,12 +2082,12 @@ GunnAire
                                     HStack {
                                         workspaceMetricView(title: "Pending Estimates", value: "\(estimateMetrics.pending)")
                                         Spacer()
-                                        workspaceMetricView(title: "Open Invoices", value: "\(invoiceMetrics.open)")
+                                        workspaceMetricView(title: "Open Invoices", value: milestoneBillingNeedsReview ? "Review" : "\(invoiceMetrics.open)")
                                     }
                                     HStack {
                                         workspaceMetricView(title: "Estimate Follow-Up", value: "\(estimateMetrics.followUp)")
                                         Spacer()
-                                        workspaceMetricView(title: "Outstanding", value: invoiceMetrics.outstandingBalance.formatted(.currency(code: "USD")))
+                                        workspaceMetricView(title: "Outstanding", value: milestoneBillingNeedsReview ? "Review" : invoiceMetrics.outstandingBalance.formatted(.currency(code: "USD")))
                                     }
                                 }
                             case .estimates:
@@ -1943,11 +2100,11 @@ GunnAire
                                 }
                             case .invoices:
                                 HStack {
-                                    workspaceMetricView(title: "Open", value: "\(invoiceMetrics.open)")
+                                    workspaceMetricView(title: "Open", value: milestoneBillingNeedsReview ? "Review" : "\(invoiceMetrics.open)")
                                     Spacer()
-                                    workspaceMetricView(title: "Overdue", value: "\(invoiceMetrics.overdue)")
+                                    workspaceMetricView(title: "Overdue", value: milestoneBillingNeedsReview ? "Review" : "\(invoiceMetrics.overdue)")
                                     Spacer()
-                                    workspaceMetricView(title: "Outstanding", value: invoiceMetrics.outstandingBalance.formatted(.currency(code: "USD")))
+                                    workspaceMetricView(title: "Outstanding", value: milestoneBillingNeedsReview ? "Review" : invoiceMetrics.outstandingBalance.formatted(.currency(code: "USD")))
                                 }
                             }
                         }
@@ -2063,7 +2220,10 @@ GunnAire
                     selectedItems: selectedItems,
                     selectedItemizedAssemblyIDs: Set(selectedItemizedAssemblyMemberships.keys),
                     documentScopedReviewItemIDs: documentScopedReviewItemIDs,
-                    onToggle: toggleItem
+                        onToggle: toggleItem,
+                        catalogScope: bundleSelectionScope,
+                        priceLabel: catalogPriceLabel,
+                        selectionMessage: bundleSelectionError
                 )
             }
             .sheet(isPresented: $showingItemCreator) {
@@ -2109,7 +2269,7 @@ GunnAire
                         candidate: candidate,
                         billingItem: billingItem,
                         paymentTerms: configuredDefaultInvoicePaymentTerms,
-                        quickBooksConnected: isQuickBooksConnected
+                        quickBooksConnected: canAttemptSharedBilling
                     ) {
                         try createMaintenanceAgreementInvoice(for: candidate)
                     }
@@ -2187,7 +2347,8 @@ GunnAire
             .sheet(isPresented: $showingProjectPlanSetup) {
                 if let call = activeServiceCall, let estimate = currentJobEstimate {
                     ProjectBillingPlanSetupSheet(
-                        contractAmount: estimate.amount,
+                        contractAmount: estimate.subtotalAmount,
+                        snapshotJSON: estimate.catalogSnapshotJSON,
                         initialDate: call.scheduledDate
                     ) { drafts in
                         createProjectBillingPlan(drafts: drafts, for: call, estimate: estimate)
@@ -2279,14 +2440,24 @@ GunnAire
         guard let newValue, let customer = customers.first(where: { $0.id == newValue }) else {
             selectedServiceLocationID = nil
             selectedItemEquipmentIDs.removeAll()
+            reconcileBundleEquipmentCustomer(nil)
             return
         }
         populateCustomerFields(from: customer)
         synchronizeServiceLocation(for: customer)
         reconcileLineEquipmentAssignments()
+        reconcileBundleEquipmentCustomer(customer.id)
+    }
+
+    private func reconcileBundleEquipmentCustomer(_ customerID: UUID?) {
+        let defaultEquipment = documentEquipmentSnapshots.first { $0.equipmentID == defaultDocumentEquipmentID }
+        selectedBundleSnapshots = CatalogBundlePolicy.equipmentForCustomerChange(in: selectedBundleSnapshots,
+            from: bundleEquipmentCustomerID, to: customerID, defaultEquipment: defaultEquipment)
+        bundleEquipmentCustomerID = customerID
     }
 
     private func selectedItemsDidChange(to selectedIDs: Set<UUID>) {
+        selectedBundleSnapshots = selectedBundleSnapshots.filter { selectedIDs.contains($0.key) }
         selectedItemPriceAdjustments = Dictionary(
             uniqueKeysWithValues: selectedItemPriceAdjustments.filter { selectedIDs.contains($0.key) }
         )
@@ -2337,6 +2508,9 @@ GunnAire
     private func loadInitialContextIfNeeded() {
         guard !didLoadInitialContext else { return }
         didLoadInitialContext = true
+        // A focused saved-invoice visit is navigation only. Do not seed/save
+        // templates, import/reprice items, or consume an unrelated queued job.
+        guard focusedInvoiceID == nil else { return }
         FieldFormTemplate.ensureStarterTemplates(in: modelContext)
         try? modelContext.save()
         selectedInvoicePaymentTerms = configuredDefaultInvoicePaymentTerms
@@ -2351,7 +2525,8 @@ GunnAire
             }
         }
         loadCustomerFinancingReadinessIfNeeded()
-        loadPendingIntentServiceCallIfNeeded()
+        // A fresh office composer must not consume an unrelated queued job route.
+        if !startsNewDocument { loadPendingIntentServiceCallIfNeeded() }
 
         if let call = activeServiceCall {
             selectedCustomerID = call.customer.id
@@ -3252,6 +3427,15 @@ GunnAire
     private var builderDetailsWorkspaceSection: some View {
                 if !isJobDocumentationMode {
                 Section(workspaceMode == .invoices ? "Invoice Details" : "Builder Details") {
+                    if selectedDocumentKind == .invoice, activeServiceCall == nil, selectedInvoiceForEditingID == nil {
+                        Picker("Work type", selection: $standaloneInvoiceWorkType) {
+                            ForEach(InvoiceWorkType.allCases) { type in
+                                Text(type.displayName).tag(type)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .accessibilityIdentifier("BillingInvoiceWorkType")
+                    }
                     if workspaceMode == .all {
                         Picker("Document", selection: $selectedDocumentKind) {
                             ForEach(BillingDocumentKind.allCases) { kind in
@@ -3327,6 +3511,7 @@ GunnAire
 
                     TextField("Notes", text: $notes, axis: .vertical)
                         .lineLimit(2...5)
+                        .accessibilityIdentifier("BillingDocumentNotes")
 
                     if changeOrderParentEstimateID != nil {
                         TextField("Change order reason", text: $changeOrderReason, axis: .vertical)
@@ -3416,13 +3601,16 @@ GunnAire
                         Toggle("Open Invoice Builder After Estimate", isOn: $openInvoiceAfterEstimateCreation)
                     }
 
-                    Button(documentActionTitle) {
-                        createDocument()
+                    if !startsNewDocument {
+                        Button(documentActionTitle) {
+                            createDocument()
+                        }
+                        .accessibilityIdentifier("SaveBillingDocument")
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.brandGold)
+                        .foregroundStyle(Color.primaryBlack)
+                        .disabled(documentActionIsDisabled)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color.brandGold)
-                    .foregroundStyle(Color.primaryBlack)
-                    .disabled(documentActionIsDisabled)
 
                     if selectedDocumentKind == .invoice,
                        let message = invoiceWorkflowBlockedMessage {
@@ -3431,7 +3619,7 @@ GunnAire
                             .foregroundColor(.orange)
                     }
 
-                    if !actionMessage.isEmpty {
+                    if !actionMessage.isEmpty, loadedCatalogIssue == nil {
                         Text(actionMessage)
                             .font(.caption)
                             .foregroundColor(.secondary)
@@ -3528,6 +3716,7 @@ GunnAire
                                                 .font(.caption2)
                                                 .foregroundColor(.secondary)
                                         }
+                                        BillingPublicationReviewLink(document: .estimate(estimate), context: modelContext)
                                         Button("Create Invoice") {
                                             createInvoiceFromEstimate(estimate)
                                         }
@@ -3575,9 +3764,26 @@ GunnAire
     @ViewBuilder
     private var invoicesWorkspaceSection: some View {
                 if !isJobDocumentationMode && workspaceMode.showsInvoices {
+                    if !retainedMilestoneDrafts.isEmpty {
+                        Section {
+                            DisclosureGroup("Retained milestone drafts (\(retainedMilestoneDrafts.count))") {
+                                ForEach(retainedMilestoneDrafts) { invoice in
+                                    NavigationLink {
+                                        BillingPublicationReviewView(document: .invoice(invoice), context: modelContext)
+                                    } label: {
+                                        VStack(alignment: .leading) {
+                                            Text(invoice.customer.name)
+                                            Text(invoice.projectMilestoneTitle ?? "Project milestone").font(.caption).foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    .accessibilityIdentifier("RetainedMilestoneDraft-\(invoice.id.uuidString)")
+                                }
+                            }
+                        } footer: { Text("These reviewed drafts are kept with their files, but are not additional invoices or amounts due.") }
+                    }
                     Section("Invoices") {
                         if displayedInvoices.isEmpty {
-                            Text("No invoices yet.")
+                            Text(focusedInvoiceID == nil ? "No invoices yet." : "This invoice needs review in the current business workspace. No replacement was created.")
                                 .foregroundColor(.secondary)
                         } else {
                             ForEach(displayedInvoices) { invoice in
@@ -3585,11 +3791,27 @@ GunnAire
                                     invoice: invoice,
                                     attachments: attachments
                                 )
-                                DisclosureGroup {
+                                DisclosureGroup(isExpanded: Binding(
+                                    get: { expandedInvoiceIDs.contains(invoice.id) },
+                                    set: { if $0 { expandedInvoiceIDs.insert(invoice.id) } else { expandedInvoiceIDs.remove(invoice.id) } }
+                                )) {
                                     VStack(alignment: .leading, spacing: 8) {
                                         Text(invoice.lineItemSummary)
                                             .font(.caption)
                                             .foregroundColor(.secondary)
+                                        SavedFieldPaymentReceiptDisclosure(invoice: invoice)
+                                        if let review = invoice.quickBooksReconciliationReviewMessage {
+                                            Text(review)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                            if AppAccess.canAccessSidebarItem(.quickBooksManagement, email: currentUserEmail, users: users) {
+                                                Button("Review in QuickBooks") {
+                                                    GunnAireAppIntentRouter.store(.quickBooks)
+                                                }
+                                                .buttonStyle(.bordered)
+                                                .accessibilityIdentifier("ReviewInvoiceAccounting-\(invoice.id.uuidString)")
+                                            }
+                                        }
                                         if let documentationStatus {
                                             Label(
                                                 documentationStatus.sendReadinessLabel,
@@ -3613,6 +3835,14 @@ GunnAire
                                             Text("Finalized")
                                                 .font(.caption2)
                                                 .foregroundColor(.green)
+                                        }
+                                        BillingPublicationReviewLink(document: .invoice(invoice), context: modelContext)
+                                            .buttonStyle(.plain)
+                                        if invoice.quickBooksSyncState != "synced" {
+                                            Button("Sync Saved Invoice") { publishBillingDocument(.invoice(invoice)) }
+                                                .buttonStyle(.bordered)
+                                                .disabled(!canAttemptSharedBilling || billingSyncLifecycles["Invoice-\(invoice.id)"] != nil)
+                                                .accessibilityIdentifier("SyncSavedInvoice-\(invoice.id.uuidString)")
                                         }
                                         if canEditInvoice(invoice) {
                                             Button("Edit Line Items") {
@@ -3641,7 +3871,7 @@ GunnAire
                                             .buttonStyle(.borderedProminent)
                                             .tint(Color.brandGold)
                                             .foregroundStyle(Color.primaryBlack)
-                                            .disabled(isInvoicePaid(invoice))
+                                            .disabled(isInvoicePaid(invoice) || !invoice.isReadyForPaymentCollection)
                                         }
 
                                         Button("Generate Invoice PDF") {
@@ -3670,8 +3900,9 @@ GunnAire
                                             Text(invoice.amount, format: .currency(code: "USD"))
                                         }
                                     }
+                                    .accessibilityElement(children: .combine)
+                                    .accessibilityIdentifier("InvoiceDisclosure-\(invoice.id.uuidString)")
                                 }
-                                .accessibilityIdentifier("InvoiceDisclosure-\(invoice.id.uuidString)")
                                 .padding(.vertical, 4)
                             }
                         }
@@ -3866,6 +4097,10 @@ GunnAire
                             }
                         }
 
+                        if let invoice = currentJobInvoice, selectedDocumentKind == .invoice,
+                           invoice.isProjectProgressInvoice {
+                            ProjectProgressInvoiceReview(invoice: invoice)
+                        } else {
                         HStack {
                             Text("Customer")
                             Spacer()
@@ -3901,6 +4136,9 @@ GunnAire
                                 .foregroundStyle(.secondary)
                         }
 
+                        savedCatalogReview
+
+                        if loadedCatalogIssue == nil {
                         HStack {
                             Text("Selected Items")
                             Spacer()
@@ -3929,7 +4167,7 @@ GunnAire
                                 VStack(alignment: .leading, spacing: 6) {
                                     HStack {
                                         VStack(alignment: .leading, spacing: 2) {
-                                            Text(item.name)
+                                            Text(selectedBundleSnapshots[item.id]?.name ?? item.name)
                                                 .font(.caption)
                                             Text(lineItemQuantityLabel(for: item))
                                                 .font(.caption2)
@@ -3954,7 +4192,7 @@ GunnAire
                                         }
                                         Spacer()
                                         VStack(alignment: .trailing, spacing: 4) {
-                                            Text(effectiveUnitPrice(for: item) * lineItemQuantity(for: item), format: .currency(code: "USD"))
+                                            Text(selectedLineAmount(item), format: .currency(code: "USD"))
                                                 .font(.caption)
                                                 .foregroundColor(.secondary)
                                             if let adjustment = selectedItemPriceAdjustments[item.id] {
@@ -3965,7 +4203,7 @@ GunnAire
                                                     .accessibilityLabel(authorizedPriceAdjustmentAccessibilityLabel(for: item))
                                                     .accessibilityValue(adjustment.reason)
                                             }
-                                            if canAuthorizePriceAdjustments {
+                                            if canAuthorizePriceAdjustments && item.itemType != .group {
                                                 Button(selectedItemPriceAdjustments[item.id] == nil ? "Discount / Adjust" : "Edit Adjustment") {
                                                     itemPendingPriceAdjustment = item
                                                 }
@@ -3990,7 +4228,7 @@ GunnAire
                                                 Stepper(
                                                     lineItemQuantityLabel(for: item),
                                                     value: lineItemQuantityBinding(for: item),
-                                                    in: 0.25...100,
+                                                    in: item.itemType == .group ? 0.00001...999_999 : 0.25...100,
                                                     step: 0.25
                                                 )
                                                 .labelsHidden()
@@ -4002,6 +4240,7 @@ GunnAire
                                         }
                                     }
                                     lineEquipmentPicker(for: item)
+                                    bundleMembersView(for: item)
                                 }
                             }
 
@@ -4050,6 +4289,7 @@ GunnAire
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
+                        }
 
                         if workspaceMode.showsEstimateBuilder {
                             Button(isCreatingDocument && selectedDocumentKind == .estimate ? "Creating Estimate..." : "Create Estimate") {
@@ -4063,6 +4303,7 @@ GunnAire
                                 isCreatingDocument ||
                                 customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
                                 selectedItems.isEmpty ||
+                                loadedCatalogIssue != nil ||
                                 documentDiscountValidationMessage != nil
                             )
                         }
@@ -4093,11 +4334,19 @@ GunnAire
                                 .foregroundColor(.orange)
                         }
 
-                        if !actionMessage.isEmpty {
+                        if !actionMessage.isEmpty, loadedCatalogIssue == nil {
                             Text(actionMessage)
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
+                        }
+                        }
+                        if selectedJobStage == .billing {
+                            if let invoice = currentJobInvoice {
+                                BillingPublicationReviewLink(document: .invoice(invoice), context: modelContext)
+                            } else if let estimate = currentJobEstimate {
+                                BillingPublicationReviewLink(document: .estimate(estimate), context: modelContext)
+                            }
                         }
                         jobMaterialsSection(for: call)
                     }
@@ -4210,6 +4459,12 @@ GunnAire
 
     @ViewBuilder
     private var documentSubtotalSummary: some View {
+        if selectedHasTaxableLines, let scope = selectedTaxAddressScope {
+            BillingTaxAddressReviewControl(scope: scope, addresses: selectedTaxAddresses) {
+                taxAddressReview = .init(scope: scope, initial: selectedTaxAddresses)
+            }
+                .disabled(isCreatingDocument)
+        }
         if selectedDocumentDiscount != nil {
             HStack {
                 Text("Items Subtotal")
@@ -4236,12 +4491,41 @@ GunnAire
     }
 
     @ViewBuilder
+    private var savedCatalogReview: some View {
+        if let loadedCatalogIssue {
+            VStack(alignment: .leading, spacing: 8) {
+                if let loadedCatalogSavedAmount {
+                    HStack {
+                        Text("Saved Document Total")
+                        Spacer()
+                        Text(loadedCatalogSavedAmount, format: .currency(code: "USD"))
+                            .font(.headline)
+                            .accessibilityIdentifier("SavedDocumentTotal")
+                    }
+                }
+                Text(loadedCatalogIssue).foregroundStyle(.orange)
+                    .accessibilityIdentifier("SavedBillingLinesNeedReview")
+                Button("Replace All Saved Lines") {
+                    clearSelectedCatalogLines()
+                    actionMessage = "Add the replacement lines, then save when ready. The original document stays unchanged until you save."
+                }
+                    .accessibilityIdentifier("ReplaceUnresolvedBillingLines")
+            }
+        }
+    }
+
+    @ViewBuilder
     private var lineItemBuilderView: some View {
                     VStack(alignment: .leading, spacing: 8) {
+                        savedCatalogReview
+                        if loadedCatalogIssue == nil {
                         HStack {
                             Text("Line Items")
                                 .font(.headline)
                             Spacer()
+                            Button("Browse Catalog") { showingItemSelector = true }
+                                .buttonStyle(.bordered)
+                                .accessibilityIdentifier("BrowseBillingCatalog")
                             Button {
                                 showingItemCreator = true
                             } label: {
@@ -4301,7 +4585,7 @@ GunnAire
                                             catalogSyncStateLabel(for: item)
                                         }
                                         Spacer()
-                                        Text(item.unitPrice, format: .currency(code: "USD"))
+                                        Text(catalogPriceLabel(item))
                                             .foregroundColor(.secondary)
                                     }
                                 }
@@ -4315,8 +4599,8 @@ GunnAire
                                 VStack(alignment: .leading, spacing: 6) {
                                     HStack {
                                         VStack(alignment: .leading, spacing: 2) {
-                                            Text(item.name)
-                                            if let description = item.itemDescription, !description.isEmpty {
+                                            Text(selectedBundleSnapshots[item.id]?.name ?? item.name)
+                                            if let description = selectedLineDescription(item), !description.isEmpty {
                                                 Text(description)
                                                     .font(.caption)
                                                     .foregroundColor(.secondary)
@@ -4326,14 +4610,14 @@ GunnAire
                                         }
                                         Spacer()
                                         VStack(alignment: .trailing, spacing: 4) {
-                                            Text(effectiveUnitPrice(for: item) * lineItemQuantity(for: item), format: .currency(code: "USD"))
+                                            Text(selectedLineAmount(item), format: .currency(code: "USD"))
                                                 .foregroundColor(.secondary)
                                             if let adjustment = selectedItemPriceAdjustments[item.id] {
                                                 Text("\(adjustment.unitPrice < adjustment.pricebookUnitPrice ? "Discounted" : "Adjusted") from \(adjustment.pricebookUnitPrice.formatted(.currency(code: "USD")))")
                                                     .font(.caption2)
                                                     .foregroundStyle(.orange)
                                             }
-                                            if canAuthorizePriceAdjustments {
+                                            if canAuthorizePriceAdjustments && item.itemType != .group {
                                                 Button(selectedItemPriceAdjustments[item.id] == nil ? "Discount / Adjust" : "Edit Adjustment") {
                                                     itemPendingPriceAdjustment = item
                                                 }
@@ -4359,7 +4643,7 @@ GunnAire
                                                 Stepper(
                                                     lineItemQuantityLabel(for: item),
                                                     value: lineItemQuantityBinding(for: item),
-                                                    in: 0.25...100,
+                                                    in: item.itemType == .group ? 0.00001...999_999 : 0.25...100,
                                                     step: 0.25
                                                 )
                                                 .labelsHidden()
@@ -4370,6 +4654,7 @@ GunnAire
                                         }
                                     }
                                     lineEquipmentPicker(for: item)
+                                    bundleMembersView(for: item)
                                 }
                             }
                         }
@@ -4391,7 +4676,7 @@ GunnAire
                             TextField("SKU", text: $newItemSKU)
                                 .textInputAutocapitalization(.characters)
                             Picker("Item Type", selection: $newItemType) {
-                                ForEach(CatalogItemType.allCases) { type in
+                                ForEach(CatalogItemType.creatableCases) { type in
                                     Text(type.rawValue).tag(type)
                                 }
                             }
@@ -4401,9 +4686,9 @@ GunnAire
                             Toggle("Taxable", isOn: $newItemTaxable)
                             HStack {
                                 TextField("Price (optional)", text: $newItemPrice)
-                                    .keyboardType(.decimalPad)
+                                    .catalogNumericKeyboard()
                                 TextField("Cost", text: $newItemCost)
-                                    .keyboardType(.decimalPad)
+                                    .catalogNumericKeyboard()
                             }
                             TextField("Typical purchase source", text: $newItemPreferredVendor)
                             if !vendors.isEmpty {
@@ -4431,6 +4716,7 @@ GunnAire
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
                             .disabled(!canAddInlineItem)
+                        }
                         }
                     }
 
@@ -4906,7 +5192,7 @@ GunnAire
             throw MaintenanceAgreementBillingWorkflowError.saveFailed(error.localizedDescription)
         }
 
-        actionMessage = isQuickBooksConnected
+        actionMessage = canAttemptSharedBilling
             ? "Agreement invoice created locally. Publishing its approved item and invoice to QuickBooks..."
             : "Agreement invoice created locally. QuickBooks publication is pending until the connection is available."
         syncInvoiceIfNeeded(invoice, customer: agreement.customer, items: [billingItem])
@@ -4932,10 +5218,9 @@ GunnAire
         }
 
         do {
-            try ProjectBillingPolicy.validatePersistedPlan(currentProjectMilestones, contractAmount: estimate.amount)
             let snapshotJSON = try ProjectBillingPolicy.progressDocumentSnapshotJSON(
-                from: estimate.catalogSnapshotJSON,
-                targetAmount: milestone.plannedAmount
+                for: milestone, estimate: estimate,
+                milestones: currentProjectMilestones, invoices: invoices
             )
             guard BillingDocumentDiscountPolicy.currencyCents(
                 BillingDocumentDiscountPolicy.netSubtotal(snapshotJSON: snapshotJSON) ?? -1
@@ -4946,7 +5231,12 @@ GunnAire
             let invoiceDueDate = configuredDefaultInvoicePaymentTerms.dueDate(from: invoiceCreatedAt)
                 ?? Calendar.current.startOfDay(for: invoiceCreatedAt)
 
+            let invoiceID = BillingMilestoneIdentity.invoiceID(for: milestone.id)
+            guard !invoices.contains(where: { $0.id == invoiceID }) else {
+                throw ProjectBillingValidationError.issuedAllocationChanged
+            }
             let invoice = Invoice(
+                id: invoiceID,
                 serviceCallID: call.id,
                 serviceLocationID: call.serviceLocationID,
                 siteAddress: call.siteAddress,
@@ -4958,18 +5248,20 @@ GunnAire
                 projectMilestoneID: milestone.id,
                 projectMilestoneSequence: milestone.sequence,
                 projectMilestoneTitle: milestone.title,
-                projectContractAmount: estimate.amount,
+                projectContractAmount: estimate.subtotalAmount,
                 projectBillingPercent: milestone.billingPercent,
                 status: "unpaid",
                 dueDate: invoiceDueDate,
                 notes: "Progress billing against approved estimate \(estimate.id.uuidString.prefix(8)).",
                 createdAt: invoiceCreatedAt
             )
+            _ = try BillingTaxAddressContext.forPublication(.invoice(invoice))
             let priorStatus = milestone.status
             let priorCompletedAt = milestone.completedAt
             let priorCompletedBy = milestone.completedByEmail
             let priorLinkedInvoiceID = call.linkedInvoiceID
             let priorEstimateStatus = estimate.status
+            let priorCallStatus = call.status
             if milestone.billingTrigger == .milestoneCompletion, milestone.completedAt == nil {
                 _ = milestone.markCompleted(by: currentUserEmail)
             }
@@ -4997,7 +5289,7 @@ GunnAire
             do {
                 try modelContext.save()
                 linkExistingInvoiceAttachments(to: invoice, serviceCallID: call.id)
-                actionMessage = isQuickBooksConnected
+                actionMessage = canAttemptSharedBilling
                     ? "Progress invoice created locally. Syncing the approved milestone allocation to QuickBooks..."
                     : "Progress invoice created locally. QuickBooks publication is pending."
                 let restoredItems = restoredCatalogItems(
@@ -5012,6 +5304,7 @@ GunnAire
                 milestone.completedByEmail = priorCompletedBy
                 call.linkedInvoiceID = priorLinkedInvoiceID
                 estimate.status = priorEstimateStatus
+                call.status = priorCallStatus
                 modelContext.delete(invoice)
                 modelContext.delete(activity)
                 actionMessage = "Could not save the progress invoice: \(error.localizedDescription)"
@@ -5030,7 +5323,6 @@ GunnAire
         call.linkedInvoiceID = invoice.id
         selectedDocumentKind = .invoice
         selectedJobStage = .billing
-        loadInvoiceIntoBuilder(invoice, announce: false)
         try? modelContext.save()
         actionMessage = "Loaded \(invoice.projectBillingDisplayTitle ?? "progress invoice") for review. Its approved milestone allocation is locked."
     }
@@ -5360,7 +5652,7 @@ GunnAire
     @ViewBuilder
     private func jobFieldFormsSection(for call: ServiceCall) -> some View {
         let templates = fieldFormTemplates
-            .filter { $0.isActive && $0.applies(to: call.type) }
+            .filter { $0.isActive && $0.isListed(for: call.type) }
             .sorted { lhs, rhs in
                 if lhs.requiresCompletionForCloseout != rhs.requiresCompletionForCloseout {
                     return lhs.requiresCompletionForCloseout
@@ -5378,6 +5670,7 @@ GunnAire
         let remainingTemplates = templates.filter { !missingIDs.contains($0.id) }
 
         Section("Field Forms") {
+            FieldFormDraftLinks(serviceCallID: call.id, actorEmail: currentUserEmail)
             if templates.isEmpty {
                 Text("No active forms apply to this job type. An administrator can configure them in Settings.")
                     .font(.caption)
@@ -5401,16 +5694,11 @@ GunnAire
 
                 ForEach(readiness.missingRequirements) { requirement in
                     if let template = templates.first(where: { $0.id == requirement.templateID }) {
-                        NavigationLink {
-                            FieldFormResponseEditor(
-                                template: template,
-                                serviceCall: call,
-                                actorEmail: currentUserEmail
-                            )
-                        } label: {
-                            Label("Complete \(template.title)", systemImage: "checklist.unchecked")
+                        FieldFormDraftNavigationLink(template: template, serviceCall: call, actorEmail: currentUserEmail,
+                            identifier: "CompleteRequiredFieldForm-\(template.id.uuidString)") {
+                            Label(template.dataReviewIssue == nil ? "Complete \(template.title)" : "Review \(template.title)",
+                                  systemImage: template.dataReviewIssue == nil ? "checklist.unchecked" : "exclamationmark.triangle")
                         }
-                        .accessibilityIdentifier("CompleteRequiredFieldForm-\(template.id.uuidString)")
                     }
                 }
 
@@ -5421,6 +5709,15 @@ GunnAire
                         }
                     }
                 }
+            }
+            if !responses.isEmpty {
+                NavigationLink {
+                    CompletedFieldFormsView(responses: responses, templates: fieldFormTemplates,
+                                            serviceCall: call, attachments: activeJobAttachments)
+                } label: {
+                    Label("Saved forms (\(responses.count))", systemImage: "doc.text")
+                }
+                .accessibilityIdentifier("OpenSavedFieldForms-\(call.id.uuidString)")
             }
         }
     }
@@ -5434,7 +5731,8 @@ GunnAire
         if let response = FieldFormCloseoutPolicy.latestResponse(
             completing: template,
             serviceCallID: call.id,
-            responses: responses
+            responses: responses,
+            originalTemplates: fieldFormTemplates
         ) {
             NavigationLink {
                 FieldFormResponseDetailView(
@@ -5457,13 +5755,7 @@ GunnAire
                 }
             }
         } else {
-            NavigationLink {
-                FieldFormResponseEditor(
-                    template: template,
-                    serviceCall: call,
-                    actorEmail: currentUserEmail
-                )
-            } label: {
+            FieldFormDraftNavigationLink(template: template, serviceCall: call, actorEmail: currentUserEmail) {
                 Label(
                     template.requiresCompletionForCloseout ? "Complete \(template.title)" : template.title,
                     systemImage: template.requiresCompletionForCloseout ? "checklist.unchecked" : "checklist"
@@ -6582,10 +6874,15 @@ GunnAire
                         .accessibilityIdentifier("AnnotateAttachment-\(attachment.id)")
                     }
 
-                    ShareLink(item: attachment.localFileURL) {
-                        Label("Share", systemImage: "square.and.arrow.up")
+                    if FileManager.default.fileExists(atPath: attachment.localFileURL.path) {
+                        ShareLink(item: attachment.localFileURL) { Label("Share", systemImage: "square.and.arrow.up") }
+                            .frame(minHeight: 44)
+                    } else {
+                        Button { previewJobAttachment(attachment) } label: {
+                            Label("Open to Share", systemImage: "square.and.arrow.up")
+                        }
+                        .frame(minHeight: 44)
                     }
-                    .frame(minHeight: 44)
                 }
                 .font(.caption)
                 .buttonStyle(.borderless)
@@ -6605,13 +6902,10 @@ GunnAire
     }
 
     private func previewJobAttachment(_ attachment: ServiceDocumentAttachment) {
-        let url = attachment.localFileURL
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            attachmentMessage = "\(attachment.displayName) is no longer available on this device."
-            return
-        }
-        attachmentPendingMarkup = nil
-        attachmentPreviewURL = url
+        do {
+            let url = try QBODocumentNativeWorkflow.previewURL(for: attachment, context: modelContext)
+            attachmentPendingMarkup = nil; attachmentPreviewURL = url; attachmentMessage = nil
+        } catch { attachmentMessage = QBODocumentNativeWorkflow.message(error) }
     }
 
     private func annotateJobAttachment(_ attachment: ServiceDocumentAttachment) {
@@ -6623,13 +6917,10 @@ GunnAire
             attachmentMessage = "Open the attachment's current job before annotating it."
             return
         }
-        let url = attachment.localFileURL
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            attachmentMessage = "\(attachment.displayName) is no longer available on this device."
-            return
-        }
-        attachmentPendingMarkup = attachment
-        attachmentPreviewURL = url
+        do {
+            let url = try QBODocumentNativeWorkflow.previewURL(for: attachment, context: modelContext)
+            attachmentPendingMarkup = attachment; attachmentPreviewURL = url; attachmentMessage = nil
+        } catch { attachmentMessage = QBODocumentNativeWorkflow.message(error) }
     }
 
     private func saveAnnotatedAttachmentCopy(
@@ -7305,23 +7596,7 @@ GunnAire
         )
         guard !references.isEmpty else { return }
 
-        QuickBooksDataAPI.shared.uploadDocument(
-            fileURL: attachment.localFileURL,
-            note: attachment.caption,
-            attachableReferences: references
-        ) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let attachableID):
-                    attachment.quickBooksAttachableID = attachableID
-                    attachment.quickBooksSyncError = nil
-                    try? modelContext.save()
-                case .failure(let error):
-                    attachment.quickBooksSyncError = error.localizedDescription
-                    try? modelContext.save()
-                }
-            }
-        }
+        QBODocumentNativeWorkflow.enqueue(attachment, references: references, context: modelContext)
     }
 
     private func contentType(for url: URL) -> String {
@@ -7343,7 +7618,7 @@ GunnAire
     }
 
     private func loadPendingIntentServiceCallIfNeeded() {
-        guard initialServiceCall == nil, pendingIntentServiceCallID == nil else { return }
+        guard focusedInvoiceID == nil, initialServiceCall == nil, pendingIntentServiceCallID == nil else { return }
         pendingIntentServiceCallID = GunnAireAppIntentRouter.consumePendingServiceCallID()
         if let call = activeServiceCall {
             selectedDocumentKind = call.type == .estimate ? .estimate : .invoice
@@ -7435,60 +7710,41 @@ GunnAire
     }
 
     private func importQuickBooksItems() {
-        guard canApprovePricebookItems, isQuickBooksConnected else { return }
-        isImportingQuickBooksItems = true
-        actionMessage = "Loading QuickBooks catalog..."
-        liveAPI.fetchItems { result in
-            DispatchQueue.main.async {
-                isImportingQuickBooksItems = false
-                switch result {
-                case .failure(let error):
-                    actionMessage = "QuickBooks catalog sync failed: \(error.localizedDescription)"
-                case .success(let quickBooksItems):
-                    var imported = 0
-                    for quickBooksItem in quickBooksItems {
-                        let normalizedID = quickBooksItem.Id.trimmingCharacters(in: .whitespacesAndNewlines)
-                        let linkedLocalItems = QuickBooksCatalogMappingIntegrity.linkedItems(
-                            to: normalizedID,
-                            in: items
-                        )
-                        if linkedLocalItems.count > 1 {
-                            QuickBooksCatalogMappingIntegrity.markConflictsForReview(in: items)
-                            continue
-                        }
-                        if let existing = Item.matchingLocalCatalogItem(
-                            in: items,
-                            quickBooksID: normalizedID,
-                            name: quickBooksItem.Name,
-                            sku: quickBooksItem.Sku
-                        ) {
-                            applyQuickBooksItem(quickBooksItem, to: existing)
-                            continue
-                        }
-
-                        let localItem = Item(
-                            quickBooksID: normalizedID,
-                            name: quickBooksItem.Name,
-                            itemType: CatalogItemType(rawValue: quickBooksItem.ItemType ?? "") ?? .service,
-                            unitPrice: quickBooksItem.UnitPrice ?? 0,
-                            purchaseCost: quickBooksItem.PurchaseCost,
-                            isTaxable: quickBooksItem.Taxable ?? false,
-                            itemDescription: quickBooksItem.Description,
-                            sku: quickBooksItem.Sku,
-                            preferredVendorName: quickBooksItem.PrefVendorRef?.name,
-                            preferredVendorQuickBooksID: quickBooksItem.PrefVendorRef?.value,
-                            purchaseDescription: quickBooksItem.PurchaseDesc
-                        )
-                        modelContext.insert(localItem)
-                        imported += 1
-                    }
-                    saveQuickBooksSyncState()
-                    actionMessage = imported == 0
-                        ? "QuickBooks catalog is already up to date."
-                        : "Imported \(imported) catalog items from QuickBooks."
+        guard canApprovePricebookItems, isQuickBooksConnected, !isImportingQuickBooksItems else { return }
+        let owner = QuickBooksSyncLifecycle()
+        do {
+            var request: QuickBooksChangeHistoryClient.Request?
+            if GunnAireBackendService.isConfigured && !GunnAireCloudKit.usesTestDatabase {
+                request = { path, method, body in
+                    try await GunnAireBackendService.quickBooksChangeHistoryRequest(path: path, method: method, body: body)
                 }
             }
-        }
+            let run = try owner.begin(api: liveAPI, sharedHistoryRequest: request) {
+                try QuickBooksSyncAccessPolicy.validate(context: modelContext)
+            }
+            billingSyncLifecycles["catalog-refresh"] = owner
+            isImportingQuickBooksItems = true
+            actionMessage = "Refreshing the company catalog…"
+            Task { @MainActor in
+                defer {
+                    owner.finish(run)
+                    if billingSyncLifecycles["catalog-refresh"] === owner {
+                        billingSyncLifecycles.removeValue(forKey: "catalog-refresh")
+                        isImportingQuickBooksItems = false
+                    }
+                }
+                do {
+                    let records: [QuickBooksItem] = try await run.receiveResource(id: "catalog", fetch: liveAPI.fetchItems)
+                    try run.markSucceeded("catalog")
+                    let history = try await run.prepareCatalogImport()
+                    try run.commit {
+                        try QuickBooksLocalSync.importSnapshot(customers: [], items: records, estimates: [],
+                            invoices: [], payments: [], vendors: [], into: modelContext, catalogHistory: history)
+                    }
+                    actionMessage = "Company catalog refreshed. Saved document prices were kept."
+                } catch { actionMessage = "Catalog refresh needs review: \(error.localizedDescription)" }
+            }
+        } catch { actionMessage = "Catalog refresh is unavailable: \(error.localizedDescription)" }
     }
 
     private func importQuickBooksItemsIfNeeded() {
@@ -7501,13 +7757,35 @@ GunnAire
     private func publishCatalogItemIfPossible(_ item: Item) {
         guard !item.requiresPricebookReview, !item.isCatalogArchived else { return }
         guard isQuickBooksConnected, itemNeedsQuickBooksSync(item) else { return }
-        prepareQuickBooksItemsForDocument([item]) { result in
-            switch result {
-            case .success:
-                actionMessage = "Added \(item.name) and synced it to QuickBooks."
-            case .failure(let error):
-                actionMessage = "Added \(item.name) locally. QuickBooks publish is pending: \(error.localizedDescription)"
+        let key = "item-\(item.id)"
+        guard billingSyncLifecycles[key] == nil else { return }
+        let owner = QuickBooksSyncLifecycle()
+        do {
+            let workflow = try QuickBooksCatalogWorkflow(item: item, context: modelContext, api: liveAPI,
+                lifecycle: owner, mode: .publish, configuration: accountingConfiguration)
+            billingSyncLifecycles[key] = owner
+            Task { @MainActor in
+                defer {
+                    owner.finish(workflow.run)
+                    if billingSyncLifecycles[key] === owner { billingSyncLifecycles.removeValue(forKey: key) }
+                }
+                do {
+                    try await workflow.run.perform {
+                        await accountingConfigurationStore.refresh(realmID: workflow.run.workflow.realmID,
+                            environment: workflow.run.workflow.environment, validate: workflow.checkItem)
+                    }
+                    let outcome = try await workflow.execute(configuration: accountingConfigurationStore.configuration(
+                        for: workflow.run.workflow.realmID, environment: workflow.run.workflow.environment))
+                    actionMessage = outcome.link == .synchronized
+                        ? "Item saved and synced to QuickBooks."
+                        : "Item saved and linked to QuickBooks. Review the pricebook differences before updating either version."
+                } catch {
+                    try? workflow.recordFailure(error)
+                    actionMessage = workflow.failureMessage(error)
+                }
             }
+        } catch {
+            actionMessage = "Item saved locally. QuickBooks publish is pending: \(error.localizedDescription)"
         }
     }
 
@@ -7524,15 +7802,6 @@ GunnAire
         }
     }
 
-    private func markQuickBooksCatalogSyncFailure(for items: [Item], error: Error) {
-        let detail = error.localizedDescription
-        for item in items where itemNeedsQuickBooksSync(item) {
-            item.quickBooksSyncStatus = "needs_attention"
-            item.quickBooksSyncDetail = detail
-        }
-        saveQuickBooksSyncState()
-    }
-
     private func loadEstimateIntoBuilder(_ estimate: Estimate, announce: Bool = true) {
         changeOrderParentEstimateID = nil
         changeOrderReason = ""
@@ -7545,6 +7814,7 @@ GunnAire
             notes: estimate.notes,
             lineItemSummary: estimate.lineItemSummary,
             catalogSnapshotJSON: estimate.catalogSnapshotJSON,
+            savedAmount: estimate.amount,
             preferredKind: .estimate,
             announce: announce
         )
@@ -7564,6 +7834,7 @@ GunnAire
             notes: estimate.notes,
             lineItemSummary: estimate.lineItemSummary,
             catalogSnapshotJSON: estimate.catalogSnapshotJSON,
+            savedAmount: estimate.amount,
             preferredKind: .estimate,
             announce: false
         )
@@ -7634,6 +7905,7 @@ GunnAire
             notes: estimate.notes,
             lineItemSummary: estimate.lineItemSummary,
             catalogSnapshotJSON: estimate.catalogSnapshotJSON,
+            savedAmount: estimate.amount,
             preferredKind: .invoice,
             announce: false
         )
@@ -7676,13 +7948,13 @@ GunnAire
         let restoredItems = restoredCatalogItems(snapshotJSON: estimate.catalogSnapshotJSON, lineItemSummary: estimate.lineItemSummary)
         if let reportErrorMessage = conversion.reportErrorMessage {
             actionMessage = reportErrorMessage
-            if isQuickBooksConnected, !restoredItems.isEmpty {
+            if canAttemptSharedBilling, !restoredItems.isEmpty {
                 syncInvoiceIfNeeded(invoice, customer: estimate.customer, items: restoredItems)
             }
-        } else if isQuickBooksConnected, !restoredItems.isEmpty {
+        } else if canAttemptSharedBilling, !restoredItems.isEmpty {
             actionMessage = "Invoice created from estimate. Syncing to QuickBooks..."
             syncInvoiceIfNeeded(invoice, customer: estimate.customer, items: restoredItems)
-        } else if isQuickBooksConnected {
+        } else if canAttemptSharedBilling {
             actionMessage = "Invoice created from estimate. QuickBooks sync skipped because the estimate lines do not match local catalog items."
         } else {
             actionMessage = "Invoice created from estimate."
@@ -7698,6 +7970,7 @@ GunnAire
             notes: invoice.notes,
             lineItemSummary: invoice.lineItemSummary,
             catalogSnapshotJSON: invoice.catalogSnapshotJSON,
+            savedAmount: invoice.amount,
             preferredKind: .invoice,
             announce: announce
         )
@@ -7710,6 +7983,7 @@ GunnAire
         notes: String?,
         lineItemSummary: String,
         catalogSnapshotJSON: String?,
+        savedAmount: Double,
         preferredKind: BillingDocumentKind,
         announce: Bool
     ) {
@@ -7720,10 +7994,21 @@ GunnAire
             customerAddress = address
         }
         self.notes = notes ?? ""
+        selectedTaxAddresses = BillingTaxAddressContext.read(catalogSnapshotJSON)
 
         let restoredItems = restoredCatalogItems(snapshotJSON: catalogSnapshotJSON, lineItemSummary: lineItemSummary)
         let snapshots = CatalogLineItemSnapshot.decoded(from: catalogSnapshotJSON)
         newlyCreatedLineItems.removeAll()
+        do { try CatalogBundlePolicy.validateRestoration(catalogSnapshotJSON, catalog: items) }
+        catch {
+            clearSelectedCatalogLines()
+            loadedCatalogSavedAmount = savedAmount.isFinite && savedAmount >= 0 ? savedAmount : nil
+            loadedCatalogIssue = "The saved line items need review. The original document has not changed. You can leave it as saved or replace all lines to edit it."
+            actionMessage = loadedCatalogIssue ?? ""
+            return
+        }
+        loadedCatalogIssue = nil
+        loadedCatalogSavedAmount = nil
         if restoredItems.isEmpty {
             clearSelectedCatalogLines()
         } else {
@@ -7752,6 +8037,9 @@ GunnAire
             selectedItemizedAssemblyMemberships = CatalogAssemblyPolicy.restoredItemizedMemberships(
                 from: snapshots
             )
+            selectedBundleSnapshots = Dictionary(snapshots.filter { $0.bundle != nil }
+                .map { ($0.catalogItemID, $0) }, uniquingKeysWith: { first, _ in first })
+            bundleEquipmentCustomerID = customer.id
             reconcileLineEquipmentAssignments()
         }
 
@@ -8204,6 +8492,7 @@ GunnAire
     }
 
     private func invoiceDisplayStatus(for invoice: Invoice) -> String {
+        if invoice.quickBooksReconciliationReviewMessage != nil { return "Review needed" }
         if isInvoicePaid(invoice) { return "Paid" }
         if isInvoiceOverdue(invoice) { return "Overdue" }
         let balance = invoiceBalanceDue(for: invoice)
@@ -8374,7 +8663,7 @@ GunnAire
         case .service:
             return item.itemType == .service
         case .materials:
-            return item.itemType == .nonInventory
+            return item.itemType.isMaterial
         case .selected:
             return isCatalogItemSelected(item)
         case .all:
@@ -8396,7 +8685,7 @@ GunnAire
                 haystack.contains("system") ||
                 item.itemType == .service
         case .replacement, .install:
-            return item.itemType == .nonInventory ||
+            return item.itemType.isMaterial ||
                 haystack.contains("install") ||
                 haystack.contains("equipment") ||
                 haystack.contains("system")
@@ -8417,11 +8706,32 @@ GunnAire
     }
 
     private func toggleItem(_ item: Item) {
+        bundleSelectionError = nil
         if isCatalogItemSelected(item) {
             if item.assemblyDefinition?.presentation == .itemized {
                 removeAssembly(item.id)
             } else {
                 removeCatalogLine(item.id)
+            }
+            return
+        }
+
+        if item.itemType == .group {
+            do {
+                guard let scope = bundleSelectionScope else { throw CatalogBundleError.originalBusiness }
+                var snapshot = try CatalogBundlePolicy.resolve(root: item, catalog: items, scope: scope)
+                if let equipmentID = defaultDocumentEquipmentID {
+                    selectedItemEquipmentIDs[item.id] = equipmentID
+                    snapshot = CatalogBundlePolicy.equipment(snapshot, documentEquipmentSnapshots.first { $0.equipmentID == equipmentID })
+                }
+                selectedBundleSnapshots[item.id] = snapshot
+                bundleEquipmentCustomerID = contextCustomer?.id
+                selectedItems.insert(item.id)
+                selectedItemQuantities[item.id] = snapshot.quantity
+                actionMessage = "Added \(item.name). Open Included Items to review or customize this document's bundle."
+            } catch {
+                actionMessage = error.localizedDescription
+                bundleSelectionError = error.localizedDescription
             }
             return
         }
@@ -8491,6 +8801,7 @@ GunnAire
         selectedItemPriceAdjustments.removeValue(forKey: itemID)
         selectedItemEquipmentIDs.removeValue(forKey: itemID)
         selectedItemAssemblySnapshots.removeValue(forKey: itemID)
+        selectedBundleSnapshots.removeValue(forKey: itemID)
     }
 
     private func removeAssembly(_ assemblyItemID: UUID) {
@@ -8510,14 +8821,19 @@ GunnAire
     }
 
     private func clearSelectedCatalogLines() {
+        loadedCatalogIssue = nil
+        loadedCatalogSavedAmount = nil
         selectedItems.removeAll()
         newlyCreatedLineItems.removeAll()
         documentScopedReviewItemIDs.removeAll()
         selectedItemQuantities.removeAll()
         selectedItemPriceAdjustments.removeAll()
         selectedDocumentDiscount = nil
+        selectedTaxAddresses = nil
         selectedItemEquipmentIDs.removeAll()
         selectedItemAssemblySnapshots.removeAll()
+        selectedBundleSnapshots.removeAll()
+        bundleEquipmentCustomerID = nil
         selectedItemizedAssemblyMemberships.removeAll()
     }
 
@@ -8544,9 +8860,16 @@ GunnAire
                 guard let equipmentID,
                       documentEquipmentProfiles.contains(where: { $0.id == equipmentID }) else {
                     selectedItemEquipmentIDs.removeValue(forKey: item.id)
+                    if let root = selectedBundleSnapshots[item.id] {
+                        selectedBundleSnapshots[item.id] = CatalogBundlePolicy.equipment(root, nil)
+                    }
                     return
                 }
                 selectedItemEquipmentIDs[item.id] = equipmentID
+                if let root = selectedBundleSnapshots[item.id] {
+                    selectedBundleSnapshots[item.id] = CatalogBundlePolicy.equipment(root,
+                        documentEquipmentSnapshots.first { $0.equipmentID == equipmentID })
+                }
             }
         )
     }
@@ -8566,14 +8889,74 @@ GunnAire
     }
 
     private func lineItemQuantity(for item: Item) -> Double {
-        max(selectedItemQuantities[item.id] ?? 1, 0.25)
+        selectedBundleSnapshots[item.id]?.quantity ?? max(selectedItemQuantities[item.id] ?? 1, 0.25)
     }
 
     private func lineItemQuantityBinding(for item: Item) -> Binding<Double> {
         Binding(
             get: { lineItemQuantity(for: item) },
-            set: { selectedItemQuantities[item.id] = min(max($0, 0.25), 100) }
+            set: { quantity in
+                if let saved = selectedBundleSnapshots[item.id] {
+                    do {
+                        selectedBundleSnapshots[item.id] = try CatalogBundlePolicy.resized(saved, quantity: quantity)
+                        selectedItemQuantities[item.id] = quantity
+                    } catch { actionMessage = error.localizedDescription }
+                } else { selectedItemQuantities[item.id] = min(max(quantity, 0.25), 100) }
+            }
         )
+    }
+
+    private var bundleSelectionScope: QuickBooksChangeHistoryScope? {
+        #if DEBUG
+        if GunnAireCloudKit.usesTestDatabase, ProcessInfo.processInfo.arguments.contains("-uiTestBundleComposer") {
+            return CatalogBundleFixture.scope
+        }
+        #endif
+        guard let companyID = CompanyWorkspaceAccessController.shared.verifiedCompanyID,
+              let realmID = liveAPI.realmID else { return nil }
+        return .init(companyID: companyID, realmID: realmID, environment: Config.QuickBooks.environment)
+    }
+
+    private func selectedLineAmount(_ item: Item) -> Double {
+        selectedBundleSnapshots[item.id]?.extendedAmount ??
+            BillingDocumentDiscountPolicy.roundCurrency(effectiveUnitPrice(for: item) * lineItemQuantity(for: item))
+    }
+
+    private func selectedLineDescription(_ item: Item) -> String? {
+        if let saved = selectedBundleSnapshots[item.id] { return saved.description }
+        return item.itemDescription
+    }
+
+    private func catalogPriceLabel(_ item: Item) -> String {
+        guard item.itemType == .group else { return QuickBooksSalesLineContract.unitPriceLabel(item.unitPrice) }
+        guard let scope = bundleSelectionScope,
+              let snapshot = try? CatalogBundlePolicy.resolve(root: item, catalog: items, scope: scope) else {
+            return "Review bundle"
+        }
+        return snapshot.extendedAmount.formatted(.currency(code: "USD"))
+    }
+
+    @ViewBuilder private func bundleMembersView(for item: Item) -> some View {
+        if let snapshot = selectedBundleSnapshots[item.id] {
+            CatalogBundleMembersView(snapshot: snapshot, onChange: { updated in
+                    selectedBundleSnapshots[item.id] = updated
+                }, onEdit: { memberID in
+                    bundleEditRequest = .init(snapshot: snapshot, memberID: memberID)
+                })
+        }
+    }
+
+    private func bundleEditSheet(_ request: CatalogBundleEditRequest) -> some View {
+        CatalogBundleEditSheet(request: request, canAuthorize: canAuthorizePriceAdjustments,
+            actorEmail: currentUserEmail, users: users) { updated in
+                guard selectedBundleSnapshots[request.snapshot.catalogItemID] == request.snapshot,
+                      selectedItems.contains(request.snapshot.catalogItemID) else {
+                    return "The selected bundle changed while this editor was open. Close it and review the latest draft."
+                }
+                guard updated.bundle?.scope == bundleSelectionScope else { return CatalogBundleError.originalBusiness.localizedDescription }
+                selectedBundleSnapshots[request.snapshot.catalogItemID] = updated
+                return nil
+            }
     }
 
     private func effectiveUnitPrice(for item: Item) -> Double {
@@ -8644,7 +9027,19 @@ GunnAire
     }
 
     private func createDocument() {
-        guard !selectedLineItems.isEmpty else { return }
+        guard !isCreatingDocument, !selectedLineItems.isEmpty else { return }
+        guard loadedCatalogIssue == nil else { actionMessage = loadedCatalogIssue ?? ""; return }
+        do {
+            for root in selectedBundleSnapshots.values { try CatalogBundlePolicy.validate(root) }
+            if !selectedBundleSnapshots.isEmpty {
+                guard let scope = bundleSelectionScope else { throw CatalogBundleError.originalBusiness }
+                try CatalogBundlePolicy.validateScope(selectedCatalogSnapshotJSON, expected: scope)
+            }
+        } catch { actionMessage = error.localizedDescription; return }
+        if startsNewDocument, !canViewFinancials || completedNewDocument != nil {
+            actionMessage = "Your current business access does not allow another document from this composer."
+            return
+        }
         if let documentDiscountValidationMessage {
             actionMessage = documentDiscountValidationMessage
             return
@@ -8703,13 +9098,15 @@ GunnAire
             activeServiceCall?.linkedEstimateID = estimate.id
             linkExistingEstimateAttachments(to: estimate, serviceCallID: activeServiceCall?.id)
             let documentTitle = estimate.isChangeOrder ? "Change order" : "Estimate"
-            actionMessage = isQuickBooksConnected
+            actionMessage = canAttemptSharedBilling
                 ? "\(documentTitle) created locally. Syncing to QuickBooks..."
                 : "\(documentTitle) created locally."
+            if startsNewDocument { completedNewDocument = .estimate(estimate) }
             guard saveBillingContext(failureMessage: "Could not save estimate locally") else {
                 isCreatingDocument = false
                 return
             }
+            if startsNewDocument { newDocumentSaveConfirmed = true }
             syncEstimateIfNeeded(estimate, customer: customer, items: selectedLineItems)
             if openInvoiceAfterEstimateCreation {
                 selectedDocumentKind = .invoice
@@ -8768,10 +9165,10 @@ GunnAire
                 invoice.dueDate = resolvedInvoiceDueDate
                 invoice.notes = trimmedNotes.isEmpty ? nil : trimmedNotes
                 invoice.quickBooksSyncStatus = "pending"
-                invoice.quickBooksSyncDetail = isQuickBooksConnected
+                invoice.quickBooksSyncDetail = canAttemptSharedBilling
                     ? "Invoice update is waiting for QuickBooks confirmation."
-                    : "Invoice changed while QuickBooks was unavailable. Reconnect and update this invoice again to publish it."
-                actionMessage = isQuickBooksConnected
+                    : "Invoice saved. Use Sync Saved Document from your business workspace when online."
+                actionMessage = canAttemptSharedBilling
                     ? "Invoice updated locally. Syncing the complete line-item set to QuickBooks..."
                     : "Invoice updated locally. QuickBooks publication is pending."
             } else {
@@ -8780,7 +9177,7 @@ GunnAire
                     serviceLocationID: activeServiceCall?.serviceLocationID ?? selectedServiceLocationID,
                     siteAddress: selectedSiteAddressSnapshot,
                     customer: customer,
-                    workType: InvoiceWorkType.inferred(from: activeServiceCall),
+                    workType: activeServiceCall.map { InvoiceWorkType.inferred(from: $0) } ?? standaloneInvoiceWorkType,
                     lineItemSummary: selectedSummary,
                     catalogSnapshotJSON: selectedCatalogSnapshotJSON,
                     amount: selectedTotal,
@@ -8794,13 +9191,16 @@ GunnAire
                 activeServiceCall?.markDocumentationCompleteIfReady()
                 activeServiceCall?.status = .invoiced
                 let reportErrorMessage = prepareLinkedOnsiteReportForInvoiceCreation(invoice, serviceCall: activeServiceCall)
-                actionMessage = reportErrorMessage ?? (isQuickBooksConnected ? "Invoice created locally with onsite report. Syncing to QuickBooks..." : "Invoice created locally with onsite report.")
+                let creationMessage = activeServiceCall == nil ? "Invoice saved locally." : "Invoice created locally with onsite report."
+                actionMessage = reportErrorMessage ?? (canAttemptSharedBilling ? "\(creationMessage) Syncing to QuickBooks..." : creationMessage)
             }
+            if startsNewDocument { completedNewDocument = .invoice(invoice) }
             guard saveBillingContext(failureMessage: isUpdatingExistingInvoice ? "Could not update invoice locally" : "Could not save invoice locally") else {
                 isCreatingDocument = false
                 return
             }
             let shouldReturnToInvoiceOverview = isUpdatingExistingInvoice && selectedInvoiceForEditingID == invoice.id
+            if startsNewDocument { newDocumentSaveConfirmed = true }
             syncInvoiceIfNeeded(invoice, customer: customer, items: selectedLineItems)
             if shouldReturnToInvoiceOverview {
                 finishInvoiceWorkspaceEditing()
@@ -8891,513 +9291,77 @@ GunnAire
     }
 
     private func syncEstimateIfNeeded(_ estimate: Estimate, customer: Customer, items: [Item]) {
-        guard isQuickBooksConnected else { return }
-        guard syncingEstimateIDs.insert(estimate.id).inserted else { return }
-        ensureQuickBooksDocumentInputs(customer: customer, items: items) { result in
-            switch result {
-            case .failure(let error):
-                syncingEstimateIDs.remove(estimate.id)
-                actionMessage = "Estimate saved locally. QuickBooks sync failed: \(error.localizedDescription)"
-            case .success(let syncedItems):
-                let lines: [QuickBooksLineItem]
-                do {
-                    lines = try QuickBooksDocumentLinePublication.lines(
-                        snapshotJSON: estimate.catalogSnapshotJSON,
-                        expectedSubtotal: estimate.subtotalAmount,
-                        catalogItems: catalogItemsForDocumentPublication(syncedItems)
-                    )
-                } catch {
-                    syncingEstimateIDs.remove(estimate.id)
-                    actionMessage = "Estimate saved locally. QuickBooks sync stopped: \(error.localizedDescription)"
-                    return
-                }
-                let payload = QuickBooksEstimateCreate(
-                    CustomerRef: QuickBooksReference(value: customer.quickBooksID ?? "", name: customer.name),
-                    Line: lines,
-                    PrivateNote: quickBooksPrivateNote(for: estimate),
-                    BillEmail: customer.email.flatMap { $0.isEmpty ? nil : QuickBooksEmailAddress(Address: $0) },
-                    ShipAddr: estimate.siteAddress.flatMap(nilIfBlank).map { QuickBooksAddress(Line1: $0) },
-                    GlobalTaxCalculation: "TaxExcluded",
-                    ApplyTaxAfterDiscount: estimate.documentDiscount == nil ? nil : true
-                )
-                liveAPI.fetchEstimates { fetchResult in
-                    DispatchQueue.main.async {
-                        switch fetchResult {
-                        case .failure(let error):
-                            syncingEstimateIDs.remove(estimate.id)
-                            actionMessage = "Estimate saved locally. QuickBooks reconciliation failed, so no duplicate-prone create was attempted: \(error.localizedDescription)"
-                        case .success(let remoteEstimates):
-                            do {
-                                if let recovered = try QuickBooksEstimatePublicationRecovery.matchingRemoteEstimate(
-                                    for: estimate,
-                                    in: remoteEstimates
-                                ) {
-                                    finishQuickBooksEstimateSync(
-                                        .success(recovered),
-                                        estimate: estimate,
-                                        recoveredExisting: true
-                                    )
-                                    return
-                                }
-                            } catch {
-                                syncingEstimateIDs.remove(estimate.id)
-                                actionMessage = error.localizedDescription
-                                return
-                            }
-
-                            liveAPI.createEstimate(payload) { apiResult in
-                                DispatchQueue.main.async {
-                                    finishQuickBooksEstimateSync(
-                                        apiResult,
-                                        estimate: estimate,
-                                        recoveredExisting: false
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func finishQuickBooksEstimateSync(
-        _ result: Result<QuickBooksEstimate, Error>,
-        estimate: Estimate,
-        recoveredExisting: Bool
-    ) {
-        syncingEstimateIDs.remove(estimate.id)
-        switch result {
-        case .success(let quickBooksEstimate):
-            estimate.quickBooksID = quickBooksEstimate.Id
-            let taxIssue = estimate.applyQuickBooksTaxResult(
-                total: quickBooksEstimate.TotalAmt,
-                reportedTax: quickBooksEstimate.TxnTaxDetail?.TotalTax
-            )
-            saveQuickBooksSyncState()
-            syncLinkedEstimateAttachmentsToQuickBooks(estimate)
-            if let taxIssue {
-                actionMessage = "Estimate is linked to QuickBooks, but its tax total needs review: \(taxIssue)"
-            } else {
-                actionMessage = recoveredExisting
-                    ? "Existing QuickBooks estimate recovered without creating a duplicate."
-                    : "Estimate created and synced to QuickBooks."
-            }
-        case .failure(let error):
-            actionMessage = "Estimate saved locally. QuickBooks sync failed: \(error.localizedDescription)"
-        }
-    }
-
-    private func quickBooksPrivateNote(for estimate: Estimate) -> String? {
-        let entries = [
-            estimate.notes?.trimmingCharacters(in: .whitespacesAndNewlines),
-            estimate.changeOrderReason.map { "Change order reason: \($0)" }
-        ]
-        .compactMap { $0 }
-        .filter { !$0.isEmpty }
-        let adjustedNote = BillingPriceAdjustmentAudit.quickBooksPrivateNote(
-            existing: entries.isEmpty ? nil : entries.joined(separator: "\n"),
-            snapshotJSON: estimate.catalogSnapshotJSON
-        )
-        let discountedNote = BillingDocumentDiscountAudit.quickBooksPrivateNote(
-            existing: adjustedNote,
-            snapshotJSON: estimate.catalogSnapshotJSON
-        )
-        return QuickBooksEstimateLineage.appendingLineage(to: discountedNote, for: estimate)
-    }
-
-    private func quickBooksPrivateNote(for invoice: Invoice) -> String? {
-        QuickBooksInvoiceLineage.appendingLineage(
-            to: BillingDocumentDiscountAudit.quickBooksPrivateNote(
-                existing: BillingPriceAdjustmentAudit.quickBooksPrivateNote(
-                    existing: invoice.accountingPrivateNote,
-                    snapshotJSON: invoice.catalogSnapshotJSON
-                ),
-                snapshotJSON: invoice.catalogSnapshotJSON
-            ),
-            for: invoice
-        )
+        publishBillingDocument(.estimate(estimate))
     }
 
     private func syncInvoiceIfNeeded(_ invoice: Invoice, customer: Customer, items: [Item]) {
-        guard isQuickBooksConnected else {
+        guard canAttemptSharedBilling else {
             invoice.quickBooksSyncStatus = "pending"
-            invoice.quickBooksSyncDetail = "QuickBooks is not connected. Reconnect and update this invoice again to publish its current line items."
+            invoice.quickBooksSyncDetail = "Saved locally. Open this document in your verified business workspace and use Sync Saved Document when online."
             saveQuickBooksSyncState()
             return
         }
-        ensureQuickBooksDocumentInputs(customer: customer, items: items) { result in
-            switch result {
-            case .failure(let error):
-                markQuickBooksInvoiceSyncFailure(invoice, error: error)
-                actionMessage = "Invoice saved locally. QuickBooks sync failed: \(error.localizedDescription)"
-            case .success(let syncedItems):
-                let lines: [QuickBooksLineItem]
-                do {
-                    lines = try QuickBooksDocumentLinePublication.lines(
-                        snapshotJSON: invoice.catalogSnapshotJSON,
-                        expectedSubtotal: invoice.subtotalAmount,
-                        catalogItems: catalogItemsForDocumentPublication(syncedItems)
-                    )
-                } catch {
-                    markQuickBooksInvoiceSyncFailure(invoice, error: error)
-                    actionMessage = "Invoice saved locally. QuickBooks sync stopped: \(error.localizedDescription)"
-                    return
-                }
-                if let quickBooksID = invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
-                   !quickBooksID.isEmpty {
-                    updateQuickBooksInvoice(
-                        invoice,
-                        quickBooksID: quickBooksID,
-                        customer: customer,
-                        lines: lines
-                    )
-                } else {
-                    createQuickBooksInvoice(invoice, customer: customer, lines: lines)
-                }
-            }
-        }
+        publishBillingDocument(.invoice(invoice))
     }
 
-    private func createQuickBooksInvoice(
-        _ invoice: Invoice,
-        customer: Customer,
-        lines: [QuickBooksLineItem]
-    ) {
-        let payload = QuickBooksInvoiceCreate(
-            CustomerRef: QuickBooksReference(value: customer.quickBooksID ?? "", name: customer.name),
-            Line: lines,
-            PrivateNote: quickBooksPrivateNote(for: invoice),
-            BillEmail: customer.email.flatMap { $0.isEmpty ? nil : QuickBooksEmailAddress(Address: $0) },
-            ShipAddr: invoice.siteAddress.flatMap(nilIfBlank).map { QuickBooksAddress(Line1: $0) },
-            DueDate: QuickBooksDateOnly.string(from: invoice.effectiveDueDate()),
-            GlobalTaxCalculation: "TaxExcluded",
-            ApplyTaxAfterDiscount: invoice.documentDiscount == nil ? nil : true
-        )
-        liveAPI.fetchInvoices { fetchResult in
-            DispatchQueue.main.async {
-                switch fetchResult {
-                case .failure(let error):
-                    markQuickBooksInvoiceSyncFailure(invoice, error: error)
-                    actionMessage = "Invoice saved locally. QuickBooks reconciliation failed, so no duplicate-prone create was attempted: \(error.localizedDescription)"
-                case .success(let remoteInvoices):
-                    do {
-                        if let recovered = try QuickBooksInvoicePublicationRecovery.matchingRemoteInvoice(
-                            for: invoice,
-                            in: remoteInvoices
-                        ) {
-                            applyQuickBooksInvoiceSync(recovered, to: invoice)
-                            syncLinkedServiceReportsToQuickBooks(invoice)
-                            actionMessage = invoice.needsQuickBooksAttention
-                                ? "Existing QuickBooks invoice recovered, but its tax total needs review: \(invoice.quickBooksSyncDetail ?? "Refresh the invoice in QuickBooks.")"
-                                : "Existing QuickBooks invoice recovered without creating a duplicate."
-                            return
-                        }
-                    } catch {
-                        markQuickBooksInvoiceSyncFailure(invoice, error: error)
-                        actionMessage = error.localizedDescription
-                        return
-                    }
-
-                    liveAPI.createInvoice(
-                        payload,
-                        requestID: QuickBooksInvoiceLineage.createRequestID(for: invoice)
-                    ) { apiResult in
-                        DispatchQueue.main.async {
-                            switch apiResult {
-                            case .success(let quickBooksInvoice):
-                                applyQuickBooksInvoiceSync(quickBooksInvoice, to: invoice)
-                                syncLinkedServiceReportsToQuickBooks(invoice)
-                                actionMessage = invoice.needsQuickBooksAttention
-                                    ? "Invoice is linked to QuickBooks, but its tax total needs review: \(invoice.quickBooksSyncDetail ?? "Refresh the invoice in QuickBooks.")"
-                                    : "Invoice created and synced to QuickBooks."
-                            case .failure(let error):
-                                markQuickBooksInvoiceSyncFailure(invoice, error: error)
-                                actionMessage = "Invoice saved locally. QuickBooks sync failed: \(error.localizedDescription)"
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func updateQuickBooksInvoice(
-        _ invoice: Invoice,
-        quickBooksID: String,
-        customer: Customer,
-        lines: [QuickBooksLineItem]
-    ) {
-        liveAPI.fetchInvoice(id: quickBooksID) { fetchResult in
-            DispatchQueue.main.async {
-                switch fetchResult {
-                case .failure(let error):
-                    markQuickBooksInvoiceSyncFailure(invoice, error: error)
-                    actionMessage = "Invoice updated locally. QuickBooks refresh failed: \(error.localizedDescription)"
-                case .success(let currentQuickBooksInvoice):
-                    guard let syncToken = currentQuickBooksInvoice.SyncToken?.trimmingCharacters(in: .whitespacesAndNewlines),
-                          !syncToken.isEmpty else {
-                        let error = QuickBooksDataAPI.QBError.missingSyncToken(entity: "invoice \(quickBooksID)")
-                        markQuickBooksInvoiceSyncFailure(invoice, error: error)
-                        actionMessage = "Invoice updated locally. \(error.localizedDescription)"
-                        return
-                    }
-                    let payload = QuickBooksInvoiceUpdate(
-                        Id: quickBooksID,
-                        SyncToken: syncToken,
-                        CustomerRef: QuickBooksReference(value: customer.quickBooksID ?? "", name: customer.name),
-                        Line: lines,
-                        PrivateNote: quickBooksPrivateNote(for: invoice),
-                        BillEmail: customer.email.flatMap { $0.isEmpty ? nil : QuickBooksEmailAddress(Address: $0) },
-                        ShipAddr: invoice.siteAddress.flatMap(nilIfBlank).map { QuickBooksAddress(Line1: $0) },
-                        DueDate: QuickBooksDateOnly.string(from: invoice.effectiveDueDate()),
-                        GlobalTaxCalculation: "TaxExcluded",
-                        ApplyTaxAfterDiscount: invoice.documentDiscount == nil ? nil : true
-                    )
-                    liveAPI.updateInvoice(payload) { updateResult in
-                        DispatchQueue.main.async {
-                            switch updateResult {
-                            case .success(let quickBooksInvoice):
-                                applyQuickBooksInvoiceSync(quickBooksInvoice, to: invoice)
-                                syncLinkedServiceReportsToQuickBooks(invoice)
-                                actionMessage = invoice.needsQuickBooksAttention
-                                    ? "Invoice lines reached QuickBooks, but the tax total needs review: \(invoice.quickBooksSyncDetail ?? "Refresh the invoice in QuickBooks.")"
-                                    : "Invoice line items updated and synced to QuickBooks."
-                            case .failure(let error):
-                                markQuickBooksInvoiceSyncFailure(invoice, error: error)
-                                actionMessage = "Invoice updated locally. QuickBooks update failed: \(error.localizedDescription)"
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func applyQuickBooksInvoiceSync(_ quickBooksInvoice: QuickBooksInvoice, to invoice: Invoice) {
-        invoice.quickBooksID = quickBooksInvoice.Id
-        invoice.quickBooksBalanceDue = quickBooksInvoice.Balance
-        if let rawDueDate = quickBooksInvoice.DueDate,
-           let dueDate = QuickBooksDateOnly.date(from: rawDueDate) {
-            invoice.dueDate = dueDate
-        }
-        let taxIssue = invoice.applyQuickBooksTaxResult(
-            total: quickBooksInvoice.TotalAmt,
-            reportedTax: quickBooksInvoice.TxnTaxDetail?.TotalTax
-        )
-        invoice.quickBooksSyncStatus = taxIssue == nil ? "synced" : "needs_attention"
-        invoice.quickBooksSyncDetail = taxIssue
-        invoice.quickBooksLastSyncedAt = Date()
-        saveQuickBooksSyncState()
-    }
-
-    private func markQuickBooksInvoiceSyncFailure(_ invoice: Invoice, error: Error) {
-        invoice.quickBooksSyncStatus = "needs_attention"
-        invoice.quickBooksSyncDetail = error.localizedDescription
-        saveQuickBooksSyncState()
-    }
-
-    private func ensureQuickBooksDocumentInputs(
-        customer: Customer,
-        items: [Item],
-        completion: @escaping (Result<[Item], Error>) -> Void
-    ) {
-        ensureQuickBooksCustomer(customer) { customerResult in
-            switch customerResult {
-            case .failure(let error):
-                completion(.failure(error))
-            case .success:
-                prepareQuickBooksItemsForDocument(items, completion: completion)
-            }
-        }
-    }
-
-    private func ensureQuickBooksCustomer(_ customer: Customer, completion: @escaping (Result<Void, Error>) -> Void) {
-        if let quickBooksID = customer.quickBooksID, !quickBooksID.isEmpty {
-            completion(.success(()))
+    private func publishBillingDocument(_ document: QuickBooksBillingDocument) {
+        guard canAttemptSharedBilling else { return }
+        let key = "\(document.label)-\(document.id)"
+        guard billingSyncLifecycles[key] == nil else {
+            actionMessage = QuickBooksBillingWorkflowError.busy.localizedDescription
             return
         }
-
-        liveAPI.recoverOrCreateCustomer(
-            QuickBooksCustomerCreateOperation.draft(for: customer)
-        ) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let quickBooksCustomer):
-                    customer.quickBooksID = quickBooksCustomer.Id
-                    saveQuickBooksSyncState()
-                    completion(.success(()))
-                case .failure(let error):
-                    completion(.failure(error))
-                }
-            }
-        }
-    }
-
-    private func prepareQuickBooksItemsForDocument(
-        _ items: [Item],
-        completion: @escaping (Result<[Item], Error>) -> Void
-    ) {
+        let owner = QuickBooksSyncLifecycle()
+        billingSyncLifecycles[key] = owner
         do {
-            try QuickBooksCatalogMappingIntegrity.validateDocumentItems(items, against: self.items)
-        } catch {
-            QuickBooksCatalogMappingIntegrity.markConflictsForReview(in: self.items)
-            saveQuickBooksSyncState()
-            completion(.failure(error))
-            return
-        }
-        if let item = items.first(where: \.requiresPricebookReview) {
-            completion(.failure(PricebookPublicationError.reviewRequired(item.name)))
-            return
-        }
-        if let item = items.first(where: \.isCatalogArchived) {
-            completion(.failure(PricebookPublicationError.archived(item.name)))
-            return
-        }
-        guard items.contains(where: itemNeedsQuickBooksSync) else {
-            completion(.success(items))
-            return
-        }
-
-        Task { @MainActor in
-            await accountingConfigurationStore.refresh(
-                realmID: liveAPI.realmID,
-                environment: Config.QuickBooks.environment
-            )
-            let accountingConfiguration = self.accountingConfiguration
-            liveAPI.fetchItems { result in
-                DispatchQueue.main.async {
-                switch result {
-                case .failure(let error):
-                    markQuickBooksCatalogSyncFailure(for: items.filter(itemNeedsQuickBooksSync), error: error)
-                    completion(.failure(error))
-                case .success(let quickBooksItems):
-                    for item in items where itemNeedsQuickBooksSync(item) {
-                        do {
-                            if let quickBooksItem = try PricebookReviewPublication.matchingRemoteItem(
-                                for: item,
-                                in: quickBooksItems
-                            ) {
-                                try QuickBooksCatalogMappingIntegrity.validateAssignment(
-                                    of: quickBooksItem.Id,
-                                    to: item,
-                                    in: self.items
-                                )
-                                let shouldStageReactivation = item.isAvailableForNewWork && quickBooksItem.Active == false
-                                applyQuickBooksItem(quickBooksItem, to: item)
-                                if shouldStageReactivation {
-                                    item.restoreToPricebook(by: currentUserEmail)
-                                    saveQuickBooksSyncState()
-                                    completion(.failure(PricebookPublicationError.inactiveQuickBooksMatch(item.name)))
-                                    return
-                                }
-                            }
-                        } catch {
-                            markQuickBooksCatalogSyncFailure(for: [item], error: error)
-                            completion(.failure(error))
-                            return
-                        }
-                    }
-
-                    let remainingLocalItems = items.filter(itemNeedsQuickBooksSync)
-                    guard !remainingLocalItems.isEmpty else {
-                        saveQuickBooksSyncState()
-                        completion(.success(items))
-                        return
-                    }
-
-                    guard let incomeAccountRef = QuickBooksItemAccountResolver.incomeAccountRef(
-                        from: quickBooksItems,
-                        configuration: accountingConfiguration
-                    ) else {
-                        let error = QuickBooksDataAPI.QBError.missingDefaultIncomeAccountRef
-                        markQuickBooksCatalogSyncFailure(for: remainingLocalItems, error: error)
-                        completion(.failure(error))
-                        return
-                    }
-
-                    ensureQuickBooksItems(
-                        items,
-                        index: 0,
-                        incomeAccountRef: incomeAccountRef,
-                        expenseAccountRef: QuickBooksItemAccountResolver.configuredExpenseAccountRef(
-                            configuration: accountingConfiguration
-                        ),
-                        synced: [],
-                        completion: completion
-                    )
+            // Capture synchronously, before Task scheduling can adopt another account.
+            let preparation = try SharedBillingPreparation(document: document, context: modelContext,
+                isCurrent: { billingSyncLifecycles[key] === owner })
+            actionMessage = document.label + " saved. Checking the business connection…"
+            Task { @MainActor in
+                var workflow: QuickBooksBillingWorkflow?
+                defer {
+                    owner.cancel()
+                    if billingSyncLifecycles[key] === owner { billingSyncLifecycles.removeValue(forKey: key) }
                 }
+                do {
+                    let prepared = try await preparation.makeWorkflow(lifecycle: owner)
+                    workflow = prepared
+                    let workflow = prepared
+                    try await workflow.run.perform {
+                        await accountingConfigurationStore.refresh(realmID: workflow.run.workflow.realmID,
+                            environment: workflow.run.workflow.environment, validate: workflow.check)
+                    }
+                    let configuration = accountingConfigurationStore.configuration(for: workflow.run.workflow.realmID,
+                        environment: workflow.run.workflow.environment)
+                    let outcome = try await workflow.execute(configuration: configuration)
+                    actionMessage = outcome.message
+                    do { try await workflow.uploadLinkedAttachments() }
+                    catch {
+                        actionMessage = outcome.message + " Supporting files remain pending: " + error.localizedDescription
+                    }
+                } catch {
+                    guard billingSyncLifecycles[key] === owner else { return }
+                    guard let workflow else {
+                        actionMessage = document.label + " saved locally. " + error.localizedDescription
+                        return
+                    }
+                    do { try workflow.recordFailure(error) }
+                    catch QuickBooksBillingWorkflowError.saveFailed {
+                        actionMessage = QuickBooksBillingWorkflowError.saveFailed.localizedDescription
+                        return
+                    } catch { /* A changed workspace/model must not receive a late failure. */ }
+                    actionMessage = workflow.failureMessage(error)
                 }
             }
+        } catch {
+            if billingSyncLifecycles[key] === owner { billingSyncLifecycles.removeValue(forKey: key) }
+            actionMessage = document.label + " saved locally. " + error.localizedDescription
         }
     }
 
     private func itemNeedsQuickBooksSync(_ item: Item) -> Bool {
         item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
-    }
-
-    private func catalogItemsForDocumentPublication(_ documentItems: [Item]) -> [Item] {
-        var itemsByID = Dictionary(self.items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        for item in documentItems {
-            itemsByID[item.id] = item
-        }
-        return Array(itemsByID.values)
-    }
-
-    private func ensureQuickBooksItems(
-        _ items: [Item],
-        index: Int,
-        incomeAccountRef: QuickBooksReference,
-        expenseAccountRef: QuickBooksReference?,
-        synced: [Item],
-        completion: @escaping (Result<[Item], Error>) -> Void
-    ) {
-        guard index < items.count else {
-            completion(.success(synced))
-            return
-        }
-
-        let item = items[index]
-        if let quickBooksID = item.quickBooksID, !quickBooksID.isEmpty {
-            ensureQuickBooksItems(
-                items,
-                index: index + 1,
-                incomeAccountRef: incomeAccountRef,
-                expenseAccountRef: expenseAccountRef,
-                synced: synced + [item],
-                completion: completion
-            )
-            return
-        }
-
-        let payload = QuickBooksCatalogCreateOperation.payload(
-            for: item,
-            incomeAccountRef: incomeAccountRef,
-            expenseAccountRef: expenseAccountRef
-        )
-        liveAPI.createItem(
-            payload,
-            requestID: QuickBooksCatalogCreateOperation.requestID(for: item.id)
-        ) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let quickBooksItem):
-                    applyQuickBooksItem(quickBooksItem, to: item)
-                    saveQuickBooksSyncState()
-                    ensureQuickBooksItems(
-                        items,
-                        index: index + 1,
-                        incomeAccountRef: incomeAccountRef,
-                        expenseAccountRef: expenseAccountRef,
-                        synced: synced + [item],
-                        completion: completion
-                    )
-                case .failure(let error):
-                    markQuickBooksCatalogSyncFailure(for: [item], error: error)
-                    completion(.failure(error))
-                }
-            }
-        }
     }
 
     @discardableResult
@@ -10278,6 +10242,7 @@ private struct RecordInvoicePaymentView: View {
                         note: trimmedPaymentNotes.isEmpty ? nil : trimmedPaymentNotes,
                         catalogItems: catalogItems
                     )
+                    try result.validateWorkspace()
 
                     let resolvedCardLast4: String?
                     if !trimmedCardLast4.isEmpty {
@@ -10294,6 +10259,8 @@ private struct RecordInvoicePaymentView: View {
                         quickBooksID: result.accountingPayment?.Id,
                         quickBooksChargeID: result.charge.id,
                         quickBooksClientTransID: result.clientTransactionID,
+                        collectionAttemptID: localPaymentID,
+                        providerPaymentStatus: result.charge.status,
                         quickBooksAccountingSyncStatus: result.accountingError == nil ? "synced" : "needs_attention",
                         quickBooksAccountingSyncDetail: result.accountingError,
                         amount: paidAmount,
@@ -10334,6 +10301,7 @@ private struct RecordInvoicePaymentView: View {
                         note: trimmedPaymentNotes.isEmpty ? nil : trimmedPaymentNotes,
                         catalogItems: catalogItems
                     )
+                    try result.validateWorkspace()
 
                     let payment = Payment(
                         id: localPaymentID,
@@ -10341,6 +10309,8 @@ private struct RecordInvoicePaymentView: View {
                         quickBooksID: result.accountingPayment?.Id,
                         quickBooksChargeID: result.charge.id,
                         quickBooksClientTransID: result.clientTransactionID,
+                        collectionAttemptID: localPaymentID,
+                        providerPaymentStatus: result.charge.status,
                         quickBooksAccountingSyncStatus: result.accountingError == nil ? "synced" : "needs_attention",
                         quickBooksAccountingSyncDetail: result.accountingError,
                         amount: paidAmount,
@@ -10459,19 +10429,23 @@ private struct DocumentationItemSelectorView: View {
     let selectedItemizedAssemblyIDs: Set<UUID>
     let documentScopedReviewItemIDs: Set<UUID>
     let onToggle: (Item) -> Void
+    let catalogScope: QuickBooksChangeHistoryScope?
+    let priceLabel: (Item) -> String
+    let selectionMessage: String?
 
     @State private var searchText = ""
     @State private var expandedItemTypes = Set(CatalogItemType.allCases)
+    @State private var categoryID: UUID?
 
-    private var filteredItems: [Item] {
+    private func filteredItems(using categoryIndex: CatalogCategoryIndex) -> [Item] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let sortedItems = items
             .filter {
-                CatalogItemSelectionPolicy.canDisplay(
+                ($0.itemType == .group || CatalogItemSelectionPolicy.canDisplay(
                     $0,
                     isSelected: isSelected($0),
                     documentScopedReviewItemIDs: documentScopedReviewItemIDs
-                )
+                )) && categoryIndex.matches($0, category: categoryID)
             }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         guard !query.isEmpty else { return sortedItems }
@@ -10490,16 +10464,30 @@ private struct DocumentationItemSelectorView: View {
         }
     }
 
-    private var groupedItems: [(type: CatalogItemType, items: [Item])] {
-        CatalogItemType.allCases.compactMap { type in
-            let matches = filteredItems.filter { $0.itemType == type }
-            return matches.isEmpty ? nil : (type, matches)
-        }
-    }
-
     var body: some View {
+        // Build and filter once per render, not once for every row and type.
+        // A business catalog can contain thousands of imported products.
+        let categoryIndex = CatalogCategoryIndex(items: items, scope: catalogScope)
+        let filteredItems = filteredItems(using: categoryIndex)
+        let byType = Dictionary(grouping: filteredItems, by: \.itemType)
+        let groupedItems: [(type: CatalogItemType, items: [Item])] = CatalogItemType.allCases.compactMap { type in
+            byType[type].map { (type, $0) }
+        }
         NavigationStack {
             List {
+                if !categoryIndex.categories.isEmpty {
+                    Picker("Category", selection: $categoryID) {
+                        Text("All Categories").tag(nil as UUID?)
+                        ForEach(categoryIndex.categories) { category in
+                            Text(category.title).tag(category.id as UUID?)
+                        }
+                    }
+                    .accessibilityIdentifier("BillingCatalogCategory")
+                }
+                if let selectionMessage {
+                    Text(selectionMessage).font(.callout).foregroundStyle(.orange)
+                        .accessibilityIdentifier("BillingCatalogSelectionError")
+                }
                 if filteredItems.isEmpty {
                     Text("No matching items.")
                         .foregroundColor(.secondary)
@@ -10518,11 +10506,11 @@ private struct DocumentationItemSelectorView: View {
                             )
                         ) {
                             ForEach(group.items) { item in
-                                itemRow(item)
+                                itemRow(item, categoryLabel: categoryIndex.label(for: item))
                             }
                         } label: {
                             HStack {
-                                Text(group.type.rawValue)
+                                Text(group.type.label)
                                 Spacer()
                                 Text("\(selectedCount(in: group.items))/\(group.items.count)")
                                     .font(.caption)
@@ -10558,7 +10546,7 @@ private struct DocumentationItemSelectorView: View {
         return selectedItems.contains(item.id)
     }
 
-    private func itemRow(_ item: Item) -> some View {
+    private func itemRow(_ item: Item, categoryLabel: String?) -> some View {
         Button {
             onToggle(item)
         } label: {
@@ -10568,6 +10556,9 @@ private struct DocumentationItemSelectorView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(item.name)
                         .font(.headline)
+                    if let category = categoryLabel {
+                        Text(category).font(.caption).foregroundStyle(.secondary)
+                    }
                     if let description = item.itemDescription, !description.isEmpty {
                         Text(description)
                             .font(.caption)
@@ -10598,7 +10589,7 @@ private struct DocumentationItemSelectorView: View {
                         .foregroundStyle(Color.brandGold)
                         .accessibilityIdentifier("ItemAssemblyContext-\(item.id.uuidString)")
                     }
-                    Text(item.isTaxable ? "Taxable" : "Non-taxable")
+                    Text(item.itemType == .group ? "Bundle · review included items after adding" : (item.isTaxable ? "Taxable" : "Non-taxable"))
                         .font(.caption2)
                         .foregroundColor(.secondary)
                     if item.isCatalogArchived {
@@ -10608,11 +10599,12 @@ private struct DocumentationItemSelectorView: View {
                     }
                 }
                 Spacer()
-                Text(item.unitPrice, format: .currency(code: "USD"))
+                Text(priceLabel(item))
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("SelectBillingCatalogItem-\(item.id)")
     }
 }
 
@@ -10905,15 +10897,18 @@ enum CatalogVendorSelection {
 }
 
 enum BillingInvoiceMutationPolicy {
-    static func blockedMessage(for invoice: Invoice, payments: [Payment]) -> String? {
-        if invoice.isProjectProgressInvoice {
+    static func blockedMessage(for invoice: Invoice, payments: [Payment], allowingInitialMilestonePublication: Bool = false) -> String? {
+        if invoice.milestoneDraftReceiptJSON != nil { return BillingMilestoneReconciliation.retainedMessage }
+        if let message = invoice.quickBooksReconciliationReviewMessage { return message }
+        if invoice.isProjectProgressInvoice && (!allowingInitialMilestonePublication ||
+            invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) {
             return "Progress-invoice lines are locked to the approved milestone allocation. Correct the project plan before invoicing, or create a separate approved adjustment."
         }
         if invoice.finalizedAt != nil || invoice.customerSignedAt != nil {
             return "This invoice is finalized or customer-signed. Create an approved adjustment instead of changing its line items."
         }
 
-        let relatedPayments = payments.filter { $0.invoice.id == invoice.id }
+        let relatedPayments = payments.filter { $0.invoice?.id == invoice.id }
         let netPaymentAmount = relatedPayments.reduce(0.0) { partial, payment in
             partial + (payment.isRefund ? -payment.amount : payment.amount)
         }
@@ -11062,7 +11057,7 @@ private struct DocumentationItemCreatorView: View {
                         .textInputAutocapitalization(.characters)
                         .focused($isEditing)
                     Picker("Item Type", selection: $itemType) {
-                        ForEach(CatalogItemType.allCases) { type in
+                        ForEach(CatalogItemType.creatableCases) { type in
                             Text(type.rawValue).tag(type)
                         }
                     }
@@ -11072,7 +11067,7 @@ private struct DocumentationItemCreatorView: View {
                         .focused($isEditing)
                     Toggle("Taxable", isOn: $isTaxable)
                     TextField("Sales price (optional)", text: $price)
-                        .keyboardType(.decimalPad)
+                        .catalogNumericKeyboard()
                         .focused($isEditing)
                     if requiresPricebookReview {
                         Label(
@@ -11086,7 +11081,7 @@ private struct DocumentationItemCreatorView: View {
 
                 Section("Purchasing") {
                     TextField("Purchase price", text: $cost)
-                        .keyboardType(.decimalPad)
+                        .catalogNumericKeyboard()
                         .focused($isEditing)
                     TextField("Typical purchase source", text: $preferredVendor)
                         .focused($isEditing)

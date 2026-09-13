@@ -1,3 +1,1791 @@
+Open invoice handoff availability, 2026-09-11:
+NATIVE_OFFICE_INVOICE_OPEN_GUARD.md closes stale access from an already-open
+invoice follow-up when local approvals become pending or recovery storage fails.
+The destination observes the same approval coordinator; rendering does not read
+the encrypted journal. Five additional regression tests plus strengthened
+original recovery assertions pass: 67 focused, 2,360 full actual-owner native,
+and 75 tooling tests, all without failures/skips. Both unsigned Mac Catalyst/iOS
+Release builds pass. Fourteen full-suite selectors and all 639 owner build
+inputs are independently verified; owner branch/HEAD/index are unchanged.
+Existing test-macro/unused-variable and Mac Metal path warnings remain visible.
+This is a focused-handoff guard, not a global editing lock or cross-device claim
+recovery. The full application goal remains ACTIVE; live provider, CloudKit,
+device, visual/accessibility and production-release gates are still incomplete.
+
+Native office invoice follow-up candidate, 2026-09-11:
+NATIVE_OFFICE_INVOICE_HANDOFF.md connects completed approvals to the exact saved
+invoice and its existing QBO/edit/PDF/payment workflow. The focused view omits
+unrelated dashboard panels and skips general workspace initialization/imports;
+saved invoice rows now expose explicit Sync Saved Invoice. Eleven new tests cover
+original-record resolution, duplicates, changed customer/job, standalone bills,
+session/company authority, durable source-confirmation gating, recovery and
+read-only navigation. The actor-refinement focused pass verifies 122 cases
+across all six requested suites; the final ordering guard adds one case. Final
+actual-owner qualification passes 2,355 tests with zero failures/skips and eleven
+verified selectors, 75 tooling tests, and both unsigned Release builds. All 639
+owner/snapshot inputs and five candidate implementation/test files remain
+unchanged. No app-source compiler warning remains; the two existing Mac Metal
+toolchain warnings remain. No live provider, visual/device or production acceptance is inferred. The complete
+application goal remains ACTIVE; consult the report for current evidence.
+
+Native office invoice recovery/review candidate, 2026-09-11:
+NATIVE_OFFICE_INVOICE_RECOVERY.md records durable original approvals, exact
+server-proposal checks, interruption recovery, bounded retries, retained
+unclaimed rejections, owner-source sequencing and a focused invoice review
+entry/sheet. The final native suite passes 2,344 tests with zero failures/skips
+and nine verified selectors; 38 backend guard/interop and 75 tooling tests pass.
+Unsigned Mac Catalyst and iOS Release builds pass; the two existing Mac Metal
+search-path warnings remain. The actual owner composite, including preserved
+parallel LoadSight additions, separately passes 2,344 native and 322 package
+tests plus both unsigned Release builds. All 637 owner/snapshot build inputs
+still match; owner branch/HEAD/index are unchanged. See the report's actual
+owner-composite section and retained manifest for exact qualification scope.
+QBO/provider acceptance, independent-account CloudKit,
+claimed-conflict/device-loss recovery and production/device acceptance remain
+unfinished. The complete application goal remains ACTIVE.
+
+Office invoice publication/collection guard candidate, 2026-09-11:
+INVOICE_APPLICATION_PUBLICATION_GUARDS.md records transactional application,
+catalog, invoice-publication and payment gates; encrypted publication links;
+exact sold-line/source/provider identity checks; and interrupted-send recovery.
+The subsequent native recovery candidate above connects journal/coordinator/
+Apply UI; end-to-end provider, CloudKit, payment-handoff and production
+acceptance remain unfinished. This is not full
+application completion. See the report for exact qualification scope.
+The full goal remains ACTIVE.
+
+Native office invoice boundary, 2026-09-11:
+NATIVE_OFFICE_INVOICE_BOUNDARY.md records typed proposal/recovery validation,
+atomic invoice/new-item saves, preserved sold/package/equipment evidence, and
+the retained discount-rounding and registered-model rollback reproductions.
+The later native recovery candidate connects the journal/coordinator/Apply UI.
+Shared provider/payment guards are covered by the subsequent candidate above, not by this historical
+native qualification. This candidate is not a completed QBO invoice workflow or
+production acceptance; see that report for exact test/build evidence and gaps.
+The full goal remains ACTIVE.
+
+Staff invoice request/application follow-up, 2026-09-11:
+NATIVE_STAFF_INVOICE_REQUESTS.md records the previously qualified native staff
+composer and its encrypted drafts/immutable recorded-only receipts.
+OFFICE_INVOICE_APPLICATION_PROTOCOL.md records the new server-side explicit
+office approval claims, exact invoice/item source confirmation, package and
+quantity preservation, current-role/scope checks and retained recovery.
+These stages do not complete the native office application screen, claim
+resolution/handoff, QBO publication/reconciliation or signed independent-account
+CloudKit acceptance. The current report contains the exact regression evidence
+and remaining integration requirements; historical checkpoints below must not
+be generalized to current production readiness. The full goal remains ACTIVE.
+
+Full32 CloudKit integration and recovery candidate, 2026-09-10:
+STAFF_CLOUD_INTEGRATION.md records the frozen parallel integration, owner seal
+publication, participant key/receive paths and concrete failure-pattern corrections.
+Fresh server checks now cover cached remount/convergence/readiness and owner cloud
+operations. Full/core retries recheck heads; manifests reject duplicate JSON keys;
+seal receipts require exact freshness/coverage/schema identity. Successor mounts
+retain old bytes and recover every disk-write boundary. Command indexes retain
+complete original requests before secondary writes; server command bodies are
+encrypted and replay verifies original actor, request, row and receipt identities.
+Native full regression passes 2,022 tests with zero failures/skips and nine verified
+selectors; Tools passes75. Final backend passes1,011 on each Python3.9.6/3.12.14.
+Unsigned Mac Catalyst arm64+x86_64 and iOS arm64 Release builds pass; warnings
+remaining in QBO and parallel operational adapters are documented, not suppressed.
+All qualification handles are closed. Later parallel UI/handoff changes are excluded from this
+snapshot's claims. No physical independent-account acceptance, complete command
+application, navigation acceptance, provider acceptance or release completion is
+claimed. The application goal remains ACTIVE; no screen access, browser/desktop
+changes, foreground UI testing, live provider writes, push or deployment occurs.
+
+Historical native full32 synchronization candidate, 2026-09-10:
+STAFF_NATIVE_CONTENT_SYNC.md records the live owner synchronization connection
+to the full32 selection/content endpoints, exact durable request replay,
+encrypted per-chunk recovery, original index/scalar/billing verification and
+server/account/source fences. The actual source coordinator rechecks saved
+owner edits after the added network awaits before capturing newer core facts.
+Retained tests exposed a genuine Foundation/server index-key ordering mismatch;
+explicit UTF-8 key sorting fixes it without changing the server hash contract.
+All five server role fixtures now pass native verification. Focused iPad passes
+87 cases/all five selectors; full iPad passes1,940/all six selectors; Tools
+passes75. Complete backend runs each pass979 cases on Python3.9.6 and3.12.14.
+These processes exit0 with no failures/skips. Unsigned arm64+x86_64 Mac Catalyst
+and arm64 iOS builds and architecture checks pass; existing QBO actor warnings
+and the Mac toolchain-path warning remain. Unrelated deletions subsequently
+observed in the temporary review tree are excluded from this change; the intact
+owner project and persistent candidate are verified separately: all13 scoped
+files agree, all11 changed source hashes remain frozen, and all454 tracked
+owner build inputs match. All451 unrelated owner changes and its branch/HEAD/index
+are preserved. The new review is /Users/gunnaire/.codex/worktrees/GunnAirePR.i2gC6X;
+temporary deletions and broken refs are not adopted. This is owner preparation, not
+full32 sealed CloudKit publication, independent staff receipt or activation.
+Those paths, operational staff read/write adapters, commands/media/lease and
+the full application acceptance requirements remain unfinished. No screen
+capture/inspection/recording, browser changes, foreground app/UI tests, push,
+deployment, credential expansion or live provider/accounting writes occur.
+
+Historical full32 field/content transport candidate, 2026-09-09:
+STAFF_FULL_CONTENT.md records explicit policy for all503 non-billing fields,
+17 structured evidence adapters, actual native discriminator parity for all48
+raw fields and a combined32-kind read-only preparation. An owner-only endpoint
+persists encrypted exact UTF-8 bytes, checks current creator/member/share/source
+authority on every request, and returns immutable hashed1 MiB chunks. The native
+assembler verifies scope, versions, offsets and exact bytes without cross-language
+JSON reencoding; failed chunks preserve prior progress. It grants no staff lease.
+Focused backend checks pass35; focused iPad checks pass42/all five selectors;
+full iPad passes1,926/all six selectors; complete backend passes978 on each of
+Python3.9.6 and3.12.14; Tools passes75. All completed runs exit0 with no failures
+or skips. Unsigned arm64+x86_64 Mac Catalyst and arm64 iOS release builds and
+architecture checks also pass. QBO actor-isolation and Mac toolchain-path warnings
+remain; there are no warnings in the new transport file. Protected copy-back
+verifies all18 scoped files equal,439 unrelated owner changes preserved and
+unchanged owner branch/HEAD/index. The new native path
+is transport integrity only, not full operational semantic acceptance or live
+publishing/CloudKit receipt. Staff adapters, commands, media, lease, independent
+signed CloudKit convergence and overall app acceptance remain unfinished.
+Backend version2026.09.09.53 is local only. No screen capture/inspection/recording,
+browser changes, foreground app/UI tests, push, deployment or provider writes.
+
+Historical server-enforced billing content candidate, 2026-09-09:
+STAFF_BILLING_DELIVERY.md records immutable encrypted invoice/estimate content
+bound to an authenticated full32 selection, with current role/share/source
+checks, bounded pages, exact retry recovery, and nested historical billing
+validation/disclosure. The actual server output for all five roles equals the
+native preparation from the same original all32-kind fixture. Focused iPad
+validation passes 48 cases/four selectors; full iPad passes 1,918 cases/five
+selectors. Expanded backend focus passes 30; Tools passes 75. Final complete
+backend runs each pass 943 cases on Python 3.9.6 and 3.12.14. All final process
+handles close with exit 0; no failures/skips. Evidence remains local.
+This supplies two server field adapters, not full staff activation. The other
+30 domain adapters, native content request/publishing/receipt path, commands,
+media, lease and signed independent-account CloudKit convergence are unfinished.
+Backend version 2026.09.09.52 is local only; no push, deployment, credential
+expansion, screen access, recording, browser changes or foreground UI testing.
+
+Full32 server record-selection candidate, 2026-09-09:
+STAFF_WORKSPACE_SELECTION.md records an owner-only, current-authority-checked
+API for immutable encrypted indexes covering all 32 model kinds. Indexes contain
+original record identities/revisions and unavailable links, never business field
+values. Role-specific job, invoice, workforce, expense, task, property, stock,
+attachment and communication selection precedes mandatory field projection.
+The final policy/role consistency guard fixes a retained 200-versus-403
+reproduction. Final full backend regressions each pass 913 cases on Python
+3.9.6 and 3.12.14 with no failures/skips; 75 Tools tests pass. Both final
+process handles closed with exit 0. Earlier reproduction evidence is retained.
+This is not staff content delivery or store activation: field adapters, native
+integration, staff commands/media/lease and signed CloudKit convergence remain
+unfinished. Source version 2026.09.09.51 is local only, not deployed or pushed.
+No screen access, recording, screenshots, browser changes or foreground apps.
+
+Role-safe staff billing preparation candidate, 2026-09-09:
+STAFF_BILLING_DISCLOSURE.md records the separate typed billing view, explicit
+restricted/not-recorded/zero cost states, nested sold-line/assembly/bundle
+disclosure, exact source/share scope, and role/assignment selection from the
+complete original owner graph. Final focused validation passes 69 cases and
+all five suite selectors; full iPad unit validation passes 1,915 cases and all
+six target/suite selectors, with zero failures/skips. Unsigned arm64+x86_64 Mac
+Catalyst and arm64 iOS release builds and architecture checks pass. This is an owner-side preparation component, not a
+deployed full32 staff projection or staff-store activation. Server enforcement,
+the other 30 model projections, native staff adapters/commands/media, a staff
+lease, independent-account CloudKit convergence and full app acceptance remain
+incomplete. Work is background-only: no screen capture/inspection/recording,
+browser changes, foreground Mac app or UI tests. See the report for evidence
+and the unchanged production and GitHub permission gates.
+
+Full owner native publication candidate, 2026-09-09:
+STAFF_FULL_WORKSPACE_PUBLICATION.md records the missing native upload path,
+durable original-wire replay, typed full-model contract, bounded/fenced paging,
+exact-version reconciliation and the secondary owner-review handoff. The
+existing core pending operation still recovers first. All 29 full-source backend
+tests and 75 Tools tests pass. IPadFocused2 verifies 51 cases and all four suite
+selectors; IPadFull1 verifies 1,895 unit cases and all five target/suite selectors,
+with zero failures/skips. Both first unsigned Release builds pass. The 805-record
+test revealed repeated reconstruction of immutable validator metadata; reusing
+that metadata reduces the unchanged fixture from 14.339 to 1.199 seconds.
+IPadFocused3 now verifies 52 passes including encrypted on-disk recovery.
+IPadFull2 verifies 1,896 passes. Both second Release builds pass. A further
+unchanged timing regression then exposes a real owner-edit-during-read handoff
+gap (52 passing cases / 1 failure). Synchronous owner-history verification before
+core capture fixes it; IPadFocused4 verifies 53 passes with all original
+assertions intact. Final IPadFull3 verifies 1,897 unit cases with zero
+failures/skips. MacRelease3 and DeviceRelease3 pass their unsigned builds and
+architecture checks: universal arm64/x86_64 Mac and arm64 iOS. Existing QBO and
+linker warnings remain. OriginalCopyBack1 verifies 11 byte-equal files, 419
+unrelated changes preserved, and the original branch/HEAD/index unchanged,
+using OriginalPreflight3. Only the isolated review checkout is committed.
+Work is now background-only with no screen capture or inspection,
+browser switching or foreground app tests, as explicitly requested. Interactive
+and visual owner-review acceptance remains open. The new server copy is not a
+staff projection, company CloudKit import, financial command or permission grant.
+Full suite, signed independent-account CloudKit, complete domain/role validation,
+staff activation/leases/commands/media and production acceptance remain required.
+The prior published e8545c2 backend and native workflows all passed. Publishing
+cf551b3 is blocked by the saved GitHub PAT's missing workflow scope; no permission
+expansion or publication bypass has been attempted.
+
+Contextual inventory editing candidate, 2026-09-09:
+INVENTORY_EDITING_ACCEPTANCE.md records the hosted unreachable Done accessory,
+unchanged local reproduction and an in-sheet editing action for catalog creation
+and editing. Candidate1 passes the original complete inventory journey with
+exact price/date/quantity, invalid input, Cancel and active-keyboard Save intact.
+Both complete catalog journeys now pass at the largest accessibility text size
+after correcting full-row focus and verifying passive-label visibility without
+treating labels as independent controls. Actual app orientation, in-sheet
+accessible controls, minimum touch bounds and keyboard non-overlap are checked.
+Final MacFull5 verifies 1,877 passes; IPadFull1 verifies 1,883, including six
+invoice/Mail/catalog UI journeys, all without failures/skips. Tools2 passes 75
+tests. Dark-mode interaction
+and arm64 iOS plus universal arm64/x86_64 unsigned Release builds pass. Existing
+QBO/linker warnings remain. OriginalCopyBack5 verifies seven byte-equal files,
+417 unrelated changes and the original owner branch/HEAD/index preserved.
+Exact-final-head hosted verification remains pending. CI retains normal-size coverage and adds
+both catalog journeys at the largest accessibility text size.
+No claim of full app completion, live QBO writes or CloudKit convergence is made.
+
+Full owner HTTP source candidate, 2026-09-09:
+STAFF_FULL_WORKSPACE_SOURCE.md records the authenticated 404 reproduction and
+new owner-workspace-v1 endpoint, generated from all 32 native model kinds and
+561 typed fields. Separate encrypted source/receipt tables, per-transaction
+Admin/company/replica checks, immutable retries, retained tombstones, explicit
+restore, atomic conflict/failure handling and actual-wire-size paging preserve
+originals without changing the six-kind staff namespace. All 29 focused backend
+tests and the corrected Mac native/backend round-trip pass. MacFull1 verifies
+1,877 cases; BackendFull1 passes 881 tests and Tools1 passes 74. Both first
+unsigned Release builds pass. IPadFull1 exposes two actual isolated-helper
+deallocation crashes, retained and not counted as passes. The component and
+resolver helpers now use value storage with explicit inout mutation, retaining
+actor and relationship checks. All three original synchronous tests now pass
+on iPad; corrected MacFull2 verifies 1,877 passes and IPadFull2 verifies 1,882,
+including five invoice/Mail/staff UI journeys, all with no failures/skips. Both
+final unsigned Release builds and architecture checks pass: arm64 iOS and
+universal arm64/x86_64 Mac. Existing QBO/test/linker warnings remain documented.
+OriginalPreflight3 protects 17 paths, 406 unrelated changes, 399 matching other
+tracked sources and the owner's branch/HEAD/index. OriginalCopyBack3 verifies
+all 17 files byte-equal, preserving those unrelated changes and branch/HEAD/index.
+Only the isolated review checkout is staged and committed. Hosted a0fd766 native CI is
+terminal: 1,891 passes/one failure in iPad group 1, at the inventory opening-date
+Done control; its Mail journeys pass. Exact verified log/artifact evidence is
+retained and the inventory issue remains open. Automatic full-model owner
+publication, domain/role projection, staff-store activation/leases/commands/media
+and independent signed-account CloudKit convergence remain essential and
+incomplete. This endpoint does not authorize live provider or financial writes.
+
+Full owner-model history local qualification, 2026-09-09:
+STAFF_FULL_MODEL_HISTORY.md records the actual lost invoice/payment deletion IDs,
+26 missing history attributes, full 32-model typed capture, store/transaction
+fences and encrypted owner-only preparation connected before newer core source
+publication. Original six-kind pending operations retain recovery priority;
+raw full-domain HR/billing fields never enter that existing endpoint or activate
+a partial staff store. Focused3 verifies 42 passing cases including all-32-model
+prior-schema migration with original values, relationships and store UUID.
+All 74 Tools tests pass. A new Release actor-isolation warning was corrected by
+making the history-reader closure explicitly MainActor. Final MacFull2 verifies
+1,874 actual cases and IPadFull2 verifies 1,879, including five ordinary invoice,
+inbox and staff setup UI journeys, all with zero failures/skips. Both final
+unsigned Release builds and architecture checks pass: arm64 iOS and universal
+arm64/x86_64 Mac. Existing QBO warnings remain. Four final iPad frames were
+inspected without account-email footers; invoice density and accepted-state
+invitation controls still need polish. Full server domain/role/lease/commands/
+media and independent signed-account CloudKit convergence remain essential and
+incomplete. OriginalPreflight2 protects 30 scoped paths, 385 unrelated edits,
+379 matching other tracked sources and the owner's original branch/HEAD/index.
+OriginalCopyBack2 verifies all 30 files byte-equal and preserves those unrelated
+changes plus branch/HEAD/index. Only the isolated review checkout is committed.
+Mail checkpoint a0fd766 is now published in PR18 after every predecessor CI job
+passed; its Backend now passes both Python versions and native run 34411588111
+remains live. This history checkpoint is not pushed over that live run.
+
+Native attachment-preview local qualification, 2026-09-09:
+NATIVE_ATTACHMENT_PREVIEW.md records the actual hosted blank text preview,
+unchanged warm/cold local passes, and a native text-reader candidate that retains
+original bytes and all other formats through Quick Look. Cancellation/identity,
+empty/unavailable recovery, explicit Quick Look refresh, original forwarding and
+edited-copy callbacks are preserved. First candidate tests expose malformed
+Unicode being read as empty; exact byte round-trip validation fixes this without
+weakening the assertions. Final focused Mac/iPad runs pass 34/37 cases. MacFull1
+verifies 1,858 logic cases; IPadFull1 verifies 1,865 cases with all seven selected
+UI journeys, including invoice navigation and retained Mail drafts. All 852
+backend and 74 Tools tests pass, as do workflow checks and unsigned arm64 iOS
+Release. Six final iPad preview/forward/inbox/compose frames were inspected.
+MacUI1 remains a real runner-launch failure: macOS rejected its signature, and
+Cancel was requested on the damaged-runner dialog without deleting files or
+changing security settings; the failed process/result is terminal. Mac UI
+acceptance needs a properly signed harness; do not
+repeat the unchanged unsigned launch. Universal arm64/x86_64 Mac Release also
+passes. Copy-back verifies all eight files byte-equal and preserves 391 unrelated
+changes plus the owner's branch/HEAD/index. Only the isolated review checkout is
+committed. This is not full app, live provider or signed-device acceptance.
+
+Saved billing evidence and staff graph locally qualified checkpoint, 2026-09-09:
+Later hosted update, 21:07 UTC: parent 223f1b4 native CI has finished with Mac and
+iPad group 2 passing but group 1 failing one Mail attachment-preview case.
+The exact artifact has 1,862 passes/one failure; its video shows a genuinely
+blank Quick Look sheet. The unchanged journey passes once locally on 929993f,
+which is not proof that the hosted defect is fixed. Evidence and the retained
+failure are recorded below in STAFF_BILLING_SNAPSHOT_INTEGRITY.md. Mail preview
+root cause/recovery remains required; no test is weakened or removed.
+STAFF_BILLING_SNAPSHOT_INTEGRITY.md records two actual failing reproductions on
+parent 223f1b4: future-version saved lines passed QBO publication validation, and
+unknown nested financial metadata passed full staff graph validation. The shared
+strict payload now recognizes legacy arrays, v1 envelopes, sold bundles/assemblies,
+discounts and tax-address evidence without dropping unknown or duplicate fields.
+It gates editing, prerequisite publication, allocation, approval/payment/PDF
+readiness and full staff graph preparation. Historical prices/serials/approvers
+remain original; current catalog values do not rewrite sold evidence.
+Initial compatibility failures and the genuine job-layout recovery-control gap
+remain recorded rather than counted as passing results. Visual review then found
+a misleading $0 draft total and pending-sync cue beside an unreadable saved $189
+invoice. Both billing layouts now show the original saved total and one recovery
+action; editing controls stay closed until explicit replacement. Leaving without
+saving preserves the original document and its recovery context on reopening.
+Final Focused4 passes 125 cases, IPadFocused3 passes 15, and MacFull3 verifies
+1,843 actual cases and seven selectors. IPadFull2 verifies 1,853 actual cases and
+17 selectors: full logic plus ten ordinary iPad journeys. Tools2 passes 74 and
+Backend1 passes 852. MacRelease3 (arm64/x86_64) and DeviceRelease3 (arm64) unsigned
+builds pass; exact hashes, retained warnings and visual evidence are in the report.
+OriginalPreflight3 freezes 16 paths, protects 378 unrelated changes and checks
+386 other matching tracked sources and original branch/HEAD/index. Copy-back
+verifies all 16 files byte-equal, all 378 unrelated edits preserved, and original
+branch/HEAD/index unchanged. Only the isolated review checkout is committed.
+Parent PR18 head 223f1b4 has
+passing Backend/Mac checks and live iPad CI; this candidate is not pushed over it.
+Full independent-staff CloudKit/domain/role/store/command/media convergence,
+provider/vendor/payment/Handoff/device and broad usability/accessibility gates
+remain essential and incomplete. No deployment, live accounting/provider write,
+signing/schema promotion, physical install or main merge occurs here.
+
+Field-form draft recovery locally qualified checkpoint, 2026-09-09:
+FIELD_FORM_DRAFT_RECOVERY.md records the state-only lost-work gap and the new
+encrypted author/workspace/job/template journal, immediately saved readings,
+original context review, explicit discard, stable completion IDs and atomic
+response/file/activity transaction. Native job navigation resumes active drafts
+in place and retains retired forms and interrupted completion acknowledgements.
+MacFocused1 has five genuine listing failures; the absolute-path correction
+passes all 42 cases in MacFocused2. Expanded lineage checks pass 46 cases in
+MacFocused3 and full MacFull1 verifies 1,822 actual cases. All 74 Tools tests pass.
+IPadFocused1 and IPadFocused2 logic pass 19 and 23 cases respectively; their UI
+journeys fail and are not credited as complete. Retained screen/AX evidence
+identifies a test input-type assumption, a test tap on a labeled switch's blank
+row, and a genuine empty-Group lifecycle defect hiding retired drafts. The
+current correction uses the native switch target and a stable recovery-list
+container. IPadFocused3 then exposed a DEBUG-only relaunch fixture deleting the
+original saved attachment; preserving only the dedicated isolated draft fixture
+fixes that test without changing production startup. IPadFocused4 passes all
+three recovery journeys. Final source adds stable activity identity and fresh
+access/original-record/PDF checks around asynchronous file upload responses.
+MacFocused5 passes 53 cases; MacFull4 verifies 1,829 cases and six selectors;
+IPadFull1 verifies 1,836 cases and 13 selectors, including all seven UI journeys.
+Tools2 passes 74 tests and Backend1 passes 852. DeviceRelease3 (arm64) and
+MacRelease3 (arm64/x86_64) unsigned builds pass; hashes are in the detailed report.
+Final iPad form/handoff, job form links, inbox and compose frames were inspected:
+readable native controls, no raw code and no account-email footer. This is not
+whole-app/Mac accessibility or production-provider acceptance.
+OriginalPreflight2 protects 12 scoped files, 378 unrelated changes, 387 matching
+other tracked sources and the owner branch/HEAD/index. Copy-back verifies all
+12 scoped files byte-equal, all 378 unrelated changes preserved and original
+branch/HEAD/index unchanged. Only the isolated review checkout is committed.
+Published d0faad5 and original workflow commit 517858f are now verified in open
+PR18. Its Backend run 34390624919 and native run 34390624697 both complete
+successfully, including Mac and both iPad groups. These are parent-head checks,
+not CI qualification of the unpublished draft checkpoint.
+Previous e7c6c8a native run 34380679032 ended with an automatic 90-minute iPad
+group-1 timeout, while Mac, group 2 and Backend passed. No agent cancellation
+occurred, and that run is not reported as all green. The retained log narrows
+the timeout to repeated animation waits within one inventory journey for over
+3,300 seconds, without proving whether the app or UI runner caused the waits.
+No live predecessor run is cancelled. Three new draft UI journeys are locally
+qualified but not added to the existing CI selectors in this checkpoint.
+Broad CloudKit/staff/provider/vendor/payment/Handoff/device,
+Mac UI signing and whole-app usability/accessibility gates remain incomplete.
+
+Business-document pagination candidate, 2026-09-09:
+DOCUMENT_LAYOUT_VALIDATION.md records actual native PDF loss: long answers and
+question labels were drawn through the footer/off-page, and blank report sections
+printed empty headings. Core Text now carries original UTF-16 ranges across pages,
+tracks labels/values independently, omits empty sections and writes complete PDF
+bytes atomically only after layout succeeds. The original three reproductions pass.
+Expanded checks cover invoice completion/estimate notes, unchanged amounts and
+internal-note privacy, short forms, Unicode boundaries and fail-without-consumption.
+The first expanded billing fixture used the wrong invoice field; its failed result
+is retained and the fixture now respects the existing customer/internal distinction.
+MacFull1 passes 1,798 cases; IPadFull1 passes 1,801 with all three UI journeys.
+Both unsigned Release builds/architecture checks and all 74 Tools/workflow checks
+pass. Subsequent review reproduced a real orphan-heading boundary case; the final
+source now reserves the same safe first-frame minimum before drawing a heading
+and before keeping a statement group together. Earlier green runs do not qualify
+this last change. Final Fixed4 passes all eight document cases; MacFull2 verifies
+1,799 actual logic cases and IPadFull2 verifies 1,802 including all three UI
+journeys, with zero failures/skips. All 22 current Mac fixture pages plus both
+iPad boundary pages were rendered and inspected. Final DeviceRelease2 and
+MacRelease2 both pass unsigned Release builds and arm64 iOS/universal Mac
+architecture checks. All local runs are now terminal.
+OriginalPreflight3 protects five scoped paths, 379 unrelated changes, 389 matching
+other tracked sources and original branch/HEAD/index. Final copy-back verifies all
+five files byte-equal and preserves all 379 unrelated changes and branch/HEAD/index.
+The review checkpoint remains unpublished while predecessor native run 34380679032
+has iPad group 1 live (Backend, Mac and group 2 pass). No successor push cancels it.
+Long page headers/titles/captions, report-readiness density, form drafts,
+full staff operational sync, signed CloudKit/provider/payment/Handoff/device and
+whole-app accessibility acceptance remain open. The full goal remains active.
+
+Field-form history integration candidate, 2026-09-09:
+FIELD_FORM_HISTORY_VALIDATION.md records strict bounded original-history parsing,
+unchanged legacy raw evidence, original-template resolution, required closeout
+validation, job-scoped Saved Forms navigation, failure-safe template persistence,
+automatic reveal of the saved template, and removal of a redundant warning.
+The 12 form paths retain both overlapping inventory/discriminator changes from
+published e7c6c8a. Combined-source MacFocused1 passed 68 actual cases with all five
+suite identities verified and zero failures/skips. MacFull1 also passed all 1,791
+logic cases and all 16 required selectors. Three current-run PDF pages were
+visually inspected: history status and answers are clear without email footers;
+empty headings and repetitive report-readiness information still need polish.
+IPadFull1 passes all 1,805 actual cases (1,791 logic plus all 14 UI journeys),
+zero failures/skips and all 30 required selectors. Eight final-run iPad frames
+were inspected with visible saved-form status and no account-email footer.
+Both combined-source unsigned Release builds and architecture checks pass:
+arm64 iOS and arm64/x86_64 universal Mac. The separate five-journey MacUI1 attempt
+failed before test execution: macOS rejected the generated unsigned test runner
+as damaged, its signature verification failed, and Xcode reported failure to
+establish the runner connection. This is retained as failed qualification, not
+Mac UI coverage. The launch alerts were dismissed without deleting files or
+changing signing/security settings. All local runs are now terminal.
+All 852 Backend and 74 Tools cases and both unchanged workflow lint checks pass.
+OriginalPreflight1 protects 368 unrelated changes and the original branch, HEAD
+and index; 379 other tracked sources match. Final copy-back verifies all 13 paths
+byte-equal and preserves all 368 unrelated changes and original branch/HEAD/index.
+The review-branch checkpoint remains local, not published. Published-head Backend
+run 34380679091 passed;
+native run 34380679032 has a Mac pass and both iPad jobs still live. It will not
+be canceled by a successor push.
+Response drafts still exist only in view state. Draft recovery, wider iPad/Mac
+navigation/accessibility, complete nested business semantics, authenticated staff
+projections, isolated operational import/lease, durable commands/files, signed
+independent-account CloudKit convergence, provider/vendor/payment/Handoff/device
+acceptance and the original full-suite goal remain incomplete.
+
+Staff domain validation and inventory entry follow-up, 2026-09-09:
+STAFF_DISCRIMINATOR_VALIDATION.md records strict recognized-value checks for
+every current persisted Raw field across all 32 schema models. The full graph
+rejects unknown codes before reconstruction; original owner values, optional
+nulls, supported historical choices and membership authority remain intact.
+Initial Mac qualification passes 1,763 actual logic cases. The first broad iPad
+run has 1,769 passes and one genuine visible fractional-input failure, not a
+complete pass. IPAD_EDITOR_RECOVERY.md records that retained evidence and the
+text-draft correction. The unchanged inventory journey and 19 inventory logic
+cases now pass in QuantityFocused1. Current combined-source MacFull3 verifies
+1,768 actual cases and IPadFull2 verifies 1,779 (complete logic plus all 11 selected
+UI journeys), with zero failures/skips. Both unsigned Release/architecture checks,
+all 74 Tools tests and both workflow checks pass. Saved inventory/estimate frames
+were inspected without account-email footers. The first repeat result did not
+execute the new test-body assertions; it is not credited as expanded coverage.
+QuantityFreshProcesses1 completed successfully at 16:50 UTC: all three
+independent-app-launch repetitions passed with three new named saved-fractional
+attachments. Each final frame was inspected; values and original date remained
+exact with no account-email footer. The long XCTest animation waits in repetition
+2 and unattributed runtime warnings remain documented. The exact candidate is
+qualified for 11-file copy-back/publication. Preflight preserves 364 unrelated
+changes, 378 other matching tracked sources, and original branch,
+HEAD and index. Published predecessor f8cfc92 now has successful Backend run
+34362120118 and successful native run 34362120065 (Mac and both iPad groups).
+Those hosted passes do not yet cover this newer local source.
+Full nested business semantics, authenticated staff projections,
+isolated operational import/lease, file bytes and field commands, signed
+independent-account CloudKit and provider/vendor/payment/Handoff/device and
+whole-app accessibility acceptance remain required. The full goal stays active.
+
+iPad editor recovery candidate, 2026-09-09:
+IPAD_EDITOR_RECOVERY.md records the exact hosted clipped-Create and invalid
+keyboard-accessibility geometry evidence, a sole native toolbar Create action,
+original-document confirmation at the top, persistent inventory opening labels,
+and stronger full-visibility and hardware edit/cancel/reopen assertions. Final
+Mac logic verifies 1,755 actual cases; final iPad verifies 1,767, including all 12
+requested UI journeys, with zero failures/skips. All 74 Tools tests, both workflow
+lint checks, unsigned arm64 iOS/universal Mac Release builds and architecture
+checks pass. Three final-run iPad frames were inspected without account-email
+footers. The first added keyboard-driver mistake is corrected and its failed
+result retained. Other catalog field labels, full accessibility/Mac UI, existing
+actor warnings, full independent-account CloudKit, and provider/vendor/device/
+payment/Handoff acceptance remain incomplete. Preflight scopes five files,
+protects 367 unrelated changes and original branch/HEAD/index, and matches 381
+other tracked sources. Copy-back verifies all five files byte-equal and all
+preservation checks pass. The qualified review-branch change remains local.
+Published predecessor
+f8cfc92 has Backend/Mac passes; native run 34362120065 still has both iPad jobs
+running. No successor push cancels them. The full goal remains active.
+
+Receipt transaction selection candidate, 2026-09-09:
+RECEIPT_TRANSACTION_SELECTION.md records the new native searchable transaction
+picker, human-readable original job target, collapsed administrator ID controls,
+explicit restoration and cancellation, six preserved provider entity types, and
+captured-access/late-response/duplicate-identity checks. The unchanged original
+file capture/upload/recovery pipeline still enforces exact job ownership. Final
+MacFull3 verifies 1,755 actual cases; IPadFull2 verifies 1,760 with all five requested
+UI journeys (including invoice opening, simple mail and technician restrictions).
+All 72 Tools tests and both unchanged workflow lint checks pass. Two final iPad
+frames are inspected with readable business data and no account-email footers;
+this is not whole-app accessibility acceptance. Final unsigned arm64 iOS and
+universal Mac Release builds and architecture checks pass. Copy-back verifies all
+six scoped files byte-equal, 365 unrelated changes preserved, and original branch,
+HEAD and index unchanged (380 other tracked sources matched in preflight).
+The published predecessor's hosted Mac and backend passed; iPad
+shard 2 timed out in preparation despite a Booted exact-model inventory, and
+shard 1 is still live. No running job is canceled. Full CloudKit staff operation,
+provider/device acceptance and the full-suite goal remain incomplete.
+
+Complete staff relationship and estimate handoff candidate, 2026-09-09:
+STAFF_RECORD_RELATIONSHIPS.md records schema-checked UUID/reference dispositions
+for all 32 models, exact missing-parent rejection, customer/technician/vehicle/
+invoice context boundaries, original back-links, iterative cycle checks and
+strict crew/covered-equipment lists. Review reproduced a live wrong-job estimate
+selection/file eligibility defect; the shared lineage rule now preserves the
+actual diagnostic and scheduled visit, not a nil diagnostic wildcard. Final Mac
+verifies 1,744 actual cases and iPad verifies 1,752 including all eight requested
+UI journeys. All 72 Tools tests, workflow lint, unsigned universal Mac/arm64 iOS
+Release builds and architecture checks pass. Two current-source iPad frames were
+inspected without account-email footers; the admin receipts screen still needs
+broader simplification/accessibility review. CI retains all 66 prior UI selections,
+adds the new receipt regression and gives iPad 90 minutes after an authoritative
+one-hour hosted cancellation. Copy-back verifies all 13 scoped files byte-equal,
+355 unrelated changes preserved and original branch/HEAD/index unchanged. This is
+not full role-safe synchronization, a staff workspace lease, provider acceptance
+or completion of the full-suite goal. The existing core-field-v1 gate is unchanged.
+
+Complete persisted-model coverage candidate, 2026-09-09:
+STAFF_FULL_MODEL_COVERAGE.md extends explicit owner-side preservation to every
+one of the 32 SwiftData entities, with 561 field mappings, exact schema disposition,
+prevalidated detached owning relationships and no mutation of an existing store.
+Charge-capable payment handles and device-local file paths are excluded; user rows
+are not membership authority. The final focused Mac run verifies 16 cases covering
+all fields/nulls, two actual SQLite stores, rejected incomplete batches and original
+maintenance/purchasing/form/HR/message/reimbursement history. Final strengthened
+logic suites verify 1,730 cases on both Mac and iPad; the identical app/UI source
+also passes six iPad journeys. All 71 Tools cases, both unchanged workflow lint
+checks, unsigned universal Mac/arm64 iOS Release builds and architecture checks
+pass. Two iPad frames are inspected without account-email footers. Copy-back
+verifies all 12 scoped files, 352 preserved unrelated changes and unchanged
+original branch/HEAD/index. The review-branch commit remains local while the
+published predecessor's native CI runs. Existing core-field-v1 transport and gate
+remain unchanged. Nested semantics, scalar-link lineage, full role projections,
+versioned server migration, isolated staff import/lease, durable field commands,
+content delivery, signed CloudKit/provider/vendor/payment/Handoff acceptance and
+complete iPad/Mac usability/accessibility remain required. The goal stays active.
+
+Schedule deletion correction and full-model semantics candidate, 2026-09-09:
+SCHEDULE_PREVIEW_DELETION.md records the exact hosted SwiftData invalidation
+stack, immutable preview/confirmation values and original-identity revalidation,
+plus a stronger isolated UI regression. STAFF_MODEL_SEMANTICS.md records explicit
+lossless codecs for nine models, full attribute/relationship disposition checks,
+real separate-SQLite reconstruction and excluded charge-capable payment handles.
+These codecs are not wired into core-field-v1 or used to activate a partial staff
+workspace. Final Mac verifies 1,721 actual cases and iPad verifies 1,729, including
+eight exact UI journeys; all 71 Tools tests, workflow lint/diff checks, unsigned
+universal Mac and arm64 iOS Release builds/architectures pass. Four final-source
+screenshots are inspected without account-email footers. Preflight freezes 14
+paths and protects 342 unrelated changes, 361 other matching sources and the
+original branch/HEAD/index. Copy-back/publication are recorded separately.
+Published predecessor 3a6d94a has terminal Backend/Mac passes, iPad group 1 failures
+(schedule deletion and estimate input) and an iPad group 2 timeout. Full 32-model
+semantics, role projection, staff operational store/commands, signed independent
+CloudKit convergence, provider/vendor/payment/Handoff acceptance and full-suite
+usability/accessibility qualification remain required. The goal stays active.
+
+Staff receiving and import-boundary candidate, 2026-09-09:
+STAFF_RECEIPT_IMPORT.md records automatic original-invitation receipt at the staff
+setup/company gate, exact typed core graph and role validation before replacing
+the encrypted stage, current source/authorization checks and retained prior data
+on invalid payloads. The iPad regression exposed an unordered-JSON task identity
+that retriggered reads on redraw; typed request equality fixes it while retaining
+the original failed-read/manual-retry/return assertions. Final Mac verifies 1,710
+actual cases, iPad 1,714, with 12 focused receipt/UI cases also verified. All 852
+backend and 70 Tools tests, both unchanged workflow lint checks, unsigned universal
+Mac and arm64 iOS Release builds and binary architecture checks pass. Three
+current-source screenshots are inspected without account-email footers. Fourteen
+copy-back paths preserve 333 unrelated changes and the original branch/HEAD/index;
+353 other tracked sources match. Published predecessor 3a6d94a backend CI passed;
+its native CI remains live, so this candidate is retained locally without canceling
+that run. Full 32-model semantics, isolated staff operational import/activation,
+field-command reconciliation, signed cross-account convergence and full-suite
+provider/vendor/payment/Handoff/usability acceptance remain required. Core receipt
+does not unlock an incomplete workspace or redefine the goal. No live provider,
+CloudKit, production deployment, signing, physical installation or merge occurred.
+
+Automatic per-member staff delivery candidate, 2026-09-09:
+STAFF_AUTOMATIC_DELIVERY.md records the connected saved-source-to-projection-to-
+private-CloudKit pipeline, immutable preparation recovery, original archive/index
+recovery, read-only encrypted-asset adoption from another owner device, and physical
+owner-store/current-role/assignment fences throughout nested operations. The app
+distinguishes shared-through-iCloud status from confirmed staff receipt. Final
+Mac verifies 1,699 cases; iPad verifies 1,703 plus three separately replayed existing
+inventory/billing/time UI journeys. All 852 backend and 69 Tools tests pass; both
+unsigned Release builds, architecture checks and workflow lint pass. Three current
+iPad screenshots are inspected with no account-email footer. Copy-back preflight
+covers 13 files, 327 unrelated changes and 348 other matching sources. The prior
+hosted iPad shard canceled after repeated animation-idle waits; its same three UI
+journeys pass locally, but hosted-only behavior is not declared fixed and new-head
+hosted acceptance remains required. Staff model import/isolated store activation,
+full-domain coverage, field-edit reconciliation and signed independent-account
+convergence remain incomplete. No live CloudKit/provider writes, deployment,
+signing changes, physical installation or merge occurred. The full goal stays active.
+
+Owner saved-change preparation candidate, 2026-09-09:
+STAFF_OWNER_SOURCE_SYNC.md records the now-connected authorized-owner lifecycle,
+same-store SwiftData deletion history, encrypted source/cursor/operation journal,
+consistent source paging, exact-request recovery and acknowledged-baseline conflict
+review. Settings > Users gains a secondary comparison/recovery screen rather than
+technical details on normal mail, invoice or job screens. Real SQLite history and
+legacy-metadata migration checks pass. Final-source Mac verifies 1,675 executed cases;
+iPad verifies 1,679, including four UI journeys and the explicit Cancel/approval/return
+flow. All 852 backend and 69 Tools tests pass, both workflows lint, and unsigned
+universal Mac/arm64 iOS Release builds and binary architecture checks pass. Three
+current iPad screenshots are inspected with no account-email footer. Copy-back
+preflight covers 22 scoped files, 315 unrelated changes and 337 matching sources.
+The predecessor's hosted backend/Mac checks passed; iPad jobs remain active at this
+checkpoint, so new-source hosted acceptance is not claimed. Per-member automatic projection/delivery,
+staff model import, full-domain coverage and signed cross-account convergence are
+not complete. No live CloudKit/provider writes, deployment, signing or physical
+installation occurred. The full goal remains active.
+
+Encrypted staff CloudKit transport candidate, 2026-09-09:
+STAFF_CLOUDKIT_TRANSPORT.md records backend 2026.09.09.49, original AES-GCM
+packaging/key authority, native private-share upload/download, exact operation
+recovery and encrypted monotonic staging. Apple permissions and current business
+assignment authority are independent checks. Keys commit with their snapshots;
+missing keys cannot be regenerated on read. Mac passes 1,650 logic cases and
+iPad passes 1,654 logic/UI cases, including exact Python-to-Swift payload bytes.
+Both unsigned Release builds and architecture checks pass. The expanded final
+backend suite passes 852 cases after the atomic key-recovery refinement; all
+69 Tools cases and both workflow lint checks pass. Three iPad screenshots were
+visually inspected with no account-email footer.
+Staff store activation,
+source change capture, complete domain coverage, field-edit reconciliation and
+signed independent-account acceptance are not complete. Prior published 4a865d9
+has now passed all hosted Backend/Mac/iPad jobs; no merge or deployment occurred.
+
+Staff operational source and projection authority candidate, 2026-09-09:
+STAFF_REPLICA_DELIVERY.md records backend 2026.09.09.48, an encrypted versioned
+source ledger, exact operation/per-record revision recovery, explicit retained
+deletions/restoration, current membership-filtered snapshot preparation and
+separate source/authorization sequences. Native saved-owner capture allowlists
+six core-field record kinds, retaining customer/property/equipment/crew identity
+without raw provider payloads or payment methods. Actual native JSON passes the
+server schema verifier. This is not a complete staff data pipeline: owner change
+capture/reconciliation, CloudKit transport, staff import/store, full domain
+serializers and durable field commands remain required. All 838 backend tests
+(38 new replica cases), 69 Tools tests, 1,629 Mac logic cases and 1,633 iPad logic/UI
+cases pass with exact execution verification. Both native serialization vectors
+pass the server contract; three iPad screenshots were inspected. Unsigned universal
+Mac and arm64 iOS Release builds and architecture checks pass. The existing private
+store remains closed to staff replica receipts. Original preflight covers 12 scoped
+files, 305 unrelated changes and 335 other matching sources. Final copy-back
+verifies all 12 scoped files match and preserves those unrelated changes and the
+original branch/HEAD/index. New exact-head hosted checks remain required. No production changes or live
+provider writes are included.
+
+Native staff CloudKit onboarding candidate, 2026-09-09:
+CLOUDKIT_STAFF_SHARING.md now records encrypted participant identity storage,
+fresh administrator identity/owner-authority reads, durable native setup journals,
+exact private invitation creation/recovery, accepted-metadata/root verification,
+separate business revocation/Apple share cleanup, and scene invitation intake.
+The actual setup UI is reachable from the company gate and Settings > Users;
+Settings uses the existing navigation stack. Neither server acceptance nor an
+invitation unlocks the private SwiftData store. The UI explicitly explains that
+staff data synchronization is not yet connected. Focused tests pass 34 backend
+and 30 native sharing/setup cases; all 800 backend and 64 Tools tests pass.
+Mac full logic passes 1,621; iPad passes 1,627 actual logic/UI cases with zero
+failures/skips and exact execution verification. Five screenshots were inspected.
+Unsigned universal Mac and arm64 iOS Release builds and architecture checks pass.
+Predecessor c344ab0 failed one hosted Time Clock UI assertion; retained evidence
+shows the message below the sheet viewport. The corrected test scrolls the exact
+form, retains recovery assertions and passes separately on M5/iOS 26.2. Final
+copy-back verifies all 22 scoped files match while preserving 286 unrelated changes
+and the original branch/HEAD/index. Fresh exact-head hosted checks remain required.
+Two new UI
+journeys are additive to all 64 previous CI selections. No production deployment,
+portal/signing/schema promotion, physical install, live CloudKit or accounting
+write is authorized by this checkpoint. Role-scoped serializers, staff-store
+lifecycle, field-command convergence, signed independent-account acceptance,
+remaining provider/vendor work, payment/handoff and full competitor-suite
+usability/accessibility qualification remain open; the full goal is not complete.
+
+Independent staff CloudKit authorization foundation, 2026-09-09:
+CLOUDKIT_STAFF_SHARING.md records backend 2026.09.09.46, the separate-account
+architecture, transactional per-member enrollment/approval/invitation/acceptance/
+revocation registry, role-revision invalidation, and distinct Apple cleanup state.
+Every plan reserves a private read-only role-scoped hierarchy; no plan can unlock
+the existing private SwiftData store. Native code validates exact business/account/
+owner/zone/root/share/role/permission evidence and constructs only empty private
+roots. This is groundwork, not completed cross-account sharing: invitation UI,
+durable native journals, actual Apple operations, role-filtered export/import,
+separate store lifecycle and command reconciliation still need implementation.
+All 793 backend and 64 Tools tests pass, including 27 new sharing tests. Mac passes
+all 1,600 logic tests; M5/iOS26.2 iPad passes 1,602 actual cases (1,600 logic plus
+Mail and offline invoice/estimate journeys), zero failures/skips, with exact
+execution verification and three inspected screenshots without account-email
+footers. Nine new native sharing tests pass on both. Unsigned universal Mac and
+arm64 iOS Release builds succeed; existing document-concurrency/Metal warnings
+remain. Original preflight covers seven scoped files, 293 unrelated changes,
+324 other identical sources and the unchanged branch/HEAD/index. Final copy-back
+verifies all seven scoped files match and preserves all 293 unrelated changes.
+Existing workflow coverage/permissions and signed CloudKit startup are
+unchanged. No deployment, signing/schema promotion, physical install or live
+CloudKit/accounting/customer/payment write occurred. Full independent-account
+convergence, provider/vendor migration, physical Tap to Pay/Handoff, competitor
+feature coverage and complete iPad/Mac usability/accessibility acceptance remain
+open. The overall build goal is not complete.
+
+Native shared Time Clock review qualification, 2026-09-09:
+NATIVE_SHARED_TIME_REVIEW.md records backend 2026.09.09.45 and the native
+business-session Time Clock cutover, without the former device-OAuth callback
+writer or automatic send after approval. Admin reviews shared Employee/Vendor
+identity; Admin/Accounting prepares and separately confirms original approved
+paid time. Encrypted device journals, pinned business/actor/entry/grant, durable
+confirmation intent, original-only recovery, explicit legacy adoption, offline
+receipt restoration and unsent cancellation retain local hours and prevent
+blind resends. Failed approval/correction saves restore affected fields, and bulk
+approval is all-or-nothing without rolling back unrelated edits. Worker review
+returns within the original navigation stack and reopens the saved exact ID.
+All 1,591 logic tests pass on each platform, including 33 time/save tests. iPad
+passes all nine selected UI journeys (1,600 actual cases), zero failures/skips,
+with exact execution verification. All 766 backend and 64 Tools tests pass;
+both workflows pass lint. Seven final screenshots are inspected, including
+simple Mail and original offline invoice/estimate saves without account-email
+footers. Unsigned universal Mac Release and arm64 iOS device Release succeed;
+existing document-concurrency/optional Metal warnings remain. Initial failed
+UI selectors and corrections are retained with evidence. CI adds four time
+journeys, retaining all previous 60, complete logic targets and exact pinned
+simulator preparation. Source-freeze/copy-back gates cover 21 scoped files,
+274 unrelated changes, original branch/HEAD/index and 309 other matching sources.
+Matching backend deployment, exact-head hosted CI and live provider acceptance
+remain required. Independent-staff CloudKit sharing, signed convergence,
+remaining Google/QBO migration, vendor onboarding, approved physical Tap to Pay
+and iPad-to-iPhone handoff, and full competitor-suite/accessibility/real-device
+acceptance remain open. No main merge, deployment, signing/schema change,
+physical install or live customer/accounting/payment mutation is included.
+
+Shared time publication groundwork, 2026-09-08:
+SHARED_TIME_PUBLICATION.md records candidate backend 2026.09.08.44, additive
+encrypted company-scoped worker mappings and the office-reviewed TimeActivity
+journal. Admin alone changes Employee/Vendor identity; Admin/Accounting review
+paid time with frozen clock values, original job/customer/service-item mapping,
+source review evidence and explicit server approval. Durable single-send claims,
+original-only read recovery, exact legacy adoption, role/grant/reference rechecks,
+strict fixed-origin transport and offline unsent cancellation are implemented.
+Unpaid breaks remain in operational audit; this is not payroll execution.
+All 102 focused tests pass, as do all 766 backend and 56 Tools tests. Both unchanged
+workflows pass actionlint. Predecessor cbe1a74 has now passed all hosted backend,
+Mac and both iPad jobs; new published source still requires its own CI. A separate
+canonical-dependency environment with OS
+time-zone lookup disabled also passes all 766 tests using tzdata 2026.3. Synthetic
+backup/restore retains the encrypted intent, worker mapping and uncertain result,
+then recovers it with exactly one total create. Full logs and source-freeze
+evidence are in Shared Time.wAcPHq. Original preflight covers 12 scoped files,
+273 unrelated changes, the unchanged index and 307 other identical source files.
+Final copy-back verifies all 12 scoped files match, preserving those unrelated
+changes and the original index. No native source, signing, CloudKit schema,
+workflow permission, live accounting/customer/payment data or deployment changed.
+Native Time Clock still uses device QBO OAuth; the shared native mapping/review,
+encrypted device journal and cutover are required next. Unsupported project/payroll
+configuration must not be silently dropped. Large-history reconciliation currently
+fails closed at 10,000 records and needs durable indexing/provider acceptance.
+Independent-staff CloudKit sharing and signed convergence, other Google/QBO
+workflows, vendor onboarding, approved physical Tap to Pay/Handoff and full
+competitor-suite/native acceptance remain open. The whole goal is not complete.
+
+Catalog keyboard navigation qualification, 2026-09-08:
+NATIVE_CATALOG_KEYBOARD_RECOVERY.md records the two retained hosted iPad failures,
+the unchanged-source passing local reproduction, and the scoped correction.
+Catalog create/edit and conditional inventory fields now share distinct focus
+values, standard Done/Next actions, and interactive keyboard dismissal. Changing
+item type releases focus. Stored prices, quantities, dates and accounting payloads
+are unchanged. UI tests scroll the identified form, verify keyboard dismissal,
+and retain the original exact-value assertions. Existing-link selection retains
+all exact assertions with a bounded eight-second accessibility wait and richer
+failure evidence; its hosted timeout is not yet proven resolved.
+Final local Mac qualification passes 1,558 logic tests. Final iPad qualification
+passes 1,573 actual tests (1,558 logic and 15 UI), with zero failures/skips and
+all requested selectors verified. The focused two-journey run also passes.
+All 19 final screenshots are visually reviewed, including dismissed inventory
+keyboards, saved invoice/estimate bundles, link recovery, and simple Mail without
+raw API diagnostics or an account-email sidebar footer. Persistent populated
+catalog field labels remain a usability follow-up; this is not full visual QA.
+All 56 Tools tests and both workflow lint checks pass. Unsigned universal Mac
+Release and arm64 iOS device Release succeed; exact executable hashes are retained
+in the checkpoint document and evidence directory. Existing document-concurrency
+and optional Metal-path warnings remain. Workflow selectors and permissions are
+unchanged. Original-project preflight covers five scoped paths, 270 unrelated
+changes, the unchanged index and 306 other byte-identical tracked source files.
+Final copy-back verifies scoped byte equality and preserves the original index
+and all 270 unrelated changes. Hosted CI must qualify the
+new published head. No merge, deployment, signing/schema change, physical install
+or live accounting/customer/payment mutation is included. Independent-staff
+CloudKit sharing, signed convergence, remaining provider workflows, approved
+physical Tap to Pay and full business-suite acceptance remain open.
+
+Native business-role authority qualification, 2026-09-08:
+NATIVE_BUSINESS_ROLE_AUTHORITY.md records removal of the implicit primary-email
+administrator grant and unapproved startup/roster administrator creation. Live
+roles require a current verified business lease, exact signed-in identity and
+consistent active mirrored records. Missing, conflicting, unknown and revoked
+roles fail closed. Focused access recovery preserves saved work and refreshes
+through the existing workspace controller. Task assignment and Time Clock entry
+points enforce the same active-role/ownership boundary; remaining device-OAuth
+time publication is not migrated by this checkpoint.
+Eight new policy tests and two controller tests cover role authority and recovery.
+All 1,558 Mac logic tests pass. Final iPad qualification passes 1,569 actual tests
+(1,558 logic plus 11 UI), with zero failures/skips and actual-execution verification.
+All eight final screenshots are visually reviewed, including simple Mail and
+business-access recovery with no account-email footer or raw API diagnostics.
+The workflow adds one recovery journey, retaining all existing selectors and
+full logic targets: 60 UI cases, each in exactly one of two balanced groups.
+All 56 Tools tests and both workflow lint checks pass. Unsigned universal Mac
+Release passes with arm64 and x86_64 verified. Existing document-concurrency
+and optional Metal-path warnings remain. Earlier fixture, accessibility-identity
+and mail-test route-isolation failures are retained with their corrective evidence;
+production role restrictions and existing regression assertions are not weakened.
+Original-project safety preflight covers 14 scoped paths, 260 unrelated changes,
+the unchanged index and 298 other byte-identical tracked source files. Final
+copy-back must verify those boundaries. Hosted CI must qualify the published head.
+Backend code is unchanged and its full suite was not rerun for this checkpoint.
+Independent-staff CloudKit sharing is not implemented: current private-store and
+single-account binding cannot provide role-filtered staff replication. Staff
+iCloud topology, data partitioning/migration and signed two-account acceptance
+remain required. No main merge, production deployment, signing, schema promotion,
+live accounting/customer/payment change or physical installation is included.
+The full business-suite goal remains open.
+
+Shared business-session existing-link review qualification, 2026-09-08:
+NATIVE_SHARED_LINK_REVIEW.md records candidate backend 2026.09.08.43 and the
+native imported-customer/item/invoice/estimate review using verified business
+login, without device QBO OAuth. Read-only context derives the server connection;
+administrator, tenant, realm, grant, original actor and page lifetime remain
+pinned. Existing realm/actor journals, operation identities, local links and sold
+prices remain intact through lost replies and reconnection. Confirmation retains
+the existing exact evidence/revision/expiry and one-to-one mapping safeguards;
+it does not create or update accounting entities. Strict bounded native transport
+and server parsing reject route, query, payload and response ambiguity.
+The iPad failure was reproduced: selection changed but body-time authorization
+disabled Review. Pure displayed-snapshot eligibility now leaves every actual
+preview/decision freshly authorized. Three new tests cover revoked access,
+ambiguous/missing identities and the 25-record limit including customers.
+Separate duplicate BC- milestone fixtures were isolated in test-only startup;
+production identity checks and every existing assertion remain unchanged.
+All 664 Backend and 56 Tools tests pass; both workflows pass lint. CI now names
+59 iPad UI journeys, adding offline link recovery while retaining disjoint groups
+and complete logic targets. Final Mac and iPad logic each pass 1,548 tests;
+all eight selected iPad UI journeys pass (1,556 total), with zero failures/skips
+and actual-execution verification. All 14 final screenshots are visually reviewed:
+enabled selection, original review outcomes and prices, simple Mail, and no
+account-email footer or temporary diagnostics. Unsigned universal Mac Release
+and both architecture checks pass. Existing concurrency/Metal warnings remain.
+Original-project safety boundaries cover 14 scoped paths, 256 unrelated changes,
+the unchanged empty index and 297 other byte-identical tracked source files.
+Matching-backend deployment and hosted qualification of the new head remain
+required. No main merge, deployment, live QBO/customer/payment change, signing,
+schema promotion or physical installation is part of this checkpoint. Signed
+CloudKit convergence and independent staff sharing, real approved Tap to Pay,
+remaining Google/QBO device-OAuth workflows, vendor onboarding and full
+competitor-suite, navigation/accessibility and physical-device acceptance remain
+open; the whole application is not complete.
+
+Shared business-session catalog qualification, 2026-09-08:
+NATIVE_SHARED_CATALOG_CONNECTION.md records candidate backend 2026.09.08.42
+and native catalog approval, publication, comparison and original-only recovery
+using verified business login instead of separate device QuickBooks OAuth.
+Read-only context derives the server company connection and exact existing item
+mapping; no provider link is guessed or silently adopted. Original item revision,
+business, administrator access, grant and view identity remain pinned across
+awaits. Separate scoped comparison snapshots prevent a later import or changed
+connection from reusing old review evidence. Offline items and sold document
+prices remain intact. Failed discovery no longer expands unrelated queues and
+hides the saved approval result; unsent-only cancellation remains explicit.
+All 659 Backend tests, 56 Tools tests and unchanged workflow lint checks pass.
+Final Mac and iPad logic each pass 1,537 cases; all 12 selected iPad UI journeys
+pass (1,549 total), with zero failures/skips and actual-execution verification.
+All 10 final exported screenshots are visually reviewed: simple Mail, original
+offline prices, inventory setup and the saved approval result have no account
+email footer or raw API response. Unsigned universal Mac Release and both
+architecture checks pass. Existing document-concurrency/Metal warnings remain.
+Original-project preflight covers 13 scoped paths, 255 unrelated changes, the
+unchanged empty index and 296 other byte-identical tracked source files.
+Earlier actor/fixture/accessibility and offscreen-feedback failures are retained
+alongside the final corrective evidence; no regression assertions were removed.
+Hosted predecessor 5287a61 has Backend/Mac/iPad-group-1 success, but group 2 has
+one Xcode background-assertion timeout in the locked-bundle milestone journey.
+The exact error is retained and must not be called a catalog fix or ignored.
+The same unmodified journey passes a separate final-source local reproduction,
+with actual-execution verification and both original-invoice screenshots reviewed.
+The next head still requires full hosted qualification. No workflow, signing,
+schema, production accounting, customer message, payment, deployment, main merge
+or physical installation change is part of this checkpoint. Existing imported
+link onboarding, remaining Google/QBO OAuth-only operations, signed CloudKit
+convergence and independent staff sharing, approved real Tap to Pay/Handoff,
+vendor partner access and full competitor-suite acceptance remain open.
+
+Shared business-session dispatch qualification, 2026-09-08:
+NATIVE_SHARED_DISPATCH_CONNECTION.md records candidate backend 2026.09.08.41
+and the actual job-save, field-billing review and recovery cutover from device
+QBO OAuth to the verified business session. First-use offline crew edits now
+have an encrypted original-account intent with no guessed realm or grant.
+The original realm-bound journal remains compatible; a durable import receipt
+prevents replay after interrupted transfer. Discovery is office-only and read
+only; original role, job/customer, saved crew, revision and connection checks
+continue through awaits and navigation cancellation. Legacy queues are retained.
+Focused native acceptance passes 46 tests across existing dispatch/shared-billing
+and 12 new shared-dispatch cases. All 652 Backend and 56 Tools tests pass.
+Final Mac and iPad logic each pass 1,525 cases; all eight selected iPad UI journeys
+pass (1,533 total), with zero failures/skips and actual-execution verification.
+All eight exported screenshots are visually reviewed: compact original-job crew
+review, simple Mail and original invoice recovery have no account-email footer
+or raw API payload. Unsigned universal Mac Release and both architecture checks
+pass. Original-project preflight verifies 17 scoped files, 248 unrelated changes,
+the unchanged empty index and 290 other byte-identical tracked source files.
+Existing document actor-isolation and optional Metal-toolchain warnings remain.
+The published predecessor has hosted Backend success; native jobs were running
+at the prepublication read. A new head requires fresh hosted qualification.
+The first new
+backend assertion used the wrong existing error name; two Swift test expressions
+needed explicit throwing evaluation; the first Tools command used an unsuitable
+import root. Those failed results are retained alongside corrected passes.
+No production action or full-suite completion is claimed. Signed CloudKit
+convergence and independent staff sharing, real approved Tap to Pay/Handoff,
+remaining OAuth-only operations, vendor onboarding and complete competitor-suite
+acceptance remain part of the unchanged goal.
+
+Shared business-session billing qualification, 2026-09-08:
+NATIVE_SHARED_BILLING_CONNECTION.md records candidate backend 2026.09.08.40
+and the actual native invoice/estimate, agreement/progress, Management retry and
+Billing Review cutover. Device QBO OAuth is no longer the billing prerequisite;
+the original verified business, document, customer, job, role and authorization
+revision remain pinned. Offline drafts and sold prices remain intact, field
+items still require approval, and uncertain requests use original-only recovery.
+Customer/catalog prerequisite pins retain existing encrypted proposal integrity
+and duplicate prevention. The explicit transport route matrix preserves existing
+job assignment and draft approval/revocation paths without a general API proxy.
+Final Mac and iPad logic each pass 1,513 tests; all ten selected iPad UI journeys
+pass (1,523 total), with actual-execution verification and no failures or skips.
+All 12 final screenshots are visually reviewed: simple Mail and original billing
+remain readable without raw API payloads or an account-email footer. All 648
+Backend tests (local Python 3.9.6), 56 Tools tests and both workflow lint checks
+pass. Unsigned universal Mac Release passes and both architectures are verified.
+The first run's old-copy assertion failure and the initial backend integrity
+failures are retained with their corrective evidence. Hosted CI must qualify
+the newly published head; no workflow definitions changed in this checkpoint.
+Original-project preflight verifies 21 scoped paths, 241 unrelated changed files,
+the original empty index and 268 other byte-identical tracked source files.
+No merge, deployment, financial mutation, customer message, signing/schema change
+or physical installation is part of this checkpoint. Shared data convergence,
+remaining direct OAuth-only operations, real approved Tap to Pay/Handoff and the
+full competitor/Google/QBO-item/vendor suite remain part of the active goal.
+
+Saved accounting check sync/recovery qualification, 2026-09-08:
+FIELD_PAYMENT_RECEIPT_RECONCILIATION.md records fresh scoped observation refresh
+after successful-resource import, original payment recovery/accounting follow-up
+and unsent reservation cancellation. Offline/conflicting follow-up retains the
+old check and review hold without inventing another payment or discarding a
+confirmed capture. Recovery validates the original invoice/customer/payment and
+receipt across awaits; newly recovered refunds use positive amount plus isRefund,
+consistent with other native entry points. Historical negative records are not
+rewritten. Paid/held invoices can refresh their saved check directly in Invoices,
+without collection eligibility or opening another payment form.
+The first full iPad run caught propagated disclosure accessibility identifiers.
+The recording shows the visible control; scoping its identifier to the label
+restores the child refresh/status identifiers. The unchanged assertions then
+press Refresh, confirm success and remain in Invoices. Failures are retained.
+Final source passes 1,503 logic tests on Mac and 1,503 logic plus all nine selected
+iPad UI journeys (1,512 total), with actual-execution verification and no skips.
+All 15 final screenshots are visually reviewed. The original-invoice result,
+simple Mail and attachment preview/forward are preserved without an account-email
+footer or raw payload. All 56 Tools tests, workflow lint and unsigned universal
+Mac Release pass, including arm64/x86_64 verification. FinalSourceHashes.json in
+the Receipt Sync.C3UmYm evidence directory freezes nine non-document paths.
+The published workflow commit 58ca6be remains unchanged: 58 named UI journeys,
+two disjoint 29-journey iPad groups and the existing full-logic/Release gates.
+Published predecessor 6036f2f has Backend/Mac success; both iPad groups were live
+at the prepublication read. A later head needs its own hosted qualification.
+Copy-back preflight confirms 11 scoped paths, 248 unrelated changed files, an
+empty original index and 296 other byte-identical tracked source files. No merge,
+deployment, financial mutation, customer message, signing/schema change or
+physical installation occurred. Older writers, remaining billing entry points,
+mixed-version signed CloudKit delivery, historical settlement/refunds, real
+approved Tap to Pay/Handoff and the complete competitor/Google/QBO-item/vendor
+suite remain open. Existing document-concurrency/Metal path warnings remain.
+
+Invoice-scoped saved accounting check qualification, 2026-09-08:
+FIELD_PAYMENT_RECEIPT_RECONCILIATION.md records explicit fresh authorized receipt
+application to the original invoice, matching original document/payment digests,
+version ordering, synchronous save recovery and mixed-field collection/statement
+holds. Original captured payments, pending ACH and refunds are never synthesized,
+replaced or deleted. The saved balance and accounting evidence are available on
+the invoice offline; neither proves bank settlement or permits another collection.
+The saved-check disclosure and its adjacent Billing Review link now use scoped
+tap behavior, fixing a reproduced iPad navigation collision. The pinned save
+confirmation resets for every new check; offline published invoices cannot open
+unchecked verified payment entry. No regression assertions were removed.
+Final local evidence passes 1,494 logic cases on Mac, 1,494 logic plus all eight
+selected iPad UI journeys (1,502 cases), 56 Tools tests and 636 unchanged Backend
+tests. Actual-execution verification confirms all requested selectors. All 14
+final screenshots were visually reviewed; no account-email footer or raw Mail
+payload is shown. Unsigned universal Mac Release and both architecture checks
+pass. Fourteen non-document source hashes are frozen in the evidence directory.
+The existing 58-selector workflow is unchanged. Published predecessor 6cf99fb has
+Backend/Mac/second-iPad-group success, but first-group Mail accessibility timeout
+and fourteen follow-on accessibility IPC failures; it is not a green hosted run.
+The Mail attachment journey passes locally. New exact-head hosted qualification
+remains required. The 16 scoped files were copied back to the original project
+and verified byte-for-byte; all 241 unrelated changed files and the original
+empty index were preserved.
+The additive v27 CloudKit field remains a candidate only. Coherent supersession
+by other accounting writers, mixed-version/signed CloudKit convergence, existing
+document actor-isolation warnings, live settlement/returns, real approved Tap to
+Pay, physical Handoff and the complete competitor/Google/QBO-item/vendor suite
+remain open. No merge, deployment, charge/refund, customer email, signing change,
+schema bootstrap/promotion or physical installation occurred in this checkpoint.
+
+Shared field-payment review qualification, 2026-09-08:
+FIELD_PAYMENT_SHARED_REVIEW.md records candidate backend 2026.09.08.39 and its
+native Contactless Payment cutover: actual QBO invoice numbers, original shared
+customer/invoice/job mappings, approved staff and current collection assignment,
+connection-version pins, targeted linked-payment reads and coherent rechecks.
+Accounting entries remain distinct from bank settlement. The old all-payment
+download and broad local import are removed from this guide; no collection,
+refund, assignment completion or local receipt application is inferred.
+The final source passes 636 Backend tests (26 new), 55 Tools tests, 1,478 logic
+cases on Mac and iPad, and all nine selected iPad UI journeys (1,487 cases).
+Actual-execution trees prove every requested selector. All ten final screenshots
+are visually reviewed, with simple Mail, no raw payloads and no account-email
+footer. The initial offscreen-button assertion failure is retained; the final
+journey scrolls back, presses Verify and confirms refresh. Unsigned universal Mac
+Release and both binary architectures pass. The candidate workflow retains all
+54 preceding journeys and adds four, with two disjoint 29-journey groups and
+unchanged full-logic/Mac-Release/security gates.
+Published predecessor 13df95f has successful Backend and Mac checks; its two iPad
+jobs were live at the latest prepublication check. New exact-head hosted
+acceptance, production deployment, narrowly applied accounting receipts,
+cross-channel payment safety, bank settlement/returns, real approved Tap to Pay,
+signed physical Handoff/CloudKit convergence and the complete comparator/Google/
+QBO-item/vendor suite remain open. Original-project preflight confirms all 17
+scoped paths and 237 unrelated changed files with the original empty index.
+No merge, production deployment, financial mutation, customer email, signing or
+CloudKit schema change, or physical installation occurred in this checkpoint.
+
+Shared original-file recovery qualification, 2026-09-08:
+NATIVE_QBO_DOCUMENT_RECOVERY.md now records verified-business shared metadata
+paging, explicit hash-verified download into encrypted device storage, immutable
+original operation/state, offline restore/export and pending original CloudKit
+application. No replacement upload is created by restoration. Job/customer
+preview, annotation and Google archive source can reuse retained originals
+without mutating shared device paths. The final 14-file source manifest matches
+1,468 passing logic cases on each platform and all seven selected iPad UI journeys
+(1,475 cases), with exact execution trees and all eight screenshots reviewed.
+The initial duplicate-filename UI selector failure is retained; a specific sheet
+identifier resolves it without dropping assertions. All 55 Tools tests, both
+workflow lint checks and unsigned universal Mac Release pass; both architectures
+are verified.
+The workflow adds two journeys to the previous 52, keeping two disjoint 27-test
+iPad groups, complete logic targets and unchanged Mac Release/security gates.
+Published predecessor a02e838 has Backend and Mac success; its two hosted iPad
+jobs were still live at prepublication verification. New exact-head hosted
+acceptance, signed same-record CloudKit convergence, standalone local identity,
+retention/restore barriers, real providers and the full HVAC/Google/QBO-item/
+physical Handoff/Tap-to-Pay goal remain open. No merge, production deployment,
+financial mutation, customer email, signing change or physical install occurred.
+
+Native original-file recovery qualification, 2026-09-08:
+NATIVE_QBO_DOCUMENT_RECOVERY.md records encrypted device originals, strict
+business/Admin/original-job authority, migrated native attachment entry points,
+lost-reply recovery without resending, retained cancellation and export, exact
+local receipt application and durable acknowledgement. Confirmed uploads with
+unfinished local links remain visible for attention. The final accepted source
+passes 1,457 logic cases on Mac and iPad, plus all seven selected iPad UI journeys
+(1,464 total). Actual execution trees, 18 frozen Swift hashes and all seven final
+screenshots were checked. Unsigned universal Mac Release passes with both
+architectures; 610 Backend tests, 55 Tools tests and workflow lint pass.
+The new workflow retains all 48 preceding UI selectors and adds four; two
+26-journey iPad groups each retain full logic coverage. Its real selection script
+is tested for disjoint coverage and invalid-group rejection. The prior published
+head c9af5d7 has successful Backend/Mac checks, but its iPad job ended at the
+60-minute limit; it is not still running or fully green. New exact-head hosted
+qualification remains separate from local acceptance. The 23-path original copy
+is verified against 220 unrelated changed files and its empty index before
+commit. Shared-server file history/adoption, reviewed later document linking,
+older-backup restore protection, real provider/signed CloudKit/multi-device
+acceptance and the full HVAC/Google/QBO-item/Handoff/Tap-to-Pay goal remain open.
+No real provider send, financial mutation, customer email, deployment, signing,
+schema promotion, merge or physical installation occurred.
+
+Original QuickBooks file recovery checkpoint, 2026-09-08:
+QBO_DOCUMENT_UPLOAD_RECOVERY.md records candidate backend 2026.09.08.38:
+encrypted retained original files, company/realm/grant ownership, operation
+aliases, single-dispatch claims, read-only recovery across reconnection and
+immutable optional job/customer/stage/document provenance validated against
+shared billing mappings. The initial route returned 404; original-job tests
+also failed before context support. Final frozen source passes 46 focused
+tests, 610 full backend tests on each of Python 3.9.6 and 3.12.14, 52 Tools
+tests, Python compilation, workflow lint and diff validation. No native or
+CloudKit schema source changed, and no new native qualification is claimed.
+The preceding published PR #18 head c9af5d7 has successful Backend and Mac
+checks, with its iPad job still running during verification; those hosted
+results do not qualify the new backend candidate. Six scoped paths match the
+original project, preserving its empty index and 226 unrelated changed files.
+Native receipt and
+automatic attachment cutover, encrypted local capture, original-context
+idempotent CloudKit application, legacy-queue quarantine, older-snapshot
+restore protection and real provider/signed-device acceptance remain open.
+The full top-ten-comparator business-suite, Google, QBO item, CloudKit and
+Handoff/Tap to Pay goal remains unproven and active. No live provider send,
+accounting write, customer email, deployment, signing/capability change,
+schema promotion, merge or physical installation occurred.
+
+Job document target and closeout checkpoint, 2026-09-08:
+JOB_DOCUMENT_TARGET_RECONCILIATION.md records saved-link precedence, exact
+customer/job/document identity, preserved historical file ownership, paired
+receipt transaction type/ID, stale lookup rejection and truthful CloudKit
+pending/review states. Six initial regressions reproduced eleven failed
+assertions. A subsequent green UI run still showed a stale Paid label; visual
+review led to reconciled row status and an explicit visible Review assertion.
+Final accepted Mac and iPad results each pass 1,427 logic tests; all nine
+selected iPad journeys pass (1,436 executions). Exact execution trees, all four
+final UI screenshots and ten accepted source hashes were checked. Unsigned
+universal Mac Release contains both architectures. All 52 Tools tests and
+workflow lint pass. Twelve scoped paths match the original iCloud project,
+preserving its empty index and 216 unrelated changed files. The prepared
+48-selector native workflow retains the preceding 44 checks. Published PR #18
+head 9e8ab2a had passed Backend/Mac with iPad still running; publication and
+hosted verification of this new checkpoint remain distinct from local evidence.
+Legacy queued upload ownership/lifecycle, remaining estimate lineage and UI
+polish, signed multi-device/provider acceptance and the full suite goal remain
+open. No merge, deployment, financial write, schema promotion, signing change
+or physical installation occurred.
+
+Job/invoice handoff follow-up, 2026-09-08:
+JOB_INVOICE_HANDOFF_RECONCILIATION.md records exact original-invoice resolution
+for Schedule balances/payment attention and Documentation Queue collection,
+strict legacy customer/job matching and blocked missing/ambiguous links.
+Schedule's retained-draft-as-paid defect is reproduced and corrected. UI-test
+diagnostics separately corrected the expected payment destination and a pinned
+launch route, without altering production routing. Mac and iPad each pass 1,413
+logic tests; the final iPad result passes all seven selected UI journeys (1,420
+total). Exact execution trees, both final collection screens and frozen source
+hashes were checked. Unsigned universal Mac Release passes with both architectures.
+All seven follow-up paths match the original iCloud project, preserving 215
+unrelated changed files and its empty index. This local review commit remains
+separate from published PR #18 head 0fa15fe (42 selectors);
+its prepared 44-selector workflow is not published. Legacy receipt/estimate
+consumers, pending-CloudKit empty-state wording, signed multi-device acceptance
+and the full business-suite goal remain open. No merge, deployment, financial
+write, schema promotion, signing change or physical installation occurred.
+
+Local milestone reconciliation qualification, 2026-09-08:
+MILESTONE_DRAFT_RECONCILIATION.md records an office-only review receipt that
+preserves both documents and follows the exact original for reporting, job
+billing and collection. Missing/changed originals and ambiguous stage identities
+remain blocked for review. The workflow revalidates authority and both records
+after shared-service GETs; it performs no accounting mutation. Final frozen
+source passes 1,410 logic tests on each native platform, all ten selected iPad
+UI journeys, three additional probe-free hardware-keyboard repetitions, 564
+Backend tests, 52 Tools tests and unsigned universal Mac Release with both
+architectures verified. All requested execution trees, five final UI captures
+and 22 source hashes were checked. Diagnostics isolate a synthesized keyboard
+initialization issue; no production text-field change or physical-device fix
+is claimed. The optional CloudKit v26 receipt field is not promoted. All 24
+candidate paths now match the original iCloud project; 197 unrelated changed
+files and its empty index were preserved. Preceding PR #18 head aaaaf68 has 41
+UI selectors: Backend/Mac passed, while iPad finished with the known keyboard
+test failure (one failure in 41 UI tests). The corrected candidate needs its own
+hosted run. Schedule/Documentation Queue and legacy receipt/estimate link
+consumers still require follow-up beyond the qualified job-detail/dashboard.
+Signed multi-device and mixed-version CloudKit safety, physical keyboard/job
+handoffs, provider acceptance and the full business-suite objective remain
+incomplete. No merge, deployment, financial write or signing change occurred.
+
+Shared milestone candidate, 2026-09-08: SHARED_MILESTONE_BILLING.md records
+stable new invoice identities, preserved legacy originals, atomic company-scoped
+publication ownership, exact office authority, provider duplicate-reference
+checks and native original-invoice/CloudKit-wait handoffs. Tests exposed the
+first-publication edit-lock defect; visual QA exposed a raw cancellation error
+after Back despite initially green UI tests. Both are corrected and retained
+as evidence. Final frozen source passes 1,390 logic tests on each native platform,
+all seven selected iPad journeys, 564 Backend tests, 51 Tools tests and unsigned
+universal Mac Release with both architectures verified. Exact test trees and
+all three final milestone screens were inspected. The native stored-data schema
+is unchanged; backend candidate 2026.09.08.37 adds only a derived identity index.
+Hosted checks/publication remain separately qualified. Signed multi-device and
+mixed-version CloudKit acceptance, local duplicate-draft/report reconciliation,
+legacy missing provider references, general feasible allocation and the remaining
+full competitor/Google/vendor/access/Handoff/Tap-to-Pay objective are incomplete.
+No merge, deployment, live accounting write, schema promotion or signing change.
+
+Bundle milestone candidate, 2026-09-08: PROJECT_BUNDLE_MILESTONE_BILLING.md
+records whole-plan cent/quantity/discount conservation, original bundle and
+member evidence, prior-invoice reconciliation, before-tax staged scope, and
+full-job material requirements, retained reviewed tax addresses, and a read-only
+saved-invoice review. Final Mac and iPad logic each pass 1,378 tests, all five
+selected iPad journeys pass, and unsigned universal Release, 546 Backend and
+51 Tools tests pass. Exact execution trees and the final screenshot were checked.
+Retained failed allocation tests exposed a Foundation Decimal conversion issue;
+visual inspection also found an empty $0 editable builder despite green tests,
+leading to the saved-record review and stronger assertions. Publication is still
+separate while the preceding exact-head hosted iPad run remains live. General
+feasible-plan allocation, older issued-history reconciliation, shared milestone
+issuance uniqueness, signed CloudKit/mixed-version safety, provider acceptance and
+the full ten-competitor/Google/vendor/access/Handoff/Tap-to-Pay objective remain
+required. No merge, deployment, live accounting write or schema promotion.
+
+Native bundle composer candidate, 2026-09-08: NATIVE_BUNDLE_COMPOSITION.md
+records native category paths, ordered immutable bundle selection and independent
+member editing/removal for invoices and estimates, customer/system boundaries,
+exact line cents, leaf tax/cost/stock/reporting and real publication/recovery
+through isolated transports. Retained tests exposed and corrected a Save-blocking
+iPad numeric-keyboard issue and an unrelated disclosure opening during bundle
+review. New CI execution verification rejects missing selected UI tests even
+when the other tests pass. Final corrected source passes 1,365 logic tests on
+each native platform, eight iPad UI journeys, 546 Backend tests, 51 Tools tests
+and unsigned universal Mac Release. Exact execution checks confirm all selected
+UI methods. Source hashes match the original project; publication/hosted checks
+remain separate. Milestone billing, editable provider imports, signed CloudKit
+and mixed-version safety, live sandbox acceptance, remaining Google/vendor and
+access-level workflows, ten-competitor coverage, and physical Handoff/Tap to Pay
+remain required. The full business-suite objective is not complete.
+
+Bundle transaction checkpoint, 2026-09-08: QBO_BUNDLE_TRANSACTION_CONTRACT.md
+records actual GroupLineDetail support in shared publication, fixed-origin
+preflight, original-business mappings, field approval, existing-link adoption,
+native response validation, encrypted proposals and expandable Billing Review.
+Final local qualification passes 546 Backend tests, 1,341 logic tests on each
+native platform, five iPad UI journeys, 42 Tools tests and unsigned universal
+Mac Release. The prior hosted iPad job hit its 45-minute execution limit, not a
+green completion; the new workflow retains all checks, adds bundle review and
+allows iPad 60 minutes. Category browsing, native bundle selection/member editing,
+immutable composer snapshots, downstream cost/stock/export integration and the
+full signed/multidevice/provider business-suite objective remain incomplete.
+No live accounting write, deployment, schema promotion or merge occurred.
+
+Native inventory candidate, 2026-09-08: NATIVE_QBO_INVENTORY.md records native
+Inventory creation/review, original-business account choices, read-only provider
+balances, immutable sold type/identity and additive CloudKit v25/receipt v2.
+The unknown-type-to-Service fallback is removed. Final Mac and iPad logic each
+pass 1,324 tests; all six selected iPad UI journeys, 42 Tools tests and unsigned
+universal Mac Release pass. The workflow adds two regression journeys (33 total)
+without removing prior checks. Retained evidence separates the actual iPad
+decimal-keypad defect from the corrected test-catalog isolation assumption.
+Category/bundle transaction UX, signed multi-device/provider acceptance and the
+full suite goal remain incomplete. No merge, deployment or schema promotion.
+
+QBO inventory server prerequisite, 2026-09-08: candidate 2026.09.08.35 adds
+explicit opening quantity/date and verified per-item inventory accounts to the
+shared catalog publisher, plus immutable-type-reviewed sparse price updates.
+Retries recover original identities and present stock without reposting opening
+balances. Frozen local qualification passes 513 Backend tests (69 focused
+catalog/provider tests) and 40 Tools tests; compileall, actionlint and diff checks
+pass. QBO_INVENTORY_PUBLICATION_CONTRACT.md records exact evidence, authorization,
+account/stock boundaries and the REQUIRED native continuation: type preservation,
+inventory forms, sold-item snapshots, additive CloudKit receipts, categories,
+bundles and full iPad/Mac/provider acceptance. This server prerequisite does not
+fix the still-existing native unknown-type-to-Service fallback. No deployment,
+native/schema/signing change or full-application completion is claimed.
+
+Versioned QBO catalog application, 2026-09-08: the follow-up source applies
+verified dated Item projections and persists scoped version/digest receipts in
+the same local save. It preserves pending edits, sold prices and stock metadata;
+older/conflicting versions and ambiguous matches require review. CloudKit source
+bootstrap v24 adds one optional Item receipt field, with exact schema preflight
+and promotion-manifest gates. QBO_CATALOG_VERSION_APPLICATION.md records the
+real legacy SQLite migration, discovered held-model rollback defect and fix,
+retained qualification, and remaining full financial/item lifecycle and
+multi-device requirements. This is not production promotion, deployment or
+full-goal completion. Final qualification passes 1,308 logic tests on each
+native platform, four iPad UI journeys, 493 Backend tests, 40 Tools tests and
+the unsigned universal Mac Release with both architectures verified. Final
+Inbox/Compose/saved-Invoice screenshots were inspected with no account-email
+footer or internal receipt data shown. Preceding head 8aadb75 passes all four
+hosted jobs; the new catalog candidate requires its own CI after publication.
+
+Native QBO history checkpoint, 2026-09-08: the configured shared backend now
+supplies the existing Management refresh's thirteen accounting collections.
+Original company/realm/grant, capture revision, page counts, canonical digests
+and microsecond ordering are verified before records reach the existing import.
+Pending technician/admin item edits, stock metadata and sold prices remain
+protected. Missing financial amounts cannot become zero; incomplete histories,
+latest tombstones and conflicting versions do not produce a partial successful
+shared refresh. Management no longer clears all webhook alerts on generic
+refresh success. Per-model application receipts, lifecycle reconciliation and
+device-consumption/CloudKit conflict handling still need implementation.
+
+Frozen local acceptance passes 1,293 logic tests on both Mac and 13-inch M5
+iPad Simulator, plus four iPad UI journeys; the unsigned universal Mac Release
+and both architecture checks pass. Backend passes 493 tests; Tools passes 37.
+Native/Backend source copies match the original iCloud project, with unrelated
+work preserved. NATIVE_QBO_CHANGE_HISTORY.md records source hashes, exact
+evidence, the retained compiler failure, corrected concurrency warning, UI
+inspection and remaining scope. Preceding published head 29e124d passes both
+hosted Native and Backend workflows; this new candidate requires its own CI.
+No merge, deployment, live accounting change, schema promotion, signing change
+or physical installation occurred. The full-suite, all-QBO/Google, CloudKit,
+Handoff/Tap to Pay, vendor and distribution goal remains active and incomplete.
+
+iPad interaction checkpoint, 2026-09-07: the global shortcut fallback no longer
+evicts text-field or multiline-editor focus, including in a delayed activation.
+The tax-address sheet is owned by the billing workspace, not a lazy scrolling
+row; labeled fields support Next/Done while Cancel, scope validation, prices and
+saved-address reopening remain intact. Existing-QBO-record selection uses full
+rows and visible/accessibility selection states. Final validation passes 1,277
+Mac logic tests, three full iPad logic runs (3,831 executions), three complete
+address workflows, and an unsigned universal Mac Release build. Eight adjacent
+UI journeys pass before the final accessibility-only form-identifier adjustment.
+`IPAD_RECORD_SELECTION_AND_ADDRESS_EDITING.md` records all retained intermediate
+failures, exact scope, source hashes and inspected final UI. Published preceding
+head `d804dd6` passes both hosted Native and Backend workflows; new-candidate
+hosted and physical-device qualification are separate. No merge, deployment,
+production data/schema/signing change, or full-goal completion is claimed.
+
+QBO server change-capture checkpoint, 2026-09-07: candidate `2026.09.07.33`
+implements the thirteen current native accounting collections' census/CDC
+transport, scoped encrypted observation history, late-event look-back, actual
+deletion/merge identity retention and paginated recovery. Frozen local acceptance
+passes 488 Backend and 37 Tools tests, including 44 focused capture/webhook tests
+and real fixture backup/restore. `QBO_SERVER_CHANGE_CAPTURE.md` distinguishes
+captured versions from applied financial changes: native cutover, per-event
+application receipts, complete lifecycle/ledger reconciliation and shared-device
+consumption remain required. No deployment or native source/schema change.
+
+Completed hosted head `6a0a38e` passes Backend and Mac, and all 1,271 iPad logic
+tests. Two iPad UI assertions fail: existing-link switch selection stays off;
+the initial cancelled tax-address entry stays at its placeholder through the
+exact-value deadline. Their root causes are not established by the job log.
+`NATIVE_CI.md` records exact job/log evidence. The old recording diagnosis below
+is valid for `a9dd55c`, not proof that these new failures are resolved. Full
+application, physical-device, provider and distribution acceptance remains open.
+
+Tax-address CI diagnosis, 2026-09-07: the original hosted `a9dd55c` recording
+shows the full street value arriving after the test's immediate partial-value
+snapshot, with no second typing request. The test entry helper now waits for
+the exact value with a five-second deadline and retains the original assertion.
+Repeated local validation also exposed an empty transitional snapshot while
+reopening the sheet; dismissal/presentation and reopened exact values now have
+explicit waits. The intermediate failure is retained, not counted as a pass.
+Final qualification passes all nine executions: tax-address, Invoice-open and
+simple-Mail journeys three times each, without failures or skips. App source and
+workflow bytes remain unchanged; this is not a new production acceptance claim.
+No app behavior, validation, sold prices, selector or failure gate changes.
+`TAX_ADDRESS_UI_SYNCHRONIZATION.md` records the digest-verified artifact,
+frame timing and qualification. The earlier unconfirmed-cause notes below are
+historical; this follow-up identifies the cause for that exact hosted failure.
+The full application and production acceptance requirements remain open.
+
+Native shared Mail checkpoint, 2026-09-07: the existing office mailbox now uses
+the captured company/actor/grant service for pages, reads, attachments, actions
+and general composition, without requiring a native Google token. Existing
+device drafts retain encrypted original server attempts and read-only recovery;
+Outbox provides shared original-request review. Domain-linked technician and
+accounting messages remain behind their existing workflows, not the general
+office endpoint. `NATIVE_SERVER_MAIL.md` records contracts, evidence and remaining
+scope. The first iPad run found
+that encrypted review-state storage rejected the newly verified server outcome.
+An explicit server-resolution transition and encrypted-store regression address
+that cause. Final frozen-source Mac and iPad runs each pass 1,271 logic tests;
+iPad also passes five selected UI journeys. Unsigned universal Mac Release and
+both architecture checks pass. Final Inbox/Outbox screenshots were reviewed with
+no account-email footer. Preceding published head `a9dd55c` passes hosted Backend
+and Mac but repeats the existing tax-address incomplete-input failure on iPad;
+its cause remains unconfirmed and all failure gates remain intact. These changes
+are not deployed and do not complete the full application goal.
+
+Server Mail checkpoint, 2026-09-07: backend **2026.09.07.32** adds own-account
+office mailbox reading, paging, attachments and recoverable actions, plus an
+encrypted immutable outbox with one dispatch claim and exact MIME/Sent recovery.
+Final local qualification passes **447 Backend tests (42 focused Mail)** and
+**37 Tools tests**. Compact encrypted summaries support recent-first lists without
+decrypting every attachment. Native transport cutover, durable mailbox-action
+recovery, server-authorized technician/accounting/customer workflows and consent,
+received-mail/job/file archival, shared history and delivery outcomes remain
+required; existing native behavior is unchanged. Exact contract, retained failures
+and rollout gates: [SERVER_MAIL_WORKFLOW.md](SERVER_MAIL_WORKFLOW.md). No live
+message, deployment, signing, CloudKit promotion or physical installation occurred.
+This does not close the complete-suite, QBO, CloudKit, Tap to Pay or release goal.
+
+Native Google access checkpoint, 2026-09-07: a compact Settings → Sync → Google
+access page now uses the company-owned OAuth service, device-only original
+request journals, scoped callback/status verification, partial-grant display,
+cancel-before-prepare tombstones and exact-grant disconnect recovery. Final
+acceptance passes 1,244 native logic tests per platform, five selected iPad
+journeys, Backend 405 and Tools 37. The final iPad page was visually inspected;
+it has normal Back navigation and no account-email footer. The service contract,
+retained failures/fixes, qualification and rollout gates are recorded in
+[NATIVE_GOOGLE_ACCESS.md](NATIVE_GOOGLE_ACCESS.md). Actual Mail/Calendar/Drive
+server transport cutover, shared outbox/received-message archival and live
+provider consent remain required. Existing device connections are preserved,
+not evidence of completed shared synchronization. Full-suite, CloudKit, QBO,
+Tap to Pay, supplier and distribution requirements remain open.
+
+Hosted qualification is separate: preceding head `f082074` passes Backend/Mac,
+but its existing tax-address UI test fails on incomplete typed input before save.
+Three unchanged local repetitions pass; the hosted cause remains unconfirmed.
+No failure gate or assertion is weakened. Fresh exact-head CI is required.
+
+Follow-up exact-head evidence: `cad60f5` passes all four hosted jobs in
+[Native run 34170779743](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34170779743)
+and [Backend run 34170779787](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34170779787).
+The iPad run includes the unchanged tax-address journey and both Google journeys.
+This qualifies that head, not later server Mail changes or production acceptance.
+
+Server Google connection checkpoint, 2026-09-07: backend candidate
+**2026.09.07.30** implements single-use, company/user-bound web OAuth, encrypted
+offline credentials, stable Google subject binding, scope-aware server-only
+token use and original-grant refresh/disconnect coordination. 35 focused tests,
+both complete Backend runs (401 each) and Tools (37) pass. Native Google
+requests still use their existing device credentials; shared Mail dispatch,
+native connection/recovery UI and production provider acceptance remain open.
+The exact contract, final evidence and rollout boundaries are recorded in
+[GOOGLE_SERVER_CONNECTION.md](GOOGLE_SERVER_CONNECTION.md). This does not
+complete the full-suite, CloudKit, QBO, Tap to Pay or release requirements.
+
+Mail draft-recovery checkpoint, 2026-09-07: **1219 logic tests per native
+platform, ten selected iPad journeys, unsigned universal Mac Release, Backend
+366 and Tools 37 pass**. The existing composer and generated-document send
+coordinator retain encrypted original drafts, attachments and pre-send locks
+across relaunch. Drafts stays in the compact mailbox menu; uncertain sends
+reopen read-only and hand off to Sent without another copy. Stable business
+snapshots and account-scoped revisions prevent silent reapproval of changed
+work or stale-window overwrites. Seven representative final screenshots were
+visually reviewed with no account-email footer. Exact evidence and limits:
+[GMAIL_DRAFT_RECOVERY.md](GMAIL_DRAFT_RECOVERY.md). This is device-local
+durability, not the remaining server-owned/cross-device Google outbox or shared
+received-mail archive. The full suite, CloudKit, physical-device/provider,
+Tap to Pay and distribution gates remain open. No deployment or merge occurred.
+
+Prior native billing entry-point follow-up, 2026-09-07: Management invoice and
+estimate creation now uses the full saved-document builder and shared billing
+authority. Payment preparation cannot implicitly create or relink invoices or
+customers. Standalone invoices share a service/repair/replacement choice;
+completed composers retain the original document and return to Sales without
+automatic email or payment. Exact source, qualification, rollout and remaining
+requirements: [BILLING_ENTRY_POINT_UNIFICATION.md](BILLING_ENTRY_POINT_UNIFICATION.md).
+This supersedes the native-publication limitation in the historical checkpoints
+below, not their open full-suite, independent-staff CloudKit, device, provider
+and distribution gates. Backend 2026.09.07.29 requires separately approved
+deployment before distributing the shared-billing native client.
+
+Prior existing QBO links checkpoint, 2026-09-07: **1174/1174 logic tests per native
+platform, 7/7 selected iPad journeys, 349/349 Backend, 37/37 Tools and unsigned
+universal Mac Release pass**. Administrator review now adopts original
+customer/item/document IDs into shared mappings without creating or changing
+QBO entities or sold prices. Lost decisions recover by GET; reconnecting the
+same realm allows cancellation but never stale confirmation. The three final
+review screenshots were visually checked. Exact evidence, API and recovery
+contracts: [QBO_EXISTING_LINK_ADOPTION.md](QBO_EXISTING_LINK_ADOPTION.md).
+The native Invoice/Estimate buttons still require shared-publication cutover;
+full historical migration, independent staff CloudKit/multidevice, Tap to Pay
+and the remaining full-suite requirements are not proved by these tests.
+
+Prior native tax-address checkpoint, 2026-09-07: **1159/1159 logic tests per native
+platform, 5/5 selected iPad journeys and unsigned universal Mac Release pass**.
+The final native form screenshot was visually reviewed. Address review retains
+the customer/site scope, sold prices and offline snapshot, reaches actual
+native QBO request bodies, and survives saving/reopening the same job. Tests
+are fixture-only; no signed CloudKit or production/provider proof is inferred.
+Exact bundles and diagnostics: [NATIVE_BILLING_TAX_ADDRESSES.md](NATIVE_BILLING_TAX_ADDRESSES.md).
+Native shared-server publication, legacy mapping, complete integration and
+multi-device acceptance remain required. Prior address-capture gaps below are
+superseded only for the entry paths covered by this checkpoint.
+
+Prior native job assignment checkpoint, 2026-09-07: **103/103 focused server tests,
+319/319 complete Backend tests and 37/37 Tools tests pass**. Add/Edit Job and
+dispatch-board assignment now have durable encrypted queueing, original
+connection/revision checks and an in-job review handoff. Early focused native
+acceptance passes 41 logic tests. Final-source acceptance passes **1144/1144
+logic tests on each native platform, 5/5 selected iPad journeys, and the unsigned
+optimized universal Mac Release**, with both architectures verified and zero
+final failures/skips. All three final screenshots were visually reviewed.
+Exact evidence and intermediate failures are recorded in
+[NATIVE_JOB_BILLING_AUTHORITY.md](NATIVE_JOB_BILLING_AUTHORITY.md).
+The preceding published head `12382ae` passes all four hosted jobs, not a
+substitute for this new source's acceptance. The complete application goal,
+invoice/estimate cutover and signed multi-device CloudKit proof remain open.
+
+Prior billing HTTP/assigned-job checkpoint, 2026-09-07: **100/100 focused, 316/316 Backend
+and 37/37 Tools tests pass**. The loopback HTTP → real server publisher/adapter →
+fixture transport round trip verifies assigned-field publication and original
+recovery without another POST to QBO. Tests cover CAS roster races, encrypted
+backup/restore, stale replay/reconnection, revoked permission immediately before
+dispatch, current catalog-price evidence, opaque scoped pagination and UUID-case
+mutation safety. Typed native requests are implemented and **1120/1120 logic tests
+pass per native platform, with 2/2 selected iPad Invoice/Mail UI regressions**.
+Evidence and scope are recorded in [QBO_BILLING_HTTP_CONTRACT.md](QBO_BILLING_HTTP_CONTRACT.md).
+**Native billing buttons, automatic schedule authority/offline edits, and review
+navigation are not yet migrated.** Tax address collection and scalable legacy
+mapping remain requirements before that cutover, not reasons to drop field use.
+No deployment, live provider write, signing or CloudKit promotion is claimed.
+
+Prior staged billing engine checkpoint, 2026-09-07: **60/60 focused engine/adapter,
+276/276 Backend and 37/37 Tools tests pass**. A fixture round trip exercises
+the shared publisher, actual fixed-origin adapter, confirmation and replay;
+backup/restore and concurrent invoice/payment reservation tests also pass.
+This engine has **no HTTP/native billing entry point yet**. Existing app billing
+continues using direct transport. There are no new native/UI/device acceptance
+claims. Scope, retained evidence and integration requirements:
+[QBO_SERVER_BILLING_ENGINE.md](QBO_SERVER_BILLING_ENGINE.md).
+
+Customer publication checkpoint, 2026-09-07: **1100/1100 logic tests pass on each
+native platform, 10/10 selected iPad journeys, 216/216 Backend and 37/37 Tools**.
+The unsigned optimized universal Mac Release passes; both architectures are
+verified and both final customer-review screenshots were visually checked.
+The server owns new customer create/link intents and one-to-one
+mapping, encrypted original proposals, one-time dispatch and read-only unknown
+recovery. Native customer publication cannot fall back to device-only create.
+The single-customer action and recovery retain exact model/contact identity;
+the existing billing coordinator uses server-confirmed customers without
+repricing invoice items. Administrator-only customer sync is enforced on the
+server, while field drafts remain saved. Scope, initial test failure and remaining
+customer/billing/CloudKit work: [QBO_SERVER_CUSTOMER_PUBLICATION.md](QBO_SERVER_CUSTOMER_PUBLICATION.md).
+This does not qualify the full application or any production deployment.
+
+Mailbox checkpoint, 2026-09-07: **1081/1081 logic tests pass on each native
+platform, 10/10 selected iPad journeys, Backend 173/173 and Tools 37/37**.
+Mail now exposes older messages, Sent/All Mail/Trash, read/unread, archive and
+in-app restoration through the existing simple interface. Page/action results
+retain the original business/provider and message/thread identity; failed
+pages preserve their cursor and rows, and uncertain mutations do not report
+success or retry automatically. Thirty-two new logic tests and four visually
+checked final iPad PNGs are documented in
+[GMAIL_MAILBOX_WORKFLOW.md](GMAIL_MAILBOX_WORKFLOW.md). The final unsigned
+universal Mac Release passes and both architectures are verified. An additional Mac UI runner stalled at dyld startup;
+macOS developer authorization is disabled, no setting was changed, and the
+specific diagnostic run was cancelled and preserved. **Mac UI acceptance is
+not proved** by logic or iPad tests. Prior published `3348725` passes all four
+hosted jobs, not a substitute for this new source's checks. Durable/server-owned
+Mail dispatch, cross-restart drafts, received-mail/job/file linkage, remaining
+Google/accounting workflows, signed CloudKit/offline multi-device convergence,
+approved Tap to Pay and provider/platform release acceptance remain open. No
+merge, deployment, signing/entitlement change, physical install or live
+business/provider mutation occurred.
+
+Mail workflow checkpoint, 2026-09-07: **1049/1049 logic tests pass on each of
+iPad Simulator and Mac Catalyst; 8/8 selected iPad UI journeys, 173/173 Backend
+and 37/37 Tools tests pass**. Native attachment preview, complete forwarding,
+file import/removal and simple draft recovery are integrated. Ordinary replies
+no longer require a customer template; original account, explicit job/document
+links and current consent/access are retained. Generated document email uses
+the shared coordinator. Failed confirmation after an accepted send cannot
+authorize a duplicate; accepted Gmail Sent evidence is not recipient delivery.
+Fifty-one new Mail logic tests and all five visually inspected final Mail PNGs
+are documented in [GMAIL_COMPOSITION_WORKFLOW.md](GMAIL_COMPOSITION_WORKFLOW.md).
+The optimized universal Mac Release passes and arm64/x86_64 are verified.
+The prior published `d9a83d8` head passes all four hosted jobs, not a substitute
+for this source's new-head checks. Cross-restart/server-owned Mail dispatch,
+folders/pagination, received-email linkage/archive, remaining Google/QBO and
+financial workflows, signed CloudKit/offline multi-device convergence, supplier
+onboarding, approved physical-iPhone Tap to Pay and provider/platform release
+acceptance remain open. No merge, deployment, signing/entitlement change,
+physical install or live customer/provider/accounting mutation occurred.
+
+Google Calendar schedule checkpoint, 2026-09-07: **998/998 logic tests pass
+on each of iPad Simulator and Mac Catalyst; 7/7 selected iPad UI journeys,
+173/173 Backend tests and 37/37 Tools tests pass**. The final unsigned optimized
+universal Mac Release succeeds and both arm64 and x86_64 are verified.
+Forty-five new calendar tests cover original provider/calendar/event identity,
+durable pre-create ID reservation, same-ID recovery, conditional ETag writes,
+current dispatch authority, local edits/save failures and work/billing-history
+retention through asynchronous deletion. Import no longer guesses event links
+or overwrites operational jobs while publishing an appointment. The Schedule
+confirmation retains its exact target; its billed-job protection journey passes
+and the retained final iPad screenshot was visually checked, with readable
+context/status and no email footer. See
+[GOOGLE_CALENDAR_WORKFLOW_LIFECYCLE.md](GOOGLE_CALENDAR_WORKFLOW_LIFECYCLE.md)
+for exact retained evidence, intermediate corrections and remaining limits.
+The preceding `455ac33` head passes all four hosted jobs; this source requires
+its own new-head acceptance. Server-owned calendar dispatch/outcome journaling,
+cross-device reconciliation, recurring/deleted event sync, legacy metadata
+scoping, remaining Google/accounting workflows, signed CloudKit/offline and
+provider/platform acceptance remain open. No merge, deployment, signing change,
+physical install or live business mutation occurred. The full-suite goal remains
+open; this is not production release qualification.
+
+
+Shared catalog checkpoint, 2026-09-07: **953/953 logic tests pass on each
+of iPad Simulator and Mac Catalyst; 7/7 selected iPad journeys, 173/173
+Backend tests and 37/37 Tools tests pass**. Backend candidate
+`2026.09.07.23` now owns the migrated shared-pricebook create/update sends.
+Encrypted immutable proposals, transactional one-time dispatch, current
+server administrator access, company/realm/grant checks, scoped item mappings,
+inactive-item pagination and uncertain-result recovery are covered by 49 new
+backend regressions. The native approval/retry path has no direct QBO fallback;
+14 new logic tests retain original identity, reviewed proposals and local-save
+recovery. The focused Catalog publication review sheet recovers original links
+or cancels only never-sent proposals, then returns to the catalog. Existing
+technician item entry, invoice prices, Invoice launch, simple Mail and catalog
+review journeys remain green. The final iPad screenshot was visually checked:
+clear item context and actions, no clipping or visible email footer.
+See [QBO_SERVER_CATALOG_PUBLICATION.md](QBO_SERVER_CATALOG_PUBLICATION.md)
+for retained results and the intermediate failures that were corrected.
+The final unsigned optimized universal Mac Release succeeds; both arm64 and
+x86_64 are verified. The actor-isolation warning found during optimization
+was corrected and complete native acceptance was rerun. Only the pre-existing
+external Metal-toolchain search-path warning remains.
+All four hosted jobs passed at the preceding `6ded36c` head; this candidate
+requires its own new-head hosted acceptance. Server-owned customer/invoice/
+estimate/payment dispatch, new-job assignment authority, credential containment,
+reconnected-grant/outcome resolution, attachment recovery, full ledger/settlement,
+remaining Google workflows, signed CloudKit/offline multi-device convergence,
+vendor onboarding and approved embedded Tap to Pay/provider/platform acceptance
+remain open. This is not full-suite production readiness. No merge, deployment,
+signing/entitlement change, physical install or live business mutation occurred.
+
+
+Billing publication checkpoint, 2026-09-07: **939/939 logic tests pass on each
+of iPad Simulator and Mac Catalyst; 6/6 selected iPad journeys pass**.
+Billing Documents and the Management retry queue now share one captured
+customer → approved items → invoice/estimate → confirmation workflow. Current
+known role/assignment, original provider/context, immutable sold prices, exact
+remote identity/lines, unpaid-update evidence, model replacement/deletion and
+local-save failure are checked. Supporting-file follow-up retains the same
+workflow and stores attachment-reference evidence. Thirty-six new tests cover
+these boundaries; unresolved CloudKit payment links and the currency-conversion
+boundary no longer crash the invoice edit gate. See
+[QBO_BILLING_WORKFLOW_LIFECYCLE.md](QBO_BILLING_WORKFLOW_LIFECYCLE.md) for exact
+evidence and remaining scope. The unsigned optimized universal Mac Release
+build passes and both arm64 and x86_64 are verified.
+The preceding 705d77e head passes all four hosted jobs. This source still needs
+its own hosted checks. Server-owned accounting intents/dispatch, durable
+uncertain-upload recovery, other provider workflows, signed CloudKit/offline
+convergence, approved embedded Tap to Pay, and physical/provider/platform
+acceptance remain open. No merge, deployment, signing/entitlement change,
+physical install or live business mutation occurred.
+
+Catalog publication checkpoint, 2026-09-07: **903/903 logic tests pass on each
+of iPad Simulator and Mac Catalyst; 10/10 focused iPad journeys and the
+unsigned universal Mac Release build pass**. Management approval/retry and
+both reviewed reconciliation directions retain the original provider, run,
+item revision and model context. Confirmation edits, role loss, late results,
+duplicate identities and local-save failures are covered by 27 new tests.
+The shared invoice-line gate and Billing Documents catalog merge retain
+duplicate identities for explicit review. A field-item publication test proves
+the new QBO Item ID does not reprice the existing invoice snapshot. See
+[QBO_CATALOG_WORKFLOW_LIFECYCLE.md](QBO_CATALOG_WORKFLOW_LIFECYCLE.md) for exact
+results, retained paths, prior failed iterations and scope. The separate
+BillingDocumentsView customer/item/document publication callback chain remains
+active and unqualified end-to-end; it is the next lifecycle migration.
+Server-owned immutable publication intents, durable realm-scoped item mappings,
+inactive-item enumeration, signed CloudKit/offline and provider/platform
+acceptance also remain open. No merge, deployment, signing, physical install
+or live business mutation occurred.
+
+QBO sync lifecycle checkpoint, 2026-09-07: **876/876 logic tests pass on iPad
+and Mac Catalyst; 6/6 focused iPad interface journeys pass; universal optimized
+Mac Release succeeds**. The active QuickBooks Management resource sync captures
+its workspace/provider/run before Task scheduling and retains it through
+pagination, accounting mappings, local saves and webhook follow-up. Run
+supersession, cancellation and current known administrator access are rechecked;
+stored method links use exact provider/customer identities. Identical saved
+credential reloads no longer cancel a valid run; real connection changes still
+do. The 27 new tests cover these boundaries and mapping-response races.
+See [QBO_SYNC_WORKFLOW_LIFECYCLE.md](QBO_SYNC_WORKFLOW_LIFECYCLE.md) for exact
+retained evidence and limits. The previous published head ba5617f passes all
+four hosted jobs, not a substitute for new-head acceptance. Other publication,
+Google and attachment orchestrations, event-specific deletion/void reconciliation,
+server-owned provider authority, payment/ledger completeness, signed CloudKit
+and provider/platform acceptance remain open. No merge, deployment, signing
+change, physical install or live business mutation occurred.
+
+QBO balance checkpoint, 2026-09-07: **849/849 logic tests pass on iPad and
+Mac Catalyst; 6/6 focused iPad interface journeys pass; universal optimized
+Mac Release succeeds**. Imported payment subsets no longer invent an invoice
+balance or replace original native capture evidence. Missing/invalid balances,
+duplicate payment identities, invalid totals and incomplete query pagination
+require reconciliation; failed resources cannot import retained screen arrays
+as fresh data. The existing review flow gates payment collection, invoice
+edits, statements and financial CSV export. The simulator QR contract test
+now independently decodes the actual image if VM Vision inference is unavailable
+or empty; blank-image rejection and deterministic payload fixtures remain.
+See [QBO_BALANCE_RECONCILIATION.md](QBO_BALANCE_RECONCILIATION.md) for retained
+results, exact scope and remaining gaps. Prior hosted head `61df19b` passes
+Mac and all five selected iPad UI journeys but fails that earlier QR assertion;
+fresh hosted acceptance is not inferred from these local passes. Historical
+ledger/statement evidence, changed/deleted payment reconciliation, settlement,
+administrator resolution, whole-sync workspace retention, signed CloudKit and
+platform/provider acceptance remain open. No merge, deployment, signing change
+or live business mutation occurred.
+
+Billing identity checkpoint, 2026-09-07: **829/829 logic tests pass on iPad
+and Mac Catalyst; 5/5 focused iPad interface journeys pass**. Independent
+invoice/estimate UUIDs remain visible; exact QBO/customer/lineage evidence
+replaces destructive name/date/amount merging. Conflicting invoice mappings
+preserve history and gate edits, collection, financial reports and statements.
+Equipment labels include an intrinsic QR quiet margin with deterministic decode
+regressions and verified single-page PDF layout. The native workflow's Mac
+architecture argument order is corrected; the earlier hosted run failed and
+new hosted acceptance remains distinct from these local passes. See
+[BILLING_IDENTITY_RECONCILIATION.md](BILLING_IDENTITY_RECONCILIATION.md).
+Complete payment balance reconciliation, administrator identity resolution,
+signed CloudKit/offline acceptance and platform/provider release gates remain.
+No merge, deployment, signing change or live business mutation occurred.
+
+Customer statement checkpoint, 2026-09-07: **811/811 logic tests pass on iPad
+and Mac Catalyst; 4/4 focused iPad UI tests pass; universal optimized Mac
+Release succeeds**. The prior historical
+balance and same-day invoice suppression defects were reproduced. Dedicated
+statement identity/cutoff/reconciliation logic passes 16 focused regressions.
+Current statements retain a simple Files flow with a direct review handoff;
+historical customer export is explicitly unavailable until dated accounting
+and versioned invoice evidence is integrated. The unsafe cache fallback is
+removed, not the full historical-feature gate. Both native PDF pages were
+rendered and visually verified; invoice groups stay together when they fit. See
+[CUSTOMER_STATEMENT_RECONCILIATION.md](CUSTOMER_STATEMENT_RECONCILIATION.md).
+Other billing display heuristics and the full payment/platform gates remain.
+
+Payment coordination checkpoint, completed 2026-09-07: **792/792 logic tests
+on iPad and Mac Catalyst, 7/7 focused iPad UI journeys, 124/124 Backend and
+37/37 Tools tests; universal Mac Release built successfully**. Backend candidate
+`2026.09.06.22` now reserves immutable shared attempts and issues one-time
+dispatch permissions for the current native card/ACH/refund service. Server
+provider/accounting verification, original-assignment limits, native restoration
+and the focused Payment review sheet replace the prior unjournaled entry paths.
+Refund accounting adds complete-snapshot matching and stable request IDs;
+optional CloudKit fields retain attempt/provider status separately from queue
+progress. See [PAYMENT_ATTEMPT_COORDINATION.md](PAYMENT_ATTEMPT_COORDINATION.md).
+Server-owned sending, accounting-send coordination, ACH returns/settlement,
+cross-channel collection, historical statements, signed CloudKit/replica
+acceptance and provider/platform release gates remain open. This is progress,
+not complete payment safety or finished application readiness. No merge,
+deployment, signing, production approval or physical install occurred.
+
+Prior 2026-09-06 payment-workflow checkpoint: **779/779 logic tests on both iPad
+and Mac Catalyst, 6/6 focused iPad UI journeys, 93/93 Backend and 37/37 Tools**.
+QBO payment workflows retain their initiating account through async/callback
+work and local accounting saves; ACH uses eCheck routes, accounting refund
+records do not request another payment, and direct-provider errors omit raw
+sensitive content. Backend candidate `2026.09.06.21` prevents late refresh/revoke
+responses from replacing or deleting a newer saved grant. See
+[PAYMENT_WORKFLOW_LIFECYCLE.md](PAYMENT_WORKFLOW_LIFECYCLE.md) for exact evidence
+and current limitations. Durable cross-device attempts, refund-receipt recovery,
+ACH settlement/returns, remaining authorization/diagnostic lifecycle work,
+historical statements and signed CloudKit/production acceptance remain open.
+The full application is not finished. No merge or production action occurred.
+
+Prior 2026-09-06 provider-request checkpoint: **765/765 logic tests on both iPad and
+Mac Catalyst, 6/6 focused iPad UI journeys, and a successful universal Mac
+Release build**. Direct QBO/Google requests now retain the verified workspace
+and initiating provider identity across refresh, retries, pages and Drive
+upload recovery; late responses cannot clear replacement credentials. The
+transport tests also exposed and corrected the QBO nested attachment-response
+decoder. See [PROVIDER_WORKSPACE_LIFECYCLE.md](PROVIDER_WORKSPACE_LIFECYCLE.md)
+for exact evidence and scope. Higher-level retained-context workflows, durable
+uncertain-payment attempts, legacy raw-response diagnostics, role enforcement,
+historical statements and signed CloudKit/production acceptance remain open.
+This is verified progress, not full application or payment readiness. No merge,
+deployment, signing change, production approval or physical install occurred.
+
+Prior 2026-09-06 workspace-access candidate: **743/743 iPad logic tests, 6/6 focused
+iPad UI journeys, and successful Mac Catalyst Debug/Release builds**. Startup,
+login, Shortcuts and own-backend business requests now require company/store
+proof; existing unregistered data needs explicit fresh-admin approval. Leases
+expire without navigation, stale session results are rejected, and account
+changes close access without deleting saved work. See
+[CLOUDKIT_WORKSPACE_IDENTITY.md](CLOUDKIT_WORKSPACE_IDENTITY.md) for exact evidence
+and limitations. This supersedes earlier record-count/admin-bypass claims, not
+the physical acceptance boundary. Direct provider callback/role audits,
+mirroring lifetime after account changes, signed-device/offline convergence,
+historical statement corrections and the existing release gates remain open.
+Backend `2026.09.06.20` must be deployed and verified before this native candidate
+is distributed. No production deployment, workspace approval or physical-device
+installation occurred in this checkpoint.
+
 The exact build-`2026090506` signing recheck passes **70/4/0** in normal local
 preflight. Strict App Store mode preserves all 70 passes and produces only two
 failures: the iOS archive is signed by the installed Apple Development identity
