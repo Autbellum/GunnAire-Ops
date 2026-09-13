@@ -56,8 +56,21 @@ class NativeWorkflowShardTests(unittest.TestCase):
         left, right = (set(group[1:]) for group in groups)
         self.assertFalse(left & right)
         expected = {"-only-testing:GunnAire OpsUITests/GunnAire_OpsUITests/" + name for name in declared}
-        self.assertEqual(left | right, expected)
-        self.assertLessEqual(abs(len(left) - len(right)), 1)
+        loadsight_methods = {
+            "testEmbeddedWorkspaceOpensFromEstimates",
+            "testCustomerJobLinkAndUnsavedProjectGuard",
+            "testLocalDraftRecoversAfterTermination",
+        }
+        loadsight_source = (ROOT / "GunnAire OpsUITests/LoadSightIntegrationUITests.swift").read_text()
+        for name in loadsight_methods:
+            self.assertRegex(loadsight_source, r"func " + name + r"\(")
+        loadsight = {
+            "-only-testing:GunnAire OpsUITests/LoadSightIntegrationUITests/" + name
+            for name in loadsight_methods
+        }
+        self.assertTrue(loadsight <= left)
+        self.assertEqual(left | right, expected | loadsight)
+        self.assertLessEqual(abs(len(left - loadsight) - len(right)), 1)
         self.assertIn("${{ matrix.platform }}-${{ matrix.shard }}-native-", WORKFLOW.read_text())
 
     def test_mac_keeps_the_complete_logic_target(self):
