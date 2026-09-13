@@ -5108,13 +5108,14 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             ):
                 self.write_json({"error": "Estimate amount is invalid"}, status=HTTPStatus.BAD_REQUEST)
                 return
+            estimate_amount = float(raw_estimate_amount)
             if (
-                not 0 <= raw_estimate_amount <= 999_999_999.99
+                not math.isfinite(estimate_amount)
+                or not 0 <= estimate_amount <= 999_999_999.99
                 or re.fullmatch(r"[0-9a-f]{64}", estimate_revision or "") is None
             ):
                 self.write_json({"error": "Estimate approval snapshot is invalid"}, status=HTTPStatus.BAD_REQUEST)
                 return
-            estimate_amount = float(raw_estimate_amount)
             estimate_amount = round(estimate_amount, 2)
 
         requested_days = payload.get("expiresInDays", 14)

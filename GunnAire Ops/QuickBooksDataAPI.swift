@@ -3244,6 +3244,40 @@ enum QuickBooksCatalogCreateOperation {
     }
 }
 
+/// One local catalog identity owns one QuickBooks create operation across
+/// devices and retries. Query-before-create still performs reconciliation;
+/// the stable request ID closes the uncertain-response window without placing
+/// customer, item, or accounting detail in the URL.
+enum QuickBooksCatalogCreateOperation {
+    static func requestID(for localItemID: UUID) -> String {
+        "ga-item-\(localItemID.uuidString.lowercased())"
+    }
+
+    static func payload(
+        for item: Item,
+        incomeAccountRef: QuickBooksReference,
+        expenseAccountRef: QuickBooksReference?
+    ) -> QuickBooksItemCreate {
+        QuickBooksItemCreate(
+            Name: item.name,
+            ItemType: item.itemType.rawValue,
+            Description: item.itemDescription,
+            Sku: item.sku,
+            PurchaseDesc: item.purchaseDescription ?? item.itemDescription,
+            UnitPrice: item.unitPrice,
+            PurchaseCost: item.purchaseCost,
+            Taxable: item.isTaxable,
+            IncomeAccountRef: incomeAccountRef,
+            ExpenseAccountRef: expenseAccountRef,
+            PrefVendorRef: item.preferredVendorQuickBooksID.flatMap { quickBooksID in
+                quickBooksID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? nil
+                    : QuickBooksReference(value: quickBooksID, name: item.preferredVendorName)
+            }
+        )
+    }
+}
+
 struct QuickBooksItemUpdate: Codable {
     let Id: String
     let SyncToken: String

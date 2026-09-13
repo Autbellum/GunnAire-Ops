@@ -980,6 +980,12 @@ struct BillingDocumentsView: View {
             .filter { $0.customer != nil }.sorted { $0.createdAt > $1.createdAt }
     }
 
+    private var unresolvedInvoiceRelationshipCount: Int {
+        Invoice.displayDeduplicated(invoices)
+            .filter { $0.customer == nil }
+            .count
+    }
+
     private var visibleBillingServiceCallIDsForFieldUser: Set<UUID> {
         AppAccess.visibleBillingServiceCallIDs(
             email: currentUserEmail,
@@ -2220,10 +2226,10 @@ GunnAire
                     selectedItems: selectedItems,
                     selectedItemizedAssemblyIDs: Set(selectedItemizedAssemblyMemberships.keys),
                     documentScopedReviewItemIDs: documentScopedReviewItemIDs,
-                        onToggle: toggleItem,
-                        catalogScope: bundleSelectionScope,
-                        priceLabel: catalogPriceLabel,
-                        selectionMessage: bundleSelectionError
+                    onToggle: toggleItem,
+                    catalogScope: bundleSelectionScope,
+                    priceLabel: catalogPriceLabel,
+                    selectionMessage: bundleSelectionError
                 )
             }
             .sheet(isPresented: $showingItemCreator) {
@@ -2445,7 +2451,6 @@ GunnAire
         }
         populateCustomerFields(from: customer)
         synchronizeServiceLocation(for: customer)
-        reconcileLineEquipmentAssignments()
         reconcileBundleEquipmentCustomer(customer.id)
     }
 
@@ -3903,6 +3908,7 @@ GunnAire
                                     .accessibilityElement(children: .combine)
                                     .accessibilityIdentifier("InvoiceDisclosure-\(invoice.id.uuidString)")
                                 }
+                                .accessibilityIdentifier("InvoiceDisclosure-\(invoice.id.uuidString)")
                                 .padding(.vertical, 4)
                             }
                         }
@@ -6883,6 +6889,7 @@ GunnAire
                         }
                         .frame(minHeight: 44)
                     }
+                    .frame(minHeight: 44)
                 }
                 .font(.caption)
                 .buttonStyle(.borderless)

@@ -749,6 +749,22 @@ struct GunnAire_OpsTests {
         )
     }
 
+    @Test func maximumDynamicTypeFixtureIsDebugOnlyAndDeterministic() {
+        #expect(
+            GunnAireAccessibilityTextSizePolicy.forcedDynamicTypeSize(
+                processArguments: [
+                    "GunnAire Ops",
+                    GunnAireAccessibilityTextSizePolicy.uiTestMaximumDynamicTypeArgument
+                ]
+            ) == .accessibility5
+        )
+        #expect(
+            GunnAireAccessibilityTextSizePolicy.forcedDynamicTypeSize(
+                processArguments: ["GunnAire Ops"]
+            ) == nil
+        )
+    }
+
     @Test func primaryIPadMacNavigationCommandsStayFocusedUniqueAndRoleGuarded() {
         let allCommands = GunnAireNavigationCommandDefinition.all
         let commands = GunnAireNavigationCommandDefinition.primary

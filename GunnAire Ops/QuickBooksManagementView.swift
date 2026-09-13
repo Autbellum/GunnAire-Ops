@@ -728,6 +728,47 @@ enum PricebookReviewPublication {
         return .reconciliationRequired(differenceCount: differences.count)
     }
 
+    static func linkedRemoteItem(
+        for localItem: Item,
+        in remoteItems: [QuickBooksItem]
+    ) throws -> QuickBooksItem {
+        let quickBooksID = localItem.quickBooksID?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let candidates = remoteItems.filter { normalize($0.Id) == normalize(quickBooksID) }
+        guard candidates.count <= 1 else {
+            throw PricebookReviewPublicationError.ambiguousLinkedRemoteItem(quickBooksID)
+        }
+        guard let linkedItem = candidates.first, !quickBooksID.isEmpty else {
+            throw PricebookReviewPublicationError.missingLinkedRemoteItem(
+                name: localItem.name,
+                quickBooksID: quickBooksID.isEmpty ? "unassigned" : quickBooksID
+            )
+        }
+        return linkedItem
+    }
+
+    @discardableResult
+    static func linkApprovedItem(
+        _ localItem: Item,
+        to remoteItem: QuickBooksItem,
+        at date: Date = Date()
+    ) -> ApprovedPricebookLinkOutcome {
+        localItem.quickBooksID = remoteItem.Id.trimmingCharacters(in: .whitespacesAndNewlines)
+        localItem.quickBooksLastSyncedAt = date
+        localItem.timestamp = date
+        let differences = QuickBooksCatalogReconciliation.differences(
+            localItem: localItem,
+            remoteItem: remoteItem
+        )
+        guard !differences.isEmpty else {
+            QuickBooksCatalogSnapshotApplication.apply(remoteItem, to: localItem, at: date)
+            return .synchronized
+        }
+        localItem.quickBooksSyncStatus = "pending_update"
+        localItem.quickBooksSyncDetail = "Pricebook approval is saved locally. Review \(differences.count) linked QuickBooks difference\(differences.count == 1 ? "" : "s") before choosing which version to publish."
+        return .reconciliationRequired(differenceCount: differences.count)
+    }
+
     private static func normalize(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
@@ -1386,6 +1427,11 @@ struct QuickBooksManagementView: View {
         let data = Data(#"{"Id":"QBO-UI-PRICEBOOK-REVIEW","SyncToken":"4","Name":"HVAC Diagnostic Service","Type":"Service","Description":"Diagnostic visit and system evaluation","UnitPrice":239,"PurchaseCost":42,"Taxable":false,"Active":true}"#.utf8)
         return (try? JSONDecoder().decode(QuickBooksItem.self, from: data)).map { [$0] } ?? []
     }
+
+    private static var linkedPricebookReviewFixtureItems: [QuickBooksItem] {
+        let data = Data(#"{"Id":"QBO-UI-PRICEBOOK-REVIEW","SyncToken":"4","Name":"HVAC Diagnostic Service","Type":"Service","Description":"Diagnostic visit and system evaluation","UnitPrice":239,"PurchaseCost":42,"Taxable":false,"Active":true}"#.utf8)
+        return (try? JSONDecoder().decode(QuickBooksItem.self, from: data)).map { [$0] } ?? []
+    }
     #endif
 
     private var quickBooksPaymentsEnabled: Bool {
@@ -2011,7 +2057,7 @@ struct QuickBooksManagementView: View {
                                             .buttonStyle(.borderedProminent)
                                             .tint(Color.brandGold)
                                             .foregroundStyle(Color.primaryBlack)
-                                            .disabled(activeLocalInvoicePublicationID != nil)
+                                            .disabled(!isAuthenticated || activeLocalInvoicePublicationID != nil)
 
                                             BillingPublicationReviewLink(document: .invoice(invoice), context: modelContext)
 
@@ -3656,6 +3702,11 @@ struct QuickBooksManagementView: View {
             return
         }
 
+        guard isAuthenticated else {
+            activeCatalogPublicationID = nil
+            actionMessage = "Saved \(localItem.name) locally. Connect QuickBooks to publish it."
+            return
+        }
         publishApprovedCatalogItem(localItem)
     }
 
@@ -3742,7 +3793,18 @@ struct QuickBooksManagementView: View {
 
         if hasLinkedQuickBooksItem {
             showCatalogReconciliationQueue = true
+            guard isAuthenticated else {
+                activePricebookReviewID = nil
+                actionMessage = "\(item.name) is approved for the company pricebook. Connect QuickBooks to load its linked comparison; no QuickBooks change was sent."
+                return
+            }
             refreshApprovedLinkedCatalogItem(item)
+            return
+        }
+
+        guard isAuthenticated else {
+            activePricebookReviewID = nil
+            actionMessage = "\(item.name) is approved for the company pricebook. Connect QuickBooks to publish it."
             return
         }
 
@@ -4730,6 +4792,7 @@ struct QuickBooksManagementView: View {
     }
 
     private func pricebookApprovalButtonTitle(for item: Item) -> String {
+        guard isAuthenticated else { return "Approve for Pricebook" }
         return item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
             ? "Approve & Compare"
             : "Approve & Publish"

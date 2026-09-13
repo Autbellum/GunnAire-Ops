@@ -1055,6 +1055,107 @@ struct PaymentsAndReceiptsView: View {
         }
     }
 
+    private func openQuickBooksConnectionFromContactlessGuide() {
+        showingContactlessPaymentGuide = false
+        Task { @MainActor in
+            await Task.yield()
+            GunnAireAppIntentRouter.store(.sync)
+        }
+    }
+
+    private func verifyContactlessPayment(for invoice: Invoice) async {
+        guard isAdminUser else {
+            contactlessGuideMessage = "Only Accounting or an administrator can verify QuickBooks payment records."
+            return
+        }
+        guard isQuickBooksConnected else {
+            contactlessGuideMessage = "Connect QuickBooks on this device before checking this payment."
+            return
+        }
+        guard let quickBooksInvoiceID = invoice.quickBooksID?.nilIfBlank else {
+            contactlessGuideMessage = "Publish this invoice to QuickBooks before checking its payment."
+            return
+        }
+
+        let previousBalance = outstandingBalance(for: invoice)
+        let knownQuickBooksPaymentIDs = Set(
+            payments
+                .filter { $0.invoice?.id == invoice.id }
+                .compactMap { $0.quickBooksID?.nilIfBlank }
+        )
+        isVerifyingContactlessPayment = true
+        defer { isVerifyingContactlessPayment = false }
+
+        do {
+            let remoteInvoice = try await fetchQuickBooksInvoiceForContactlessVerification(
+                id: quickBooksInvoiceID
+            )
+            guard remoteInvoice.Id == quickBooksInvoiceID else {
+                contactlessGuideMessage = "QuickBooks did not return this invoice. Reconnect the approved company or review the invoice in QuickBooks before collecting again."
+                return
+            }
+
+            let remotePayments = try await fetchQuickBooksPaymentsForContactlessVerification()
+            let linkedPayments = remotePayments.filter { payment in
+                QuickBooksPaymentAllocation.amountApplied(
+                    by: payment,
+                    toInvoiceID: quickBooksInvoiceID
+                ) > 0.009
+            }
+            let newlyLinkedPaymentAmount = linkedPayments
+                .filter { !knownQuickBooksPaymentIDs.contains($0.Id) }
+                .reduce(0) {
+                    $0 + QuickBooksPaymentAllocation.amountApplied(
+                        by: $1,
+                        toInvoiceID: quickBooksInvoiceID
+                    )
+                }
+
+            try QuickBooksLocalSync.importSnapshot(
+                customers: [],
+                items: [],
+                estimates: [],
+                invoices: [remoteInvoice],
+                payments: linkedPayments,
+                vendors: [],
+                into: modelContext
+            )
+
+            let refreshedPayments = try modelContext.fetch(FetchDescriptor<Payment>())
+            let refreshedBalance = Invoice.outstandingBalance(
+                for: invoice,
+                payments: refreshedPayments
+            )
+            let outcome = FieldPaymentVerificationOutcome.resolve(
+                previousBalance: previousBalance,
+                refreshedBalance: refreshedBalance,
+                newlyLinkedPaymentAmount: newlyLinkedPaymentAmount
+            )
+            contactlessGuideMessage = outcome.statusMessage
+            if outcome.confirmsCollection {
+                fieldPaymentHandoff.end(invoiceID: invoice.id)
+            }
+        } catch {
+            contactlessGuideMessage = "QuickBooks could not be checked. No payment status was changed. Try again, or review this invoice in QuickBooks before collecting again."
+        }
+    }
+
+    private func fetchQuickBooksInvoiceForContactlessVerification(id: String) async throws -> QuickBooksInvoice {
+        try await withCheckedThrowingContinuation { continuation in
+            liveAPI.fetchInvoice(id: id) { result in
+                continuation.resume(with: result)
+            }
+        }
+    }
+
+    private func fetchQuickBooksPaymentsForContactlessVerification() async throws -> [QuickBooksPayment] {
+        try await withCheckedThrowingContinuation { continuation in
+            liveAPI.fetchPayments { result in
+                continuation.resume(with: result)
+            }
+        }
+    }
+
     private var paymentConfirmationTitle: String {
         if isProcessingQuickBooksPayment {
             return "Processing..."

@@ -575,7 +575,7 @@ final class QuickBooksPaymentsService {
         }
     }
 
-    private func syncManualAccountingPayment(for payment: Payment) async throws -> QuickBooksPayment {
+    func syncManualAccountingPayment(for payment: Payment) async throws -> QuickBooksPayment {
         return try await api.withWorkspaceOperation { operation in
             guard !payment.isRefund else {
                 throw QuickBooksPaymentsServiceError.invalidRetryTarget
