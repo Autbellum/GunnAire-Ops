@@ -1276,6 +1276,22 @@ def check_source(root: Path, results: Results) -> tuple[str, str, str]:
     return marketing_version, build_version, backend_version
 
 
+def forbidden_release_markers(strings_text: str) -> list[str]:
+    # Exact production billing persistence names, reviewed in
+    # SharedJobBillingConnection.swift, JobBillingDispatch.swift and its journal.
+    # Do not exempt arbitrary text merely because it mentions job billing.
+    production_names = {
+        "JobBillingBootstrapStore", "JobBillingBootstrap", "bootstrapStore",
+        "importedBootstrapEditID", "JobBillingBootstrap-v1",
+        "JobBillingBootstrapEncryption-v1",
+    }
+    inspected = "\n".join(
+        line for line in strings_text.splitlines() if line not in production_names
+    ).lower()
+    return [marker for marker in ("-uiTest", "bootstrap", "localhost", "127.0.0.1")
+            if marker.lower() in inspected]
+
+
 def check_archive(
     archive: Path,
     marketing_version: str,
@@ -1500,10 +1516,10 @@ def check_archive(
 
     strings_process = run(["strings", str(binary_path)], check=False)
     strings_text = strings_process.stdout.decode("utf-8", errors="replace")
-    forbidden = [marker for marker in ("-uiTest", "bootstrap", "localhost", "127.0.0.1") if marker in strings_text]
+    forbidden = forbidden_release_markers(strings_text)
     results.require(
         strings_process.returncode == 0 and not forbidden,
-        "Release binary contains no UI-test, bootstrap, or local-host markers",
+        "Release binary contains no UI-test, debug-bootstrap, or local-host markers",
         f"Release binary contains forbidden markers: {forbidden}",
     )
 
@@ -1730,14 +1746,10 @@ def check_mac_app(
 
     strings_process = run(["strings", str(binary_path)], check=False)
     strings_text = strings_process.stdout.decode("utf-8", errors="replace")
-    forbidden = [
-        marker
-        for marker in ("-uiTest", "bootstrap", "localhost", "127.0.0.1")
-        if marker in strings_text
-    ]
+    forbidden = forbidden_release_markers(strings_text)
     results.require(
         strings_process.returncode == 0 and not forbidden,
-        "Mac Catalyst binary contains no UI-test, bootstrap, or local-host markers",
+        "Mac Catalyst binary contains no UI-test, debug-bootstrap, or local-host markers",
         f"Mac Catalyst binary contains forbidden markers: {forbidden}",
     )
 

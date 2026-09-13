@@ -16,6 +16,26 @@ except ModuleNotFoundError:  # Direct execution from the Tools directory.
     import release_preflight
 
 
+class ReleaseBinaryMarkerTests(unittest.TestCase):
+    def test_exact_production_billing_names_are_allowed(self):
+        names = "\n".join(("JobBillingBootstrapStore", "JobBillingBootstrap",
+                            "bootstrapStore", "importedBootstrapEditID",
+                            "JobBillingBootstrap-v1", "JobBillingBootstrapEncryption-v1"))
+        self.assertEqual(release_preflight.forbidden_release_markers(names), [])
+
+    def test_debug_and_network_markers_still_fail(self):
+        for marker in ("-uiTest", "schema-bootstrap@gunnaire.invalid",
+                       "GunnAireCloudKitSchemaBootstrap", "__SCHEMA_BOOTSTRAP__",
+                       "localhost", "127.0.0.1", "bootstrapStore-extra"):
+            with self.subTest(marker=marker):
+                self.assertTrue(release_preflight.forbidden_release_markers(marker))
+
+    def test_allowed_name_cannot_hide_an_adjacent_forbidden_marker(self):
+        for text in ("bootstrapStore\n-uiTest", "JobBillingBootstrap localhost",
+                     "bootstrapStore\nSchemaBootstrap"):
+            self.assertTrue(release_preflight.forbidden_release_markers(text))
+
+
 class CloudKitV23PreflightTests(unittest.TestCase):
     def setUp(self) -> None:
         self.production = {
