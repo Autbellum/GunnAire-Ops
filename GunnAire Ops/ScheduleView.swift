@@ -273,20 +273,33 @@ struct ScheduleView: View {
         technicianTimeOffRequests.filter { $0.status == .pending }.count
     }
 
+    /// Standard row chrome for every top-level "card" in the schedule List.
+    /// Buttons inside content that used to live in a ScrollView/LazyVStack
+    /// nested inside this same NavigationStack's detail column were silently
+    /// losing touches to the ScrollView's own pan gesture recognizer — a
+    /// known SwiftUI/UIKit nested-scroll-container conflict. A real List
+    /// (matching CustomersView/BillingDocumentsView, where the same buttons
+    /// work correctly) gives each row proper UIKit-backed gesture handling.
+    private func scheduleCardRow<Content: View>(bottomSpacing: CGFloat = 18, @ViewBuilder content: () -> Content) -> some View {
+        content()
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: bottomSpacing, trailing: 16))
+    }
+
     var body: some View {
-        ZStack {
-            WatermarkBackground()
+        Group {
             NavigationStack(path: $navigationPath) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        snapshotSection
+                List {
+                    scheduleCardRow { snapshotSection }
 
-                        jobSearchSection
+                    scheduleCardRow { jobSearchSection }
 
-                        if canManageDispatch {
-                            serviceRequestsSection
-                        }
+                    if canManageDispatch {
+                        scheduleCardRow { serviceRequestsSection }
+                    }
 
+                    scheduleCardRow {
                         VStack(alignment: .leading, spacing: 10) {
                             sectionTitle("Calendar")
                             DatePicker(
@@ -299,52 +312,56 @@ struct ScheduleView: View {
                             .padding(12)
                             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                         }
+                    }
 
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack {
-                                sectionTitle(selectedDate.formatted(.dateTime.month(.wide).day().year()))
-                                Spacer()
-                                Text("\(selectedDayCalls.count) event\(selectedDayCalls.count == 1 ? "" : "s")")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.secondary)
-                            }
+                    scheduleCardRow(bottomSpacing: selectedDayCalls.isEmpty ? 18 : 10) {
+                        HStack {
+                            sectionTitle(selectedDate.formatted(.dateTime.month(.wide).day().year()))
+                            Spacer()
+                            Text("\(selectedDayCalls.count) event\(selectedDayCalls.count == 1 ? "" : "s")")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
 
-                            if selectedDayCalls.isEmpty {
-                                emptyDayState
-                            } else {
-                                if isFieldTechnician, selectedDayCalls.count > 1 {
-                                    VStack(alignment: .leading, spacing: 10) {
-                                        TechnicianTravelDisclosure(
-                                            calls: selectedDayCalls,
-                                            accessibilityPrefix: "Field"
-                                        )
-                                    }
-                                    .padding(14)
-                                    .background(
-                                        .ultraThinMaterial,
-                                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    if selectedDayCalls.isEmpty {
+                        scheduleCardRow { emptyDayState }
+                    } else {
+                        if isFieldTechnician, selectedDayCalls.count > 1 {
+                            scheduleCardRow {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    TechnicianTravelDisclosure(
+                                        calls: selectedDayCalls,
+                                        accessibilityPrefix: "Field"
                                     )
                                 }
-
-                                VStack(spacing: 10) {
-                                    ForEach(selectedDayCalls) { call in
-                                        selectedDayCallRow(for: call)
-                                    }
-                                }
+                                .padding(14)
+                                .background(
+                                    .ultraThinMaterial,
+                                    in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                )
                             }
                         }
 
-                        if let message = googleAuth.calendarSyncMessage ?? syncMessage {
+                        ForEach(selectedDayCalls) { call in
+                            scheduleCardRow(bottomSpacing: 10) {
+                                selectedDayCallRow(for: call)
+                            }
+                        }
+                    }
+
+                    if let message = googleAuth.calendarSyncMessage ?? syncMessage {
+                        scheduleCardRow {
                             Text(message)
                                 .accessibilityIdentifier("ScheduleSyncStatus")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 2)
                         }
-
                     }
                 }
-                .padding(.horizontal)
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
                 .padding(.vertical, 10)
                 .background(Color.clear)
                 .navigationTitle("Schedule")
@@ -1426,7 +1443,7 @@ struct ScheduleView: View {
                     Image(systemName: "chevron.right")
                         .frame(width: 34, height: 34)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.borderless)
                 .accessibilityLabel("Open job details")
                 .accessibilityIdentifier("OpenServiceCall-\(call.id.uuidString)")
 

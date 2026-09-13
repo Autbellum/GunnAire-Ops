@@ -58,6 +58,8 @@ Config/Local.xcconfig
 # Generated local QA previews (source assets remain under AppStoreAssets)
 /output/
 /tmp/
+/LoadSight/output/
+/LoadSight/tmp/
 
 # Xcode user data
 *.xcuserdatad/
