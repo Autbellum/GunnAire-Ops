@@ -118,7 +118,10 @@ extension StaffWorkspaceModelCodecs {
             .optional("reviewNote", \.reviewNote),
             .optional("reviewAuditJSON", \.reviewAuditJSON),
             .reference("serviceCall", \.serviceCall, id: \ServiceCall.id, kind: "job", required: false),
-        ], excludedAttributes: [:], inverseRelationships: [], make: { record, resolver in
+        ], excludedAttributes: [
+            "clockDriftFlaggedForReview": "Office-review diagnostic flag derived from device/server clock skew at submission time. Not a staff-facing field and never needs to reach a shared replica.",
+            "deviceClockDriftSeconds": "Office-review diagnostic value paired with clockDriftFlaggedForReview. Excluded from the staff wire codec for the same reason.",
+        ], inverseRelationships: [], make: { record, resolver in
             TimeEntry(id: record.id, userEmail: "")
         })
     }

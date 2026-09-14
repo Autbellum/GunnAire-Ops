@@ -5,6 +5,44 @@ extension Notification.Name {
     static let quickBooksAuthenticationDidChange = Notification.Name("QuickBooksAuthenticationDidChange")
 }
 
+/// Caps concurrent in-flight QuickBooks HTTP requests well under Intuit's
+/// published limits (500/min, 40 concurrent) during a burst of UI-triggered
+/// fetches. Completion-handler based to match the callback-style request
+/// pipeline it wraps; does not alter retry, decoding, or auth logic.
+private final class QuickBooksRequestGate: @unchecked Sendable {
+    static let shared = QuickBooksRequestGate()
+    private let maximumConcurrent = 40
+    private var active = 0
+    private var waiters: [() -> Void] = []
+    private let lock = NSLock()
+
+    private init() {}
+
+    func run(_ work: @escaping (@escaping () -> Void) -> Void) {
+        lock.lock()
+        if active < maximumConcurrent {
+            active += 1
+            lock.unlock()
+            work { [weak self] in self?.finish() }
+        } else {
+            waiters.append { [weak self] in work { self?.finish() } }
+            lock.unlock()
+        }
+    }
+
+    private func finish() {
+        lock.lock()
+        if !waiters.isEmpty {
+            let next = waiters.removeFirst()
+            lock.unlock()
+            next()
+        } else {
+            active -= 1
+            lock.unlock()
+        }
+    }
+}
+
 struct QuickBooksOAuthTokens: Codable {
     let accessToken: String
     let expiration: Date
@@ -825,8 +863,11 @@ final class QuickBooksDataAPI: ObservableObject {
         completion: @escaping (Data?, URLResponse?, Error?) -> Void
     ) {
         let scope = WorkflowScope(owner: ObjectIdentifier(self), operation: operation)
-        operation.send(request, transport: requestTransport) { data, response, error in
-            Self.$workflowScope.withValue(scope) { completion(data, response, error) }
+        QuickBooksRequestGate.shared.run { release in
+            operation.send(request, transport: self.requestTransport) { data, response, error in
+                release()
+                Self.$workflowScope.withValue(scope) { completion(data, response, error) }
+            }
         }
     }
 

@@ -4955,7 +4955,8 @@ private struct CustomerEditorView: View {
     }
 
     private func handleCapturedCustomerImage(_ image: UIImage) {
-        guard let data = image.jpegData(compressionQuality: 0.84) else {
+        let quality: CGFloat = forcedCustomerAttachmentKind?.isDocumentationCritical == true ? 0.95 : 0.84
+        guard let data = image.jpegData(compressionQuality: quality) else {
             customerAttachmentMessage = "Could not save the captured photo."
             forcedCustomerAttachmentKind = nil
             return

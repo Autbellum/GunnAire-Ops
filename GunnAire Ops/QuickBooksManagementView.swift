@@ -1717,6 +1717,16 @@ struct QuickBooksManagementView: View {
                                 .font(.caption)
                                 .foregroundStyle(.orange)
                         }
+
+                        if isAuthenticated, QuickBooksRefreshTokenHealth.isStale() {
+                            Label(
+                                "This QuickBooks connection hasn't refreshed in a while and may be close to expiring. Reconnect soon to avoid an interruption.",
+                                systemImage: "clock.badge.exclamationmark"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .accessibilityIdentifier("QuickBooksRefreshTokenStaleWarning")
+                        }
                     }
 
                     Section("Accounting Mappings") {

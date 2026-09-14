@@ -2011,6 +2011,15 @@ GunnAire
             for owner in billingSyncLifecycles.values { owner.cancel() }
             billingSyncLifecycles.removeAll()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .gunnaireConnectivityRestored)) { _ in
+            guard canAttemptSharedBilling else { return }
+            // Reuses the exact same per-document publish path the manual
+            // "Sync Saved Document" button calls - no new sync logic, just an
+            // automatic trigger for what a human would otherwise have to tap.
+            for invoice in QuickBooksInvoicePublicationRecovery.queuedInvoices(from: invoices) {
+                publishBillingDocument(.invoice(invoice))
+            }
+        }
     }
 
     private var hasNewDocumentEdits: Bool {
@@ -7094,7 +7103,8 @@ GunnAire
     }
 
     private func handleCapturedDocumentationImage(_ image: UIImage) {
-        guard let data = image.jpegData(compressionQuality: 0.85) else {
+        let quality: CGFloat = attachmentKind.isDocumentationCritical ? 0.95 : 0.85
+        guard let data = image.jpegData(compressionQuality: quality) else {
             attachmentMessage = "Could not encode camera image."
             return
         }

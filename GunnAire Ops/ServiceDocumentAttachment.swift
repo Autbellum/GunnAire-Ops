@@ -49,6 +49,18 @@ enum ServiceDocumentAttachmentKind: String, Codable, CaseIterable, Identifiable 
         }
     }
 
+    /// Kinds where lost detail has real consequences (a data plate's
+    /// model/serial must stay legible; warranty evidence must stay
+    /// verifiable), so captured photos skip the app's normal compression.
+    var isDocumentationCritical: Bool {
+        switch self {
+        case .equipmentDataPlatePhoto, .warrantyEvidence:
+            return true
+        case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerProfilePhoto, .customerDocument, .maintenanceAgreement, .invoiceSupport, .estimateSupport, .receipt, .expenseReceipt, .fleetService, .other:
+            return false
+        }
+    }
+
     var isFinancialCustomerProfileAttachment: Bool {
         switch self {
         case .maintenanceAgreement, .invoiceSupport, .estimateSupport, .receipt:

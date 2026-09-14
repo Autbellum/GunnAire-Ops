@@ -1042,6 +1042,12 @@ struct TimeClockView: View {
                     .font(.caption)
                     .foregroundColor(.orange)
             }
+            if entry.clockDriftFlaggedForReview, let drift = entry.deviceClockDriftSeconds {
+                Label("Device clock was off by \(Int(abs(drift)))s at submission — verify these times", systemImage: "clock.badge.exclamationmark")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .accessibilityIdentifier("TimeEntryClockDriftWarning-\(entry.id.uuidString)")
+            }
             if entry.quickBooksTimeActivityID != nil {
                 Label("Linked to QuickBooks", systemImage: "checkmark.circle")
                     .font(.caption)
@@ -1272,6 +1278,8 @@ struct TimeClockView: View {
         let previousReviewNote = entry.reviewNote
         let previousQuickBooksSyncError = entry.quickBooksTimeActivitySyncError
         let previousReviewAuditJSON = entry.reviewAuditJSON
+        let previousDeviceClockDriftSeconds = entry.deviceClockDriftSeconds
+        let previousClockDriftFlaggedForReview = entry.clockDriftFlaggedForReview
         entry.clockOut = now
         do {
             try TimeEntryReviewPolicy.submitAfterClockOut(entry, actorEmail: signedInEmail, at: now)
@@ -1285,6 +1293,8 @@ struct TimeClockView: View {
             entry.reviewNote = previousReviewNote
             entry.quickBooksTimeActivitySyncError = previousQuickBooksSyncError
             entry.reviewAuditJSON = previousReviewAuditJSON
+            entry.deviceClockDriftSeconds = previousDeviceClockDriftSeconds
+            entry.clockDriftFlaggedForReview = previousClockDriftFlaggedForReview
             syncMessage = error.localizedDescription
         }
     }

@@ -474,6 +474,7 @@ struct ContentView: View {
             if prefersPersistentSidebar {
                 columnVisibility = .doubleColumn
             }
+            NetworkConnectivityMonitor.shared.start()
             QuickBooksDataAPI.shared.loadTokens()
             isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
             isGoogleAuthenticated = GoogleAuthManager.shared.isAuthenticated

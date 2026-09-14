@@ -193,6 +193,11 @@ final class TimeEntry {
     /// Versioned, bounded JSON retains the current activity classification and
     /// append-only review events without adding another CloudKit model field.
     var reviewAuditJSON: String?
+    /// Device-vs-server clock offset observed at the most recent submission,
+    /// from `ServerClockSync`. Never blocks submission — surfaced so an office
+    /// reviewer can catch a technician's device clock being wrong.
+    var deviceClockDriftSeconds: Double?
+    var clockDriftFlaggedForReview: Bool = false
 
     init(
         id: UUID = UUID(),
@@ -806,10 +811,12 @@ enum TimeEntryReviewPolicy {
             let start = entry.clockIn, end = entry.clockOut, call = entry.serviceCall, notes = entry.notes
             let status = entry.reviewStatusRawValue, reviewer = entry.reviewedByEmail, reviewed = entry.reviewedAt
             let note = entry.reviewNote, audit = entry.reviewAuditJSON, syncError = entry.quickBooksTimeActivitySyncError
+            let drift = entry.deviceClockDriftSeconds, driftFlagged = entry.clockDriftFlaggedForReview
             return {
                 entry.clockIn = start; entry.clockOut = end; entry.serviceCall = call; entry.notes = notes
                 entry.reviewStatusRawValue = status; entry.reviewedByEmail = reviewer; entry.reviewedAt = reviewed
                 entry.reviewNote = note; entry.reviewAuditJSON = audit; entry.quickBooksTimeActivitySyncError = syncError
+                entry.deviceClockDriftSeconds = drift; entry.clockDriftFlaggedForReview = driftFlagged
             }
         }
         do { try update(); try save() }
@@ -826,7 +833,21 @@ enum TimeEntryReviewPolicy {
         }
     }
 
-    static func submitAfterClockOut(
+    /// Threshold above which an observed device-vs-server clock offset is
+    /// flagged for office review rather than treated as ordinary network jitter.
+    static let clockDriftFlagThresholdSeconds: Double = 120
+
+    @MainActor private static func applyClockDriftFlagIfNeeded(to entry: TimeEntry) {
+        guard let offset = ServerClockSync.shared.lastKnownOffsetSeconds else {
+            entry.deviceClockDriftSeconds = nil
+            entry.clockDriftFlaggedForReview = false
+            return
+        }
+        entry.deviceClockDriftSeconds = offset
+        entry.clockDriftFlaggedForReview = abs(offset) > clockDriftFlagThresholdSeconds
+    }
+
+    @MainActor static func submitAfterClockOut(
         _ entry: TimeEntry,
         actorEmail: String,
         at date: Date = Date()
@@ -842,6 +863,7 @@ enum TimeEntryReviewPolicy {
         entry.reviewedAt = nil
         entry.reviewNote = nil
         entry.quickBooksTimeActivitySyncError = nil
+        applyClockDriftFlagIfNeeded(to: entry)
         entry.appendReviewEvent(.submitted, actorEmail: actorEmail, at: date)
     }
 
@@ -878,7 +900,7 @@ enum TimeEntryReviewPolicy {
         )
     }
 
-    static func applyCorrection(
+    @MainActor static func applyCorrection(
         _ draft: TimeEntryCorrectionDraft,
         to entry: TimeEntry,
         serviceCall: ServiceCall?,
@@ -926,6 +948,7 @@ enum TimeEntryReviewPolicy {
         entry.reviewedAt = nil
         entry.reviewNote = nil
         entry.quickBooksTimeActivitySyncError = nil
+        applyClockDriftFlagIfNeeded(to: entry)
         let oldRange = "\(oldStart.formatted(date: .abbreviated, time: .shortened))–\(oldEnd?.formatted(date: .abbreviated, time: .shortened) ?? "open")"
         let newRange = "\(draft.clockIn.formatted(date: .abbreviated, time: .shortened))–\(draft.clockOut.formatted(date: .abbreviated, time: .shortened))"
         entry.appendReviewEvent(

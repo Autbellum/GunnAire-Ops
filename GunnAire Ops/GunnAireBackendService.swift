@@ -686,7 +686,9 @@ enum GunnAireBackendService {
             QuickBooksCodePayload(code: code, realmID: realmID, environment: Config.QuickBooks.environment.lowercased())
         )
         let responseData = try await send(path: "/api/qbo/exchange", method: "POST", body: data)
-        return try decodeQuickBooksTokens(from: responseData)
+        let tokens = try decodeQuickBooksTokens(from: responseData)
+        QuickBooksRefreshTokenHealth.recordSuccess()
+        return tokens
     }
 
     /// Requests a new short-lived access token from the backend's encrypted,
@@ -696,11 +698,14 @@ enum GunnAireBackendService {
             QuickBooksRefreshPayload(realmID: realmID, environment: environment.lowercased())
         )
         let responseData = try await send(path: "/api/qbo/refresh", method: "POST", body: data)
-        return try decodeQuickBooksTokens(from: responseData)
+        let tokens = try decodeQuickBooksTokens(from: responseData)
+        QuickBooksRefreshTokenHealth.recordSuccess()
+        return tokens
     }
 
     static func revokeQuickBooksConnection() async throws {
         _ = try await send(path: "/api/qbo/revoke", method: "POST")
+        QuickBooksRefreshTokenHealth.clear()
     }
 
     static func fetchQuickBooksAccountingConfiguration() async throws -> BackendQuickBooksAccountingConfiguration? {
@@ -2175,6 +2180,7 @@ enum GunnAireBackendService {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw GunnAireBackendError.invalidResponse
         }
+        Task { @MainActor in ServerClockSync.shared.record(from: httpResponse) }
         guard (200..<300).contains(httpResponse.statusCode) else {
             let message = (try? JSONDecoder().decode(ServerErrorResponse.self, from: data).error)
                 ?? String(data: data, encoding: .utf8)
