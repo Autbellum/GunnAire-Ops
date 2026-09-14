@@ -5,6 +5,25 @@ import CloudKit
 import UIKit
 import StoreKit
 
+/// CloudKit's async calls carry no built-in timeout, so a stalled network
+/// path (rather than a clean error) can leave a caller awaiting forever with
+/// no feedback. Races the operation against a deadline and throws
+/// `CompanyWorkspaceFailure.server` if the deadline wins.
+private func withCloudKitTimeout<T: Sendable>(
+    seconds: TimeInterval,
+    _ operation: @escaping @Sendable () async throws -> T
+) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+        group.addTask { try await operation() }
+        group.addTask {
+            try await Task.sleep(for: .seconds(seconds))
+            throw CompanyWorkspaceFailure.server
+        }
+        defer { group.cancelAll() }
+        return try await group.next()!
+    }
+}
+
 enum CompanyCloudKitRuntimeAccount {
     /// The installed, signed profile determines CloudKit's environment. Store
     /// distribution removes that profile; a verified App Store transaction is
@@ -70,8 +89,15 @@ enum CompanyCloudKitRuntimeAccount {
             throw CompanyWorkspaceFailure.configuration
         }
         let container = CKContainer(identifier: GunnAireCloudKit.containerIdentifier)
-        guard try await container.accountStatus() == .available else { throw CompanyWorkspaceFailure.accountUnavailable }
-        let identifier = try await container.userRecordID()
+        // CKContainer's async calls have no built-in timeout. A stalled
+        // network path (rather than a clean error) previously left staff
+        // staring at an unbounded "Verifying company access…" spinner with
+        // no feedback at all. Bound each call so a stall surfaces as a clear,
+        // actionable failure instead of hanging indefinitely.
+        guard try await withCloudKitTimeout(seconds: 20, { try await container.accountStatus() }) == .available else {
+            throw CompanyWorkspaceFailure.accountUnavailable
+        }
+        let identifier = try await withCloudKitTimeout(seconds: 20) { try await container.userRecordID() }
         guard !identifier.recordName.isEmpty else { throw CompanyWorkspaceFailure.accountUnavailable }
         let hash = CompanyWorkspaceSession.digest(
             "gunnaire-cloudkit-account-v1\n\(GunnAireCloudKit.containerIdentifier)\n\(environment)\n\(identifier.recordName)"
