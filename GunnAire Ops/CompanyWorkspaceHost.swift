@@ -24,6 +24,15 @@ private func withCloudKitTimeout<T: Sendable>(
     }
 }
 
+/// A repeated "could not verify its secure server or signed CloudKit
+/// environment" failure on a real device with no console access is otherwise
+/// undiagnosable. Captures exactly why the AppTransaction check didn't
+/// succeed so it can be shown directly in the on-screen error text.
+@MainActor
+enum CompanyWorkspaceDiagnostics {
+    static var lastConfigurationDetail: String = ""
+}
+
 enum CompanyCloudKitRuntimeAccount {
     /// The installed, signed profile determines CloudKit's environment. Store
     /// distribution removes that profile; a verified App Store transaction is
@@ -74,16 +83,34 @@ enum CompanyCloudKitRuntimeAccount {
             // which misleadingly sends staff to check their iCloud sign-in
             // for what is really a StoreKit verification problem. Retry
             // briefly before giving up.
+            var lastDetail = ""
             for attempt in 0..<3 {
                 if attempt > 0 { try? await Task.sleep(for: .seconds(1)) }
-                if let result = try? await AppTransaction.shared,
-                   case .verified(let transaction) = result,
-                   transaction.bundleID == Bundle.main.bundleIdentifier,
-                   transaction.environment == .production || transaction.environment == .sandbox {
-                    hasVerifiedDistribution = true
-                    break
+                do {
+                    let result = try await AppTransaction.shared
+                    switch result {
+                    case .verified(let transaction):
+                        if transaction.bundleID != Bundle.main.bundleIdentifier {
+                            lastDetail = "bundleID mismatch: got \(transaction.bundleID)"
+                        } else if !(transaction.environment == .production || transaction.environment == .sandbox) {
+                            lastDetail = "unexpected environment: \(transaction.environment)"
+                        } else {
+                            hasVerifiedDistribution = true
+                        }
+                    case .unverified(_, let verificationError):
+                        lastDetail = "unverified: \(verificationError)"
+                    }
+                } catch {
+                    lastDetail = "threw: \(String(describing: error))"
                 }
+                if hasVerifiedDistribution { break }
             }
+            if !hasVerifiedDistribution {
+                let detail = "profileData=nil, AppTransaction: \(lastDetail)"
+                await MainActor.run { CompanyWorkspaceDiagnostics.lastConfigurationDetail = detail }
+            }
+        } else {
+            await MainActor.run { CompanyWorkspaceDiagnostics.lastConfigurationDetail = "profileData present, \(profileData?.count ?? -1) bytes" }
         }
         guard let environment = environment(profileData: profileData, hasVerifiedStoreDistribution: hasVerifiedDistribution) else {
             throw CompanyWorkspaceFailure.configuration
@@ -170,6 +197,12 @@ struct CompanyWorkspaceHost: View {
                             Text(failure == .differentWorkspace ? "Workspace does not match" : "Workspace needs attention")
                                 .font(.headline)
                             Text(failure.localizedDescription)
+                            if failure == .configuration, !CompanyWorkspaceDiagnostics.lastConfigurationDetail.isEmpty {
+                                Text(CompanyWorkspaceDiagnostics.lastConfigurationDetail)
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("CompanyWorkspaceConfigurationDetail")
+                            }
                             if failure != .restartRequired {
                                 Button("Check Again") { Task { await access.refresh() } }
                                     .buttonStyle(.borderedProminent)
