@@ -182,6 +182,10 @@ struct CompanyWorkspaceDependencies {
 final class CompanyWorkspaceAccessController: ObservableObject {
     static let shared = CompanyWorkspaceAccessController(dependencies: .live, observesAccountChanges: true)
     @Published private(set) var phase: CompanyWorkspacePhase = .checking
+    /// Surfaced directly in the "Verifying company access…" spinner so a
+    /// stuck verification can be localized to a specific step without needing
+    /// console access to the device — read the on-screen text and report it.
+    @Published private(set) var diagnosticStep: String = "Starting…"
     private(set) var generation = UUID()
     private var container: ModelContainer?
     private var activeLease: CompanyWorkspaceLease?
@@ -295,13 +299,16 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         guard let session = dependencies.session() else { invalidate(); return }
         let operation = generation
         if authorizedContainer == nil { phase = .checking }
+        diagnosticStep = "Checking iCloud account…"
         var verifiedAccount = false
         do {
             let account = try await dependencies.account()
             verifiedAccount = true
+            diagnosticStep = "iCloud account confirmed. Contacting server…"
             guard isCurrent(operation, session: session) else { return }
             do {
                 let response = try await dependencies.fetchWorkspace()
+                diagnosticStep = "Server responded. Verifying workspace binding…"
                 guard isCurrent(operation, session: session) else { return }
                 guard response.user.isActive, AppAccess.normalizedEmail(response.user.email) == session.email,
                       AppUserRole(rawValue: response.user.role) != nil,
@@ -315,12 +322,15 @@ final class CompanyWorkspaceAccessController: ObservableObject {
                     guard matching.isEmpty, response.workspace.bindings.allSatisfy({ $0.isValid && $0.companyID == response.workspace.companyID }) else {
                         throw CompanyWorkspaceFailure.differentWorkspace
                     }
+                    diagnosticStep = "No binding yet. Requesting admin approval…"
                     try requireApproval(user: response.user)
                     return
                 }
                 guard binding.cloudAccountHash == account.accountHash else { throw CompanyWorkspaceFailure.differentWorkspace }
                 let lease = CompanyWorkspaceLease(session: session, binding: binding, user: response.user, verifiedAt: dependencies.now())
+                diagnosticStep = "Binding verified. Opening local data store…"
                 try unlock(lease, allowLegacyAdoption: false)
+                diagnosticStep = "Store opened. Ready."
             } catch {
                 guard isCurrent(operation, session: session) else { return }
                 // Only transport failure can use an existing bounded lease.

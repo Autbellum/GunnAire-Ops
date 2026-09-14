@@ -144,6 +144,10 @@ struct CompanyWorkspaceHost: View {
                         case .checking, .ready:
                             ProgressView("Verifying company access…")
                                 .accessibilityIdentifier("CompanyWorkspaceProofCheck")
+                            Text(access.diagnosticStep)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .accessibilityIdentifier("CompanyWorkspaceDiagnosticStep")
                         case .needsApproval(let hasSavedStore):
                             Text(hasSavedStore ? "Review this device's saved work" : "Approve this company iCloud account")
                                 .font(.headline)
