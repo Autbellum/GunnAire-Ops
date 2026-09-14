@@ -31,6 +31,12 @@ private func withCloudKitTimeout<T: Sendable>(
 @MainActor
 enum CompanyWorkspaceDiagnostics {
     static var lastConfigurationDetail: String = ""
+    /// The raw CKAccountStatus (or empty-record-ID condition) behind the most
+    /// recent accountUnavailable failure. That failure collapses several
+    /// distinct device-side conditions (.noAccount, .restricted,
+    /// .couldNotDetermine, .temporarilyUnavailable) into one generic message,
+    /// which made remote diagnosis on real staff hardware pure guesswork.
+    static var lastAccountStatusDetail: String = ""
 }
 
 enum CompanyCloudKitRuntimeAccount {
@@ -137,15 +143,31 @@ enum CompanyCloudKitRuntimeAccount {
         // staring at an unbounded "Verifying company access…" spinner with
         // no feedback at all. Bound each call so a stall surfaces as a clear,
         // actionable failure instead of hanging indefinitely.
-        guard try await withCloudKitTimeout(seconds: 20, { try await container.accountStatus() }) == .available else {
+        let status = try await withCloudKitTimeout(seconds: 20, { try await container.accountStatus() })
+        guard status == .available else {
+            await MainActor.run { CompanyWorkspaceDiagnostics.lastAccountStatusDetail = "accountStatus=\(Self.describe(status))" }
             throw CompanyWorkspaceFailure.accountUnavailable
         }
         let identifier = try await withCloudKitTimeout(seconds: 20) { try await container.userRecordID() }
-        guard !identifier.recordName.isEmpty else { throw CompanyWorkspaceFailure.accountUnavailable }
+        guard !identifier.recordName.isEmpty else {
+            await MainActor.run { CompanyWorkspaceDiagnostics.lastAccountStatusDetail = "accountStatus=available, userRecordID.recordName=empty" }
+            throw CompanyWorkspaceFailure.accountUnavailable
+        }
         let hash = CompanyWorkspaceSession.digest(
             "gunnaire-cloudkit-account-v1\n\(GunnAireCloudKit.containerIdentifier)\n\(environment)\n\(identifier.recordName)"
         )
         return CompanyCloudKitAccount(environment: environment, accountHash: hash, recordName: identifier.recordName)
+    }
+
+    private static func describe(_ status: CKAccountStatus) -> String {
+        switch status {
+        case .available: "available"
+        case .restricted: "restricted"
+        case .noAccount: "noAccount"
+        case .couldNotDetermine: "couldNotDetermine"
+        case .temporarilyUnavailable: "temporarilyUnavailable"
+        @unknown default: "unknown(\(status.rawValue))"
+        }
     }
 }
 
@@ -218,6 +240,12 @@ struct CompanyWorkspaceHost: View {
                                     .font(.caption2.monospaced())
                                     .foregroundStyle(.secondary)
                                     .accessibilityIdentifier("CompanyWorkspaceConfigurationDetail")
+                            }
+                            if failure == .accountUnavailable, !CompanyWorkspaceDiagnostics.lastAccountStatusDetail.isEmpty {
+                                Text(CompanyWorkspaceDiagnostics.lastAccountStatusDetail)
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("CompanyWorkspaceAccountStatusDetail")
                             }
                             if failure != .restartRequired {
                                 Button("Check Again") { Task { await access.refresh() } }
