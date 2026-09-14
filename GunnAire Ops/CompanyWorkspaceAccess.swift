@@ -344,8 +344,11 @@ final class CompanyWorkspaceAccessController: ObservableObject {
             }
         } catch {
             guard isCurrent(operation, session: session) else { return }
-            invalidate(reason: Self.failure(for: error, verifiedAccount: verifiedAccount),
-                       preserveCachedLease: Self.isConnectivityFailure(error))
+            let failure = Self.failure(for: error, verifiedAccount: verifiedAccount)
+            if failure == .server {
+                CompanyWorkspaceDiagnostics.lastServerFailureDetail = Self.describeRawError(error)
+            }
+            invalidate(reason: failure, preserveCachedLease: Self.isConnectivityFailure(error))
         }
     }
 
@@ -460,6 +463,20 @@ final class CompanyWorkspaceAccessController: ObservableObject {
             }
         }
         return verifiedAccount ? .server : .accountUnavailable
+    }
+
+    /// A confirmed-healthy backend (curl and Safari both reach it fine) but a
+    /// generic .server failure on-device meant the real cause - the specific
+    /// URLError/DecodingError this app's own request hit - was being thrown
+    /// away. No token or header value is included, only the error's type/code.
+    static func describeRawError(_ error: Error) -> String {
+        if let urlError = error as? URLError {
+            return "URLError(\(urlError.code.rawValue) \(urlError.code)): \(urlError.localizedDescription)"
+        }
+        if error is DecodingError {
+            return "DecodingError: \(error.localizedDescription)"
+        }
+        return "\(type(of: error)): \(error.localizedDescription)"
     }
 
     static func isConnectivityFailure(_ error: Error) -> Bool {

@@ -37,6 +37,11 @@ enum CompanyWorkspaceDiagnostics {
     /// .couldNotDetermine, .temporarilyUnavailable) into one generic message,
     /// which made remote diagnosis on real staff hardware pure guesswork.
     static var lastAccountStatusDetail: String = ""
+    /// The raw error behind the most recent .server failure. That failure is
+    /// a catch-all for any workspace-fetch error that isn't a recognized
+    /// GunnAireBackendError, so the on-screen message alone can't distinguish
+    /// a real backend problem from a URLError/DecodingError on this device.
+    static var lastServerFailureDetail: String = ""
 }
 
 enum CompanyCloudKitRuntimeAccount {
@@ -246,6 +251,12 @@ struct CompanyWorkspaceHost: View {
                                     .font(.caption2.monospaced())
                                     .foregroundStyle(.secondary)
                                     .accessibilityIdentifier("CompanyWorkspaceAccountStatusDetail")
+                            }
+                            if failure == .server, !CompanyWorkspaceDiagnostics.lastServerFailureDetail.isEmpty {
+                                Text(CompanyWorkspaceDiagnostics.lastServerFailureDetail)
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("CompanyWorkspaceServerFailureDetail")
                             }
                             if failure != .restartRequired {
                                 Button("Check Again") { Task { await access.refresh() } }
