@@ -16,9 +16,20 @@ enum CompanyCloudKitRuntimeAccount {
                   let plist = try? PropertyListSerialization.propertyList(from: data[start.lowerBound..<end.upperBound], format: nil) as? [String: Any],
                   let entitlements = plist["Entitlements"] as? [String: Any],
                   let containers = entitlements["com.apple.developer.icloud-container-identifiers"] as? [String],
-                  containers.contains(GunnAireCloudKit.containerIdentifier),
-                  let value = entitlements["com.apple.developer.icloud-container-environment"] as? String,
-                  ["Development", "Production"].contains(value) else { return nil }
+                  containers.contains(GunnAireCloudKit.containerIdentifier) else { return nil }
+            // Provisioning profiles encode this entitlement as a single String
+            // for a distribution-only profile, but as a String array (e.g.
+            // ["Production", "Development"]) for profiles that support both
+            // environments. Accept either shape and prefer Production.
+            let rawEnvironmentValues: [String]
+            if let single = entitlements["com.apple.developer.icloud-container-environment"] as? String {
+                rawEnvironmentValues = [single]
+            } else if let list = entitlements["com.apple.developer.icloud-container-environment"] as? [String] {
+                rawEnvironmentValues = list
+            } else {
+                return nil
+            }
+            guard let value = rawEnvironmentValues.first(where: { $0 == "Production" }) ?? rawEnvironmentValues.first(where: { $0 == "Development" }) else { return nil }
             return value.lowercased()
         }
         return hasVerifiedStoreDistribution ? "production" : nil

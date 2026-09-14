@@ -264,6 +264,21 @@ struct CompanyWorkspaceAccessTests {
         #expect(CompanyCloudKitRuntimeAccount.environment(profileData: Data("invalid profile".utf8), hasVerifiedStoreDistribution: true) == nil)
     }
 
+    /// Real device provisioning profiles (confirmed on-device) encode this
+    /// entitlement as a String array, not a single String, when the profile
+    /// supports both environments. Missing this shape made environment()
+    /// always return nil for real installs, surfacing as a false
+    /// "Company workspace needs attention" / accountUnavailable block.
+    @Test func signedCloudKitEnvironmentAcceptsArrayShapedEntitlement() throws {
+        let plist = ["Entitlements": ["com.apple.developer.icloud-container-identifiers": [GunnAireCloudKit.containerIdentifier], "com.apple.developer.icloud-container-environment": ["Production", "Development"]]]
+        let xml = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        #expect(CompanyCloudKitRuntimeAccount.environment(profileData: Data([0, 1, 2]) + xml + Data([3, 4]), hasVerifiedStoreDistribution: false) == "production")
+
+        let developmentOnlyPlist = ["Entitlements": ["com.apple.developer.icloud-container-identifiers": [GunnAireCloudKit.containerIdentifier], "com.apple.developer.icloud-container-environment": ["Development"]]]
+        let developmentOnlyXML = try PropertyListSerialization.data(fromPropertyList: developmentOnlyPlist, format: .xml, options: 0)
+        #expect(CompanyCloudKitRuntimeAccount.environment(profileData: developmentOnlyXML, hasVerifiedStoreDistribution: false) == "development")
+    }
+
     @Test func businessDataRequestsRequireWorkspaceProofButIdentityEstablishmentDoesNot() {
         for path in ["/api/users", "/api/documents", "/api/payments", "/api/qbo/tokens", "/api/communications", "/api/readiness"] {
             #expect(CompanyWorkspaceRequestPolicy.needsWorkspaceProof(path: path))
