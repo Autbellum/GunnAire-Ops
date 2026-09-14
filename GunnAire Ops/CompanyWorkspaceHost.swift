@@ -44,11 +44,27 @@ enum CompanyCloudKitRuntimeAccount {
         let profileURL = profileURLs.first { FileManager.default.fileExists(atPath: $0.path) }
         let profileData = try profileURL.map { try Data(contentsOf: $0) }
         var hasVerifiedDistribution = false
-        if profileData == nil,
-           case .verified(let transaction) = try await AppTransaction.shared,
-           transaction.bundleID == Bundle.main.bundleIdentifier,
-           transaction.environment == .production || transaction.environment == .sandbox {
-            hasVerifiedDistribution = true
+        if profileData == nil {
+            // App Store / TestFlight distribution strips the embedded
+            // provisioning profile from the on-device bundle, so this is the
+            // only path real staff devices take: distribution is proven via
+            // StoreKit's AppTransaction instead. A thrown error here (network,
+            // or the App Store receipt not yet settling right after a fresh
+            // install/update) must never propagate as a raw, uncategorized
+            // error — the caller maps any such error to accountUnavailable,
+            // which misleadingly sends staff to check their iCloud sign-in
+            // for what is really a StoreKit verification problem. Retry
+            // briefly before giving up.
+            for attempt in 0..<3 {
+                if attempt > 0 { try? await Task.sleep(for: .seconds(1)) }
+                if let result = try? await AppTransaction.shared,
+                   case .verified(let transaction) = result,
+                   transaction.bundleID == Bundle.main.bundleIdentifier,
+                   transaction.environment == .production || transaction.environment == .sandbox {
+                    hasVerifiedDistribution = true
+                    break
+                }
+            }
         }
         guard let environment = environment(profileData: profileData, hasVerifiedStoreDistribution: hasVerifiedDistribution) else {
             throw CompanyWorkspaceFailure.configuration
