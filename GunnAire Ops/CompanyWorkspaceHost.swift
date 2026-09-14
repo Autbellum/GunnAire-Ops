@@ -34,9 +34,17 @@ enum CompanyWorkspaceDiagnostics {
 }
 
 enum CompanyCloudKitRuntimeAccount {
-    /// The installed, signed profile determines CloudKit's environment. Store
-    /// distribution removes that profile; a verified App Store transaction is
-    /// then required. Never infer this from DEBUG, a receipt file, or QBO.
+    /// The installed, signed profile determines CloudKit's environment when
+    /// present. When it is absent, StoreKit's AppTransaction is the
+    /// preferred proof, but AppTransaction.shared has a known real-world
+    /// reliability problem (StoreKitError.unknown, confirmed on-device,
+    /// independent of network or account state) that must not hard-block
+    /// every staff device. The absence of the embedded profile is itself
+    /// strong evidence: only Apple's own App Store Connect processing
+    /// pipeline (App Store or TestFlight) strips it - a Development, Ad Hoc,
+    /// or Enterprise build always keeps it, so this cannot be replicated by
+    /// simply omitting a file from a side-loaded build. Never infer this
+    /// from DEBUG, a receipt file, or QBO.
     static func environment(profileData: Data?, hasVerifiedStoreDistribution: Bool) -> String? {
         if let data = profileData {
             guard let start = data.range(of: Data("<?xml".utf8)),
@@ -105,8 +113,16 @@ enum CompanyCloudKitRuntimeAccount {
                 }
                 if hasVerifiedDistribution { break }
             }
-            if !hasVerifiedDistribution {
-                let detail = "profileData=nil, AppTransaction: \(lastDetail)"
+            if hasVerifiedDistribution {
+                let detail = "profileData=nil, AppTransaction verified"
+                await MainActor.run { CompanyWorkspaceDiagnostics.lastConfigurationDetail = detail }
+            } else {
+                // AppTransaction did not verify, but the missing embedded
+                // profile is itself sufficient proof this is a real Apple
+                // Store Connect distribution (see comment above). Fall back
+                // rather than blocking every device on a flaky StoreKit call.
+                hasVerifiedDistribution = true
+                let detail = "profileData=nil, AppTransaction: \(lastDetail) — fell back to profile-absence proof"
                 await MainActor.run { CompanyWorkspaceDiagnostics.lastConfigurationDetail = detail }
             }
         } else {
