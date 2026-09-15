@@ -650,6 +650,9 @@ enum GunnAireBackendService {
         let customerName: String
         let amount: Double
         let assignedTo: String
+        /// The sending device's push installation, so a collection sent to the
+        /// signed-in account's own iPhone does not alert the device it came from.
+        let originInstallationID: String?
     }
 
     private struct CustomerPortalLinkPayload: Codable {
@@ -1548,13 +1551,15 @@ enum GunnAireBackendService {
     static func createFieldPaymentAssignment(
         invoice: Invoice,
         amount: Double,
-        assignedTo email: String
+        assignedTo email: String,
+        originInstallationID: UUID? = nil
     ) async throws -> BackendFieldPaymentAssignmentRecord {
         let payload = FieldPaymentAssignmentPayload(
             invoiceID: invoice.id.uuidString,
             customerName: invoice.customer.name,
             amount: amount,
-            assignedTo: AppAccess.normalizedEmail(email)
+            assignedTo: AppAccess.normalizedEmail(email),
+            originInstallationID: originInstallationID?.uuidString
         )
         let data = try JSONEncoder().encode(payload)
         let responseData = try await send(path: "/api/field-payment-assignments", method: "POST", body: data)

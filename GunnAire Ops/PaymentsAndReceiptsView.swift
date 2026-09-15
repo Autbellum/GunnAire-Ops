@@ -1029,8 +1029,14 @@ struct PaymentsAndReceiptsView: View {
     private var contactlessPaymentGuide: some View {
         Group {
             if let invoice = selectedInvoice {
-                FieldPaymentReviewView(invoice: invoice, localBalance: outstandingBalance(for: invoice),
-                                       recordVerifiedPayment: openVerifiedPaymentEntryFromContactlessGuide)
+                FieldPaymentReviewView(
+                    invoice: invoice,
+                    localBalance: outstandingBalance(for: invoice),
+                    recordVerifiedPayment: openVerifiedPaymentEntryFromContactlessGuide,
+                    sendToOwnPhone: ownPhoneSendAction(for: invoice),
+                    assignableTechnicians: guideAssignableTechnicians,
+                    assignToTechnician: guideTechnicianAssignAction(for: invoice)
+                )
             } else {
                 ContentUnavailableView("Invoice Unavailable", systemImage: "exclamationmark.triangle",
                     description: Text("Reopen the invoice from your approved business workspace."))
@@ -1524,6 +1530,57 @@ struct PaymentsAndReceiptsView: View {
         } catch {
             actionMessage = "Could not assign field collection: \(error.localizedDescription)"
         }
+    }
+
+    /// Field collection needs a collector role; office review roles can assign
+    /// but have no iPhone task list of their own to receive one.
+    private var canSendCollectionToOwnPhone: Bool {
+        AppAccess.canCollectFieldPayments(email: signedInEmail, users: users)
+    }
+
+    private func ownPhoneSendAction(for invoice: Invoice) -> ((Double) async -> String)? {
+        guard canSendCollectionToOwnPhone else { return nil }
+        return { amount in await sendCollectionToOwnPhone(invoice: invoice, amount: amount) }
+    }
+
+    private var guideAssignableTechnicians: [String] {
+        isAdminUser ? activeFieldCollectionTechnicians.map(\.email) : []
+    }
+
+    private func guideTechnicianAssignAction(for invoice: Invoice) -> ((String, Double) async -> String)? {
+        guard isAdminUser else { return nil }
+        return { email, amount in await assignCollectionFromGuide(invoice: invoice, amount: amount, technicianEmail: email) }
+    }
+
+    /// "Send to My iPhone" from the contactless guide on an iPad or Mac. The
+    /// server task is the durable path to the same GunnAire account's iPhone;
+    /// Apple Handoff is started as well when this device can offer it.
+    private func sendCollectionToOwnPhone(invoice: Invoice, amount: Double) async -> String {
+        if let blockedMessage = invoice.paymentCollectionBlockedMessage { return blockedMessage }
+        guard let signedInEmail, !signedInEmail.isEmpty else {
+            return "Sign in to the business account before sending a collection to your iPhone."
+        }
+        guard GunnAireBackendService.isConfigured else {
+            return "Configure shared company storage before sending a collection to your iPhone."
+        }
+        let handoffStarted = fieldPaymentHandoff.begin(invoiceID: invoice.id, amount: amount)
+        do {
+            let assignment = try await GunnAireBackendService.createFieldPaymentAssignment(
+                invoice: invoice,
+                amount: amount,
+                assignedTo: signedInEmail,
+                originInstallationID: StaffPushNotificationManager.shared.installationID
+            )
+            await refreshFieldPaymentAssignments()
+            return FieldPaymentHandoff.ownPhoneSendMessage(assignedTo: assignment.assignedTo, handoffStarted: handoffStarted)
+        } catch {
+            return "Could not send this collection to your iPhone: \(error.localizedDescription)"
+        }
+    }
+
+    private func assignCollectionFromGuide(invoice: Invoice, amount: Double, technicianEmail: String) async -> String {
+        await assignFieldCollection(invoice: invoice, amount: amount, technicianEmail: technicianEmail)
+        return actionMessage
     }
 
     private func acceptFieldCollection(_ assignment: BackendFieldPaymentAssignmentRecord) async {

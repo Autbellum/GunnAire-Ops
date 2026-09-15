@@ -218,4 +218,16 @@ final class FieldPaymentHandoff: ObservableObject {
         }
         return "Open GunnAire Ops from Handoff within 30 minutes. Collection opens on the iPhone, but QuickBooks Tap to Pay still needs Accounting to publish this invoice."
     }
+
+    /// Origin-device status after "Send to My iPhone". The server task is the
+    /// durable path to the same GunnAire account's iPhone; Handoff is a
+    /// nearby-device convenience layered on top. Never includes amounts or
+    /// customer data.
+    nonisolated static func ownPhoneSendMessage(assignedTo: String, handoffStarted: Bool) -> String {
+        var message = "Sent to \(assignedTo). On your iPhone, open GunnAire Ops from the notification, or open Payments → Your Field Collection Tasks and choose the invoice."
+        if handoffStarted {
+            message += " Handoff is also active for 30 minutes on a nearby iPhone using the same Apple Account."
+        }
+        return message
+    }
 }

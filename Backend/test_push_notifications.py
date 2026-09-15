@@ -295,6 +295,115 @@ class StaffPushNotificationTests(unittest.TestCase):
                     server.server_close()
                     thread.join(timeout=5)
 
+    def test_own_phone_send_skips_the_origin_device_and_needs_a_collector_role(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.configured_backend(root):
+                backend.initialize_database()
+                technician_email = "tech@gunnaire.com"
+                technician_token = self.seed_session(technician_email, "Field Technician")
+                accounting_token = self.seed_session("books@gunnaire.com", "Accounting")
+                self.seed_session("tech-b@gunnaire.com", "Field Technician")
+                tablet_installation = str(uuid.uuid4())
+                phone_installation = str(uuid.uuid4())
+                server, thread, base_url = self.start_server()
+                try:
+                    for installation_id, token_hex in ((tablet_installation, "ab" * 32), (phone_installation, "cd" * 32)):
+                        with urllib.request.urlopen(
+                            self.request(
+                                f"{base_url}/api/push-devices",
+                                technician_token,
+                                method="POST",
+                                payload={
+                                    "installationID": installation_id,
+                                    "deviceToken": token_hex,
+                                    "platform": "iOS",
+                                    "environment": "development",
+                                    "bundleID": self.topic,
+                                    "appVersion": "1.0",
+                                    "appBuild": "2026091601",
+                                },
+                            ),
+                            timeout=5,
+                        ) as response:
+                            self.assertEqual(response.status, HTTPStatus.CREATED)
+
+                    # "Send to My iPhone" from the tablet alerts only the other device.
+                    invoice_id = str(uuid.uuid4())
+                    own_phone = {
+                        "invoiceID": invoice_id,
+                        "customerName": "Own Phone Customer",
+                        "amount": 189,
+                        "assignedTo": technician_email,
+                        "originInstallationID": tablet_installation,
+                    }
+                    with urllib.request.urlopen(
+                        self.request(f"{base_url}/api/field-payment-assignments", technician_token, method="POST", payload=own_phone),
+                        timeout=5,
+                    ) as response:
+                        assignment = json.loads(response.read().decode("utf-8"))["assignment"]
+                    self.assertEqual(response.status, HTTPStatus.CREATED)
+                    self.assertEqual(assignment["assignedBy"], technician_email)
+                    with backend.db() as connection:
+                        alerted = connection.execute(
+                            """
+                            SELECT push_devices.installation_id
+                            FROM push_deliveries
+                            INNER JOIN push_devices ON push_devices.id = push_deliveries.device_id
+                            WHERE push_deliveries.record_id = ?
+                            """,
+                            (invoice_id,),
+                        ).fetchall()
+                    self.assertEqual([row["installation_id"] for row in alerted], [phone_installation])
+
+                    # A field technician still cannot assign anyone else.
+                    with self.assertRaises(urllib.error.HTTPError) as forbidden:
+                        urllib.request.urlopen(
+                            self.request(
+                                f"{base_url}/api/field-payment-assignments",
+                                technician_token,
+                                method="POST",
+                                payload={**own_phone, "invoiceID": str(uuid.uuid4()), "assignedTo": "tech-b@gunnaire.com"},
+                            ),
+                            timeout=5,
+                        )
+                    self.assertEqual(forbidden.exception.code, HTTPStatus.FORBIDDEN)
+
+                    # Accounting reviews but does not collect, so it has no own-phone task.
+                    with self.assertRaises(urllib.error.HTTPError) as rejected:
+                        urllib.request.urlopen(
+                            self.request(
+                                f"{base_url}/api/field-payment-assignments",
+                                accounting_token,
+                                method="POST",
+                                payload={**own_phone, "invoiceID": str(uuid.uuid4()), "assignedTo": "books@gunnaire.com"},
+                            ),
+                            timeout=5,
+                        )
+                    self.assertEqual(rejected.exception.code, HTTPStatus.BAD_REQUEST)
+
+                    # An office assignment to a technician still alerts every device.
+                    office_invoice = str(uuid.uuid4())
+                    with urllib.request.urlopen(
+                        self.request(
+                            f"{base_url}/api/field-payment-assignments",
+                            accounting_token,
+                            method="POST",
+                            payload={"invoiceID": office_invoice, "customerName": "Office Customer", "amount": 75, "assignedTo": technician_email},
+                        ),
+                        timeout=5,
+                    ) as response:
+                        self.assertEqual(response.status, HTTPStatus.CREATED)
+                    with backend.db() as connection:
+                        office_alerts = connection.execute(
+                            "SELECT COUNT(*) FROM push_deliveries WHERE record_id = ?", (office_invoice,)
+                        ).fetchone()[0]
+                    self.assertEqual(office_alerts, 2)
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=5)
+
     def test_shared_api_token_cannot_create_account_bound_push_registration(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

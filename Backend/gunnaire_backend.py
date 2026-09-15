@@ -3034,13 +3034,25 @@ def queue_staff_push_event(
     category: str,
     route: str,
     record_id: str,
+    exclude_installation_id: str | None = None,
 ) -> int:
-    """Create one durable delivery per active device without customer/payment content."""
+    """Create one durable delivery per active device without customer/payment content.
+
+    ``exclude_installation_id`` skips the device that raised the event, so a
+    collection a collector sends to their own iPhone does not alert the iPad
+    or Mac they sent it from.
+    """
     email = normalize_email(recipient_email)
     try:
         normalized_record_id = str(uuid.UUID(record_id))
     except ValueError as error:
         raise ValueError("Invalid staff notification event") from error
+    excluded_installation: str | None = None
+    if exclude_installation_id is not None:
+        try:
+            excluded_installation = str(uuid.UUID(str(exclude_installation_id)))
+        except ValueError as error:
+            raise ValueError("Invalid staff notification event") from error
     if (
         not re.fullmatch(r"[A-Za-z0-9:_-]{1,160}", event_key)
         or not is_valid_email(email)
@@ -3050,21 +3062,23 @@ def queue_staff_push_event(
         raise ValueError("Invalid staff notification event")
     now = utc_now()
     queued = 0
+    device_query = """
+        SELECT push_devices.id
+        FROM push_devices
+        INNER JOIN users ON users.email = push_devices.email
+        INNER JOIN auth_sessions ON auth_sessions.id = push_devices.auth_session_id
+        WHERE push_devices.email = ?
+          AND push_devices.deactivated_at IS NULL
+          AND users.is_active = 1
+          AND auth_sessions.revoked_at IS NULL
+          AND auth_sessions.expires_at > ?
+    """
+    device_parameters: tuple[object, ...] = (email, now)
+    if excluded_installation is not None:
+        device_query += " AND push_devices.installation_id != ?"
+        device_parameters += (excluded_installation,)
     with db() as connection:
-        devices = connection.execute(
-            """
-            SELECT push_devices.id
-            FROM push_devices
-            INNER JOIN users ON users.email = push_devices.email
-            INNER JOIN auth_sessions ON auth_sessions.id = push_devices.auth_session_id
-            WHERE push_devices.email = ?
-              AND push_devices.deactivated_at IS NULL
-              AND users.is_active = 1
-              AND auth_sessions.revoked_at IS NULL
-              AND auth_sessions.expires_at > ?
-            """,
-            (email, now),
-        ).fetchall()
+        devices = connection.execute(device_query, device_parameters).fetchall()
         for device in devices:
             queued += connection.execute(
                 """
@@ -3926,7 +3940,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             self.store_payment_collection()
             return
         if parsed.path == "/api/field-payment-assignments":
-            if not self.require_field_payment_assignment_management():
+            # Collectors may send a task to their own account; the handler
+            # keeps third-party assignment behind the management roles.
+            if not self.require_field_payment_assignment_access():
                 return
             self.create_field_payment_assignment()
             return
@@ -6175,12 +6191,37 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
 
         principal = self.principal() or {}
         assigned_by = normalize_email(principal.get("email") if isinstance(principal.get("email"), str) else None)
+        actor_role = principal.get("role")
+        origin_installation_id: str | None = None
+        if payload.get("originInstallationID") is not None:
+            try:
+                origin_installation_id = str(uuid.UUID(str(payload.get("originInstallationID"))))
+            except ValueError:
+                self.write_json({"error": "Invalid origin installation identifier"}, status=HTTPStatus.BAD_REQUEST)
+                return
+        # A self-assignment is how an iPad or Mac hands a collection to the
+        # same GunnAire account's iPhone. It is open to every role that may
+        # collect in the field; assigning someone else stays an office action.
+        self_assignment = assigned_to == assigned_by
+        if not self_assignment and actor_role not in {"Admin", "Accounting", "Dispatcher"}:
+            self.write_json({"error": "Field collection assignment management access required"}, status=HTTPStatus.FORBIDDEN)
+            return
+        if self_assignment and actor_role not in {"Admin", "Field Technician"}:
+            self.write_json(
+                {"error": "Only administrators and field technicians can send a collection to their own iPhone"},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
         with db() as connection:
             technician = connection.execute(
                 "SELECT role, is_active FROM users WHERE email = ?",
                 (assigned_to,),
             ).fetchone()
-            if technician is None or not bool(technician["is_active"]) or technician["role"] != "Field Technician":
+            if self_assignment:
+                if technician is not None and not bool(technician["is_active"]):
+                    self.write_json({"error": "This account is not active"}, status=HTTPStatus.BAD_REQUEST)
+                    return
+            elif technician is None or not bool(technician["is_active"]) or technician["role"] != "Field Technician":
                 self.write_json({"error": "Assignments must target an active field technician"}, status=HTTPStatus.BAD_REQUEST)
                 return
             existing = connection.execute(
@@ -6224,6 +6265,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 category="field-payment-assignment",
                 route="paymentCollection",
                 record_id=invoice_id,
+                exclude_installation_id=origin_installation_id if self_assignment else None,
             )
         except (ValueError, sqlite3.Error):
             # Assignment creation is authoritative and must remain available when

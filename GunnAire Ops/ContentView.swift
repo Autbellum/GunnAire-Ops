@@ -215,7 +215,9 @@ struct ContentView: View {
         if fieldCollectionPromptFixtureRequested {
             return "ui-test-field-collection"
         }
-        guard isFieldTechnician,
+        // Every role that can collect in the field can be handed a collection
+        // task, including an administrator sending one to their own iPhone.
+        guard AppAccess.canCollectFieldPayments(email: currentUserEmail, users: users),
               GunnAireBackendService.isConfigured else { return nil }
         let email = AppAccess.normalizedEmail(currentUserEmail)
         return email.isEmpty ? nil : email

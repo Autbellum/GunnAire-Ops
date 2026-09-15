@@ -173,6 +173,90 @@ class FieldPaymentAssignmentTests(unittest.TestCase):
                     server.server_close()
                     thread.join(timeout=5)
 
+    def test_collector_can_send_a_collection_to_their_own_account(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with mock.patch.multiple(
+                backend,
+                DB_PATH=root / "gunnaire_backend.sqlite3",
+                STORAGE_ROOT=root / "storage",
+                AUTH_MODE="api-token",
+                API_TOKEN=self.api_token,
+                PRIMARY_ADMIN_EMAIL=self.admin_email,
+            ):
+                backend.initialize_database()
+                now = backend.utc_now()
+                with backend.db() as connection:
+                    connection.execute(
+                        """
+                        INSERT INTO users(email, role, is_active, created_at, updated_at)
+                        VALUES (?, 'Admin', 1, ?, ?)
+                        """,
+                        ("office@gunnaire.com", now, now),
+                    )
+
+                server = ThreadingHTTPServer(("127.0.0.1", 0), backend.GunnAireBackendHandler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                base_url = f"http://127.0.0.1:{server.server_port}"
+                invoice_id = str(uuid.uuid4())
+                try:
+                    # The api-token principal is the primary administrator, so
+                    # targeting that same email is "Send to My iPhone".
+                    own_phone = {
+                        "invoiceID": invoice_id,
+                        "customerName": "Own Phone Customer",
+                        "amount": 189,
+                        "assignedTo": self.admin_email,
+                        "originInstallationID": str(uuid.uuid4()),
+                    }
+                    with urllib.request.urlopen(
+                        self.request(f"{base_url}/api/field-payment-assignments", method="POST", payload=own_phone),
+                        timeout=5,
+                    ) as response:
+                        assignment = json.loads(response.read().decode("utf-8"))["assignment"]
+                    self.assertEqual(response.status, 201)
+                    self.assertEqual(assignment["assignedTo"], self.admin_email)
+                    self.assertEqual(assignment["assignedBy"], self.admin_email)
+                    self.assertEqual(assignment["status"], "pending")
+
+                    with urllib.request.urlopen(
+                        self.request(f"{base_url}/api/field-payment-assignments", method="POST", payload=own_phone),
+                        timeout=5,
+                    ) as response:
+                        replay = json.loads(response.read().decode("utf-8"))
+                    self.assertTrue(replay["idempotentReplay"])
+
+                    # Assigning someone else still requires an active field technician.
+                    office_target = {
+                        "invoiceID": str(uuid.uuid4()),
+                        "customerName": "Office Customer",
+                        "amount": 50,
+                        "assignedTo": "office@gunnaire.com",
+                    }
+                    with self.assertRaises(urllib.error.HTTPError) as rejected:
+                        urllib.request.urlopen(
+                            self.request(f"{base_url}/api/field-payment-assignments", method="POST", payload=office_target),
+                            timeout=5,
+                        )
+                    self.assertEqual(rejected.exception.code, 400)
+
+                    # A malformed origin device is rejected before anything is stored.
+                    malformed = {**own_phone, "invoiceID": str(uuid.uuid4()), "originInstallationID": "not-a-device"}
+                    with self.assertRaises(urllib.error.HTTPError) as invalid:
+                        urllib.request.urlopen(
+                            self.request(f"{base_url}/api/field-payment-assignments", method="POST", payload=malformed),
+                            timeout=5,
+                        )
+                    self.assertEqual(invalid.exception.code, 400)
+                    with backend.db() as connection:
+                        stored = connection.execute("SELECT COUNT(*) FROM field_payment_assignments").fetchone()[0]
+                    self.assertEqual(stored, 1)
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=5)
+
     def test_initialize_database_adds_completion_columns_to_existing_assignment_table(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

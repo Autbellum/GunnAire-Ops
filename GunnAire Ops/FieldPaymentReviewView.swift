@@ -8,6 +8,12 @@ struct FieldPaymentReviewView: View {
     let invoice: Invoice
     let localBalance: Double
     let recordVerifiedPayment: (Double?) -> Void
+    /// Offered on an iPad or Mac: hand this collection to the signed-in
+    /// account's iPhone (server task plus Handoff) or to a field technician.
+    /// Each returns the status line to show; nil hides the action.
+    var sendToOwnPhone: ((Double) async -> String)? = nil
+    var assignableTechnicians: [String] = []
+    var assignToTechnician: ((String, Double) async -> String)? = nil
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
@@ -21,8 +27,18 @@ struct FieldPaymentReviewView: View {
     @State private var updateSavedInvoice = false
     @State private var saveMessage = ""
     @State private var savedBalanceOverride: Double?
+    @State private var isHandingOff = false
 
     private var published: Bool { invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }
+    private var offersPhoneHandoff: Bool {
+        guard FieldPaymentHandoff.shared.canStartFromCurrentDevice,
+              sendToOwnPhone != nil || (assignToTechnician != nil && !assignableTechnicians.isEmpty)
+        else { return false }
+        // Nothing to hand to a phone once QuickBooks shows the invoice settled
+        // or another payment under review - the same gate as the Tap to Pay steps.
+        guard let snapshot else { return true }
+        return !snapshot.hasOpenAttempt && snapshot.collectionLimitCents > 0
+    }
 
     var body: some View {
         NavigationStack {
@@ -43,6 +59,7 @@ struct FieldPaymentReviewView: View {
                         Text("Ask the office to publish this invoice to QuickBooks, then reopen the collection task.")
                             .foregroundStyle(.secondary)
                     }
+                    phoneHandoffSection
                 } else {
                     Section("QuickBooks Invoice") {
                         if isLoading { ProgressView("Checking this invoice…").accessibilityIdentifier("ContactlessReviewLoading") }
@@ -105,6 +122,7 @@ struct FieldPaymentReviewView: View {
                             .accessibilityIdentifier("ContactlessQuickBooksCollectionSteps")
                         }
                     }
+                    phoneHandoffSection
                     if let snapshot, !snapshot.payments.isEmpty {
                         Section {
                             DisclosureGroup("Applied payments (\(snapshot.payments.count))") {
@@ -181,6 +199,54 @@ struct FieldPaymentReviewView: View {
             guard !Task.isCancelled, originalRefresh == refreshID else { return }
             message = (error as? FieldPaymentReceiptError)?.localizedDescription ?? FieldPaymentReviewError.safe(error).localizedDescription
         }
+    }
+
+    /// Shown on an iPad or Mac after the QuickBooks steps, which only an iPhone
+    /// can finish with Tap to Pay. Kept below the verification rows so the
+    /// compact sheet still shows the invoice check first.
+    @ViewBuilder private var phoneHandoffSection: some View {
+        if offersPhoneHandoff {
+            Section("Collect on an iPhone") {
+                Text("Tap to Pay on iPhone runs on an iPhone. Send this collection to an iPhone signed in to GunnAire Ops with this account; it opens this same guide there from the notification or from Payments.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if let sendToOwnPhone {
+                    Button {
+                        Task { await handOff(sendToOwnPhone) }
+                    } label: {
+                        Label(isHandingOff ? "Sending…" : "Send to My iPhone", systemImage: "iphone.and.arrow.forward")
+                    }
+                    .disabled(isHandingOff)
+                    .accessibilityIdentifier("ContactlessSendToOwnPhone")
+                }
+                if let assignToTechnician, !assignableTechnicians.isEmpty {
+                    Menu {
+                        ForEach(assignableTechnicians, id: \.self) { email in
+                            Button(email) {
+                                Task { await handOff { amount in await assignToTechnician(email, amount) } }
+                            }
+                        }
+                    } label: {
+                        Label("Assign to a Technician", systemImage: "person.badge.plus")
+                    }
+                    .disabled(isHandingOff)
+                    .accessibilityIdentifier("ContactlessAssignToTechnician")
+                }
+            }
+        }
+    }
+
+    /// The task carries the locally saved balance, exactly as the Payments
+    /// list's assignment does; the receiving guide re-verifies against QuickBooks.
+    @MainActor private func handOff(_ action: (Double) async -> String) async {
+        guard !isHandingOff else { return }
+        isHandingOff = true
+        defer { isHandingOff = false }
+        let amount = savedBalanceOverride ?? localBalance
+        guard amount.isFinite, amount > 0 else {
+            saveMessage = "This invoice has no open balance to collect."
+            return
+        }
+        saveMessage = await action(amount)
     }
 
     @MainActor private func openVerifiedEntry() {
