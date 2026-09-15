@@ -1635,16 +1635,29 @@ final class GoogleAuthManager: NSObject, ObservableObject {
 
     private func loadTokens() {
         if let stored = try? KeychainStore.loadCodable(GoogleOAuthTokens.self, account: keychainAccount) {
+            // The Keychain has the tokens, so any copy an earlier version left
+            // in UserDefaults is redundant. This branch is the one most
+            // installs take at every launch, so it is where the purge has to
+            // live: the migration below never runs once the Keychain is
+            // populated.
+            UserDefaults.standard.removeObject(forKey: tokenStorageKey)
             applyTokens(stored)
             return
         }
 
-        // Backward-compat migration from UserDefaults.
+        // Backward-compat migration from UserDefaults. Move the copy into the
+        // Keychain and only then remove it: if the Keychain write fails, the
+        // legacy copy stays readable rather than silently signing the user out.
         guard let data = UserDefaults.standard.data(forKey: tokenStorageKey),
               let stored = try? JSONDecoder().decode(GoogleOAuthTokens.self, from: data) else {
             return
         }
-        try? KeychainStore.saveCodable(stored, account: keychainAccount)
+        do {
+            try KeychainStore.saveCodable(stored, account: keychainAccount)
+            UserDefaults.standard.removeObject(forKey: tokenStorageKey)
+        } catch {
+            // Keep the legacy copy until the Keychain accepts it.
+        }
         applyTokens(stored)
     }
 
@@ -1673,10 +1686,15 @@ final class GoogleAuthManager: NSObject, ObservableObject {
 
     private func storeTokens(_ tokens: GoogleOAuthTokens) {
         if persistsCredentials {
+            // The Keychain is the only store for OAuth tokens. An earlier
+            // version also wrote them to UserDefaults on every save, which is a
+            // plaintext plist in the app container and travels in unencrypted
+            // device backups - a long-lived Google refresh token for the
+            // business account, stored outside the Keychain. That copy is no
+            // longer written, and any one still on disk is removed here so a
+            // token refresh cleans up installs the launch-time purge missed.
             try? KeychainStore.saveCodable(tokens, account: keychainAccount)
-            if let encoded = try? JSONEncoder().encode(tokens) {
-                UserDefaults.standard.set(encoded, forKey: tokenStorageKey)
-            }
+            UserDefaults.standard.removeObject(forKey: tokenStorageKey)
         }
         applyTokens(tokens)
     }
