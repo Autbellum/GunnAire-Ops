@@ -139,7 +139,10 @@ struct FieldFormResponseEditor: View {
                 case .toggle:
                     Toggle(question.required ? "Confirmed" : "Yes", isOn: Binding(
                         get: { answers[question.id] == "true" },
-                        set: { answers[question.id] = $0 ? "true" : "false"; persistAnswers() }))
+                        // Same coalesced path as text and choice answers, so
+                        // every answer change shares one invariant: writes
+                        // coalesce, every exit flushes.
+                        set: { answers[question.id] = $0 ? "true" : "false"; scheduleAnswerPersist() }))
                         .accessibilityLabel(question.label)
                         .accessibilityIdentifier("FieldFormAnswer-\(question.id.uuidString)")
                 case .text:
