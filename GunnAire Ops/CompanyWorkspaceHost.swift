@@ -209,6 +209,10 @@ struct CompanyWorkspaceHost: View {
     @Binding var hasAuthenticatedUser: Bool
     @State private var confirmsOwnership = false
     @State private var showingStaffSetup = false
+    #if DEBUG
+    @State private var schemaSeedResult = ""
+    @State private var isSeedingSchema = false
+    #endif
     @StateObject private var staffNavigation = StaffWorkspaceNavigationController()
     @ObservedObject private var staffInvitations = CloudKitStaffInvitationInbox.shared
 
@@ -299,6 +303,35 @@ struct CompanyWorkspaceHost: View {
                                     .accessibilityIdentifier("OpenStaffCloudKitSetup")
                             }
                         }
+                        #if DEBUG
+                        // Reachable in every blocked state on purpose: seeding
+                        // the Development schema needs CloudKit only, not an
+                        // approved workspace, so this must not sit behind the
+                        // approval it exists to make unnecessary.
+                        VStack(alignment: .leading, spacing: 8) {
+                            Divider()
+                            Text("Developer")
+                                .font(.caption.bold())
+                                .foregroundStyle(.secondary)
+                            Button(isSeedingSchema ? "Seeding…" : "Seed cloudkit.share (Development)") {
+                                isSeedingSchema = true
+                                Task {
+                                    schemaSeedResult = await CloudKitSchemaSeed.seedShareRecordType()
+                                    isSeedingSchema = false
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(isSeedingSchema)
+                            .accessibilityIdentifier("SeedCloudKitShareType")
+                            if !schemaSeedResult.isEmpty {
+                                Text(schemaSeedResult)
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                                    .accessibilityIdentifier("SeedCloudKitShareTypeResult")
+                            }
+                        }
+                        #endif
                         Button("Sign Out") {
                             access.invalidate()
                             FieldPaymentHandoff.shared.end()
