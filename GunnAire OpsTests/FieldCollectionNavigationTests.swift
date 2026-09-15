@@ -4,11 +4,21 @@ import Testing
 
 /// The single serialized home for every test that touches
 /// `GunnAireAppIntentRouter`. The router is process-global static state that
-/// persists pending routes to `UserDefaults.standard`, so router tests spread
-/// across parallel suites trampled each other's pending routes - failing on
-/// a varying test, only under the full suite, and only on some simulators.
-/// `.serialized` protects tests within one suite and nothing across suites,
-/// so they all live here, and each one starts and ends from a clean slate.
+/// persists pending routes to `UserDefaults.standard`, and Swift Testing runs
+/// suites in parallel, so router tests spread across several suites could in
+/// principle overwrite each other's pending routes. `.serialized` protects
+/// tests within one suite and nothing across suites, so they all live here,
+/// and each one starts and ends from a clean slate.
+///
+/// Record, so the next person does not repeat the detour: these eight tests
+/// once failed on every full-suite run on one iPad simulator while passing
+/// alone and on every other destination. That was not a race. The simulator's
+/// app container had gone stale after killed runs and silently dropped the
+/// app's UserDefaults writes - store, then read, returned nil in the same
+/// process - and erasing the simulator made the identical code pass 2480/0.
+/// CI is unaffected because it creates a fresh simulator per run. The
+/// consolidation here is kept as hygiene for genuinely shared state, not as
+/// the fix for that incident.
 @MainActor
 @Suite(.serialized)
 struct FieldCollectionNavigationTests {
