@@ -270,13 +270,54 @@ struct CompanyWorkspaceAccessTests {
     /// always return nil for real installs, surfacing as a false
     /// "Company workspace needs attention" / accountUnavailable block.
     @Test func signedCloudKitEnvironmentAcceptsArrayShapedEntitlement() throws {
-        let plist = ["Entitlements": ["com.apple.developer.icloud-container-identifiers": [GunnAireCloudKit.containerIdentifier], "com.apple.developer.icloud-container-environment": ["Production", "Development"]]]
-        let xml = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
-        #expect(CompanyCloudKitRuntimeAccount.environment(profileData: Data([0, 1, 2]) + xml + Data([3, 4]), hasVerifiedStoreDistribution: false) == "production")
-
         let developmentOnlyPlist = ["Entitlements": ["com.apple.developer.icloud-container-identifiers": [GunnAireCloudKit.containerIdentifier], "com.apple.developer.icloud-container-environment": ["Development"]]]
         let developmentOnlyXML = try PropertyListSerialization.data(fromPropertyList: developmentOnlyPlist, format: .xml, options: 0)
         #expect(CompanyCloudKitRuntimeAccount.environment(profileData: developmentOnlyXML, hasVerifiedStoreDistribution: false) == "development")
+
+        let productionOnlyPlist = ["Entitlements": ["com.apple.developer.icloud-container-identifiers": [GunnAireCloudKit.containerIdentifier], "com.apple.developer.icloud-container-environment": ["Production"]]]
+        let productionOnlyXML = try PropertyListSerialization.data(fromPropertyList: productionOnlyPlist, format: .xml, options: 0)
+        #expect(CompanyCloudKitRuntimeAccount.environment(profileData: productionOnlyXML, hasVerifiedStoreDistribution: false) == "production")
+    }
+
+    /// Both the development and the store profile for this app carry
+    /// ["Production", "Development"] - the entitlement is an allowlist, not a
+    /// selection. Preferring Production unconditionally made a debug build
+    /// call itself "production" while CloudKit served it the Development
+    /// database, so its account hash could never match the production binding
+    /// and every run failed as an opaque "workspace does not match".
+    /// get-task-allow is the signed discriminator: true only for development
+    /// profiles, false for App Store, Ad Hoc and Enterprise.
+    @Test func bothEnvironmentsAllowedResolvesByDebuggableSigning() throws {
+        func profile(debuggable: Bool?) throws -> Data {
+            var entitlements: [String: Any] = [
+                "com.apple.developer.icloud-container-identifiers": [GunnAireCloudKit.containerIdentifier],
+                "com.apple.developer.icloud-container-environment": ["Production", "Development"]
+            ]
+            if let debuggable { entitlements["get-task-allow"] = debuggable }
+            let xml = try PropertyListSerialization.data(fromPropertyList: ["Entitlements": entitlements], format: .xml, options: 0)
+            return Data([0, 1, 2]) + xml + Data([3, 4])
+        }
+        #expect(CompanyCloudKitRuntimeAccount.environment(profileData: try profile(debuggable: true), hasVerifiedStoreDistribution: false) == "development")
+        #expect(CompanyCloudKitRuntimeAccount.environment(profileData: try profile(debuggable: false), hasVerifiedStoreDistribution: false) == "production")
+        // A missing key must fail closed to distribution, never to development.
+        #expect(CompanyCloudKitRuntimeAccount.environment(profileData: try profile(debuggable: nil), hasVerifiedStoreDistribution: false) == "production")
+    }
+
+    /// A single-environment profile is unambiguous and must ignore
+    /// get-task-allow entirely: a development-signed build of a
+    /// Production-only profile still reaches Production.
+    @Test func singleEnvironmentEntitlementIgnoresDebuggableSigning() throws {
+        for (value, expected) in [("Production", "production"), ("Development", "development")] {
+            for debuggable in [true, false] {
+                let entitlements: [String: Any] = [
+                    "com.apple.developer.icloud-container-identifiers": [GunnAireCloudKit.containerIdentifier],
+                    "com.apple.developer.icloud-container-environment": [value],
+                    "get-task-allow": debuggable
+                ]
+                let xml = try PropertyListSerialization.data(fromPropertyList: ["Entitlements": entitlements], format: .xml, options: 0)
+                #expect(CompanyCloudKitRuntimeAccount.environment(profileData: xml, hasVerifiedStoreDistribution: false) == expected)
+            }
+        }
     }
 
     @Test func businessDataRequestsRequireWorkspaceProofButIdentityEstablishmentDoesNot() {

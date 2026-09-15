@@ -42,6 +42,10 @@ enum CompanyWorkspaceDiagnostics {
     /// GunnAireBackendError, so the on-screen message alone can't distinguish
     /// a real backend problem from a URLError/DecodingError on this device.
     static var lastServerFailureDetail: String = ""
+    /// The CloudKit environment this build resolved to. It namespaces the
+    /// account hash, the workspace binding and every staff share plan, so a
+    /// mismatch surfaces only as an opaque "workspace does not match".
+    static var lastResolvedEnvironment: String = ""
 }
 
 enum CompanyCloudKitRuntimeAccount {
@@ -65,9 +69,12 @@ enum CompanyCloudKitRuntimeAccount {
                   let containers = entitlements["com.apple.developer.icloud-container-identifiers"] as? [String],
                   containers.contains(GunnAireCloudKit.containerIdentifier) else { return nil }
             // Provisioning profiles encode this entitlement as a single String
-            // for a distribution-only profile, but as a String array (e.g.
-            // ["Production", "Development"]) for profiles that support both
-            // environments. Accept either shape and prefer Production.
+            // for a single-environment profile, but as a String array (e.g.
+            // ["Production", "Development"]) for profiles that permit both.
+            // The array is an ALLOWLIST, not a selection: both the development
+            // and the store profile for this app carry both values (verified
+            // by decoding the installed profiles), so it cannot by itself say
+            // which environment a build actually reaches.
             let rawEnvironmentValues: [String]
             if let single = entitlements["com.apple.developer.icloud-container-environment"] as? String {
                 rawEnvironmentValues = [single]
@@ -76,8 +83,21 @@ enum CompanyCloudKitRuntimeAccount {
             } else {
                 return nil
             }
-            guard let value = rawEnvironmentValues.first(where: { $0 == "Production" }) ?? rawEnvironmentValues.first(where: { $0 == "Development" }) else { return nil }
-            return value.lowercased()
+            let allowsProduction = rawEnvironmentValues.contains("Production")
+            let allowsDevelopment = rawEnvironmentValues.contains("Development")
+            guard allowsProduction || allowsDevelopment else { return nil }
+            guard allowsProduction && allowsDevelopment else {
+                return allowsProduction ? "production" : "development"
+            }
+            // Both permitted: disambiguate with get-task-allow, the signed,
+            // tamper-evident marker of a development-signed build. Apple's
+            // development profiles carry true and distribution profiles
+            // (App Store, Ad Hoc, Enterprise) carry false - verified by
+            // decoding this app's own installed profiles. A missing key is
+            // treated as distribution, the conservative choice. Never infer
+            // this from DEBUG, a receipt file, or QBO.
+            let debuggable = (entitlements["get-task-allow"] as? Bool) ?? false
+            return debuggable ? "development" : "production"
         }
         return hasVerifiedStoreDistribution ? "production" : nil
     }
@@ -141,6 +161,13 @@ enum CompanyCloudKitRuntimeAccount {
         }
         guard let environment = environment(profileData: profileData, hasVerifiedStoreDistribution: hasVerifiedDistribution) else {
             throw CompanyWorkspaceFailure.configuration
+        }
+        // The resolved environment namespaces accountHash, the workspace
+        // binding lookup and every staff share plan, so a wrong value fails as
+        // an opaque "workspace does not match". Record it where it can be read
+        // off the device instead of inferred.
+        await MainActor.run {
+            CompanyWorkspaceDiagnostics.lastResolvedEnvironment = environment
         }
         let container = CKContainer(identifier: GunnAireCloudKit.containerIdentifier)
         // CKContainer's async calls have no built-in timeout. A stalled
@@ -257,6 +284,12 @@ struct CompanyWorkspaceHost: View {
                                     .font(.caption2.monospaced())
                                     .foregroundStyle(.secondary)
                                     .accessibilityIdentifier("CompanyWorkspaceServerFailureDetail")
+                            }
+                            if failure == .differentWorkspace, !CompanyWorkspaceDiagnostics.lastResolvedEnvironment.isEmpty {
+                                Text("environment=\(CompanyWorkspaceDiagnostics.lastResolvedEnvironment)")
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("CompanyWorkspaceResolvedEnvironment")
                             }
                             if failure != .restartRequired {
                                 Button("Check Again") { Task { await access.refresh() } }
