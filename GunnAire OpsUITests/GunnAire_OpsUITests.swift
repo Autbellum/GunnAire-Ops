@@ -12,6 +12,9 @@ final class GunnAire_OpsUITests: XCTestCase {
     private let screenshotCustomerID = "A1000000-0000-4000-8000-000000000001"
     private let screenshotServiceCallID = "A1000000-0000-4000-8000-000000000002"
     private let screenshotInvoiceID = "A1000000-0000-4000-8000-000000000003"
+    // The confirmed original that BillingPublicationReviewView.loadFixture inserts
+    // beside the retained milestone draft above.
+    private let milestoneOriginalInvoiceID = "10000000-0000-4000-8000-000000000006"
     private let screenshotEquipmentID = "A1000000-0000-4000-8000-000000000010"
     private let maintenanceServiceCallID = "A1000000-0000-4000-8000-000000000012"
     private let serviceRequestID = "A1000000-0000-4000-8000-000000000019"
@@ -5434,21 +5437,33 @@ final class GunnAire_OpsUITests: XCTestCase {
                     "The retained draft's zero contribution must not label the job paid.")
             }
             XCTAssertTrue(collect.waitForExistence(timeout: 4)); collect.tap()
-            XCTAssertTrue(app.navigationBars[scheduleHandoff ? "Finalize Invoice" : "Record Payment"].waitForExistence(timeout: 5))
             if scheduleHandoff {
+                XCTAssertTrue(app.navigationBars["Finalize Invoice"].waitForExistence(timeout: 5))
                 XCTAssertTrue(app.staticTexts["Blue Ridge Dental"].exists)
                 XCTAssertTrue(app.staticTexts["Balance due: $189.00"].exists,
                     "A job still linked to the retained draft must collect the reviewed original, never the zero-balance alias.")
             } else {
-                XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Blue Ridge Dental - $189.00")).firstMatch.exists)
-                XCTAssertEqual(app.textFields["Amount"].value as? String, "189.00")
+                // An explicit field "Collect Payment" opens the contactless guide in
+                // the Payments workspace (storeFieldPaymentCollectionRoute); the
+                // guide and the Collect list must both resolve the reviewed original.
+                XCTAssertTrue(app.navigationBars["Payments"].waitForExistence(timeout: 5))
+                XCTAssertTrue(app.navigationBars["Contactless Payment"].waitForExistence(timeout: 5))
+                XCTAssertTrue(app.staticTexts["Customer, Blue Ridge Dental"].exists)
+                let savedBalance = app.descendants(matching: .any)["ContactlessSavedBalance"]
+                XCTAssertTrue(savedBalance.waitForExistence(timeout: 4))
+                XCTAssertTrue(savedBalance.label.contains("$189.00"),
+                    "A job still linked to the retained draft must collect the reviewed original, never the zero-balance alias.")
+                XCTAssertTrue(app.descendants(matching: .any)["InvoiceCollectionActions-\(milestoneOriginalInvoiceID)"].exists,
+                    "The Collect list must offer the reviewed original invoice.")
+                XCTAssertFalse(app.descendants(matching: .any)["InvoiceCollectionActions-\(screenshotInvoiceID)"].exists,
+                    "The retained draft must not be offered for collection.")
             }
             XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Retained duplicate draft.")).firstMatch.exists)
             let handoffEvidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
             handoffEvidence.name = "Retained milestone - \(jobHandoff) opens original collection"
             handoffEvidence.lifetime = .keepAlways; add(handoffEvidence)
             if !scheduleHandoff {
-                app.navigationBars["Record Payment"].buttons["Cancel"].tap()
+                app.navigationBars["Contactless Payment"].buttons["Done"].tap()
                 XCTAssertTrue(app.navigationBars["Payments"].waitForExistence(timeout: 4))
                 XCTAssertTrue(app.segmentedControls["PaymentsWorkspacePicker"].buttons["Collect"].isSelected)
             }

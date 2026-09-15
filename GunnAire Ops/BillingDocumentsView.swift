@@ -3803,6 +3803,12 @@ GunnAire
                                     get: { expandedInvoiceIDs.contains(invoice.id) },
                                     set: { if $0 { expandedInvoiceIDs.insert(invoice.id) } else { expandedInvoiceIDs.remove(invoice.id) } }
                                 )) {
+                                    // The row identifier below is applied to the whole
+                                    // DisclosureGroup, and SwiftUI pushes a container's
+                                    // accessibility identifier down onto every child
+                                    // element. Without a container boundary here it
+                                    // overwrote BillingReview-/EditInvoice-/SyncSavedInvoice-
+                                    // on the expanded controls, so no UI test could find them.
                                     VStack(alignment: .leading, spacing: 8) {
                                         Text(invoice.lineItemSummary)
                                             .font(.caption)
@@ -3888,6 +3894,7 @@ GunnAire
                                         .buttonStyle(.bordered)
                                     }
                                     .padding(.top, 6)
+                                    .accessibilityElement(children: .contain)
                                 } label: {
                                     HStack {
                                         VStack(alignment: .leading) {
