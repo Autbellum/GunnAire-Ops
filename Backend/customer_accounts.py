@@ -292,6 +292,15 @@ def store_customer_service_request(
 # fakes; the real callers in gunnaire_backend.py pass `qbo_payment_read_transport`
 # and a closure around `qbo_authorized_bearer` built from the current
 # qbo_connections grant.
+#
+# Verified against live GunnAire QuickBooks data: card, ACH, and PayPal are
+# all enabled account-wide, but `InvoiceLink` was empty on every one of the
+# 10 most recent invoices, and the account has zero QBO payment links
+# created. In practice this feature will show "Contact us to pay" (see
+# customer_account_portal.py) for most invoices today, not a working Pay Now
+# link, until invoices are sent through QBO with online payment enabled per
+# invoice, or a payment link is created through some other path. Confirmed
+# real, not hypothetical -- do not remove this note without re-verifying.
 
 QBO_INVOICE_ID_PATTERN = re.compile(r"[0-9]{1,21}")
 

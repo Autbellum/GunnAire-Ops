@@ -194,6 +194,12 @@ PORTAL_HTML = """<!doctype html>
           link.href = invoice.payLink; link.target = "_blank"; link.rel = "noopener";
           link.textContent = "Pay Now";
           row.appendChild(link);
+        } else if (invoice.balance) {
+          var contact = document.createElement("span");
+          contact.style.fontSize = "0.8rem";
+          contact.style.color = "#888";
+          contact.textContent = "Contact us to pay";
+          row.appendChild(contact);
         }
         list.appendChild(row);
       });
