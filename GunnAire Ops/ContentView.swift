@@ -5114,10 +5114,6 @@ struct EditServiceCallView: View {
         )
     }
 
-    private var visibleCustomers: [Customer] {
-        customers.filter { !CustomerDataMaintenance.isSystemCalendarCustomer($0) }
-    }
-
     private var isExternalGoogleCalendarEvent: Bool {
         GoogleCalendarScheduleSync.isExternalGoogleCalendarEvent(call)
     }
@@ -5207,14 +5203,34 @@ struct EditServiceCallView: View {
                             .foregroundColor(.secondary)
                     }
                 }
-                Picker("Customer", selection: $customer) {
-                    if CustomerDataMaintenance.isSystemCalendarCustomer(call.customer) {
-                        Text("Unassigned Calendar Event").tag(Customer?.some(call.customer))
+                // A bare Picker here left no way to search a real customer list
+                // and no way to add a customer who did not exist yet, which is
+                // exactly what a calendar-imported job needs: it arrives with no
+                // customer whenever the event carried no matching email.
+                CustomerSelectionSection(
+                    customer: $customer,
+                    customers: customers,
+                    identifierPrefix: "EditServiceCall",
+                    placeholder: CustomerDataMaintenance.isSystemCalendarCustomer(call.customer)
+                        ? call.customer : nil,
+                    onCreate: { created in
+                        // Mirror the new-job sheet: give the customer a reusable
+                        // primary location when they were entered with an
+                        // address, so billing and reports have one to attach to.
+                        guard let address = created.address else { return }
+                        let primaryLocation = CustomerServiceLocation(
+                            customer: created,
+                            name: "Primary Service Location",
+                            address: address,
+                            isPrimary: true
+                        )
+                        modelContext.insert(primaryLocation)
+                        selectedServiceLocationID = primaryLocation.id
+                        if siteAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            siteAddress = address
+                        }
                     }
-                    ForEach(visibleCustomers) { customer in
-                        Text(customer.name).tag(Customer?.some(customer))
-                    }
-                }
+                )
                 CustomerOperationalAlertInlineSummary(
                     alerts: selectedOperationalAlerts,
                     accessibilityIdentifier: "EditServiceCallOperationalAlerts"
