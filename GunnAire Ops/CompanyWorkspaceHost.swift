@@ -313,10 +313,10 @@ struct CompanyWorkspaceHost: View {
                             Text("Developer")
                                 .font(.caption.bold())
                                 .foregroundStyle(.secondary)
-                            Button(isSeedingSchema ? "Seeding…" : "Seed staff sharing schema (Development)") {
+                            Button(isSeedingSchema ? "Seeding…" : "Seed Development schema") {
                                 isSeedingSchema = true
                                 Task {
-                                    schemaSeedResult = await CloudKitSchemaSeed.seedShareRecordType()
+                                    schemaSeedResult = await CloudKitSchemaSeed.seedDevelopmentSchema()
                                     isSeedingSchema = false
                                 }
                             }
