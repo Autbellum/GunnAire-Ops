@@ -882,7 +882,7 @@ struct PaymentsAndReceiptsView: View {
                                     .foregroundColor(.secondary)
                             }
 
-                            if isAdminUser, assignment.isActionable {
+                            if assignment.isActionable, isAdminUser || wasSentToOwnPhone(assignment) {
                                 Button("Cancel", role: .destructive) {
                                     Task {
                                         await cancelFieldCollection(assignment)
@@ -1536,6 +1536,15 @@ struct PaymentsAndReceiptsView: View {
     /// but have no iPhone task list of their own to receive one.
     private var canSendCollectionToOwnPhone: Bool {
         AppAccess.canCollectFieldPayments(email: signedInEmail, users: users)
+    }
+
+    /// A task the signed-in collector sent to their own phone; the server lets
+    /// them withdraw it, unlike a task the office assigned to them.
+    private func wasSentToOwnPhone(_ assignment: BackendFieldPaymentAssignmentRecord) -> Bool {
+        let email = AppAccess.normalizedEmail(signedInEmail)
+        return !email.isEmpty
+            && AppAccess.normalizedEmail(assignment.assignedTo) == email
+            && AppAccess.normalizedEmail(assignment.assignedBy) == email
     }
 
     private func ownPhoneSendAction(for invoice: Invoice) -> ((Double) async -> String)? {

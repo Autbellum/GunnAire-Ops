@@ -398,7 +398,34 @@ class StaffPushNotificationTests(unittest.TestCase):
                         office_alerts = connection.execute(
                             "SELECT COUNT(*) FROM push_deliveries WHERE record_id = ?", (office_invoice,)
                         ).fetchone()[0]
+                        office_assignment_id = connection.execute(
+                            "SELECT id FROM field_payment_assignments WHERE invoice_id = ?", (office_invoice,)
+                        ).fetchone()["id"]
                     self.assertEqual(office_alerts, 2)
+
+                    # The collector may withdraw the task they sent to their own
+                    # phone, but not one the office assigned to them.
+                    with self.assertRaises(urllib.error.HTTPError) as office_task:
+                        urllib.request.urlopen(
+                            self.request(
+                                f"{base_url}/api/field-payment-assignments/{office_assignment_id}",
+                                technician_token,
+                                method="DELETE",
+                            ),
+                            timeout=5,
+                        )
+                    self.assertEqual(office_task.exception.code, HTTPStatus.FORBIDDEN)
+                    with urllib.request.urlopen(
+                        self.request(
+                            f"{base_url}/api/field-payment-assignments/{assignment['id']}",
+                            technician_token,
+                            method="DELETE",
+                        ),
+                        timeout=5,
+                    ) as response:
+                        withdrawn = json.loads(response.read().decode("utf-8"))["assignment"]
+                    self.assertEqual(withdrawn["status"], "cancelled")
+                    self.assertEqual(withdrawn["id"], assignment["id"])
                 finally:
                     server.shutdown()
                     server.server_close()

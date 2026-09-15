@@ -4061,7 +4061,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             self.write_json({"id": link_id, "revoked": True})
             return
         if parsed.path.startswith("/api/field-payment-assignments/"):
-            if not self.require_field_payment_assignment_management():
+            # The handler lets a collector withdraw a task they sent to their
+            # own phone; every other cancellation stays an office action.
+            if not self.require_field_payment_assignment_access():
                 return
             assignment_id = unquote(parsed.path.removeprefix("/api/field-payment-assignments/")).strip()
             self.cancel_field_payment_assignment(assignment_id)
@@ -6315,12 +6317,20 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         principal = self.principal() or {}
         actor = normalize_email(principal.get("email") if isinstance(principal.get("email"), str) else None)
+        actor_role = principal.get("role")
         with db() as connection:
             row = connection.execute(
                 "SELECT * FROM field_payment_assignments WHERE id = ?", (assignment_id,)
             ).fetchone()
             if row is None:
                 self.write_json({"error": "Field collection assignment not found"}, status=HTTPStatus.NOT_FOUND)
+                return
+            sent_to_own_phone = row["assigned_to"] == actor and row["assigned_by"] == actor
+            if actor_role not in {"Admin", "Accounting", "Dispatcher"} and not sent_to_own_phone:
+                self.write_json(
+                    {"error": "Only the office or the collector who sent this task to their own phone can cancel it"},
+                    status=HTTPStatus.FORBIDDEN,
+                )
                 return
             if row["status"] == "completed":
                 self.write_json({"error": "Completed collection assignments cannot be cancelled"}, status=HTTPStatus.CONFLICT)

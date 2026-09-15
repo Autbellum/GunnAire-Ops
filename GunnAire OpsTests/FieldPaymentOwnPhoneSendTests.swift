@@ -8,7 +8,9 @@ struct FieldPaymentOwnPhoneSendTests {
     @Test func statusNamesTheServerTaskAndTheReceivingSteps() {
         let message = FieldPaymentHandoff.ownPhoneSendMessage(assignedTo: "eric@gunnaire.com", handoffStarted: false)
         #expect(message.hasPrefix("Sent to eric@gunnaire.com."))
-        #expect(message.contains("Your Field Collection Tasks"))
+        // Role-neutral: administrators and technicians see different section titles.
+        #expect(message.contains("Payments → Collect"))
+        #expect(!message.contains("Your Field Collection Tasks"))
         #expect(!message.contains("Handoff"))
     }
 

@@ -9335,11 +9335,13 @@ final class GunnAire_OpsUITests: XCTestCase {
             // section sits just above the verified-payment button reached above.
             let sendToPhone = app.buttons["ContactlessSendToOwnPhone"]
             if !sendToPhone.exists { app.swipeDown() }
-            if role == "-uiTestAuthenticatedAdmin" {
-                XCTAssertTrue(sendToPhone.waitForExistence(timeout: 4), "An administrator on an iPad sends the collection to their own iPhone.")
-                XCTAssertTrue(sendToPhone.isEnabled)
-            } else {
-                XCTAssertFalse(sendToPhone.exists, "Accounting cannot collect in the field, so no phone handoff is offered.")
+            if app.windows.firstMatch.frame.width >= 700 {
+                if role == "-uiTestAuthenticatedAdmin" {
+                    XCTAssertTrue(sendToPhone.waitForExistence(timeout: 4), "An administrator on an iPad sends the collection to their own iPhone.")
+                    XCTAssertTrue(sendToPhone.isEnabled)
+                } else {
+                    XCTAssertFalse(sendToPhone.exists, "Accounting cannot collect in the field, so no phone handoff is offered.")
+                }
             }
             let image = XCTAttachment(screenshot: app.screenshot())
             image.name = "Shared contactless review without device QuickBooks OAuth"

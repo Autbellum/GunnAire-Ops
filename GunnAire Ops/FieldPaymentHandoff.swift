@@ -224,7 +224,7 @@ final class FieldPaymentHandoff: ObservableObject {
     /// nearby-device convenience layered on top. Never includes amounts or
     /// customer data.
     nonisolated static func ownPhoneSendMessage(assignedTo: String, handoffStarted: Bool) -> String {
-        var message = "Sent to \(assignedTo). On your iPhone, open GunnAire Ops from the notification, or open Payments → Your Field Collection Tasks and choose the invoice."
+        var message = "Sent to \(assignedTo). On your iPhone, open GunnAire Ops from the notification, or open Payments → Collect and choose this invoice in the collection tasks list."
         if handoffStarted {
             message += " Handoff is also active for 30 minutes on a nearby iPhone using the same Apple Account."
         }
