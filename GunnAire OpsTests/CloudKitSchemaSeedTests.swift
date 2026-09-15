@@ -110,7 +110,6 @@ final class CloudKitSchemaSeedTests: XCTestCase {
     /// Double as DOUBLE (`CD_amount`), Bool as INT(64) (`CD_isRefund`).
     /// CloudKit infers a field's type from the value, so an NSNumber built from
     /// the wrong Swift type silently registers the wrong column.
-    @MainActor
     func testValueKindsProduceTheCloudKitTypesTheSchemaUses() throws {
         XCTAssertTrue(CloudKitSchemaSeed.value(for: .string) is String)
 

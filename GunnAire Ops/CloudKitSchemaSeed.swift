@@ -88,7 +88,11 @@ enum CloudKitSchemaSeed {
         ],
     ]
 
-    static func value(for kind: FieldKind) -> CKRecordValue {
+    /// Pure mapping from a field kind to the representative value written for
+    /// it. Deliberately `nonisolated`: it touches no state, and isolating it to
+    /// the main actor would force every caller — including tests — onto the
+    /// main actor for no reason.
+    nonisolated static func value(for kind: FieldKind) -> CKRecordValue {
         switch kind {
         case .string: return "ga-schema-seed" as CKRecordValue
         case .double: return NSNumber(value: Double(0)) as CKRecordValue
