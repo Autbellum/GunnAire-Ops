@@ -20,6 +20,9 @@ enum QuickBooksChangeHistoryError: Error, LocalizedError, Equatable {
         if let own = error as? Self { return own }
         if error is WorkspaceProviderAccessError || error is CompanyWorkspaceFailure { return .access }
         if error is DecodingError { return .invalid }
+        // A change-capture reply that kept its status and staff message maps
+        // by status exactly like the plain backend error it replaces.
+        if let failure = error as? QuickBooksChangeHistoryServerFailure { return safe(failure.backendError) }
         if case GunnAireBackendError.server(let status, _) = error {
             if status == 401 || status == 403 { return .access }
             if status == 409 { return .changed }
@@ -288,6 +291,7 @@ struct QuickBooksHistoryPage: Decodable {
             return page
         } catch {
             try check()
+            QuickBooksChangeHistoryDiagnostics.record(error, entity: entity)
             throw QuickBooksChangeHistoryError.safe(error)
         }
     }
@@ -306,7 +310,10 @@ struct QuickBooksHistoryPage: Decodable {
                 guard bytes <= Self.maximumHistoryBytes, count < 100_000 else { throw QuickBooksChangeHistoryError.limit }
                 let updated: QuickBooksHistoryTimestamp
                 do { updated = try version.validate() }
-                catch { throw QuickBooksChangeHistoryError.safe(error) }
+                catch {
+                    QuickBooksChangeHistoryDiagnostics.record(error, entity: entity)
+                    throw QuickBooksChangeHistoryError.safe(error)
+                }
                 count += 1
                 if let prior = latest[version.entityID] {
                     if updated > prior.1 { latest[version.entityID] = (version, updated, false) }
@@ -331,7 +338,10 @@ struct QuickBooksHistoryPage: Decodable {
                 try version.validateProjection(for: entity)
                 return try JSONDecoder().decode(T.self, from: Data(version.recordJSON.utf8))
             }
-        } catch { throw QuickBooksChangeHistoryError.safe(error) }
+        } catch {
+            QuickBooksChangeHistoryDiagnostics.record(error, entity: entity)
+            throw QuickBooksChangeHistoryError.safe(error)
+        }
         // An empty final read rechecks the server session, role, grant and
         // collection revision before even exposing this collection to the UI.
         _ = try await request(entity: entity, original: first, after: first.throughSequence)

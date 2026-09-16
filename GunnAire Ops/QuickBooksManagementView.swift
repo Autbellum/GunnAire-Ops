@@ -1263,6 +1263,7 @@ struct QuickBooksManagementView: View {
     @State private var statusMessage = "Connect QuickBooks in Settings to start live sync."
     @State private var actionMessage: String?
     @State private var syncResourceStatuses: [QuickBooksSyncResourceStatus] = Self.defaultSyncResourceStatuses
+    @State private var lastChangeHistoryFailure: QuickBooksChangeHistoryFailure?
     @State private var lastSuccessfulSyncAt: Date?
     @State private var lastSyncStartedAt: Date?
     @State private var activeEmailEstimateID: String?
@@ -1880,6 +1881,13 @@ struct QuickBooksManagementView: View {
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }
+                        }
+
+                        if let failure = lastChangeHistoryFailure {
+                            Text("Last shared history failure (\(failure.entity ?? "Accounting"), \(failure.at.formatted(date: .omitted, time: .shortened))). \(failure.summary)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .accessibilityIdentifier("QuickBooksChangeHistoryFailureDetail")
                         }
 
                         if syncResourceStatuses.contains(where: { $0.state != .idle }) {
@@ -3409,6 +3417,8 @@ struct QuickBooksManagementView: View {
         quickBooksReconnectRequired = false
         lastSyncStartedAt = Date()
         resetSyncStatusesForRun()
+        QuickBooksChangeHistoryDiagnostics.reset()
+        lastChangeHistoryFailure = nil
         statusMessage = "Refreshing QuickBooks…"
 
         resourceSyncTask = Task { @MainActor in
@@ -3435,7 +3445,7 @@ struct QuickBooksManagementView: View {
                 clearQuickBooksSyncSnapshot()
                 let message = error is CancellationError
                     ? "QuickBooks sync stopped. Saved work has been retained."
-                    : error.localizedDescription
+                    : error.localizedDescription + changeHistoryFailureSuffix(for: error)
                 markAllSyncStatusesFailed(message)
                 statusMessage = "QuickBooks sync stopped. \(message)"
             }
@@ -3487,7 +3497,7 @@ struct QuickBooksManagementView: View {
                 updateSyncStatus(id: id, state: .success, detail: "Loaded \(records.count) records.", count: records.count)
                 return true
             case .failure(let error):
-                let message = userFacingQuickBooksMessage(for: error)
+                let message = userFacingQuickBooksMessage(for: error) + changeHistoryFailureSuffix(for: error)
                 if let qbError = error as? QuickBooksDataAPI.QBError,
                    qbError.requiresReconnect {
                     quickBooksReconnectRequired = true
@@ -5250,6 +5260,19 @@ struct QuickBooksManagementView: View {
             return qbError.localizedDescription
         }
         return error.localizedDescription
+    }
+
+    /// For a shared accounting history failure, the server's own status,
+    /// code and staff message (or the device transport error) recorded by the
+    /// change-history client during this run. Empty for every other error.
+    private func changeHistoryFailureSuffix(for error: Error) -> String {
+        // Only a failure recorded during this run: the diagnostics are shared
+        // with the billing catalog refresh, which must not be attributed here.
+        guard error is QuickBooksChangeHistoryError,
+              let failure = QuickBooksChangeHistoryDiagnostics.lastFailure,
+              failure.at >= (lastSyncStartedAt ?? .distantPast) else { return "" }
+        lastChangeHistoryFailure = failure
+        return failure.detailSuffix
     }
 
     @ViewBuilder

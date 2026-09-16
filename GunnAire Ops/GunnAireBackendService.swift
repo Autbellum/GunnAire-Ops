@@ -2089,9 +2089,16 @@ enum GunnAireBackendService {
         do {
             // Reuse the existing bounded, ephemeral, no-redirect transfer.
             // It stops at the byte boundary before allocating a large reply.
-            let (data, _) = try await GmailServerHTTPTransfer.data(
-                for: request, maximum: QuickBooksChangeHistoryClient.maximumPageBytes)
+            // 4xx/5xx bodies are kept so staff can see the server's own
+            // reason (provider_throttled, storage_unavailable, ...); 3xx and
+            // other 2xx codes are still refused by the transfer as before.
+            let (data, response) = try await GmailServerHTTPTransfer.data(
+                for: request, maximum: QuickBooksChangeHistoryClient.maximumPageBytes,
+                acceptedStatusCodes: QuickBooksChangeHistoryServerFailure.observedStatusCodes)
             try check()
+            guard response.statusCode == 200 else {
+                throw QuickBooksChangeHistoryServerFailure(status: response.statusCode, body: data)
+            }
             return data
         } catch {
             try check()
