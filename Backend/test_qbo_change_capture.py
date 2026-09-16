@@ -96,13 +96,24 @@ class ChangeCaptureProviderTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "change_limit")
         self.assertEqual(len(self.requests), 1)
 
-    def test_count_rejections_describe_the_reply_shape_without_record_content(self):
-        # A bare group (no count fields at all) is rejected, and staff can see why.
+    def test_intuit_empty_group_means_no_changes(self):
+        # Intuit's real "nothing changed" reply is a bare {} group (observed live
+        # 2026-09-16), which must read as zero changes at the response time.
         self.payload = {**cdc([]), "CDCResponse": [{"QueryResponse": [{}]}]}
+        self.assertEqual(self.provider.changes("Item", capture.stamp(NOW - timedelta(minutes=2))), ([], NOW))
+        # An empty group dated before the cursor is still refused.
+        self.payload = {**cdc([], when=NOW - timedelta(minutes=5)), "CDCResponse": [{"QueryResponse": [{}]}]}
+        with self.assertRaises(capture.AttemptError) as stale:
+            self.provider.changes("Item", capture.stamp(NOW - timedelta(minutes=2)))
+        self.assertEqual(stale.exception.code, "incomplete_changes")
+
+    def test_count_rejections_describe_the_reply_shape_without_record_content(self):
+        # A group with count fields missing is rejected, and staff can see why.
+        self.payload = {**cdc([]), "CDCResponse": [{"QueryResponse": [{"startPosition": 1}]}]}
         with self.assertRaises(capture.AttemptError) as bare:
             self.provider.changes("Item", capture.stamp(NOW - timedelta(minutes=2)))
         self.assertEqual(bare.exception.code, "incomplete_changes")
-        self.assertIn("Reply shape: keys=[], Item records=absent, maxResults=absent, startPosition=absent, totalCount=absent.",
+        self.assertIn("Reply shape: keys=['startPosition'], Item records=absent, maxResults=absent, startPosition=1, totalCount=absent.",
                       str(bare.exception))
         # A count mismatch names the counts, never the records themselves.
         self.payload = cdc([record(Name="Private fixture service")])

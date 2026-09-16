@@ -279,6 +279,13 @@ class ChangeCaptureQBOProvider:
         if not isinstance(groups, list) or len(groups) != 1 or not isinstance(groups[0], dict):
             raise failure("incomplete_changes", "QuickBooks did not confirm the requested accounting collection.")
         group = groups[0]
+        if not group:
+            # Intuit answers "nothing changed since changedSince" with an empty
+            # group - no entity key and no count fields - not with maxResults=0.
+            # Verified live on 2026-09-16 (production realm, every collection).
+            if response_time < timestamp(stamp_since):
+                raise failure("incomplete_changes", "QuickBooks returned an older change-capture response.")
+            return [], response_time
         if set(group) - {entity, "startPosition", "maxResults", "totalCount"}:
             raise failure("incomplete_changes", "QuickBooks returned a different or incomplete accounting collection. "
                           + reply_shape(group, entity))
