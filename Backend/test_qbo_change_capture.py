@@ -96,6 +96,25 @@ class ChangeCaptureProviderTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "change_limit")
         self.assertEqual(len(self.requests), 1)
 
+    def test_count_rejections_describe_the_reply_shape_without_record_content(self):
+        # A bare group (no count fields at all) is rejected, and staff can see why.
+        self.payload = {**cdc([]), "CDCResponse": [{"QueryResponse": [{}]}]}
+        with self.assertRaises(capture.AttemptError) as bare:
+            self.provider.changes("Item", capture.stamp(NOW - timedelta(minutes=2)))
+        self.assertEqual(bare.exception.code, "incomplete_changes")
+        self.assertIn("Reply shape: keys=[], Item records=absent, maxResults=absent, startPosition=absent, totalCount=absent.",
+                      str(bare.exception))
+        # A count mismatch names the counts, never the records themselves.
+        self.payload = cdc([record(Name="Private fixture service")])
+        self.payload["CDCResponse"][0]["QueryResponse"][0]["maxResults"] = 2
+        self.payload["CDCResponse"][0]["QueryResponse"][0]["totalCount"] = "2"
+        with self.assertRaises(capture.AttemptError) as mismatch:
+            self.provider.changes("Item", capture.stamp(NOW - timedelta(minutes=2)))
+        self.assertEqual(mismatch.exception.code, "incomplete_changes")
+        self.assertIn("keys=['Item', 'maxResults', 'startPosition', 'totalCount'], Item records=1, maxResults=2, "
+                      "startPosition=1, totalCount='2'.", str(mismatch.exception))
+        self.assertNotIn("Private fixture service", str(mismatch.exception))
+
     def test_explicit_empty_and_deleted_records_are_distinct(self):
         self.payload = cdc([])
         self.assertEqual(self.provider.changes("Item", capture.stamp(NOW))[0], [])

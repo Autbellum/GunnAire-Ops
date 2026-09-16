@@ -188,6 +188,22 @@ def record_evidence(value, *, tombstone_allowed):
     return identifier, stamp(updated), "deleted" if deleted else "present", raw
 
 
+def reply_shape(group, entity):
+    """Describe a change-capture group for staff: key names, the record count and
+    the scalar count fields' types/values only - never any record content."""
+    def scalar(name):
+        if name not in group:
+            return f"{name}=absent"
+        value = group[name]
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            return f"{name}=<{type(value).__name__}>"
+        return f"{name}={repr(value)[:24]}"
+    records = group.get(entity)
+    count = len(records) if isinstance(records, list) else ("absent" if records is None else f"<{type(records).__name__}>")
+    return (f"Reply shape: keys={sorted(str(key) for key in group)}, {entity} records={count}, "
+            f"{scalar('maxResults')}, {scalar('startPosition')}, {scalar('totalCount')}.")
+
+
 class ChangeCaptureQBOProvider:
     def __init__(self, context, authorize, bearer_loader, send=None):
         reference(context["realm_id"])
@@ -264,12 +280,14 @@ class ChangeCaptureQBOProvider:
             raise failure("incomplete_changes", "QuickBooks did not confirm the requested accounting collection.")
         group = groups[0]
         if set(group) - {entity, "startPosition", "maxResults", "totalCount"}:
-            raise failure("incomplete_changes", "QuickBooks returned a different or incomplete accounting collection.")
+            raise failure("incomplete_changes", "QuickBooks returned a different or incomplete accounting collection. "
+                          + reply_shape(group, entity))
         records = group.get(entity, [])
         if (not isinstance(records, list) or type(group.get("maxResults")) is not int
                 or group["maxResults"] != len(records) or group.get("startPosition", 1) != 1
                 or ("totalCount" in group and (type(group["totalCount"]) is not int or group["totalCount"] != len(records)))):
-            raise failure("incomplete_changes", "QuickBooks returned incomplete change counts. The original cursor is retained.")
+            raise failure("incomplete_changes", "QuickBooks returned incomplete change counts. The original cursor is retained. "
+                          + reply_shape(group, entity))
         # Exactly 1000 is ambiguous: CDC has no documented pagination/end-time.
         # Never move changedSince forward to make a saturated result look complete.
         if len(records) >= 1000:
