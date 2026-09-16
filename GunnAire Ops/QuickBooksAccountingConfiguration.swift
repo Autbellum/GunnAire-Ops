@@ -116,6 +116,11 @@ final class QuickBooksAccountingConfigurationStore: ObservableObject {
     @Published private(set) var configuration: BackendQuickBooksAccountingConfiguration?
     @Published private(set) var isLoading = false
     @Published private(set) var statusMessage: String?
+    /// Cache key of the company/environment whose most recent server refresh
+    /// answered definitively that no mapping exists. A failed refresh never
+    /// sets it, so an automatic derivation cannot overwrite a saved mapping
+    /// the app merely failed to fetch.
+    @Published private(set) var confirmedAbsentContext: String?
 
     private let defaults: UserDefaults
     private let fetchConfiguration: () async throws -> BackendQuickBooksAccountingConfiguration?
@@ -147,6 +152,13 @@ final class QuickBooksAccountingConfigurationStore: ObservableObject {
         return cached
     }
 
+    /// True only when the latest refresh for this company and environment
+    /// received an explicit "no configuration" answer from the server.
+    func hasConfirmedNoConfiguration(realmID: String?, environment: String) -> Bool {
+        guard let realmID = normalizedRealmID(realmID) else { return false }
+        return confirmedAbsentContext == cacheKey(realmID: realmID, environment: environment)
+    }
+
     func refresh(
         realmID: String?,
         environment: String,
@@ -166,6 +178,7 @@ final class QuickBooksAccountingConfigurationStore: ObservableObject {
         let requestID = UUID()
         refreshID = requestID
         loadingContext = context
+        confirmedAbsentContext = nil
         isLoading = true
         defer {
             if refreshID == requestID {
@@ -188,6 +201,7 @@ final class QuickBooksAccountingConfigurationStore: ObservableObject {
             } else {
                 configuration = nil
                 defaults.removeObject(forKey: context)
+                confirmedAbsentContext = context
                 statusMessage = QuickBooksAccountingConfigurationError.unavailable.localizedDescription
             }
         } catch {
@@ -197,11 +211,17 @@ final class QuickBooksAccountingConfigurationStore: ObservableObject {
         }
     }
 
+    static let savedStatusMessage = "Accounting mappings saved for this QuickBooks company."
+
+    /// Sends `candidate` to the server, which validates every mapping and
+    /// requires an administrator session. `statusMessage` is shown after a
+    /// successful save so an automatic derivation can say where it came from.
     @discardableResult
     func save(
         _ candidate: BackendQuickBooksAccountingConfiguration,
         realmID: String?,
-        environment: String
+        environment: String,
+        statusMessage successMessage: String = QuickBooksAccountingConfigurationStore.savedStatusMessage
     ) async throws -> BackendQuickBooksAccountingConfiguration {
         guard let realmID = normalizedRealmID(realmID) else {
             throw QuickBooksAccountingConfigurationError.missingConnectionContext
@@ -220,7 +240,8 @@ final class QuickBooksAccountingConfigurationStore: ObservableObject {
         }
         configuration = saved
         cache(saved)
-        statusMessage = "Accounting mappings saved for this QuickBooks company."
+        confirmedAbsentContext = nil
+        statusMessage = successMessage
         return saved
     }
 
