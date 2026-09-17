@@ -3691,6 +3691,35 @@ struct QuickBooksManagementView: View {
             )
         case .complete(let candidate):
             try syncRun.check()
+            // Absence was confirmed several fetches ago and the server's save is
+            // an unconditional upsert, so ask again immediately before saving: a
+            // mapping an administrator saved elsewhere meanwhile must win. The
+            // contract has no create-only semantics, so a sub-second race remains.
+            await accountingConfigurationStore.refresh(
+                realmID: realmID,
+                environment: environment,
+                force: true,
+                validate: { try syncRun.check() }
+            )
+            try syncRun.check()
+            if accountingConfiguration != nil {
+                updateSyncStatus(
+                    id: "mappings",
+                    state: .success,
+                    detail: "Loaded accounting defaults saved on the server during this sync.",
+                    count: 6
+                )
+                return
+            }
+            guard accountingConfigurationStore.hasConfirmedNoConfiguration(realmID: realmID, environment: environment) else {
+                updateSyncStatus(
+                    id: "mappings",
+                    state: .warning,
+                    detail: "The server could not reconfirm that no accounting mapping exists; nothing was changed.",
+                    count: 0
+                )
+                return
+            }
             do {
                 let successMessage = "Accounting defaults set automatically from this company's QuickBooks usage."
                 _ = try await accountingConfigurationStore.save(

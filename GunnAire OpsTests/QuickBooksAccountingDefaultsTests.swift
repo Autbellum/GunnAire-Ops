@@ -5,6 +5,7 @@ import Testing
 /// Every derivation rule in `QuickBooksAccountingDefaults` is exercised here
 /// with records shaped like QuickBooks responses. Nothing outside the fixture
 /// arrays may influence a proposal.
+@MainActor
 struct QuickBooksAccountingDefaultsTests {
     private typealias Defaults = QuickBooksAccountingDefaults
 
@@ -184,6 +185,41 @@ struct QuickBooksAccountingDefaultsTests {
         )
         #expect(configuration.defaultCreditCardAccountRef == "50")
         #expect(configuration.defaultBankAccountRef == "40")
+        #expect(configuration.defaultSalesItemRef == "1")
+    }
+
+    @Test func inactiveIncomeExpenseAndPayableAccountsAreNeverChosenEvenWhenMostUsed() throws {
+        let accounts = completeAccounts + [
+            account("11", "Old Services", type: "Income", active: false),
+            account("21", "Old Materials", type: "Cost of Goods Sold", active: false),
+            account("31", "Old Payables", type: "Accounts Payable", active: false)
+        ]
+        let items = completeItems + [
+            item("3", "Legacy Service", income: "11", expense: "21"),
+            item("4", "Legacy Repair", income: "11", expense: "21")
+        ]
+        let bills = try (0..<3).map { try bill("B\($0)", apAccount: "31") }
+        // Three active Service items would leave the sales item ambiguous; one
+        // invoice line singles out item 1 so the account slots are what is tested.
+        let invoices = try [invoice("I1", itemIDs: ["1"])]
+        let configuration = try #require(
+            propose(items: items, accounts: accounts, invoices: invoices, bills: bills)?.configuration
+        )
+        #expect(configuration.defaultSalesItemRef == "1")
+        #expect(configuration.defaultIncomeAccountRef == "10")
+        #expect(configuration.defaultExpenseAccountRef == "20")
+        #expect(configuration.defaultAPAccountRef == "30")
+    }
+
+    @Test func usageOfIdsQuickBooksDidNotReturnIsIgnored() throws {
+        let deposits = (0..<3).map { deposit("D\($0)", account: "999") }
+        let purchases = (0..<3).map { purchase("P\($0)", account: "998", paymentType: "CreditCard") }
+        let invoices = try (0..<3).map { try invoice("I\($0)", itemIDs: ["997"]) }
+        let configuration = try #require(
+            propose(invoices: invoices, deposits: deposits, purchases: purchases)?.configuration
+        )
+        #expect(configuration.defaultBankAccountRef == "40")
+        #expect(configuration.defaultCreditCardAccountRef == "50")
         #expect(configuration.defaultSalesItemRef == "1")
     }
 
@@ -488,7 +524,9 @@ struct QuickBooksAccountingDefaultsAbsenceGuardTests {
     @Test func serverSayingNoMappingConfirmsAbsenceForThatCompanyOnly() async throws {
         let (defaults, suite) = try makeDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }
-        let store = QuickBooksAccountingConfigurationStore(defaults: defaults) { nil }
+        let store = QuickBooksAccountingConfigurationStore(defaults: defaults) {
+            QuickBooksAccountingConfigurationReply(realmID: "realm-a", environment: "sandbox", configuration: nil)
+        }
         await store.refresh(realmID: "realm-a", environment: "sandbox", force: true)
         #expect(store.configuration == nil)
         #expect(store.hasConfirmedNoConfiguration(realmID: "realm-a", environment: "sandbox"))
@@ -498,12 +536,32 @@ struct QuickBooksAccountingDefaultsAbsenceGuardTests {
         #expect(!store.hasConfirmedNoConfiguration(realmID: nil, environment: "sandbox"))
     }
 
+    @Test func serverAnsweringForAnotherCompanyNeverConfirmsAbsence() async throws {
+        let (defaults, suite) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        // The device still holds realm-a while the server was reconnected to realm-b.
+        let store = QuickBooksAccountingConfigurationStore(defaults: defaults) {
+            QuickBooksAccountingConfigurationReply(realmID: "realm-b", environment: "sandbox", configuration: nil)
+        }
+        await store.refresh(realmID: "realm-a", environment: "sandbox", force: true)
+        #expect(store.configuration == nil)
+        #expect(!store.hasConfirmedNoConfiguration(realmID: "realm-a", environment: "sandbox"))
+        #expect(!store.hasConfirmedNoConfiguration(realmID: "realm-b", environment: "sandbox"))
+        #expect(store.statusMessage == QuickBooksAccountingConfigurationError.contextMismatch.localizedDescription)
+        // A legacy fetch that carries no server context can load a mapping but never confirm absence.
+        let legacy = QuickBooksAccountingConfigurationStore(defaults: defaults) { nil }
+        await legacy.refresh(realmID: "realm-a", environment: "sandbox", force: true)
+        #expect(!legacy.hasConfirmedNoConfiguration(realmID: "realm-a", environment: "sandbox"))
+    }
+
     @Test func failedRefreshNeverConfirmsAbsence() async throws {
         let (defaults, suite) = try makeDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }
         var succeed = true
         let store = QuickBooksAccountingConfigurationStore(defaults: defaults) {
-            if succeed { return nil }
+            if succeed {
+                return QuickBooksAccountingConfigurationReply(realmID: "realm-a", environment: "sandbox", configuration: nil)
+            }
             throw RefreshFailure()
         }
         await store.refresh(realmID: "realm-a", environment: "sandbox", force: true)

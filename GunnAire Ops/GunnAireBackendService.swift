@@ -709,11 +709,21 @@ enum GunnAireBackendService {
     }
 
     static func fetchQuickBooksAccountingConfiguration() async throws -> BackendQuickBooksAccountingConfiguration? {
+        try await fetchQuickBooksAccountingConfigurationReply().configuration
+    }
+
+    /// The server answers for the QuickBooks company it is connected to, which
+    /// can differ from the device's saved realm until the device refreshes its
+    /// token. Callers that treat "no mapping" as a fact must compare the reply's
+    /// context with their own before believing it.
+    static func fetchQuickBooksAccountingConfigurationReply() async throws -> QuickBooksAccountingConfigurationReply {
         let data = try await send(path: "/api/qbo/accounting-config", method: "GET")
-        return try JSONDecoder().decode(
-            QuickBooksAccountingConfigurationResponse.self,
-            from: data
-        ).configuration
+        let response = try JSONDecoder().decode(QuickBooksAccountingConfigurationResponse.self, from: data)
+        return QuickBooksAccountingConfigurationReply(
+            realmID: response.realmID,
+            environment: response.environment,
+            configuration: response.configuration
+        )
     }
 
     static func updateQuickBooksAccountingConfiguration(

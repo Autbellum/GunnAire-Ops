@@ -89,6 +89,15 @@ struct BackendQuickBooksAccountingConfiguration: Codable, Equatable {
     }
 }
 
+/// What the server said when asked for the accounting mapping: the company it
+/// answered for and the mapping, if any. `realmID`/`environment` are nil only
+/// for legacy fetches that never carried the server's context.
+struct QuickBooksAccountingConfigurationReply: Equatable {
+    let realmID: String?
+    let environment: String?
+    let configuration: BackendQuickBooksAccountingConfiguration?
+}
+
 enum QuickBooksAccountingConfigurationError: LocalizedError, Equatable {
     case missingConnectionContext
     case contextMismatch
@@ -123,16 +132,28 @@ final class QuickBooksAccountingConfigurationStore: ObservableObject {
     @Published private(set) var confirmedAbsentContext: String?
 
     private let defaults: UserDefaults
-    private let fetchConfiguration: () async throws -> BackendQuickBooksAccountingConfiguration?
+    private let fetchReply: () async throws -> QuickBooksAccountingConfigurationReply
     private var loadingContext: String?
     private var refreshID: UUID?
 
     init(defaults: UserDefaults = .standard,
-         fetchConfiguration: @escaping () async throws -> BackendQuickBooksAccountingConfiguration? = {
-             try await GunnAireBackendService.fetchQuickBooksAccountingConfiguration()
+         fetchReply: @escaping () async throws -> QuickBooksAccountingConfigurationReply = {
+             try await GunnAireBackendService.fetchQuickBooksAccountingConfigurationReply()
          }) {
         self.defaults = defaults
-        self.fetchConfiguration = fetchConfiguration
+        self.fetchReply = fetchReply
+    }
+
+    /// A fetch that returns only the mapping cannot say which company the server
+    /// answered for, so it can load a mapping but never confirm that none exists.
+    convenience init(defaults: UserDefaults = .standard,
+                     fetchConfiguration: @escaping () async throws -> BackendQuickBooksAccountingConfiguration?) {
+        self.init(defaults: defaults, fetchReply: {
+            let configuration = try await fetchConfiguration()
+            return QuickBooksAccountingConfigurationReply(
+                realmID: configuration?.realmID, environment: configuration?.environment, configuration: configuration
+            )
+        })
     }
 
     func configuration(
@@ -188,10 +209,10 @@ final class QuickBooksAccountingConfigurationStore: ObservableObject {
             }
         }
         do {
-            let remote = try await fetchConfiguration()
+            let reply = try await fetchReply()
             try validate()
             guard refreshID == requestID else { return }
-            if let remote {
+            if let remote = reply.configuration {
                 guard remote.matches(realmID: realmID, environment: environment), remote.isComplete else {
                     throw QuickBooksAccountingConfigurationError.contextMismatch
                 }
@@ -201,8 +222,16 @@ final class QuickBooksAccountingConfigurationStore: ObservableObject {
             } else {
                 configuration = nil
                 defaults.removeObject(forKey: context)
-                confirmedAbsentContext = context
-                statusMessage = QuickBooksAccountingConfigurationError.unavailable.localizedDescription
+                // "No mapping" is a fact only for the company the server answered
+                // for; a device still holding another realm's token must not read
+                // the server's answer as absence for its own.
+                if normalizedRealmID(reply.realmID) == realmID,
+                   reply.environment?.caseInsensitiveCompare(environment) == .orderedSame {
+                    confirmedAbsentContext = context
+                    statusMessage = QuickBooksAccountingConfigurationError.unavailable.localizedDescription
+                } else {
+                    statusMessage = QuickBooksAccountingConfigurationError.contextMismatch.localizedDescription
+                }
             }
         } catch {
             do { try validate() } catch { return }
