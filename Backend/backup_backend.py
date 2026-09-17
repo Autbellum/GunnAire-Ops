@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -57,9 +58,25 @@ def sqlite_integrity(path: Path) -> None:
 
 def write_json_atomic(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
+    # A per-writer temporary name: the in-service worker and the manual
+    # command can both rewrite the status file, and a shared name would let
+    # one replace the other's half-written file.
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink(missing_ok=True)
+
+
+def is_transient_storage_entry(path: Path) -> bool:
+    """Readiness probes create short-lived dot-files in the storage root.
+
+    They are not documents and can vanish between listing and copy, so backups
+    neither copy nor count them.
+    """
+    return path.name.startswith(".gunnaire-readiness-")
 
 
 def create_backup(
@@ -86,10 +103,13 @@ def create_backup(
     artifact.mkdir(parents=True)
     try:
         database_copy = artifact / DATABASE_FILENAME
-        source_connection = sqlite3.connect(source_database)
+        # Read-only source; the copy proceeds in bounded steps so the live
+        # service's writers wait at most one step instead of the whole copy.
+        # SQLite restarts the copy if a writer lands between steps.
+        source_connection = sqlite3.connect(f"{source_database.as_uri()}?mode=ro", uri=True)
         destination_connection = sqlite3.connect(database_copy)
         try:
-            source_connection.backup(destination_connection)
+            source_connection.backup(destination_connection, pages=256, sleep=0.05)
         finally:
             destination_connection.close()
             source_connection.close()
@@ -98,6 +118,8 @@ def create_backup(
         storage_copy = artifact / "storage"
         storage_copy.mkdir()
         for source in sorted(source_storage.rglob("*")):
+            if is_transient_storage_entry(source):
+                continue
             if source.is_symlink():
                 raise BackupVerificationError("Shared document storage contains a symbolic link; backup stopped.")
             relative = source.relative_to(source_storage)
@@ -121,22 +143,24 @@ def create_backup(
         }
         write_json_atomic(artifact / MANIFEST_FILENAME, manifest)
         summary = verify_backup(artifact)
-        if state_file is not None:
-            write_json_atomic(
-                state_file.expanduser(),
-                {
-                    "artifactID": summary["artifactID"],
-                    "verifiedAt": utc_now().isoformat(),
-                    "createdAt": manifest["createdAt"],
-                    "databaseBytes": summary["databaseBytes"],
-                    "documentCount": summary["documentCount"],
-                    "totalBytes": summary["totalBytes"],
-                },
-            )
-        return summary
     except Exception:
         shutil.rmtree(artifact, ignore_errors=True)
         raise
+    # The artifact is complete and verified. A failure to record that in the
+    # status file must not destroy it, so this write sits outside the cleanup.
+    if state_file is not None:
+        write_json_atomic(
+            state_file.expanduser(),
+            {
+                "artifactID": summary["artifactID"],
+                "verifiedAt": utc_now().isoformat(),
+                "createdAt": manifest["createdAt"],
+                "databaseBytes": summary["databaseBytes"],
+                "documentCount": summary["documentCount"],
+                "totalBytes": summary["totalBytes"],
+            },
+        )
+    return summary
 
 
 def verified_record(artifact: Path, record: object) -> tuple[Path, int]:
