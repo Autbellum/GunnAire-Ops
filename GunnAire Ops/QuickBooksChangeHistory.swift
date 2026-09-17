@@ -16,6 +16,21 @@ enum QuickBooksChangeHistoryError: Error, LocalizedError, Equatable {
         }
     }
 
+    /// Short, record-free cause for the diagnostics line ("Response: code
+    /// message"). Access errors already carry a specific user sentence and
+    /// are not diagnostics.
+    var diagnosticCause: (code: String, message: String)? {
+        switch self {
+        case .access: nil
+        case .changed: ("collection_changed", "The accounting connection or the collection revision changed during the run.")
+        case .invalid: ("reply_invalid", "The history reply failed validation.")
+        case .incomplete: ("capture_incomplete", "The server reported an incomplete capture or events awaiting review.")
+        case .lifecycleReview: ("lifecycle_review", "A deleted, voided, or conflicting record version needs reconciliation.")
+        case .unavailable: ("history_unavailable", "The shared history was unavailable.")
+        case .limit: ("transfer_limit", "The history exceeded the staged transfer limit.")
+        }
+    }
+
     static func safe(_ error: Error) -> Self {
         if let own = error as? Self { return own }
         if error is WorkspaceProviderAccessError || error is CompanyWorkspaceFailure { return .access }

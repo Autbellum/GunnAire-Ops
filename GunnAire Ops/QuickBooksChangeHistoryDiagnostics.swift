@@ -111,7 +111,14 @@ nonisolated struct QuickBooksChangeHistoryFailure: Equatable, Sendable {
     static func describe(_ error: Error, entity: QuickBooksChangeEntity?,
                          at: Date = Date()) -> QuickBooksChangeHistoryFailure? {
         let entity = entity?.rawValue
-        if error is QuickBooksChangeHistoryError || error is CancellationError
+        if let own = error as? QuickBooksChangeHistoryError {
+            // The client's own outcome errors used to be silent here, which
+            // left every row with the generic sentence and no cause. Record
+            // which check failed for which entity; no record content is kept.
+            guard let cause = own.diagnosticCause else { return nil }
+            return .init(kind: .response, status: nil, code: cause.code, message: cause.message, entity: entity, at: at)
+        }
+        if error is CancellationError
             || error is WorkspaceProviderAccessError || error is CompanyWorkspaceFailure { return nil }
         if let failure = error as? QuickBooksChangeHistoryServerFailure {
             return .init(kind: .server, status: failure.status, code: failure.code,

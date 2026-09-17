@@ -302,6 +302,9 @@ struct CustomersView: View {
     }
 
     var body: some View {
+        // Computed once per body: every customer row reads it, and the
+        // property rebuilds every snapshot from all records on each read.
+        let customerSnapshotsByID = self.customerSnapshotsByID
         NavigationStack {
             Form {
                 if canManageCustomerRecords {

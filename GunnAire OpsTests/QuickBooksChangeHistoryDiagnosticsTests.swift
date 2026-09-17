@@ -72,10 +72,23 @@ struct QuickBooksChangeHistoryDiagnosticsTests {
         #expect(result.failure?.summary == "Server: HTTP 204 - Accounting history was not confirmed.")
     }
 
-    @Test func ownOutcomeErrorsAreNotDiagnostics() async throws {
+    /// The client's own outcome errors record which check failed for which
+    /// entity (they used to be silent, leaving every row with the generic
+    /// sentence and no cause); access errors and cancellation stay silent.
+    @Test func ownOutcomeErrorsRecordTheirCause() async throws {
         let result = try await outcome { _, _, _ in throw QuickBooksChangeHistoryError.changed }
         #expect(result.error == .changed)
-        #expect(result.failure == nil)
+        let failure = try #require(result.failure)
+        #expect(failure.kind == .response)
+        #expect(failure.status == nil)
+        #expect(failure.code == "collection_changed")
+        #expect(failure.entity == "Item")
+        #expect(failure.summary == "Response: collection_changed The accounting connection or the collection revision changed during the run.")
+        for own in [QuickBooksChangeHistoryError.invalid, .incomplete, .lifecycleReview, .unavailable, .limit] {
+            let described = try #require(QuickBooksChangeHistoryDiagnostics.describe(own, entity: .customer))
+            #expect(described.kind == .response && described.entity == "Customer" && described.code == own.diagnosticCause?.code)
+        }
+        #expect(QuickBooksChangeHistoryDiagnostics.describe(QuickBooksChangeHistoryError.access, entity: .item) == nil)
         #expect(QuickBooksChangeHistoryDiagnostics.describe(CancellationError(), entity: .item) == nil)
     }
 

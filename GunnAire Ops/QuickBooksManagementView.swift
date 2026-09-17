@@ -1970,7 +1970,10 @@ struct QuickBooksManagementView: View {
                                             .buttonStyle(.borderedProminent)
                                             .tint(Color.brandGold)
                                             .foregroundStyle(Color.primaryBlack)
-                                            .disabled(activeLocalEstimatePublicationID != nil)
+                                            // Same gate as the invoice control below: publication
+                                            // needs the device's QuickBooks session as well as the
+                                            // shared business login.
+                                            .disabled(!isAuthenticated || activeLocalEstimatePublicationID != nil)
 
                                             BillingPublicationReviewLink(document: .estimate(estimate), context: modelContext)
 
@@ -3463,7 +3466,7 @@ struct QuickBooksManagementView: View {
                 let message = error is CancellationError
                     ? "QuickBooks sync stopped. Saved work has been retained."
                     : error.localizedDescription + changeHistoryFailureSuffix(for: error)
-                markAllSyncStatusesFailed(message)
+                markSyncStatusesAfterRunFailure(message)
                 statusMessage = "QuickBooks sync stopped. \(message)"
             }
         }
@@ -5279,6 +5282,37 @@ struct QuickBooksManagementView: View {
                 count: nil,
                 updatedAt: now
             )
+        }
+    }
+
+    /// A run that stops part-way used to rewrite every row, including the
+    /// ones that had already synced, with the same sentence, so the owner saw
+    /// "almost done, then everything red" with no indication of where it
+    /// stopped. Finished rows keep their result and counts; the row that was
+    /// in progress carries the failure; rows never reached say so. The local
+    /// import gate is unchanged and still requires every required resource.
+    private func markSyncStatusesAfterRunFailure(_ detail: String) {
+        let now = Date()
+        let stoppedAt = syncResourceStatuses.first { $0.state == .syncing }?.name
+        let stoppedSuffix = stoppedAt.map { " at \($0)" } ?? ""
+        syncResourceStatuses = syncResourceStatuses.map { status in
+            var status = status
+            switch status.state {
+            case .success:
+                status.detail = "Synced before the run stopped\(stoppedSuffix)."
+            case .syncing:
+                status.state = status.required ? .failed : .warning
+                status.detail = detail
+                status.count = nil
+            case .idle:
+                status.state = status.required ? .failed : .warning
+                status.detail = "Not reached: the run stopped\(stoppedSuffix)."
+                status.count = nil
+            case .warning, .failed:
+                break // keeps its own, more specific message
+            }
+            status.updatedAt = now
+            return status
         }
     }
 
