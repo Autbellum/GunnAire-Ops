@@ -27,6 +27,8 @@ struct CompanyWorkspaceAccessTests {
         var delayedSleep: ((TimeInterval) async throws -> Void)?
         var clearedContinuations = 0
         var registrationError = false
+        var sessionReads = 0
+        var sessionSignal = "signal-a"
         let modelContainer: ModelContainer
 
         init() throws {
@@ -49,7 +51,7 @@ struct CompanyWorkspaceAccessTests {
 
         func controller() -> CompanyWorkspaceAccessController {
             CompanyWorkspaceAccessController(dependencies: CompanyWorkspaceDependencies(
-                session: { self.session },
+                session: { self.sessionReads += 1; return self.session },
                 account: { CompanyCloudKitAccount(environment: self.environment, accountHash: self.cloudAccountHash) },
                 fetchWorkspace: {
                     self.fetchCount += 1
@@ -81,9 +83,86 @@ struct CompanyWorkspaceAccessTests {
                     if let delayed = self.delayedSleep { try await delayed(interval) }
                     else { try await Task.sleep(for: .seconds(interval)) }
                 },
-                clearContinuations: { self.clearedContinuations += 1 }
+                clearContinuations: { self.clearedContinuations += 1 },
+                sessionSignal: { self.sessionSignal }
             ))
         }
+    }
+
+    /// Render-time authority reads (`verifiedRole`, `verifiedUser`,
+    /// `operationStamp`, `verifiedCompanyID`) reuse one decoded session within
+    /// the memo lifetime, re-read it once the lifetime passes or the in-memory
+    /// token signal changes, and never let the memo outlive a removed session
+    /// when the deadline is enforced.
+    @Test func renderTimeAuthorityReadsMemoizeTheSessionWithoutExtendingIt() async throws {
+        let h = try Harness(); h.register()
+        let controller = h.controller(); await controller.refresh()
+        #expect(controller.phase == .ready)
+
+        let baseline = h.sessionReads
+        for _ in 0..<100 {
+            #expect(controller.verifiedRole == .fieldTechnician)
+            #expect(controller.verifiedUser?.email == h.user.email)
+            #expect(controller.operationStamp != nil)
+            #expect(controller.verifiedCompanyID == h.binding.companyID)
+        }
+        #expect(h.sessionReads - baseline <= 1)
+
+        let beforeLifetime = h.sessionReads
+        h.now = h.now.addingTimeInterval(CompanyWorkspaceAccessController.sessionMemoLifetime)
+        #expect(controller.verifiedRole == .fieldTechnician)
+        #expect(h.sessionReads == beforeLifetime + 1)
+        #expect(controller.verifiedRole == .fieldTechnician)
+        #expect(h.sessionReads == beforeLifetime + 1)
+
+        let beforeSignal = h.sessionReads
+        h.sessionSignal = "signal-b"
+        #expect(controller.verifiedRole == .fieldTechnician)
+        #expect(h.sessionReads == beforeSignal + 1)
+
+        // Within the lifetime the memo is reused, but the deadline check always
+        // observes the live session and closes the workspace immediately.
+        let beforeRemoval = h.sessionReads
+        h.session = nil
+        #expect(controller.verifiedRole == .fieldTechnician)
+        #expect(h.sessionReads == beforeRemoval)
+        controller.enforceAccessDeadline()
+        #expect(controller.phase == .blocked(.signIn))
+        #expect(controller.authorizedContainer == nil && controller.verifiedRole == nil)
+    }
+
+    /// A repeated verification with an unchanged server user must not dirty or
+    /// save the main context: every save is a CloudKit export candidate.
+    @Test func repeatedVerificationWithUnchangedUserDoesNotSaveTheMainContext() async throws {
+        let h = try Harness(); h.register()
+        let context = h.modelContainer.mainContext
+        var saves = 0
+        let observation = NotificationCenter.default.publisher(for: ModelContext.didSave)
+            .filter { ($0.object as AnyObject?) === context }
+            .sink { _ in saves += 1 }
+        let controller = h.controller(); await controller.refresh()
+        #expect(controller.phase == .ready)
+        #expect(saves >= 1)
+        #expect(!context.hasChanges)
+        let firstPassSaves = saves
+        let templates = try context.fetch(FetchDescriptor<FieldFormTemplate>()).count
+        #expect(templates >= 5)
+        let users = try context.fetch(FetchDescriptor<AppUser>()).count
+
+        await controller.refresh()
+        #expect(controller.phase == .ready)
+        #expect(!context.hasChanges)
+        #expect(saves == firstPassSaves)
+        #expect(try context.fetch(FetchDescriptor<FieldFormTemplate>()).count == templates)
+        #expect(try context.fetch(FetchDescriptor<AppUser>()).count == users)
+
+        // A changed server role is still written and saved.
+        h.user = BackendAppUserRecord(email: h.user.email, role: "Standard", isActive: true, createdAt: nil)
+        await controller.refresh()
+        #expect(controller.phase == .ready)
+        #expect(saves == firstPassSaves + 1)
+        #expect(try context.fetch(FetchDescriptor<AppUser>()).allSatisfy { $0.role == .standard })
+        withExtendedLifetime(observation) {}
     }
 
     @Test func noBusinessSessionNeverOpensAnExistingStore() async throws {

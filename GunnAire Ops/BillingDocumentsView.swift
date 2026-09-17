@@ -2516,11 +2516,12 @@ GunnAire
     private func loadInitialContextIfNeeded() {
         guard !didLoadInitialContext else { return }
         didLoadInitialContext = true
-        // A focused saved-invoice visit is navigation only. Do not seed/save
-        // templates, import/reprice items, or consume an unrelated queued job.
+        // A focused saved-invoice visit is navigation only. Do not import or
+        // reprice items, or consume an unrelated queued job. Starter field-form
+        // templates are seeded once per workspace generation when the company
+        // workspace unlocks (and at startup for the test database), so this
+        // visit no longer re-seeds and saves the main context every time.
         guard focusedInvoiceID == nil else { return }
-        FieldFormTemplate.ensureStarterTemplates(in: modelContext)
-        try? modelContext.save()
         selectedInvoicePaymentTerms = configuredDefaultInvoicePaymentTerms
         invoiceCustomDueDate = configuredDefaultInvoicePaymentTerms.dueDate(from: Date())
             ?? Calendar.current.startOfDay(for: Date())

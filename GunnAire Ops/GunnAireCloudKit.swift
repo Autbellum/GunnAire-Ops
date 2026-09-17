@@ -319,6 +319,22 @@ struct CloudKitMirroringState: Codable, Equatable, Sendable {
     }
 }
 
+/// The coarse, always-mounted view of mirroring health. The root workspace only
+/// needs to know which operation (if any) currently needs attention, so it
+/// observes this object instead of the full event monitor: routine
+/// running/succeeded events, and repeated failures of the same operation, do
+/// not re-render the sidebar and detail host.
+final class GunnAireCloudKitAttentionMonitor: ObservableObject {
+    @Published private(set) var operation: CloudKitMirroringOperation?
+    /// The full monitor, reachable without subscribing to its changes.
+    fileprivate(set) weak var eventMonitor: GunnAireCloudKitEventMonitor?
+
+    fileprivate func update(_ next: CloudKitMirroringOperation?) {
+        guard next != operation else { return }
+        operation = next
+    }
+}
+
 /// Observes the mirroring events emitted by the persistent CloudKit container.
 /// The reducer stores no customer data and keeps successful routine sync quiet.
 final class GunnAireCloudKitEventMonitor: ObservableObject {
@@ -327,7 +343,11 @@ final class GunnAireCloudKitEventMonitor: ObservableObject {
         category: "CloudKitContinuity"
     )
 
+    /// Published only when an event actually changes the reduced state; a
+    /// repeated `.running` for an operation already running is dropped.
     @Published private(set) var state = CloudKitMirroringState()
+    /// Published only when the attention operation itself changes.
+    let attention = GunnAireCloudKitAttentionMonitor()
 
     private let notificationCenter: NotificationCenter
     private let userDefaults: UserDefaults
@@ -340,21 +360,27 @@ final class GunnAireCloudKitEventMonitor: ObservableObject {
     init(
         notificationCenter: NotificationCenter = .default,
         userDefaults: UserDefaults = .standard,
-        isEnabled: Bool = !GunnAireCloudKit.usesTestDatabase
+        isEnabled: Bool = !GunnAireCloudKit.usesTestDatabase,
+        retainsCloudKitContainer: Bool = true
     ) {
         self.notificationCenter = notificationCenter
         self.userDefaults = userDefaults
         self.persistenceEnabled = isEnabled
+        attention.eventMonitor = self
         guard isEnabled else { return }
 
         if let data = userDefaults.data(forKey: Self.persistedStateKey),
            let restored = try? JSONDecoder().decode(CloudKitMirroringState.self, from: data) {
             state = restored.durableSnapshot
+            attention.update(state.attentionFailure?.operation)
         }
 
         // Retaining the named container ensures CloudKit posts account-change
         // notifications while SwiftData owns the private-database mirroring.
-        retainedContainer = CKContainer(identifier: GunnAireCloudKit.containerIdentifier)
+        // Unit tests observe the reducer without an entitled container.
+        if retainsCloudKitContainer {
+            retainedContainer = CKContainer(identifier: GunnAireCloudKit.containerIdentifier)
+        }
         eventObserver = notificationCenter.addObserver(
             forName: NSPersistentCloudKitContainer.eventChangedNotification,
             object: nil,
@@ -381,9 +407,15 @@ final class GunnAireCloudKitEventMonitor: ObservableObject {
     }
 
     func record(_ event: CloudKitMirroringEventSnapshot) {
-        state.apply(event)
-        guard persistenceEnabled,
-              let data = try? JSONEncoder().encode(state.durableSnapshot) else { return }
+        var next = state
+        next.apply(event)
+        guard next != state else { return }
+        let durableChanged = next.durableSnapshot != state.durableSnapshot
+        state = next
+        attention.update(next.attentionFailure?.operation)
+        // Running-only transitions never change what must survive relaunch.
+        guard durableChanged, persistenceEnabled,
+              let data = try? JSONEncoder().encode(next.durableSnapshot) else { return }
         userDefaults.set(data, forKey: Self.persistedStateKey)
     }
 }

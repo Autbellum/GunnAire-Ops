@@ -36,6 +36,23 @@ struct CompanyWorkspaceSession: Codable, Equatable {
     }
 }
 
+/// A Keychain-independent view of every in-memory input that can change the
+/// result of `CompanyWorkspaceSession.current` between two reads: the Apple
+/// session token, the Google application-session token, Apple's authenticated
+/// flag, and the signed-in email. `AppleAuthManager` and `GoogleAuthManager`
+/// update these in the same call that writes or removes the Keychain item, so
+/// a changed token is observed here before any Keychain read happens.
+enum CompanyWorkspaceSessionSignal {
+    static var current: String {
+        [
+            AppleAuthManager.shared.isAuthenticated ? "apple" : "",
+            AppleAuthManager.shared.sessionToken ?? "",
+            GoogleAuthManager.shared.applicationSessionToken ?? "",
+            AppIdentity.currentEmail ?? ""
+        ].joined(separator: "\u{1F}")
+    }
+}
+
 enum CompanyWorkspaceClock {
     static func parse(_ text: String) -> Date? {
         let formatter = ISO8601DateFormatter()
@@ -153,6 +170,9 @@ struct CompanyWorkspaceDependencies {
         try await Task.sleep(for: .seconds(interval))
     }
     var clearContinuations: () -> Void = {}
+    /// Cheap identity inputs compared before a memoized `session()` result is
+    /// reused; any change forces a fresh read. See `CompanyWorkspaceSessionSignal`.
+    var sessionSignal: () -> String = { CompanyWorkspaceSessionSignal.current }
 
     static var live: Self {
         Self(
@@ -195,6 +215,20 @@ final class CompanyWorkspaceAccessController: ObservableObject {
     private var expiryTask: Task<Void, Never>?
     private let dependencies: CompanyWorkspaceDependencies
     private var accountObserver: NSObjectProtocol?
+    /// The render-time getters (`verifiedUser`, `verifiedRole`, `operationStamp`,
+    /// `verifiedCompanyID`) are evaluated hundreds of times per SwiftUI body
+    /// pass, and every fresh `dependencies.session()` read costs one or two
+    /// Keychain round-trips plus JSON decoding. The decoded session is therefore
+    /// memoized for at most `sessionMemoLifetime`. The memo never extends
+    /// authority: lease expiry, the email match and the clock are evaluated on
+    /// every call; the entry is discarded when the in-memory session tokens or
+    /// signed-in email change, when the clock moves backwards, and whenever
+    /// `invalidate()` or `unlock` run; and every verification path
+    /// (`enforceAccessDeadline`, `refresh`, `unlock`, `isCurrent`) reads the
+    /// session fresh.
+    static let sessionMemoLifetime: TimeInterval = 1
+    private var sessionMemo: (signal: String, readAt: Date, session: CompanyWorkspaceSession?)?
+    private var starterTemplatesGeneration: UUID?
     #if DEBUG
     private var testContainer: ModelContainer?
     func installTestContainer(_ container: ModelContainer) {
@@ -221,14 +255,33 @@ final class CompanyWorkspaceAccessController: ObservableObject {
     }
 
     var authorizedContainer: ModelContainer? {
+        authorizedContainer(for: memoizedSession())
+    }
+
+    private func authorizedContainer(for session: CompanyWorkspaceSession?) -> ModelContainer? {
         #if DEBUG
         if GunnAireCloudKit.usesTestDatabase, let testContainer { return testContainer }
         #endif
-        guard phase == .ready, !mustRestart, let lease = activeLease,
-              let session = dependencies.session(),
+        guard phase == .ready, !mustRestart, let lease = activeLease, let session,
               lease.isValid(for: session, accountHash: lease.binding.cloudAccountHash,
                             environment: lease.binding.environment, now: dependencies.now()) else { return nil }
         return container
+    }
+
+    private func memoizedSession() -> CompanyWorkspaceSession? {
+        let now = dependencies.now()
+        let signal = dependencies.sessionSignal()
+        if let memo = sessionMemo, memo.signal == signal, now >= memo.readAt,
+           now.timeIntervalSince(memo.readAt) < Self.sessionMemoLifetime {
+            return memo.session
+        }
+        let session = dependencies.session()
+        sessionMemo = (signal, now, session)
+        return session
+    }
+
+    private func forgetSessionMemo() {
+        sessionMemo = nil
     }
 
     var operationStamp: CompanyWorkspaceOperationStamp? {
@@ -261,6 +314,7 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         activeLease = nil
         pending = nil
         container = nil
+        forgetSessionMemo()
         mustRestart = mustRestart || accountChanged
         dependencies.clearContinuations()
         if !preserveCachedLease { try? dependencies.saveLease(nil) }
@@ -271,6 +325,8 @@ final class CompanyWorkspaceAccessController: ObservableObject {
     /// mounted workspace never relies only on a non-observable getter.
     func enforceAccessDeadline() {
         guard activeLease != nil else { return }
+        // A deadline check must observe the live session, never the memo.
+        forgetSessionMemo()
         if authorizedContainer == nil { invalidate() }
     }
 
@@ -298,7 +354,7 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         guard !mustRestart else { phase = .blocked(.restartRequired); return }
         guard let session = dependencies.session() else { invalidate(); return }
         let operation = generation
-        if authorizedContainer == nil { phase = .checking }
+        if authorizedContainer(for: session) == nil { phase = .checking }
         diagnosticStep = "Checking iCloud account…"
         var verifiedAccount = false
         do {
@@ -416,8 +472,14 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         let users = try context.fetch(FetchDescriptor<AppUser>())
         let technicians = try context.fetch(FetchDescriptor<Technician>())
         _ = GunnAireBackendService.applyVerifiedUser(lease.user, into: context, currentUsers: users, technicians: technicians)
-        FieldFormTemplate.ensureStarterTemplates(in: context)
-        try context.save()
+        // Starter templates are seeded once per workspace generation. Every
+        // foreground refresh re-runs unlock, and each unconditional save here
+        // is a CloudKit export candidate on the production store.
+        if starterTemplatesGeneration != generation {
+            FieldFormTemplate.ensureStarterTemplates(in: context)
+            starterTemplatesGeneration = generation
+        }
+        if context.hasChanges { try context.save() }
         if !isOffline { try dependencies.saveLease(lease) }
         if let activeLease, activeLease.user.role != lease.user.role {
             // Invalidate privileged sheets and late responses when the server
@@ -428,6 +490,7 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         container = opened
         activeLease = lease
         pending = nil
+        forgetSessionMemo()
         phase = .ready
         scheduleExpiry(for: lease)
     }

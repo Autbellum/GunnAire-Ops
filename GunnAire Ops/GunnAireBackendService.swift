@@ -1512,15 +1512,18 @@ enum GunnAireBackendService {
         if matches.isEmpty {
             modelContext.insert(user)
         }
+        // Assign only when the value differs. The server still overwrites a
+        // diverged local record; an unchanged record must not become dirty on
+        // every foreground refresh and re-queue a CloudKit export.
         for match in matches.isEmpty ? [user] : matches {
-            match.email = email
-            match.role = role
-            match.isActive = remoteUser.isActive
+            if match.email != email { match.email = email }
+            if match.roleRawValue != role.rawValue { match.role = role }
+            if match.isActive != remoteUser.isActive { match.isActive = remoteUser.isActive }
         }
         if remoteUser.isActive {
             _ = AppAccess.ensureTechnicianRecord(for: email, technicians: technicians, modelContext: modelContext)
         }
-        try? modelContext.save()
+        if modelContext.hasChanges { try? modelContext.save() }
         _ = AppUserDataMaintenance.collapseCloudKitDuplicates(
             matches.isEmpty ? currentUsers + [user] : currentUsers,
             modelContext: modelContext

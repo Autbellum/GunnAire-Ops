@@ -121,13 +121,16 @@ struct GunnAireIPadKeyCommandBridge: UIViewRepresentable {
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.gunnaireReduceMotion) private var reduceMotion
-    @EnvironmentObject private var cloudKitEventMonitor: GunnAireCloudKitEventMonitor
+    /// The root workspace observes only the coarse attention operation. The
+    /// full `GunnAireCloudKitEventMonitor` publishes on every mirroring event
+    /// and is observed by Settings, where the detail is shown.
+    @EnvironmentObject private var cloudKitAttention: GunnAireCloudKitAttentionMonitor
     @AppStorage("hasAuthenticatedUser") private var hasAuthenticatedUser = false
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
-    @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var attachments: [ServiceDocumentAttachment]
-    @Query(sort: \CustomerCommunication.createdAt, order: .reverse) private var customerCommunications: [CustomerCommunication]
+    // Pending document and communication uploads are fetched on demand inside
+    // the retry helpers rather than held as root `@Query` subscriptions, which
+    // re-rendered the whole sidebar and detail host on every CloudKit import.
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
-    @ObservedObject private var googleAuth = GoogleAuthManager.shared
 
     @State private var selectedSidebarItem: SidebarItem? = .commandCenter
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
@@ -180,7 +183,7 @@ struct ContentView: View {
         return cloudKitReadiness.flatMap {
             OperationalDataContinuity.cloudKitNotice(
                 for: $0,
-                mirroringState: cloudKitEventMonitor.state
+                attentionOperation: cloudKitAttention.operation
             )
         }
     }
@@ -229,30 +232,32 @@ struct ContentView: View {
         #endif
     }
 
+    /// Each element evaluates the verified business role. `body` reads this
+    /// once per pass and hands the result to every section and destination.
     private var visibleSidebarItems: [SidebarItem] {
         SidebarItem.allCases.filter { item in
             AppAccess.canAccessSidebarItem(item, email: currentUserEmail, users: users)
         }
     }
 
-    private var operationsItems: [SidebarItem] {
+    private func operationsItems(in visible: [SidebarItem]) -> [SidebarItem] {
         [.commandCenter, .timeClock, .scheduleAndJobs, .customers, .onsiteDocumentation]
-            .filter { visibleSidebarItems.contains($0) }
+            .filter { visible.contains($0) }
     }
 
-    private var backOfficeItems: [SidebarItem] {
+    private func backOfficeItems(in visible: [SidebarItem]) -> [SidebarItem] {
         [.mail, .estimates, .invoices, .payments, .reports, .receiptsBills]
-            .filter { visibleSidebarItems.contains($0) }
+            .filter { visible.contains($0) }
     }
 
-    private var integrationItems: [SidebarItem] {
+    private func integrationItems(in visible: [SidebarItem]) -> [SidebarItem] {
         [.syncIntegrations]
-            .filter { visibleSidebarItems.contains($0) }
+            .filter { visible.contains($0) }
     }
 
-    private var adminItems: [SidebarItem] {
+    private func adminItems(in visible: [SidebarItem]) -> [SidebarItem] {
         [.quickBooksManagement]
-            .filter { visibleSidebarItems.contains($0) }
+            .filter { visible.contains($0) }
     }
 
     private var pendingAppRoute: GunnAireAppRoute? {
@@ -272,7 +277,7 @@ struct ContentView: View {
     /// they all remain in one generic `ViewBuilder` switch, a physical device
     /// can recursively resolve every branch while navigating and exhaust the
     /// main-thread stack before the selected workspace appears.
-    private var selectedWorkspaceDetail: AnyView {
+    private func selectedWorkspaceDetail(visible visibleSidebarItems: [SidebarItem]) -> AnyView {
         guard !visibleSidebarItems.isEmpty else {
             return AnyView(
                 ContentUnavailableView {
@@ -371,6 +376,13 @@ struct ContentView: View {
     }
     
     var body: some View {
+        // Evaluated once per body pass; every section, the detail host and the
+        // navigation command context read this snapshot.
+        let visible = visibleSidebarItems
+        let operationsItems = operationsItems(in: visible)
+        let backOfficeItems = backOfficeItems(in: visible)
+        let integrationItems = integrationItems(in: visible)
+        let adminItems = adminItems(in: visible)
         NavigationSplitView(columnVisibility: $columnVisibility) {
             List(selection: $selectedSidebarItem) {
                 if let cloudKitContinuityNotice {
@@ -423,7 +435,7 @@ struct ContentView: View {
                             .lineLimit(1)
                             .accessibilityIdentifier("SidebarAccountIdentity")
                     }
-                    if visibleSidebarItems.isEmpty {
+                    if visible.isEmpty {
                         Label("Verify business access", systemImage: "person.badge.key")
                             .font(.footnote)
                             .foregroundColor(.orange)
@@ -458,7 +470,7 @@ struct ContentView: View {
         } detail: {
             ZStack {
                 WatermarkBackground()
-                selectedWorkspaceDetail
+                selectedWorkspaceDetail(visible: visible)
                 .id(selectedSidebarItem)
                 .tint(Color.brandGold)
             }
@@ -489,7 +501,7 @@ struct ContentView: View {
             )
             applyPendingAppRouteIfNeeded()
         }
-        .onChange(of: visibleSidebarItems) { _, updatedItems in
+        .onChange(of: visible) { _, updatedItems in
             let resolvedSelection = SidebarNavigationPolicy.resolvedSelection(
                 selectedSidebarItem,
                 visibleItems: updatedItems
@@ -601,7 +613,7 @@ struct ContentView: View {
         .focusedSceneValue(
             \.gunnaireNavigationCommandContext,
             GunnAireNavigationCommandContext(
-                visibleSidebarItems: Set(visibleSidebarItems)
+                visibleSidebarItems: Set(visible)
             )
         )
         .tint(Color.brandGold)
@@ -617,8 +629,8 @@ struct ContentView: View {
         }
         if arguments.contains("-uiTestSeedCloudKitExportFailure") {
             cloudKitReadiness = .available
-            if cloudKitEventMonitor.state.attentionFailure?.operation != .exportRecords {
-                cloudKitEventMonitor.record(
+            if cloudKitAttention.operation != .exportRecords {
+                cloudKitAttention.eventMonitor?.record(
                     CloudKitMirroringEventSnapshot(
                         operation: .exportRecords,
                         outcome: .failed
@@ -757,6 +769,12 @@ struct ContentView: View {
 
     private func retryPendingSharedCompanyDocumentUploadsIfNeeded() {
         guard GunnAireBackendService.isConfigured else { return }
+        // Same selection as the former root query: newest first, then the
+        // first ten that still need the shared company upload.
+        let descriptor = FetchDescriptor<ServiceDocumentAttachment>(
+            sortBy: [SortDescriptor(\ServiceDocumentAttachment.createdAt, order: .reverse)]
+        )
+        let attachments = (try? modelContext.fetch(descriptor)) ?? []
         let pending = Array(attachments.filter(\.needsSharedCompanyStorageUpload).prefix(10))
         guard !pending.isEmpty else { return }
         Task {
@@ -780,6 +798,12 @@ struct ContentView: View {
     private func retryPendingCustomerCommunicationUploadsIfNeeded() {
         guard GunnAireBackendService.isConfigured,
               !isRetryingCustomerCommunicationUploads else { return }
+        // Same selection as the former root query: newest first, then the
+        // first ten that still need the shared company sync.
+        let descriptor = FetchDescriptor<CustomerCommunication>(
+            sortBy: [SortDescriptor(\CustomerCommunication.createdAt, order: .reverse)]
+        )
+        let customerCommunications = (try? modelContext.fetch(descriptor)) ?? []
         let pending = Array(customerCommunications.filter(\.needsSharedCompanySync).prefix(10))
         guard !pending.isEmpty else { return }
         isRetryingCustomerCommunicationUploads = true
@@ -6189,9 +6213,11 @@ private extension String {
 }
 
 #Preview {
+    let cloudKitEventMonitor = GunnAireCloudKitEventMonitor(isEnabled: false)
     ContentView()
         .modelContainer(for: [ServiceCall.self, Customer.self, Technician.self, RecurringMaintenanceContract.self], inMemory: true)
-        .environmentObject(GunnAireCloudKitEventMonitor(isEnabled: false))
+        .environmentObject(cloudKitEventMonitor)
+        .environmentObject(cloudKitEventMonitor.attention)
 }
 
 #Preview("Canvas Sanity") {
