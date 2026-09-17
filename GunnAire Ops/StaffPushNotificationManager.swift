@@ -349,6 +349,14 @@ final class StaffPushNotificationManager: NSObject, ObservableObject {
                 return "Sign in again with Apple or Google before retrying staff alerts."
             case .notConfigured:
                 return "The GunnAire business server is not configured in this build."
+            case .server(let statusCode, let message):
+                // The server states the exact reason (for example, staff
+                // notifications not configured, or no application session).
+                // Hiding it behind a generic sentence sent the owner looking
+                // for a device or account problem that did not exist.
+                let reason = message.trimmingCharacters(in: .whitespacesAndNewlines)
+                let suffix = reason.isEmpty ? "" : " \(reason.hasSuffix(".") ? reason : reason + ".")"
+                return "Apple registration succeeded, but the GunnAire server declined this device (HTTP \(statusCode)).\(suffix)"
             default:
                 break
             }
