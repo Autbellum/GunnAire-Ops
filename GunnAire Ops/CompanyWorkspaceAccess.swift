@@ -201,6 +201,11 @@ struct CompanyWorkspaceDependencies {
 @MainActor
 final class CompanyWorkspaceAccessController: ObservableObject {
     static let shared = CompanyWorkspaceAccessController(dependencies: .live, observesAccountChanges: true)
+    /// Which check produced the most recent .differentWorkspace failure, with
+    /// 8-character fingerprints of the accounts, bindings or store involved.
+    /// That failure covers five distinct conditions and its one sentence made
+    /// the owner's iPad undiagnosable from outside. No account or token content.
+    @Published private(set) var lastMismatchDetail: String = ""
     @Published private(set) var phase: CompanyWorkspacePhase = .checking
     /// Surfaced directly in the "Verifying company access…" spinner so a
     /// stuck verification can be localized to a specific step without needing
@@ -380,6 +385,7 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         #endif
         guard !mustRestart else { phase = .blocked(.restartRequired); return }
         guard let session = dependencies.session() else { invalidate(); return }
+        lastMismatchDetail = ""
         let operation = generation
         if authorizedContainer(for: session) == nil { phase = .checking }
         diagnosticStep = "Checking iCloud account…"
@@ -420,16 +426,20 @@ final class CompanyWorkspaceAccessController: ObservableObject {
                 }
                 pending = (session, response, account)
                 let matching = response.workspace.bindings.filter { $0.environment == account.environment }
-                guard matching.count <= 1 else { throw CompanyWorkspaceFailure.differentWorkspace }
+                guard matching.count <= 1 else {
+                    throw mismatch("server lists \(matching.count) \(account.environment) bindings; expected one")
+                }
                 guard let binding = response.workspace.binding(for: account.environment) else {
                     guard matching.isEmpty, response.workspace.bindings.allSatisfy({ $0.isValid && $0.companyID == response.workspace.companyID }) else {
-                        throw CompanyWorkspaceFailure.differentWorkspace
+                        throw mismatch("no \(account.environment) binding; \(response.workspace.bindings.count) other binding(s) invalid or for another company")
                     }
                     diagnosticStep = "No binding yet. Requesting admin approval…"
                     try requireApproval(user: response.user)
                     return
                 }
-                guard binding.cloudAccountHash == account.accountHash else { throw CompanyWorkspaceFailure.differentWorkspace }
+                guard binding.cloudAccountHash == account.accountHash else {
+                    throw mismatch("iCloud account differs: approved \(Self.fingerprint(binding.cloudAccountHash)) on \(binding.approvedAt), this device \(Self.fingerprint(account.accountHash))")
+                }
                 let lease = CompanyWorkspaceLease(session: session, binding: binding, user: response.user, verifiedAt: dependencies.now())
                 diagnosticStep = "Binding verified. Opening local data store…"
                 try unlock(lease, allowLegacyAdoption: false)
@@ -462,8 +472,36 @@ final class CompanyWorkspaceAccessController: ObservableObject {
     private func requireApproval(user: BackendAppUserRecord) throws {
         guard user.role == AppUserRole.admin.rawValue else { throw CompanyWorkspaceFailure.administratorRequired }
         // Even an administrator cannot relabel a previously registered store.
-        guard try dependencies.readRegistration() == nil else { throw CompanyWorkspaceFailure.differentWorkspace }
+        if let registration = try dependencies.readRegistration() {
+            throw mismatch("saved store \(Self.fingerprint(registration.storeUUID)) is already registered to the \(registration.binding.environment) binding for account \(Self.fingerprint(registration.binding.cloudAccountHash))")
+        }
         phase = .needsApproval(hasSavedStore: try dependencies.storeIdentity() != nil)
+    }
+
+    /// Records which check failed before the generic `.differentWorkspace` is
+    /// thrown, so the gate can show it. Cleared at the start of each refresh.
+    private func mismatch(_ detail: String) -> CompanyWorkspaceFailure {
+        lastMismatchDetail = detail
+        return .differentWorkspace
+    }
+
+    static func fingerprint(_ value: String) -> String {
+        String(value.prefix(8))
+    }
+
+    /// A registration may follow a re-approved binding only when every
+    /// identity component matches: same server, same store, same company,
+    /// container, environment and iCloud account. Only the approval date and
+    /// replica id may differ.
+    static func canAdopt(registration: CompanyWorkspaceStoreRegistration, session: CompanyWorkspaceSession,
+                         binding: CompanyCloudKitBinding, storeUUID: String?) -> Bool {
+        registration.backendOrigin == session.backendOrigin
+            && !registration.storeUUID.isEmpty && registration.storeUUID == storeUUID
+            && registration.binding.companyID == binding.companyID
+            && registration.binding.containerID == binding.containerID
+            && registration.binding.environment == binding.environment
+            && registration.binding.cloudAccountHash == binding.cloudAccountHash
+            && binding.isValid
     }
 
     func approve(confirmed: Bool) async {
@@ -474,7 +512,7 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         do {
             let currentAccount = try await dependencies.account()
             guard currentAccount.accountHash == account.accountHash, currentAccount.environment == account.environment else {
-                throw CompanyWorkspaceFailure.differentWorkspace
+                throw mismatch("iCloud account changed during approval: was \(Self.fingerprint(account.accountHash)) (\(account.environment)), now \(Self.fingerprint(currentAccount.accountHash)) (\(currentAccount.environment))")
             }
             guard isCurrent(operation, session: session) else { return }
             let binding = try await dependencies.approve(CompanyCloudKitApprovalRequest(
@@ -484,7 +522,7 @@ final class CompanyWorkspaceAccessController: ObservableObject {
             guard isCurrent(operation, session: session) else { return }
             guard binding.isValid, binding.companyID == response.workspace.companyID,
                   binding.environment == account.environment, binding.cloudAccountHash == account.accountHash else {
-                throw CompanyWorkspaceFailure.differentWorkspace
+                throw mismatch("server returned a binding that does not match this device (valid=\(binding.isValid), environment \(binding.environment), account \(Self.fingerprint(binding.cloudAccountHash)) vs \(Self.fingerprint(account.accountHash)))")
             }
             let lease = CompanyWorkspaceLease(session: session, binding: binding, user: response.user, verifiedAt: dependencies.now())
             try unlock(lease, allowLegacyAdoption: true)
@@ -502,8 +540,26 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         }
         let identity = try dependencies.storeIdentity()
         if let registration = try dependencies.readRegistration() {
+            if !registration.matches(session: lease.session, binding: lease.binding, storeUUID: identity),
+               Self.canAdopt(registration: registration, session: lease.session, binding: lease.binding, storeUUID: identity) {
+                // The server re-approved the same iCloud account for the same
+                // company, container and environment (a new approval date or
+                // replica id). The store still belongs to this workspace; the
+                // registration follows the current binding.
+                try dependencies.saveRegistration(CompanyWorkspaceStoreRegistration(
+                    backendOrigin: lease.session.backendOrigin, binding: lease.binding, storeUUID: registration.storeUUID
+                ))
+            } else {
             guard registration.matches(session: lease.session, binding: lease.binding, storeUUID: identity) else {
-                throw CompanyWorkspaceFailure.differentWorkspace
+                let parts = [
+                    registration.backendOrigin == lease.session.backendOrigin ? nil : "server origin differs",
+                    registration.binding == lease.binding ? nil
+                        : "binding differs (registered account \(Self.fingerprint(registration.binding.cloudAccountHash)) \(registration.binding.environment), current \(Self.fingerprint(lease.binding.cloudAccountHash)) \(lease.binding.environment))",
+                    registration.storeUUID.isEmpty || registration.storeUUID != identity
+                        ? "store differs (registered \(Self.fingerprint(registration.storeUUID)), on device \(identity.map(Self.fingerprint) ?? "none"))" : nil
+                ].compactMap { $0 }
+                throw mismatch("saved store registration does not match: " + parts.joined(separator: "; "))
+            }
             }
         } else if identity != nil && !allowLegacyAdoption {
             try requireApproval(user: lease.user)

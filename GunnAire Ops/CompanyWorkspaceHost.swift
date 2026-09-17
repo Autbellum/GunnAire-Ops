@@ -321,6 +321,13 @@ struct CompanyWorkspaceHost: View {
                                     .foregroundStyle(.secondary)
                                     .accessibilityIdentifier("CompanyWorkspaceResolvedEnvironment")
                             }
+                            if failure == .differentWorkspace, !access.lastMismatchDetail.isEmpty {
+                                Text(access.lastMismatchDetail)
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                                    .accessibilityIdentifier("CompanyWorkspaceMismatchDetail")
+                            }
                             if failure != .restartRequired {
                                 Button("Check Again") { Task { await access.refresh() } }
                                     .buttonStyle(.borderedProminent)

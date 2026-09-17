@@ -243,6 +243,63 @@ struct CompanyWorkspaceAccessTests {
         #expect(h.openCount == 0)
     }
 
+    /// The gate names the failing check: an approved iCloud account that
+    /// differs from this device's, or a saved-store registration that belongs
+    /// to another server or binding. Only 8-character fingerprints are shown.
+    @Test func workspaceMismatchNamesTheFailingCheckWithFingerprints() async throws {
+        let h = try Harness(); h.register()
+        h.cloudAccountHash = String(repeating: "b", count: 64)
+        let controller = h.controller(); await controller.refresh()
+        #expect(controller.phase == .blocked(.differentWorkspace))
+        #expect(controller.lastMismatchDetail
+                == "iCloud account differs: approved aaaaaaaa on \(h.binding.approvedAt), this device bbbbbbbb")
+
+        let other = try Harness(); other.register()
+        other.registration = CompanyWorkspaceStoreRegistration(
+            backendOrigin: "https://other.example.test", binding: other.binding, storeUUID: "existing-store"
+        )
+        let second = other.controller(); await second.refresh()
+        #expect(second.phase == .blocked(.differentWorkspace))
+        #expect(second.lastMismatchDetail
+                == "saved store registration does not match: server origin differs")
+
+        // A later successful refresh clears the detail.
+        other.registration = CompanyWorkspaceStoreRegistration(
+            backendOrigin: other.session!.backendOrigin, binding: other.binding, storeUUID: "existing-store"
+        )
+        await second.refresh()
+        #expect(second.phase == .ready)
+        #expect(second.lastMismatchDetail.isEmpty)
+    }
+
+    /// A server re-approval of the same iCloud account (new approval date and
+    /// replica id) must not lock a device out: the saved store registration
+    /// follows the current binding. Any other difference still blocks.
+    @Test func registrationFollowsAReapprovedBindingForTheSameAccount() async throws {
+        let h = try Harness(); h.register()
+        let previous = CompanyCloudKitBinding(
+            companyID: h.binding.companyID, containerID: h.binding.containerID, environment: h.binding.environment,
+            replicaID: UUID(), cloudAccountHash: h.binding.cloudAccountHash, approvedAt: "2026-08-01T12:00:00+00:00"
+        )
+        h.registration = CompanyWorkspaceStoreRegistration(backendOrigin: h.session!.backendOrigin, binding: previous, storeUUID: "existing-store")
+        let controller = h.controller(); await controller.refresh()
+        #expect(controller.phase == .ready)
+        #expect(h.registration?.binding == h.binding)
+        #expect(h.registration?.storeUUID == "existing-store")
+        #expect(controller.lastMismatchDetail.isEmpty)
+
+        // A different company is never adopted.
+        let other = try Harness(); other.register()
+        let foreign = CompanyCloudKitBinding(
+            companyID: UUID(), containerID: other.binding.containerID, environment: other.binding.environment,
+            replicaID: other.binding.replicaID, cloudAccountHash: other.binding.cloudAccountHash, approvedAt: other.binding.approvedAt
+        )
+        other.registration = CompanyWorkspaceStoreRegistration(backendOrigin: other.session!.backendOrigin, binding: foreign, storeUUID: "existing-store")
+        let second = other.controller(); await second.refresh()
+        #expect(second.phase == .blocked(.differentWorkspace))
+        #expect(second.lastMismatchDetail.hasPrefix("saved store registration does not match: binding differs"))
+    }
+
     @Test func noBusinessSessionNeverOpensAnExistingStore() async throws {
         let h = try Harness(); h.register(); h.session = nil
         let controller = h.controller()
