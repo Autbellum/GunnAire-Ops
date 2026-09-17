@@ -469,10 +469,10 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         if authorizedContainer == nil { await refresh() }
     }
 
-    private func requireApproval(user: BackendAppUserRecord) throws {
+    private func requireApproval(user: BackendAppUserRecord, ignoringStaleRegistration: Bool = false) throws {
         guard user.role == AppUserRole.admin.rawValue else { throw CompanyWorkspaceFailure.administratorRequired }
         // Even an administrator cannot relabel a previously registered store.
-        if let registration = try dependencies.readRegistration() {
+        if !ignoringStaleRegistration, let registration = try dependencies.readRegistration() {
             throw mismatch("saved store \(Self.fingerprint(registration.storeUUID)) is already registered to the \(registration.binding.environment) binding for account \(Self.fingerprint(registration.binding.cloudAccountHash))")
         }
         phase = .needsApproval(hasSavedStore: try dependencies.storeIdentity() != nil)
@@ -493,6 +493,18 @@ final class CompanyWorkspaceAccessController: ObservableObject {
     /// identity component matches: same server, same store, same company,
     /// container, environment and iCloud account. Only the approval date and
     /// replica id may differ.
+    /// The registration names this same server and binding, but there is no
+    /// store on the device at all: the registered database is gone. A different
+    /// store in its place is not this case and remains refused, even to an
+    /// administrator, because a registered device's data must not be swapped.
+    static func registeredStoreIsGone(registration: CompanyWorkspaceStoreRegistration, session: CompanyWorkspaceSession,
+                                      binding: CompanyCloudKitBinding, storeUUID: String?) -> Bool {
+        registration.backendOrigin == session.backendOrigin
+            && registration.binding == binding
+            && !registration.storeUUID.isEmpty
+            && storeUUID == nil
+    }
+
     static func canAdopt(registration: CompanyWorkspaceStoreRegistration, session: CompanyWorkspaceSession,
                          binding: CompanyCloudKitBinding, storeUUID: String?) -> Bool {
         registration.backendOrigin == session.backendOrigin
@@ -539,18 +551,28 @@ final class CompanyWorkspaceAccessController: ObservableObject {
             throw CompanyWorkspaceFailure.signIn
         }
         let identity = try dependencies.storeIdentity()
-        if let registration = try dependencies.readRegistration() {
-            if !registration.matches(session: lease.session, binding: lease.binding, storeUUID: identity),
-               Self.canAdopt(registration: registration, session: lease.session, binding: lease.binding, storeUUID: identity) {
+        var registration = try dependencies.readRegistration()
+        if let existing = registration, !existing.matches(session: lease.session, binding: lease.binding, storeUUID: identity) {
+            if Self.canAdopt(registration: existing, session: lease.session, binding: lease.binding, storeUUID: identity) {
                 // The server re-approved the same iCloud account for the same
                 // company, container and environment (a new approval date or
                 // replica id). The store still belongs to this workspace; the
                 // registration follows the current binding.
-                try dependencies.saveRegistration(CompanyWorkspaceStoreRegistration(
-                    backendOrigin: lease.session.backendOrigin, binding: lease.binding, storeUUID: registration.storeUUID
-                ))
+                let updated = CompanyWorkspaceStoreRegistration(
+                    backendOrigin: lease.session.backendOrigin, binding: lease.binding, storeUUID: existing.storeUUID
+                )
+                try dependencies.saveRegistration(updated)
+                registration = updated
+            } else if Self.registeredStoreIsGone(registration: existing, session: lease.session, binding: lease.binding, storeUUID: identity) {
+                // The registered store is no longer on this device and no other
+                // store is present: a reinstall leaves the Keychain registration
+                // behind, and it refused every unlock. The workspace identity
+                // still matches, so the device is treated as never registered
+                // and a fresh store is created and registered below. A different
+                // populated store in its place stays refused (see below).
+                registration = nil
             } else {
-            guard registration.matches(session: lease.session, binding: lease.binding, storeUUID: identity) else {
+                let registration = existing
                 let parts = [
                     registration.backendOrigin == lease.session.backendOrigin ? nil : "server origin differs",
                     registration.binding == lease.binding ? nil
@@ -560,15 +582,17 @@ final class CompanyWorkspaceAccessController: ObservableObject {
                 ].compactMap { $0 }
                 throw mismatch("saved store registration does not match: " + parts.joined(separator: "; "))
             }
-            }
-        } else if identity != nil && !allowLegacyAdoption {
-            try requireApproval(user: lease.user)
-            return
-        } else if isOffline { throw CompanyWorkspaceFailure.storage }
+        }
+        if registration == nil {
+            if identity != nil && !allowLegacyAdoption {
+                try requireApproval(user: lease.user, ignoringStaleRegistration: true)
+                return
+            } else if isOffline { throw CompanyWorkspaceFailure.storage }
+        }
 
         let opened = try container ?? dependencies.openStore()
         guard let storeUUID = try dependencies.storeIdentity() else { throw CompanyWorkspaceFailure.storage }
-        if try dependencies.readRegistration() == nil {
+        if registration == nil {
             try dependencies.saveRegistration(CompanyWorkspaceStoreRegistration(backendOrigin: lease.session.backendOrigin, binding: lease.binding, storeUUID: storeUUID))
         }
         let context = opened.mainContext

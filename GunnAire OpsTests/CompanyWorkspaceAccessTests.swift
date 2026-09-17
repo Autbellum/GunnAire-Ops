@@ -300,6 +300,35 @@ struct CompanyWorkspaceAccessTests {
         #expect(second.lastMismatchDetail.hasPrefix("saved store registration does not match: binding differs"))
     }
 
+    /// A Keychain registration that names a store no longer on the device
+    /// (reinstall, rebuilt database) must not refuse every unlock. With no
+    /// store present, a fresh one is created and registered.
+    @Test func staleRegistrationWithNoStoreOnDeviceCreatesAndRegistersAFreshStore() async throws {
+        let h = try Harness(); h.register()
+        h.registration = CompanyWorkspaceStoreRegistration(backendOrigin: h.session!.backendOrigin, binding: h.binding, storeUUID: "4d8dcc46-old-store")
+        h.storeID = nil
+        let controller = h.controller(); await controller.refresh()
+        #expect(controller.phase == .ready)
+        #expect(controller.lastMismatchDetail.isEmpty)
+        #expect(h.openCount == 1)
+        #expect(h.registration?.storeUUID == "new-store")
+        #expect(h.registration?.binding == h.binding)
+    }
+
+    /// A registered device whose store was swapped for a different populated
+    /// one stays refused for every role (a registration is never relabelled to
+    /// another store); the gate names the check.
+    @Test func staleRegistrationWithADifferentStorePresentStaysRefused() async throws {
+        let h = try Harness(); h.register()
+        h.user = BackendAppUserRecord(email: h.user.email, role: "Admin", isActive: true, createdAt: nil)
+        h.registration = CompanyWorkspaceStoreRegistration(backendOrigin: h.session!.backendOrigin, binding: h.binding, storeUUID: "4d8dcc46-old-store")
+        let controller = h.controller(); await controller.refresh()
+        #expect(controller.phase == .blocked(.differentWorkspace))
+        #expect(h.openCount == 0)
+        #expect(controller.lastMismatchDetail
+                == "saved store registration does not match: store differs (registered 4d8dcc46, on device existing)")
+    }
+
     @Test func noBusinessSessionNeverOpensAnExistingStore() async throws {
         let h = try Harness(); h.register(); h.session = nil
         let controller = h.controller()
