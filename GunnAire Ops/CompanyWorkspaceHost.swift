@@ -8,7 +8,14 @@ import StoreKit
 /// CloudKit's async calls carry no built-in timeout, so a stalled network
 /// path (rather than a clean error) can leave a caller awaiting forever with
 /// no feedback. Races the operation against a deadline and throws
-/// `CompanyWorkspaceFailure.server` if the deadline wins.
+/// `CompanyCloudKitTimeout` if the deadline wins. The access controller
+/// treats that like a network outage (a bounded lease may keep the workspace
+/// open) and reports it as a server-side failure otherwise.
+struct CompanyCloudKitTimeout: Error, CustomStringConvertible {
+    let seconds: TimeInterval
+    var description: String { "CloudKit call exceeded \(Int(seconds)) s" }
+}
+
 private func withCloudKitTimeout<T: Sendable>(
     seconds: TimeInterval,
     _ operation: @escaping @Sendable () async throws -> T
@@ -17,7 +24,7 @@ private func withCloudKitTimeout<T: Sendable>(
         group.addTask { try await operation() }
         group.addTask {
             try await Task.sleep(for: .seconds(seconds))
-            throw CompanyWorkspaceFailure.server
+            throw CompanyCloudKitTimeout(seconds: seconds)
         }
         defer { group.cancelAll() }
         return try await group.next()!
@@ -102,8 +109,27 @@ enum CompanyCloudKitRuntimeAccount {
         return hasVerifiedStoreDistribution ? "production" : nil
     }
 
+    /// Resolving the account costs a StoreKit transaction lookup (with
+    /// retries) and two CloudKit calls, and every foreground verification,
+    /// publication pass and staff delivery repeats it. A successful result is
+    /// reused briefly; CloudKit's account-change notification drops it.
+    static let cacheLifetime: TimeInterval = 15 * 60
+    @MainActor private static var cachedAccount: (account: CompanyCloudKitAccount, resolvedAt: Date)?
+
+    @MainActor static func invalidateCache() { cachedAccount = nil }
+
     static func current() async throws -> CompanyCloudKitAccount {
         guard !GunnAireCloudKit.usesTestDatabase else { throw CompanyWorkspaceFailure.configuration }
+        if let cached = await MainActor.run(body: { Self.cachedAccount }),
+           Date().timeIntervalSince(cached.resolvedAt) < Self.cacheLifetime {
+            return cached.account
+        }
+        let account = try await resolve()
+        await MainActor.run { Self.cachedAccount = (account, Date()) }
+        return account
+    }
+
+    private static func resolve() async throws -> CompanyCloudKitAccount {
         let profileURLs = [
             Bundle.main.bundleURL.appendingPathComponent("embedded.mobileprovision"),
             Bundle.main.bundleURL.appendingPathComponent("Contents/embedded.provisionprofile")
@@ -381,7 +407,7 @@ struct CompanyWorkspaceHost: View {
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             access.enforceAccessDeadline()
             receive.enforceAccessDeadline()
-            Task { await access.refresh() }
+            Task { await access.refreshIfStale(maxAge: CompanyWorkspaceAccessController.foregroundReverificationInterval) }
         }
     }
 }

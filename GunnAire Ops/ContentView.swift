@@ -142,6 +142,18 @@ struct ContentView: View {
     @State private var isCheckingFieldCollectionPrompts = false
     @State private var didLoadFieldCollectionPromptFixture = false
     @State private var isRetryingCustomerCommunicationUploads = false
+    @State private var isRetryingSharedCompanyDocumentUploads = false
+    @State private var cloudKitReadinessCheckedAt: Date?
+    /// Activations are frequent (privacy cover, Control Center, notifications);
+    /// the iCloud account status is re-read at most this often between them.
+    /// `CKAccountChanged` still triggers an immediate check.
+    static let cloudKitReadinessRecheckInterval: TimeInterval = 15 * 60
+
+    static func cloudKitReadinessIsStale(checkedAt: Date?, now: Date,
+                                         interval: TimeInterval = cloudKitReadinessRecheckInterval) -> Bool {
+        guard let checkedAt else { return true }
+        return now.timeIntervalSince(checkedAt) >= interval
+    }
     @State private var cloudKitReadiness: GunnAireCloudKit.AccountReadiness?
     @State private var showingCloudKitContinuityDetails = false
     @State private var isCheckingBusinessRole = false
@@ -595,7 +607,9 @@ struct ContentView: View {
             applyPendingAppRouteIfNeeded()
             Task {
                 await refreshAppWideFieldCollectionPrompt()
-                await refreshOperationalContinuityState()
+                if Self.cloudKitReadinessIsStale(checkedAt: cloudKitReadinessCheckedAt, now: Date()) {
+                    await refreshOperationalContinuityState()
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .quickBooksAuthenticationDidChange)) { _ in
@@ -648,7 +662,10 @@ struct ContentView: View {
         }
         #endif
 
-        cloudKitReadiness = await GunnAireCloudKit.accountReadiness()
+        let readiness = await GunnAireCloudKit.accountReadiness()
+        cloudKitReadinessCheckedAt = Date()
+        // Assigning an equal value would still re-render the whole tree.
+        if cloudKitReadiness != readiness { cloudKitReadiness = readiness }
     }
 
     @MainActor
@@ -768,7 +785,8 @@ struct ContentView: View {
     }
 
     private func retryPendingSharedCompanyDocumentUploadsIfNeeded() {
-        guard GunnAireBackendService.isConfigured else { return }
+        guard GunnAireBackendService.isConfigured,
+              !isRetryingSharedCompanyDocumentUploads else { return }
         // Same selection as the former root query: newest first, then the
         // first ten that still need the shared company upload.
         let descriptor = FetchDescriptor<ServiceDocumentAttachment>(
@@ -777,7 +795,11 @@ struct ContentView: View {
         let attachments = (try? modelContext.fetch(descriptor)) ?? []
         let pending = Array(attachments.filter(\.needsSharedCompanyStorageUpload).prefix(10))
         guard !pending.isEmpty else { return }
+        // A second activation while these uploads run must not start a second
+        // pass over the same attachments.
+        isRetryingSharedCompanyDocumentUploads = true
         Task {
+            defer { Task { @MainActor in isRetryingSharedCompanyDocumentUploads = false } }
             for attachment in pending {
                 do {
                     let response = try await GunnAireBackendService.retrySharedCompanyDocumentUpload(attachment)

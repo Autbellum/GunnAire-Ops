@@ -39,6 +39,13 @@ struct StaffReplicaSourceDependencies {
             guard !GunnAireCloudKit.usesTestDatabase, let stamp = access.operationStamp, access.verifiedRole == .admin else {
                 throw StaffReplicaSourceSyncError.access
             }
+            // The workspace response and iCloud account are re-fetched at most
+            // every 15 minutes for the same operation stamp; `verify` still
+            // checks the live stamp, role, company, session and store on every pass.
+            if let cached = StaffReplicaSourceContextCache.entry, cached.stamp == stamp,
+               Date().timeIntervalSince(cached.resolvedAt) < StaffReplicaSourceContextCache.lifetime {
+                return cached.context
+            }
             let response = try await GunnAireBackendService.fetchCompanyWorkspace()
             let account = try await CompanyCloudKitRuntimeAccount.current()
             guard access.operationStamp == stamp, response.user.email == stamp.session.email, response.user.isActive,
@@ -48,8 +55,13 @@ struct StaffReplicaSourceDependencies {
                   registration.matches(session: stamp.session, binding: binding, storeUUID: try CompanyWorkspaceStore.identity(at: CompanyWorkspaceStore.url)) else {
                 throw StaffReplicaSourceSyncError.access
             }
-            return .init(scope: .init(backendOrigin: stamp.session.backendOrigin, actorEmail: stamp.session.email,
-                                     binding: binding, storeUUID: registration.storeUUID), stamp: stamp)
+            let context = StaffReplicaSourceContext(
+                scope: .init(backendOrigin: stamp.session.backendOrigin, actorEmail: stamp.session.email,
+                             binding: binding, storeUUID: registration.storeUUID),
+                stamp: stamp
+            )
+            StaffReplicaSourceContextCache.entry = (stamp, context, Date())
+            return context
         }, check: { try verify($0) }, capture: { context, token in
             guard let container = CompanyWorkspaceAccessController.shared.authorizedContainer else { throw StaffReplicaSourceSyncError.access }
             return try StaffReplicaSourceHistory.capture(container: container, after: token, storeUUID: context.scope.storeUUID)
@@ -76,10 +88,22 @@ enum StaffReplicaSourceStorage {
     }
 }
 
+@MainActor enum StaffReplicaSourceContextCache {
+    static let lifetime: TimeInterval = 15 * 60
+    static var entry: (stamp: CompanyWorkspaceOperationStamp, context: StaffReplicaSourceContext, resolvedAt: Date)?
+}
+
 /// The owner SwiftData store remains authoritative. This prepares the explicit
 /// core-field source ledger; it does not import partial models or claim delivery.
 @MainActor final class StaffReplicaSourceCoordinator: ObservableObject {
     static let shared = StaffReplicaSourceCoordinator()
+    /// A completed pass with nothing left to do is not repeated sooner than
+    /// this unless a save or a CloudKit import asks for one (`scheduleSync`).
+    static let passInterval: TimeInterval = 60
+    /// Saves and CloudKit events arrive in bursts; one pass serves the burst.
+    var scheduledSyncDelay: Duration = .seconds(10)
+    private(set) var lastCompletedAt: Date?
+    private var scheduledSync: Task<Void, Never>?
     @Published private(set) var isRunning = false
     @Published private(set) var message = "Saved changes will be prepared when the approved owner workspace is connected."
     @Published private(set) var conflicts: [StaffReplicaSourceConflict] = []
@@ -274,10 +298,38 @@ enum StaffReplicaSourceStorage {
         }
     }
 
+    /// Coalesces save/import-driven requests into one pass after a short delay.
+    func scheduleSync() {
+        guard scheduledSync == nil else { return }
+        scheduledSync = Task { [weak self] in
+            try? await Task.sleep(for: self?.scheduledSyncDelay ?? .seconds(10))
+            while let self, !Task.isCancelled, self.isRunning {
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.scheduledSync = nil
+            await self.sync()
+        }
+    }
+
+    /// The foreground loop's pass: skipped while the previous completed pass
+    /// (nothing left to do) is younger than `passInterval`, so an activation
+    /// that restarts the loop does not repeat a full read of the workspace.
+    /// `sync()` itself always runs.
+    func syncIfDue() async {
+        if !hasMore, let last = lastCompletedAt,
+           dependencies.now().timeIntervalSince(last) < Self.passInterval {
+            return
+        }
+        await sync()
+    }
+
     func sync() async {
         guard !isRunning else { return }
         isRunning = true; hasMore = false
         defer { isRunning = false }
+        var completed = false
+        defer { if completed { lastCompletedAt = dependencies.now() } }
         do {
             let context = try await dependencies.context()
             try dependencies.check(context)
@@ -358,6 +410,7 @@ enum StaffReplicaSourceStorage {
                     message = summary.message
                 }
             } else { message = "Core records prepared. Staff device delivery is a separate step." }
+            completed = !hasMore
         } catch is CancellationError {
             // The durable original is retained for the next foreground run.
         } catch {

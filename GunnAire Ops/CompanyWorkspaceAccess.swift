@@ -242,6 +242,7 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         if observesAccountChanges {
             accountObserver = NotificationCenter.default.addObserver(forName: .CKAccountChanged, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
+                    CompanyCloudKitRuntimeAccount.invalidateCache()
                     self?.invalidate(accountChanged: true)
                 }
             }
@@ -350,6 +351,25 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         if refreshTask?.id == id { refreshTask = nil }
     }
 
+    /// How long a server-verified lease is trusted across foreground
+    /// activations before the workspace is re-verified with the server. The
+    /// privacy cover, Control Center and notifications all produce an
+    /// activation; sign-out, revocation and expiry are enforced locally by
+    /// `enforceAccessDeadline` and by the backend on every proof-bearing request.
+    static let foregroundReverificationInterval: TimeInterval = 15 * 60
+
+    /// Foreground re-verification: after the local deadline check, a workspace
+    /// whose lease was verified within `maxAge` stays as it is; anything older
+    /// (or not authorized) runs a full `refresh()`.
+    func refreshIfStale(maxAge: TimeInterval) async {
+        enforceAccessDeadline()
+        if authorizedContainer != nil, let lease = activeLease,
+           dependencies.now().timeIntervalSince(lease.verifiedAt) < maxAge {
+            return
+        }
+        await refresh()
+    }
+
     private func refreshWorkspace() async {
         guard !Task.isCancelled else { return }
         #if DEBUG
@@ -365,7 +385,27 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         diagnosticStep = "Checking iCloud account…"
         var verifiedAccount = false
         do {
-            let account = try await dependencies.account()
+            let account: CompanyCloudKitAccount
+            do {
+                account = try await dependencies.account()
+            } catch {
+                guard isCurrent(operation, session: session) else { return }
+                // A CloudKit stall or a network outage at the account step is
+                // transport failure, like an unreachable server: a lease that
+                // is still within its bound keeps the workspace open offline.
+                // Anything else (no iCloud account, configuration) still fails.
+                if Self.isConnectivityFailure(error), let lease = try dependencies.readLease(),
+                   lease.isValid(for: session, accountHash: lease.binding.cloudAccountHash,
+                                 environment: lease.binding.environment, now: dependencies.now()),
+                   let registration = try dependencies.readRegistration(),
+                   registration.matches(session: session, binding: lease.binding, storeUUID: try dependencies.storeIdentity()) {
+                    diagnosticStep = "iCloud unreachable. Using the verified workspace lease…"
+                    try unlock(lease, allowLegacyAdoption: false, isOffline: true)
+                    diagnosticStep = "Store opened. Ready."
+                    return
+                }
+                throw error
+            }
             verifiedAccount = true
             diagnosticStep = "iCloud account confirmed. Contacting server…"
             guard isCurrent(operation, session: session) else { return }
@@ -522,6 +562,7 @@ final class CompanyWorkspaceAccessController: ObservableObject {
 
     static func failure(for error: Error, verifiedAccount: Bool) -> CompanyWorkspaceFailure {
         if let failure = error as? CompanyWorkspaceFailure { return failure }
+        if error is CompanyCloudKitTimeout { return .server }
         if let backend = error as? GunnAireBackendError {
             switch backend {
             case .missingBusinessIdentity: return .signIn
@@ -550,6 +591,7 @@ final class CompanyWorkspaceAccessController: ObservableObject {
     }
 
     static func isConnectivityFailure(_ error: Error) -> Bool {
+        if error is CompanyCloudKitTimeout { return true }
         if let error = error as? CKError {
             return [.networkFailure, .networkUnavailable].contains(error.code)
         }

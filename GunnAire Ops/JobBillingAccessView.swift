@@ -223,12 +223,22 @@ extension JobBillingDispatch {
 struct JobBillingRecoveryModifier: ViewModifier {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
+    @State private var lastResumedAt: Date?
+    /// Activations are frequent (privacy cover, Control Center, notifications);
+    /// the connection discovery request is repeated at most this often.
+    static let activationResumeInterval: TimeInterval = 15 * 60
 
     func body(content: Content) -> some View {
         content
-            .task { await JobBillingDispatch.shared.resume(context: modelContext) }
+            .task {
+                lastResumedAt = Date()
+                await JobBillingDispatch.shared.resume(context: modelContext)
+            }
             .onChange(of: scenePhase) { _, phase in
-                if phase == .active { Task { await JobBillingDispatch.shared.resume(context: modelContext) } }
+                guard phase == .active else { return }
+                if let last = lastResumedAt, Date().timeIntervalSince(last) < Self.activationResumeInterval { return }
+                lastResumedAt = Date()
+                Task { await JobBillingDispatch.shared.resume(context: modelContext) }
             }
     }
 }

@@ -29,6 +29,7 @@ struct CompanyWorkspaceAccessTests {
         var registrationError = false
         var sessionReads = 0
         var sessionSignal = "signal-a"
+        var accountError: Error?
         let modelContainer: ModelContainer
 
         init() throws {
@@ -52,7 +53,10 @@ struct CompanyWorkspaceAccessTests {
         func controller() -> CompanyWorkspaceAccessController {
             CompanyWorkspaceAccessController(dependencies: CompanyWorkspaceDependencies(
                 session: { self.sessionReads += 1; return self.session },
-                account: { CompanyCloudKitAccount(environment: self.environment, accountHash: self.cloudAccountHash) },
+                account: {
+                    if let error = self.accountError { throw error }
+                    return CompanyCloudKitAccount(environment: self.environment, accountHash: self.cloudAccountHash)
+                },
                 fetchWorkspace: {
                     self.fetchCount += 1
                     if let delayed = self.delayedFetch { return try await delayed() }
@@ -190,6 +194,53 @@ struct CompanyWorkspaceAccessTests {
         #expect(try context.fetch(FetchDescriptor<FieldFormTemplate>()).count == afterDelete)
         await controller.refresh()
         #expect(try context.fetch(FetchDescriptor<FieldFormTemplate>()).count == afterDelete + 1)
+    }
+
+    /// A foreground activation re-verifies with the server only once the lease
+    /// is older than the interval; the local deadline check still runs every time.
+    @Test func foregroundReverificationSkipsTheServerWhileTheLeaseIsFresh() async throws {
+        let h = try Harness(); h.register()
+        let controller = h.controller(); await controller.refresh()
+        #expect(controller.phase == .ready)
+        #expect(h.fetchCount == 1)
+
+        h.now = h.now.addingTimeInterval(14 * 60)
+        await controller.refreshIfStale(maxAge: 15 * 60)
+        #expect(h.fetchCount == 1)
+        #expect(controller.phase == .ready)
+
+        h.now = h.now.addingTimeInterval(2 * 60)
+        await controller.refreshIfStale(maxAge: 15 * 60)
+        #expect(h.fetchCount == 2)
+        #expect(controller.phase == .ready)
+
+        // A removed session closes the workspace on the very next activation.
+        h.session = nil
+        await controller.refreshIfStale(maxAge: 15 * 60)
+        #expect(controller.phase == .blocked(.signIn))
+        #expect(controller.authorizedContainer == nil)
+    }
+
+    /// A CloudKit stall at the account step is transport failure: a lease
+    /// verified within its bound keeps the workspace open offline, exactly as
+    /// an unreachable server already did.
+    @Test func iCloudTimeoutKeepsAVerifiedLeaseOpenOffline() async throws {
+        let h = try Harness(); h.register(); h.cache()
+        h.accountError = CompanyCloudKitTimeout(seconds: 20)
+        let controller = h.controller(); await controller.refresh()
+        #expect(controller.phase == .ready)
+        #expect(controller.authorizedContainer != nil)
+        #expect(h.fetchCount == 0)
+        #expect(h.lease != nil)
+    }
+
+    @Test func iCloudTimeoutWithoutALeaseBlocksAsAServerFailure() async throws {
+        let h = try Harness(); h.register()
+        h.accountError = CompanyCloudKitTimeout(seconds: 20)
+        let controller = h.controller(); await controller.refresh()
+        #expect(controller.phase == .blocked(.server))
+        #expect(controller.authorizedContainer == nil)
+        #expect(h.openCount == 0)
     }
 
     @Test func noBusinessSessionNeverOpensAnExistingStore() async throws {

@@ -85,6 +85,10 @@ struct StaffReplicaReceiveDependencies {
         applicationActive = active
         if active { startRecoveryIfNeeded() }
         else {
+            // An authorized owner device runs no staff recovery and shows no
+            // received workspace; publishing a pause message there only
+            // re-renders the host behind the privacy cover.
+            guard recoveryEnabled || presentation != nil else { return }
             let hasVerifiedWorkspace = authorizedPresentation != nil
             // Invalidate late publication before cancellation reaches transport.
             generation = UUID(); received = nil

@@ -63,6 +63,9 @@ struct StaffPushNotificationPreference: Codable, Equatable {
     var ownerEmail: String?
     var isOptedIn: Bool
     var pendingServerDeactivation: Bool
+    /// When the server last confirmed this installation's registration.
+    /// Absent in preferences saved before it existed.
+    var lastRegisteredAt: Date? = nil
 
     static func newInstallation() -> Self {
         Self(
@@ -129,8 +132,16 @@ final class StaffPushNotificationManager: NSObject, ObservableObject {
         Task { await refreshAndRegisterIfNeeded() }
     }
 
+    /// Registration is repeated at launch and, on activation, at most this
+    /// often; the privacy cover alone must not re-register the device.
+    static let activationRegistrationInterval: TimeInterval = 12 * 60 * 60
+
     func applicationDidBecomeActive() {
         guard !applyUITestStateIfRequested() else { return }
+        if state == .ready, let last = preference.lastRegisteredAt,
+           Date().timeIntervalSince(last) < Self.activationRegistrationInterval {
+            return
+        }
         Task { await refreshAndRegisterIfNeeded() }
     }
 
@@ -196,6 +207,7 @@ final class StaffPushNotificationManager: NSObject, ObservableObject {
             )
             preference.ownerEmail = nil
             preference.pendingServerDeactivation = false
+            preference.lastRegisteredAt = nil
             savePreference()
             state = .off
         } catch {
@@ -271,6 +283,7 @@ final class StaffPushNotificationManager: NSObject, ObservableObject {
                       response.registered,
                       response.device?.isActive == true else { return }
                 preference.pendingServerDeactivation = false
+                preference.lastRegisteredAt = Date()
                 savePreference()
                 state = .ready
             } catch {
