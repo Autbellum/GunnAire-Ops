@@ -165,6 +165,33 @@ struct CompanyWorkspaceAccessTests {
         withExtendedLifetime(observation) {}
     }
 
+    /// Starter templates are seeded once per workspace generation, not on every
+    /// foreground verification; a new generation (here, a server role change)
+    /// seeds again on the unlock that follows it.
+    @Test func starterTemplatesAreSeededOncePerWorkspaceGeneration() async throws {
+        let h = try Harness(); h.register()
+        let context = h.modelContainer.mainContext
+        let controller = h.controller(); await controller.refresh()
+        #expect(controller.phase == .ready)
+        let seeded = try context.fetch(FetchDescriptor<FieldFormTemplate>())
+        #expect(seeded.count >= 5)
+        context.delete(try #require(seeded.first)); try context.save()
+        let afterDelete = try context.fetch(FetchDescriptor<FieldFormTemplate>()).count
+
+        await controller.refresh()
+        #expect(controller.phase == .ready)
+        #expect(try context.fetch(FetchDescriptor<FieldFormTemplate>()).count == afterDelete)
+
+        let generation = controller.generation
+        h.user = BackendAppUserRecord(email: h.user.email, role: "Standard", isActive: true, createdAt: nil)
+        await controller.refresh()
+        #expect(controller.generation != generation)
+        // The seed check ran before the role change bumped the generation.
+        #expect(try context.fetch(FetchDescriptor<FieldFormTemplate>()).count == afterDelete)
+        await controller.refresh()
+        #expect(try context.fetch(FetchDescriptor<FieldFormTemplate>()).count == afterDelete + 1)
+    }
+
     @Test func noBusinessSessionNeverOpensAnExistingStore() async throws {
         let h = try Harness(); h.register(); h.session = nil
         let controller = h.controller()

@@ -255,7 +255,14 @@ final class CompanyWorkspaceAccessController: ObservableObject {
     }
 
     var authorizedContainer: ModelContainer? {
-        authorizedContainer(for: memoizedSession())
+        #if DEBUG
+        if GunnAireCloudKit.usesTestDatabase, let testContainer { return testContainer }
+        #endif
+        // State checks first: while the workspace is not ready there is no
+        // lease to compare a session against, so no Keychain read is warranted
+        // (the gate re-renders several times per verification).
+        guard phase == .ready, !mustRestart, activeLease != nil else { return nil }
+        return authorizedContainer(for: memoizedSession())
     }
 
     private func authorizedContainer(for session: CompanyWorkspaceSession?) -> ModelContainer? {

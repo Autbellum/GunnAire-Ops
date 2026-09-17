@@ -58,6 +58,10 @@ struct CloudKitEventMonitorTests {
         #expect(stateEmissions == 4)
         #expect(attentionEmissions == 1)
         #expect(monitor.state.attentionFailure?.occurredAt == start.addingTimeInterval(4))
+        // The newer failure time is durable: a relaunch must not report the older one.
+        let retried = try #require(defaults.data(forKey: "GunnAireCloudKitMirroringStateV1"))
+        #expect(try JSONDecoder().decode(CloudKitMirroringState.self, from: retried).attentionFailure?.occurredAt
+                == start.addingTimeInterval(4))
 
         // A successful export clears the warning for both observers.
         monitor.record(CloudKitMirroringEventSnapshot(operation: .exportRecords, outcome: .succeeded, occurredAt: start.addingTimeInterval(5)))
@@ -65,6 +69,9 @@ struct CloudKitEventMonitorTests {
         #expect(attentionEmissions == 2)
         #expect(monitor.attention.operation == nil)
         #expect(!monitor.state.needsAttention)
+        // The cleared failure is persisted too, so a relaunch does not resurrect it.
+        let cleared = try #require(defaults.data(forKey: "GunnAireCloudKitMirroringStateV1"))
+        #expect(try JSONDecoder().decode(CloudKitMirroringState.self, from: cleared).attentionFailure == nil)
         withExtendedLifetime((stateObservation, attentionObservation)) {}
     }
 
