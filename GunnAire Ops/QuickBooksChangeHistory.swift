@@ -181,7 +181,11 @@ struct QuickBooksHistoryVersion: Decodable {
         guard identity.Id == entityID, identity.sparse != true,
               try QuickBooksHistoryTimestamp(identity.MetaData.LastUpdatedTime) == updated,
               status == "deleted" ? identity.status == "Deleted" :
-                (identity.status == nil && identity.SyncToken.map(QuickBooksChangeHistoryScope.validReference) == true)
+                // A present version carries no lifecycle marker, or QuickBooks'
+                // "Voided" marker on a voided transaction it keeps with zeroed
+                // amounts; both still need a valid SyncToken.
+                ((identity.status == nil || identity.status == "Voided")
+                 && identity.SyncToken.map(QuickBooksChangeHistoryScope.validReference) == true)
         else { throw QuickBooksChangeHistoryError.invalid }
         return updated
     }

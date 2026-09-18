@@ -228,6 +228,22 @@ struct QuickBooksChangeHistoryTests {
         catch { #expect(error as? QuickBooksChangeHistoryError == .invalid) }
     }
 
+    /// QuickBooks keeps a voided transaction, zeroed, with the top-level
+    /// marker "Voided". It is a present version with a valid SyncToken and
+    /// must reach the app carrying the marker; any other marker stays invalid.
+    @Test func voidedPresentVersionsAreAcceptedAndKeepTheirMarker() async throws {
+        let server = Server(scope)
+        server.versions[.invoice] = [try version("7", fields: ["status": "Voided", "TotalAmt": 0, "Balance": 0])]
+        let invoices: [QuickBooksInvoice] = try await client(server).records(entity: .invoice)
+        #expect(invoices.map(\.Id) == ["7"])
+        #expect(invoices.first?.isVoided == true)
+
+        let other = Server(scope)
+        other.versions[.invoice] = [try version("8", fields: ["status": "Pending"])]
+        do { let _: [QuickBooksInvoice] = try await client(other).records(entity: .invoice); Issue.record("Unknown marker applied") }
+        catch { #expect(error as? QuickBooksChangeHistoryError == .invalid) }
+    }
+
     @Test(arguments: ["deleted", "conflicting", "missing", "repeated", "premature"])
     func tombstonesConflictsAndIncompletePagesAreNotSuccessfulEmptySnapshots(mode: String) async throws {
         let server = Server(scope)
