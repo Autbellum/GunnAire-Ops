@@ -449,6 +449,7 @@ final class Invoice {
     static func resolvedStatus(for invoice: Invoice, payments: [Payment]) -> String {
         if invoice.milestoneDraftReceiptJSON != nil { return "retained draft" }
         guard invoice.quickBooksReconciliationReviewMessage == nil else { return "review" }
+        if invoice.normalizedStatus == QuickBooksBalanceReconciliation.voidedStatus { return "voided" }
         let balance = outstandingBalance(for: invoice, payments: payments)
         if balance <= 0.009 {
             return "paid"

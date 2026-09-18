@@ -3646,11 +3646,15 @@ struct QuickBooksInvoice: Codable, Identifiable {
     let ShipAddr: QuickBooksAddress?
     let TxnTaxDetail: QuickBooksTxnTaxDetail?
     let Line: [QuickBooksLineItem]?
+    /// QuickBooks' lifecycle marker: "Voided" on a voided invoice (amounts
+    /// already zeroed by QuickBooks), absent otherwise.
+    let status: String?
 
     var id: String { Id }
+    var isVoided: Bool { status == "Voided" }
 
     private enum CodingKeys: String, CodingKey {
-        case Id, SyncToken, DocNumber, CustomerRef, TotalAmt, Balance, TxnDate, DueDate, PrivateNote, BillEmail, EmailStatus, ShipAddr, TxnTaxDetail, Line
+        case Id, SyncToken, DocNumber, CustomerRef, TotalAmt, Balance, TxnDate, DueDate, PrivateNote, BillEmail, EmailStatus, ShipAddr, TxnTaxDetail, Line, status
     }
 
     init(from decoder: Decoder) throws {
@@ -3675,6 +3679,7 @@ struct QuickBooksInvoice: Codable, Identifiable {
         ShipAddr = try container.decodeIfPresent(QuickBooksAddress.self, forKey: .ShipAddr)
         TxnTaxDetail = try container.decodeIfPresent(QuickBooksTxnTaxDetail.self, forKey: .TxnTaxDetail)
         Line = try container.decodeIfPresent([QuickBooksLineItem].self, forKey: .Line)
+        status = try container.decodeIfPresent(String.self, forKey: .status)
     }
 
     private static func decodeFlexibleDouble(_ container: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) -> Double? {

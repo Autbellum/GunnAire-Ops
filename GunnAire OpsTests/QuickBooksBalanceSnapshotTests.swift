@@ -21,11 +21,12 @@ struct QuickBooksBalanceSnapshotTests {
         return (container, context, invoice)
     }
 
-    private func remoteInvoice(balance: Any? = 300, total: Any = 500) throws -> QuickBooksInvoice {
+    private func remoteInvoice(balance: Any? = 300, total: Any = 500, status: String? = nil) throws -> QuickBooksInvoice {
         var object: [String: Any] = [
             "Id": "I1", "CustomerRef": ["value": "C1"], "TotalAmt": total, "TxnDate": "2026-09-01"
         ]
         if let balance { object["Balance"] = balance }
+        if let status { object["status"] = status }
         return try JSONDecoder().decode(QuickBooksInvoice.self,
             from: JSONSerialization.data(withJSONObject: object))
     }
@@ -127,6 +128,26 @@ struct QuickBooksBalanceSnapshotTests {
         #expect(!Invoice.isPaid(invoice, payments: []))
         #expect(Invoice.resolvedStatus(for: invoice, payments: []) == "review")
         #expect(BillingInvoiceMutationPolicy.blockedMessage(for: invoice, payments: []) != nil)
+    }
+
+    /// QuickBooks keeps a voided invoice with zeroed amounts and marks it
+    /// status "Voided". It must not be recorded as paid: nothing is owed and
+    /// nothing was collected, and the invoice says so.
+    @Test func voidedInvoiceIsRecordedAsVoidedNotPaid() throws {
+        let (container, context, invoice) = try fixture()
+        defer { withExtendedLifetime(container) {} }
+        let voided = try remoteInvoice(balance: 0, total: 0, status: "Voided")
+        #expect(voided.isVoided)
+        try importRecords(context, invoices: [voided])
+        #expect(invoice.status == "voided")
+        #expect(invoice.quickBooksBalanceDue == 0)
+        #expect(invoice.quickBooksSyncDetail == QuickBooksBalanceReconciliation.voidedDetail)
+        #expect(Invoice.resolvedStatus(for: invoice, payments: []) == "voided")
+        #expect(Invoice.outstandingBalance(for: invoice, payments: []) == 0)
+
+        // An ordinary reply never carries the marker and keeps the paid logic.
+        let ordinary = try remoteInvoice(balance: 0)
+        #expect(!ordinary.isVoided)
     }
 
     @Test func freshZeroBalanceRemainsAuthoritativeWithoutPaymentHistory() throws {
