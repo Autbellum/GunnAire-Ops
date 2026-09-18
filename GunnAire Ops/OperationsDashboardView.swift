@@ -589,7 +589,12 @@ struct OperationsDashboardView: View {
         OnsitePaymentProcessor(rawValue: onsitePaymentProcessor) ?? .none
     }
 
+    // Signposted because this reduces every customer, call, estimate, invoice,
+    // payment and contract in the business, and it is recomputed on each access
+    // rather than once per body pass. A trace needs it named to attribute the
+    // time to the dashboard rather than to SwiftData.
     private var suiteSnapshot: BusinessSuiteSnapshot {
+        AppPerformanceSignposts.measure("Dashboard.suiteSnapshot") {
         BusinessSuiteIntelligence.snapshot(
             customers: dashboardCustomers,
             serviceCalls: dashboardServiceCalls,
@@ -609,9 +614,13 @@ struct OperationsDashboardView: View {
             now: Date(),
             calendar: calendar
         )
+        }
     }
 
+    // Same reduction shape as the suite snapshot, and read by three separate
+    // computed properties below, so one body pass can run it several times.
     private var accountSnapshots: [CustomerIntelligenceSnapshot] {
+        AppPerformanceSignposts.measure("Dashboard.accountSnapshots") {
         CustomerIntelligence.snapshots(
             customers: dashboardCustomers,
             serviceCalls: dashboardServiceCalls,
@@ -622,6 +631,7 @@ struct OperationsDashboardView: View {
             now: Date(),
             calendar: calendar
         )
+        }
     }
 
     private var activeAccountSnapshots: [CustomerIntelligenceSnapshot] {

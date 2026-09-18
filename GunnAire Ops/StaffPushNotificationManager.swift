@@ -458,6 +458,9 @@ final class GunnAireApplicationDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        // Started first so the launch stopwatch sees as much of startup as the
+        // app can observe, and so a crash during startup is still recorded.
+        AppPerformanceDiagnostics.shared.start()
         StaffPushNotificationManager.shared.configureAtLaunch()
         return true
     }

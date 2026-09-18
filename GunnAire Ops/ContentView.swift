@@ -523,6 +523,11 @@ struct ContentView: View {
                 selectedSidebarItem = resolvedSelection
             }
         }
+        .onChange(of: selectedSidebarItem, initial: true) { _, item in
+            // Names the open screen so a recorded freeze says where it happened
+            // rather than only how long it lasted.
+            AppPerformanceDiagnostics.shared.noteContext(item?.rawValue ?? "No screen")
+        }
         .task(id: fieldCollectionPromptPollingKey) {
             guard fieldCollectionPromptPollingKey != nil else { return }
             while !Task.isCancelled {

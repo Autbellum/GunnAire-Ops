@@ -984,6 +984,8 @@ struct SyncIntegrationsView: View {
                     }
                 }
 
+                AppPerformanceDiagnosticsSection()
+
                 if canViewFinancials {
                     Section("Suite Readiness") {
                     HStack(alignment: .center, spacing: 14) {
