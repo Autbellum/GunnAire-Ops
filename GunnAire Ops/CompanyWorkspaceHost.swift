@@ -400,7 +400,7 @@ struct CompanyWorkspaceHost: View {
         .onReceive(staffInvitations.$pending) { invitation in
             if invitation != nil { showingStaffSetup = true }
         }
-        .task { await access.refresh() }
+        .task { await access.refreshIfStale(maxAge: CompanyWorkspaceAccessController.verificationInterval) }
         .task(id: receive.presentation?.context.stamp.session.expiresAt) {
             guard let expires = receive.presentation?.context.stamp.session.expiresAt else { return }
             do { try await Task.sleep(for: .seconds(max(0, expires.timeIntervalSinceNow))) }
@@ -414,7 +414,7 @@ struct CompanyWorkspaceHost: View {
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             access.enforceAccessDeadline()
             receive.enforceAccessDeadline()
-            Task { await access.refreshIfStale(maxAge: CompanyWorkspaceAccessController.foregroundReverificationInterval) }
+            Task { await access.refreshIfStale(maxAge: CompanyWorkspaceAccessController.verificationInterval) }
         }
     }
 }

@@ -329,6 +329,34 @@ struct CompanyWorkspaceAccessTests {
                 == "saved store registration does not match: store differs (registered 4d8dcc46, on device existing)")
     }
 
+    /// A launch inside the verification interval opens the workspace from the
+    /// saved lease with no server round-trip; once the lease is older than the
+    /// interval the next launch or activation re-verifies, and a lease for
+    /// another session is never used.
+    @Test func launchInsideTheVerificationIntervalOpensFromTheSavedLease() async throws {
+        let h = try Harness(); h.register(); h.cache()
+        h.now = h.now.addingTimeInterval(6 * 60 * 60)
+        let controller = h.controller()
+        await controller.refreshIfStale(maxAge: CompanyWorkspaceAccessController.verificationInterval)
+        #expect(controller.phase == .ready)
+        #expect(h.fetchCount == 0)
+        #expect(h.openCount == 1)
+        #expect(controller.verifiedRole == .fieldTechnician)
+
+        h.now = h.now.addingTimeInterval(CompanyWorkspaceAccessController.verificationInterval)
+        await controller.refreshIfStale(maxAge: CompanyWorkspaceAccessController.verificationInterval)
+        #expect(controller.phase == .ready)
+        #expect(h.fetchCount == 1)
+
+        let other = try Harness(); other.register(); other.cache()
+        let s = other.session!
+        other.session = CompanyWorkspaceSession(backendOrigin: s.backendOrigin, email: "someone-else@example.test",
+                                                tokenFingerprint: "another-digest", expiresAt: s.expiresAt)
+        let second = other.controller()
+        await second.refreshIfStale(maxAge: CompanyWorkspaceAccessController.verificationInterval)
+        #expect(other.fetchCount == 1)
+    }
+
     @Test func noBusinessSessionNeverOpensAnExistingStore() async throws {
         let h = try Harness(); h.register(); h.session = nil
         let controller = h.controller()

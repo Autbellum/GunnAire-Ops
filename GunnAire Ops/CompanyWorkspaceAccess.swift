@@ -356,21 +356,39 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         if refreshTask?.id == id { refreshTask = nil }
     }
 
-    /// How long a server-verified lease is trusted across foreground
-    /// activations before the workspace is re-verified with the server. The
-    /// privacy cover, Control Center and notifications all produce an
-    /// activation; sign-out, revocation and expiry are enforced locally by
-    /// `enforceAccessDeadline` and by the backend on every proof-bearing request.
-    static let foregroundReverificationInterval: TimeInterval = 15 * 60
+    /// How long a server-verified lease is trusted before the workspace is
+    /// re-verified with the server: the lease itself is bounded to 24 hours,
+    /// so re-verification at 23 hours renews it before it lapses. Launches and
+    /// foreground activations inside the interval use the lease; sign-out,
+    /// revocation and expiry are still enforced locally by
+    /// `enforceAccessDeadline` on every activation and by the backend on every
+    /// proof-bearing request.
+    static let verificationInterval: TimeInterval = 23 * 60 * 60
 
-    /// Foreground re-verification: after the local deadline check, a workspace
-    /// whose lease was verified within `maxAge` stays as it is; anything older
-    /// (or not authorized) runs a full `refresh()`.
+    /// Launch and foreground path: after the local deadline check, a workspace
+    /// whose lease was verified within `maxAge` stays open (or is opened from
+    /// the saved lease without a network round-trip); anything older, or a
+    /// lease that does not fit this session and store, runs a full `refresh()`.
     func refreshIfStale(maxAge: TimeInterval) async {
         enforceAccessDeadline()
-        if authorizedContainer != nil, let lease = activeLease,
-           dependencies.now().timeIntervalSince(lease.verifiedAt) < maxAge {
+        let now = dependencies.now()
+        if authorizedContainer != nil, let lease = activeLease, now.timeIntervalSince(lease.verifiedAt) < maxAge {
             return
+        }
+        if activeLease == nil, !mustRestart, let session = dependencies.session(),
+           let lease = try? dependencies.readLease(),
+           now.timeIntervalSince(lease.verifiedAt) < maxAge,
+           lease.isValid(for: session, accountHash: lease.binding.cloudAccountHash,
+                         environment: lease.binding.environment, now: now),
+           let registration = try? dependencies.readRegistration(),
+           registration.matches(session: session, binding: lease.binding, storeUUID: (try? dependencies.storeIdentity()) ?? nil) {
+            do {
+                lastMismatchDetail = ""
+                try unlock(lease, allowLegacyAdoption: false, isOffline: true)
+                return
+            } catch {
+                // A stale or unusable saved lease falls through to a full verification.
+            }
         }
         await refresh()
     }
