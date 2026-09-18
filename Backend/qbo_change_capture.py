@@ -174,7 +174,10 @@ def record_evidence(value, *, tombstone_allowed):
     metadata = value.get("MetaData")
     updated = timestamp(metadata.get("LastUpdatedTime") if isinstance(metadata, dict) else None)
     deleted = value.get("status") == "Deleted"
-    if "status" in value and value["status"] != "Deleted":
+    # QuickBooks marks a voided transaction with a top-level status of
+    # "Voided" and keeps the record (amounts zeroed) in every read; it is a
+    # present version whose record carries the marker through to the app.
+    if "status" in value and value["status"] not in ("Deleted", "Voided"):
         # Name the value so the owner's sync caption says which lifecycle
         # state QuickBooks sent; it is a status word, never record content.
         observed = re.sub(r"[^A-Za-z0-9_.-]", "", str(value["status"]))[:40] or "empty"

@@ -126,6 +126,16 @@ class ChangeCaptureProviderTests(unittest.TestCase):
                       "startPosition=1, totalCount='2'.", str(mismatch.exception))
         self.assertNotIn("Private fixture service", str(mismatch.exception))
 
+    def test_voided_records_are_present_versions_that_keep_their_marker(self):
+        voided = record("7", TotalAmt=0, status="Voided")
+        identifier, updated, status, raw = capture.record_evidence(voided, tombstone_allowed=False)
+        self.assertEqual((identifier, status), ("7", "present"))
+        self.assertIn('"status":"Voided"', raw.replace(" ", ""))
+        with self.assertRaises(Exception) as context:
+            capture.record_evidence(record("8", status="Pending"), tombstone_allowed=True)
+        self.assertEqual(getattr(context.exception, "code", None), "unsupported_status")
+        self.assertIn("(status=Pending)", str(getattr(context.exception, "message", context.exception)))
+
     def test_explicit_empty_and_deleted_records_are_distinct(self):
         self.payload = cdc([])
         self.assertEqual(self.provider.changes("Item", capture.stamp(NOW))[0], [])
@@ -136,7 +146,7 @@ class ChangeCaptureProviderTests(unittest.TestCase):
         self.assertEqual(self.provider.changes("Item", capture.stamp(NOW))[0], [])
 
     def test_sparse_invalid_status_nonfinite_and_missing_version_are_rejected(self):
-        for value in (record(sparse=True), record(status="Voided"), record(UnitPrice=float("nan")),
+        for value in (record(sparse=True), record(status="Pending"), record(UnitPrice=float("nan")),
                       {"Id": "42", "MetaData": {"LastUpdatedTime": capture.stamp(NOW)}}):
             with self.subTest(value=value), self.assertRaises(capture.AttemptError):
                 capture.record_evidence(value, tombstone_allowed=True)
