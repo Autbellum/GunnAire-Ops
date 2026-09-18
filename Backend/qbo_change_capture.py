@@ -175,7 +175,11 @@ def record_evidence(value, *, tombstone_allowed):
     updated = timestamp(metadata.get("LastUpdatedTime") if isinstance(metadata, dict) else None)
     deleted = value.get("status") == "Deleted"
     if "status" in value and value["status"] != "Deleted":
-        raise failure("unsupported_status", "Review the accounting record's unrecognized lifecycle state.")
+        # Name the value so the owner's sync caption says which lifecycle
+        # state QuickBooks sent; it is a status word, never record content.
+        observed = re.sub(r"[^A-Za-z0-9_.-]", "", str(value["status"]))[:40] or "empty"
+        raise failure("unsupported_status",
+                      f"Review the accounting record's unrecognized lifecycle state (status={observed}).")
     if deleted and not tombstone_allowed:
         raise failure("incomplete_census", "The initial accounting collection changed while it was being read.")
     if not deleted:
