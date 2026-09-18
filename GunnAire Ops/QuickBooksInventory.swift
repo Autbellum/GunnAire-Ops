@@ -107,7 +107,21 @@ struct QuickBooksItemGroupDetail: Codable, Equatable {
         let Qty: Double
         let ItemRef: Reference
     }
+    /// QuickBooks omits the array entirely for a bundle that has no
+    /// components (a group item saved before any lines were added). Such a
+    /// record must still decode: the shared-history import stopped on every
+    /// resource because one empty bundle in the Item collection did not.
+    /// Consumers already treat an empty recipe as needing a refresh.
     let ItemGroupLine: [Line]
+
+    init(ItemGroupLine: [Line]) {
+        self.ItemGroupLine = ItemGroupLine
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        ItemGroupLine = try container.decodeIfPresent([Line].self, forKey: .ItemGroupLine) ?? []
+    }
 }
 
 /// Provider evidence, not an editable stock count and not an invoice price.

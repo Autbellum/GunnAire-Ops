@@ -338,6 +338,20 @@ struct QuickBooksInventoryTests {
         #expect(local.catalogDetails?.group?.ItemGroupLine.first?.ItemRef.type == "Inventory")
         #expect(local.catalogDetails?.printGroupedItems == true)
     }
+
+    /// QuickBooks omits ItemGroupLine for a bundle with no components. That
+    /// record must decode (as an empty recipe) instead of stopping the whole
+    /// shared-history import, and an empty recipe still round-trips.
+    @Test func providerBundleWithoutComponentLinesDecodesAsAnEmptyRecipe() throws {
+        let json = #"{"Id":"B2","Name":"Empty kit","Type":"Group","ItemGroupDetail":{},"PrintGroupedItems":false}"#
+        let remote = try JSONDecoder().decode(QuickBooksItem.self, from: Data(json.utf8))
+        #expect(remote.ItemGroupDetail?.ItemGroupLine.isEmpty == true)
+        let local = Item(name: "old", unitPrice: 99)
+        QuickBooksCatalogSnapshotApplication.apply(remote, to: local)
+        #expect(local.itemType == .group && local.catalogDetails?.group?.ItemGroupLine.isEmpty == true)
+        let encoded = try JSONEncoder().encode(remote.ItemGroupDetail)
+        #expect(try JSONDecoder().decode(QuickBooksItemGroupDetail.self, from: encoded).ItemGroupLine.isEmpty)
+    }
 }
 
 /// Exact Item attributes at 89c6ee7 / CloudKit v24. Keep the original entity
