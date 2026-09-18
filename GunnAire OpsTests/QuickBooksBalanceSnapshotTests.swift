@@ -150,6 +150,31 @@ struct QuickBooksBalanceSnapshotTests {
         #expect(!ordinary.isVoided)
     }
 
+    /// QuickBooks reads CreditCardPayment back with a JSON boolean
+    /// ProcessPayment (the write contract takes a string) and may report the
+    /// transaction id as a number. Every payment and sales receipt carrying a
+    /// card charge must still decode.
+    @Test func cardChargeFieldsDecodeFromBooleansAndNumbers() throws {
+        let object: [String: Any] = [
+            "Id": "P9", "CustomerRef": ["value": "C1"], "TotalAmt": 250, "TxnDate": "2026-09-18",
+            "CreditCardPayment": [
+                "CreditChargeInfo": ["ProcessPayment": true],
+                "CreditChargeResponse": ["CCTransId": 987654321]
+            ]
+        ]
+        let payment = try JSONDecoder().decode(QuickBooksPayment.self,
+            from: JSONSerialization.data(withJSONObject: object))
+        #expect(payment.CreditCardPayment?.CreditChargeInfo?.ProcessPayment == "true")
+        // A whole number identifier must not gain a ".0" suffix.
+        #expect(payment.CreditCardPayment?.CreditChargeResponse?.CCTransId == "987654321")
+
+        var receiptObject = object
+        receiptObject["CreditCardPayment"] = ["CreditChargeInfo": ["ProcessPayment": "false"]]
+        let receipt = try JSONDecoder().decode(QuickBooksSalesReceipt.self,
+            from: JSONSerialization.data(withJSONObject: receiptObject))
+        #expect(receipt.CreditCardPayment?.CreditChargeInfo?.ProcessPayment == "false")
+    }
+
     @Test func freshZeroBalanceRemainsAuthoritativeWithoutPaymentHistory() throws {
         let (container, context, invoice) = try fixture()
         defer { withExtendedLifetime(container) {} }

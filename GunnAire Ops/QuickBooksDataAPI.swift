@@ -4647,10 +4647,12 @@ private enum QuickBooksFlexibleDecoding {
         if let value = try? container.decodeIfPresent(String.self, forKey: key) {
             return value
         }
-        if let value = try? container.decodeIfPresent(Double.self, forKey: key) {
+        // Whole numbers first: a transaction or reference identifier read as a
+        // Double would gain a ".0" suffix and stop matching the record it names.
+        if let value = try? container.decodeIfPresent(Int.self, forKey: key) {
             return String(value)
         }
-        if let value = try? container.decodeIfPresent(Int.self, forKey: key) {
+        if let value = try? container.decodeIfPresent(Double.self, forKey: key) {
             return String(value)
         }
         if let value = try? container.decodeIfPresent(Bool.self, forKey: key) {
@@ -5267,6 +5269,16 @@ struct QuickBooksCreditChargeInfo: Codable {
     init(ProcessPayment: String?) {
         self.ProcessPayment = ProcessPayment
     }
+
+    private enum CodingKeys: String, CodingKey { case ProcessPayment }
+
+    // QuickBooks reads this back as a JSON boolean while the write contract
+    // takes a string, so the synthesized decoder rejected every payment and
+    // sales receipt that carried a card charge.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        ProcessPayment = QuickBooksFlexibleDecoding.string(container, .ProcessPayment)
+    }
 }
 
 struct QuickBooksCreditChargeResponse: Codable {
@@ -5274,6 +5286,15 @@ struct QuickBooksCreditChargeResponse: Codable {
 
     init(CCTransId: String?) {
         self.CCTransId = CCTransId
+    }
+
+    private enum CodingKeys: String, CodingKey { case CCTransId }
+
+    /// Transaction identifiers arrive as strings or numbers depending on the
+    /// processor path; either is the same identifier.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        CCTransId = QuickBooksFlexibleDecoding.string(container, .CCTransId)
     }
 }
 
