@@ -76,6 +76,20 @@ maintenance run in `.task`, with the full-table fetches, user-duplicate collapse
 and upload retries on `ContentStartupMaintenance` (`@ModelActor`). The recorder
 reads and writes its file off main. Debug build: 0 warnings (was 22).
 
+## Rule I: a periodic loop's synchronous work is a stall on every screen
+
+Build 15 on the owner's iPad (2026-09-19): no crashes, Command Center quiet after
+the first 20 s, and then one 0.8 to 1.1 s stall every 62 s on whichever screen was
+open. That signature (fixed period, screen-independent) is a timer or sleep loop,
+never a view body. It was `StaffReplicaSourceCoordinator` (`passInterval` 60 s)
+calling `StaffReplicaSourceHistory.capture` synchronously on the main actor: the
+full persistent-history fetch, all six core tables and the snapshot build. Fixed in
+41d4e99 with `captureOffMain` (fetches on a detached task, both unsaved fences on
+main, owner-history fence re-checked after the suspension). Any loop that reads
+the store must do it on its own context off main, and the recorder now names the
+pass step that overlapped a stall (`AppPerformanceDiagnostics.operation`), so read
+"Running at the time:" in the stall detail before guessing.
+
 ## What the device recorded (2026-09-19, TestFlight 2026091612, real data)
 
 73 stalls, all Command Center, 17–26 s each, back to back; two crashes were
