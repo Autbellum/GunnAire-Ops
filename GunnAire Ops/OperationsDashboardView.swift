@@ -634,8 +634,10 @@ struct OperationsDashboardView: View {
         }
     }
 
-    private var activeAccountSnapshots: [CustomerIntelligenceSnapshot] {
-        accountSnapshots.filter {
+    // Derived from one already-computed set of snapshots rather than from
+    // `accountSnapshots`, which would run the reduction again per call.
+    private func activeAccountSnapshots(in snapshots: [CustomerIntelligenceSnapshot]) -> [CustomerIntelligenceSnapshot] {
+        snapshots.filter {
             $0.hasRisk ||
             $0.hasOpenWork ||
             $0.activeContractCount > 0 ||
@@ -643,16 +645,16 @@ struct OperationsDashboardView: View {
         }
     }
 
-    private var atRiskAccountCount: Int {
-        accountSnapshots.filter { $0.healthScore < 70 || $0.overdueInvoiceCount > 0 }.count
+    private func atRiskAccountCount(in snapshots: [CustomerIntelligenceSnapshot]) -> Int {
+        snapshots.filter { $0.healthScore < 70 || $0.overdueInvoiceCount > 0 }.count
     }
 
-    private var accountOpenBalanceTotal: Double {
-        accountSnapshots.reduce(0) { $0 + $1.openBalance }
+    private func accountOpenBalanceTotal(in snapshots: [CustomerIntelligenceSnapshot]) -> Double {
+        snapshots.reduce(0) { $0 + $1.openBalance }
     }
 
-    private var accountPipelineTotal: Double {
-        accountSnapshots.reduce(0) { $0 + $1.openEstimateTotal }
+    private func accountPipelineTotal(in snapshots: [CustomerIntelligenceSnapshot]) -> Double {
+        snapshots.reduce(0) { $0 + $1.openEstimateTotal }
     }
 
     var body: some View {
@@ -669,12 +671,19 @@ struct OperationsDashboardView: View {
                         }
                         if operationsAccess.canShowBusinessOverview {
                             DisclosureGroup(isExpanded: $isBusinessOverviewExpanded) {
-                                VStack(alignment: .leading, spacing: 18) {
-                                    suiteSynchronizationSection
-                                    accountIntelligenceSection
-                                    workflowSection
+                                // Built only while open. SwiftUI evaluates this
+                                // content on every pass even when collapsed, and
+                                // these sections reduce the whole business each
+                                // time; on the owner's iPad they were two thirds of
+                                // main-thread time while nothing of them was shown.
+                                if isBusinessOverviewExpanded {
+                                    VStack(alignment: .leading, spacing: 18) {
+                                        suiteSynchronizationSection
+                                        accountIntelligenceSection
+                                        workflowSection
+                                    }
+                                    .padding(.top, 12)
                                 }
-                                .padding(.top, 12)
                             } label: {
                                 Label("Business overview", systemImage: "chart.bar.xaxis")
                                     .font(.headline)
@@ -683,11 +692,13 @@ struct OperationsDashboardView: View {
                             .background(Color(.secondarySystemBackground).opacity(0.64), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                         }
                         DisclosureGroup(isExpanded: $isOperationalStatusExpanded) {
-                            VStack(alignment: .leading, spacing: 18) {
-                                fieldTeamSection
-                                systemsSection
+                            if isOperationalStatusExpanded {
+                                VStack(alignment: .leading, spacing: 18) {
+                                    fieldTeamSection
+                                    systemsSection
+                                }
+                                .padding(.top, 12)
                             }
-                            .padding(.top, 12)
                         } label: {
                             Label("Field and system status", systemImage: "checklist.checked")
                                 .font(.headline)
@@ -902,16 +913,20 @@ struct OperationsDashboardView: View {
     }
 
     private var suiteSynchronizationSection: some View {
-        dashboardSection(title: "Suite Synchronization", systemImage: "point.3.connected.trianglepath.dotted") {
-            suiteScoreHeader
+        // `suiteSnapshot` recomputes the whole reduction on every read; this
+        // section and its header read it more than a dozen times. Take it once.
+        let snapshot = suiteSnapshot
+        let nextActions = Array(snapshot.actions.prefix(5))
+        return dashboardSection(title: "Suite Synchronization", systemImage: "point.3.connected.trianglepath.dotted") {
+            suiteScoreHeader(snapshot)
 
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 168), spacing: 12)], spacing: 12) {
-                ForEach(suiteSnapshot.workstreams) { workstream in
+                ForEach(snapshot.workstreams) { workstream in
                     suiteWorkstreamCard(workstream)
                 }
             }
 
-            if suiteSnapshot.actions.isEmpty {
+            if nextActions.isEmpty {
                 emptyState("Connected workstreams show no sync exceptions.")
             } else {
                 VStack(alignment: .leading, spacing: 8) {
@@ -919,9 +934,9 @@ struct OperationsDashboardView: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
 
-                    ForEach(suiteSnapshot.actions.prefix(5)) { action in
+                    ForEach(nextActions) { action in
                         suiteActionRow(action)
-                        if action.id != suiteSnapshot.actions.prefix(5).last?.id {
+                        if action.id != nextActions.last?.id {
                             Divider()
                         }
                     }
@@ -1036,39 +1051,46 @@ struct OperationsDashboardView: View {
     }
 
     private var accountIntelligenceSection: some View {
-        dashboardSection(title: "Account Intelligence", systemImage: "person.crop.rectangle.stack") {
+        // One reduction per pass; every figure below is derived from it.
+        let snapshots = accountSnapshots
+        let customers = dashboardCustomers
+        let watched = atRiskAccountCount(in: snapshots)
+        let openBalance = accountOpenBalanceTotal(in: snapshots)
+        let needsBillingReview = snapshots.contains(where: { $0.billingReviewMessage != nil })
+        let activeAccounts = Array(activeAccountSnapshots(in: snapshots).prefix(5))
+        return dashboardSection(title: "Account Intelligence", systemImage: "person.crop.rectangle.stack") {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 156), spacing: 12)], spacing: 12) {
                 dispatchMetric(
                     title: "Watched Accounts",
-                    value: "\(atRiskAccountCount)",
-                    detail: "\(dashboardCustomers.count) total",
+                    value: "\(watched)",
+                    detail: "\(customers.count) total",
                     systemImage: "person.crop.circle.badge.exclamationmark",
-                    tint: atRiskAccountCount == 0 ? .green : .orange
+                    tint: watched == 0 ? .green : .orange
                 )
                 dispatchMetric(
                     title: "Open Balance",
-                    value: accountSnapshots.contains(where: { $0.billingReviewMessage != nil }) ? "Review" : currency(accountOpenBalanceTotal),
-                    detail: accountSnapshots.contains(where: { $0.billingReviewMessage != nil }) ? "Milestone billing needs review" : "\(openInvoices.count) invoices",
+                    value: needsBillingReview ? "Review" : currency(openBalance),
+                    detail: needsBillingReview ? "Milestone billing needs review" : "\(openInvoices.count) invoices",
                     systemImage: "creditcard.trianglebadge.exclamationmark",
-                    tint: accountOpenBalanceTotal > 0 ? .red : .green
+                    tint: openBalance > 0 ? .red : .green
                 )
                 dispatchMetric(
                     title: "Estimate Pipeline",
-                    value: currency(accountPipelineTotal),
+                    value: currency(accountPipelineTotal(in: snapshots)),
                     detail: "\(openEstimateCount) open",
                     systemImage: "chart.bar.doc.horizontal",
                     tint: Color.brandGold
                 )
             }
 
-            if dashboardCustomers.isEmpty {
+            if customers.isEmpty {
                 emptyState("No customer accounts are on file yet.")
-            } else if activeAccountSnapshots.isEmpty {
+            } else if activeAccounts.isEmpty {
                 emptyState("Customer accounts are current across payments, agreements, and scheduled work.")
             } else {
-                ForEach(Array(activeAccountSnapshots.prefix(5))) { snapshot in
+                ForEach(activeAccounts) { snapshot in
                     accountIntelligenceRow(for: snapshot)
-                    if snapshot.id != activeAccountSnapshots.prefix(5).last?.id {
+                    if snapshot.id != activeAccounts.last?.id {
                         Divider()
                     }
                 }
@@ -1315,7 +1337,7 @@ struct OperationsDashboardView: View {
         .background(Color(.secondarySystemBackground).opacity(0.64), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
-    private var suiteScoreHeader: some View {
+    private func suiteScoreHeader(_ suiteSnapshot: BusinessSuiteSnapshot) -> some View {
         HStack(alignment: .center, spacing: 14) {
             ZStack {
                 Circle()
