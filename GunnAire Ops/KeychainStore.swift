@@ -2,24 +2,24 @@ import Foundation
 import Security
 
 enum KeychainStore {
-    enum KeychainError: Error {
+    nonisolated enum KeychainError: Error {
         case unexpectedStatus(OSStatus)
         case encodingFailed
         case decodingFailed
     }
 
-    private static var service: String {
+    nonisolated private static var service: String {
         Bundle.main.bundleIdentifier ?? "www.gunnaire.com.GunnAire-Ops"
     }
 
-    static func saveCodable<T: Codable>(_ value: T, account: String) throws {
+    nonisolated static func saveCodable<T: Codable>(_ value: T, account: String) throws {
         guard let data = try? JSONEncoder().encode(value) else {
             throw KeychainError.encodingFailed
         }
         try save(data: data, account: account)
     }
 
-    static func loadCodable<T: Codable>(_ type: T.Type, account: String) throws -> T? {
+    nonisolated static func loadCodable<T: Codable>(_ type: T.Type, account: String) throws -> T? {
         guard let data = try loadData(account: account) else { return nil }
         guard let decoded = try? JSONDecoder().decode(type, from: data) else {
             throw KeychainError.decodingFailed
@@ -27,7 +27,7 @@ enum KeychainStore {
         return decoded
     }
 
-    static func remove(account: String) throws {
+    nonisolated static func remove(account: String) throws {
         let query: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: service,
@@ -39,7 +39,13 @@ enum KeychainStore {
         }
     }
 
-    private static func save(data: Data, account: String) throws {
+    /// Raw bytes in and out; nonisolated because the encrypted journal stores
+    /// call these from background tasks. Keychain calls are thread-safe.
+    nonisolated static func saveData(_ data: Data, account: String) throws {
+        try save(data: data, account: account)
+    }
+
+    nonisolated private static func save(data: Data, account: String) throws {
         let query: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: service,
@@ -68,7 +74,7 @@ enum KeychainStore {
         }
     }
 
-    private static func loadData(account: String) throws -> Data? {
+    nonisolated static func loadData(account: String) throws -> Data? {
         let query: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: service,

@@ -2,7 +2,7 @@ import Foundation
 
 /// Shared native boundary for saved proposals, provider confirmations and mapped
 /// invoice reads. A Group header is never charged or substituted with a Service.
-enum QuickBooksSalesLineContract {
+nonisolated enum QuickBooksSalesLineContract {
     struct Totals {
         let gross: Decimal
         let discount: Decimal

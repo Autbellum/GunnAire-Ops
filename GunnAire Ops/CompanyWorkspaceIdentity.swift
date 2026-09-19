@@ -22,7 +22,7 @@ struct CompanyWorkspaceIdentity: Codable, Equatable, Sendable {
     }
 }
 
-struct CompanyCloudKitBinding: Codable, Equatable, Sendable {
+nonisolated struct CompanyCloudKitBinding: Codable, Equatable, Sendable {
     let companyID: UUID
     let containerID: String
     let environment: String
@@ -64,7 +64,7 @@ struct CompanyCloudKitBinding: Codable, Equatable, Sendable {
 /// The lock is what makes shared formatters safe: a binding is `Sendable` and is
 /// validated from the decoding and networking paths as well as the main actor.
 /// Taking an uncontended lock costs a fraction of what it replaces.
-enum CompanyApprovalDateParser {
+nonisolated enum CompanyApprovalDateParser {
     private static let lock = NSLock()
 
     private static let withFractionalSeconds: ISO8601DateFormatter = {

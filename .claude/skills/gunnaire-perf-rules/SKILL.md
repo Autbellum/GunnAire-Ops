@@ -90,6 +90,19 @@ the store must do it on its own context off main, and the recorder now names the
 pass step that overlapped a stall (`AppPerformanceDiagnostics.operation`), so read
 "Running at the time:" in the stall detail before guessing.
 
+Build 16 measured (2026-09-19, 13:46 onward): launch 0.16 s, and the per-minute
+stall was still there at 0.9 to 1.1 s, now tagged "Running at the time:
+replica.fullWorkspace", i.e. the core capture was off main and the remaining cost
+was `StaffWorkspacePublicationCoordinator.synchronize` staging the 32-kind owner
+workspace on the main actor. Build 2026091617 (PR #26) moves that too:
+`StaffWorkspaceSourceStaging.prepareOffMain` does the journal read, the capture,
+the assembly and the encrypted write on a detached utility task; the session
+checks and both unsaved-changes fences stay on main; `prepare` and
+`matchesCurrent` are async. Verified by build and suites only; the recorder pull
+after Eric installs 17 decides whether the stall is gone or moves to
+`replica.readSource` / `replica.deliver` / `replica.fence`. Do not describe it as
+fixed before that pull.
+
 ## What the device recorded (2026-09-19, TestFlight 2026091612, real data)
 
 73 stalls, all Command Center, 17–26 s each, back to back; two crashes were

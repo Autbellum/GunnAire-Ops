@@ -4,7 +4,7 @@ import CryptoKit
 
 /// This is an encrypted owner-only preparation journal, not a staff payload,
 /// membership grant, server operation or full-workspace delivery receipt.
-struct StaffWorkspaceSourceJournal: Codable, Equatable {
+nonisolated struct StaffWorkspaceSourceJournal: Codable, Equatable {
     let version: Int
     let scope: StaffReplicaSourceScope
     let records: [StaffWorkspaceModelRecord]
@@ -44,7 +44,7 @@ struct StaffWorkspaceSourceJournal: Codable, Equatable {
 }
 
 @MainActor enum StaffWorkspaceSourceStaging {
-    static func key(_ scope: StaffReplicaSourceScope) -> String { "full-owner-staging-v1\n" + scope.key }
+    nonisolated static func key(_ scope: StaffReplicaSourceScope) -> String { "full-owner-staging-v1\n" + scope.key }
 
     static var device: SharedTimeLocalStore {
         guard let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
@@ -52,38 +52,74 @@ struct StaffWorkspaceSourceJournal: Codable, Equatable {
         }
         return .encrypted(directory: root.appendingPathComponent("StaffWorkspaceOwner-v1", isDirectory: true), maximumBytes: 64 * 1024 * 1024) { create in
             let account = "StaffWorkspaceOwnerEncryption-v1"
-            if let bytes = try KeychainStore.loadCodable(Data.self, account: account) {
+            if let bytes = try KeychainStore.loadData(account: account) {
                 guard bytes.count == 32 else { throw StaffReplicaSourceSyncError.storage }; return bytes
             }
             guard create else { throw StaffReplicaSourceSyncError.storage }
             let bytes = SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }
-            try KeychainStore.saveCodable(bytes, account: account); return bytes
+            try KeychainStore.saveData(bytes, account: account); return bytes
         }
     }
 
+    /// Synchronous staging on the main actor, kept for the tests and any
+    /// caller already holding the main thread.
     @discardableResult static func prepare(container: ModelContainer, scope: StaffReplicaSourceScope,
                                           store: SharedTimeLocalStore, check: () throws -> Void) throws -> StaffWorkspaceSourceJournal {
         try check()
-        let storageKey = key(scope)
-        let previous: StaffWorkspaceSourceJournal?
-        do { previous = try store.read(storageKey).map { try StaffWorkspaceSourceJournal.decode($0, scope: scope) } }
-        catch { throw StaffReplicaSourceSyncError.storage }
+        let previous = try readPrevious(store, scope: scope)
         let capture = try StaffWorkspaceHistory.capture(container: container, after: previous?.cursor, storeUUID: scope.storeUUID)
+        let journal = try assemble(capture, previous: previous, scope: scope)
+        try check()
+        try persist(journal, previous: previous, store: store, scope: scope)
+        return journal
+    }
+
+    /// The same staging with the journal read, the 32-kind capture, the
+    /// validation and the encrypted write on a background task. The session
+    /// checks and the unsaved-changes fences stay on the main actor. The
+    /// owner-workspace publication runs this every minute, twice per pass.
+    static func prepareOffMain(container: ModelContainer, scope: StaffReplicaSourceScope,
+                               store: SharedTimeLocalStore, check: () throws -> Void) async throws -> StaffWorkspaceSourceJournal {
+        try check()
+        guard !container.mainContext.hasChanges else { throw StaffReplicaSourceError.unsaved }
+        let (previous, journal) = try await Task.detached(priority: .utility) { () throws -> (StaffWorkspaceSourceJournal?, StaffWorkspaceSourceJournal) in
+            let previous = try readPrevious(store, scope: scope)
+            let capture = try StaffWorkspaceHistory.captureBodyForStaging(container: container, after: previous?.cursor, storeUUID: scope.storeUUID)
+            return (previous, try assemble(capture, previous: previous, scope: scope))
+        }.value
+        guard !container.mainContext.hasChanges else { throw StaffReplicaSourceError.unsaved }
+        try check()
+        guard journal != previous else { return journal }
+        try await Task.detached(priority: .utility) {
+            try persist(journal, previous: previous, store: store, scope: scope)
+        }.value
+        return journal
+    }
+
+    nonisolated private static func readPrevious(_ store: SharedTimeLocalStore, scope: StaffReplicaSourceScope) throws -> StaffWorkspaceSourceJournal? {
+        do { return try store.read(key(scope)).map { try StaffWorkspaceSourceJournal.decode($0, scope: scope) } }
+        catch { throw StaffReplicaSourceSyncError.storage }
+    }
+
+    nonisolated private static func assemble(_ capture: StaffWorkspaceHistoryCapture, previous: StaffWorkspaceSourceJournal?,
+                                             scope: StaffReplicaSourceScope) throws -> StaffWorkspaceSourceJournal {
         var deletions = Set(previous?.deletionKeys ?? []).union(capture.deletions)
         deletions.subtract(capture.records.map(StaffWorkspaceHistory.key))
         let journal = StaffWorkspaceSourceJournal(version: 1, scope: scope, records: capture.records,
                                                   cursor: capture.cursor, deletionKeys: deletions.sorted())
         try journal.validate(scope)
-        try check()
-        // Snapshot, original tombstones and cursor move together, or not at
-        // all. Until a full-domain protocol acknowledges them, retain deletions
-        // across every relaunch; the six-kind ledger cannot acknowledge these.
-        if journal != previous {
-            do {
-                let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-                try store.write(storageKey, encoder.encode(journal))
-            } catch { throw StaffReplicaSourceSyncError.storage }
-        }
         return journal
+    }
+
+    /// Snapshot, original tombstones and cursor move together, or not at
+    /// all. Until a full-domain protocol acknowledges them, retain deletions
+    /// across every relaunch; the six-kind ledger cannot acknowledge these.
+    nonisolated private static func persist(_ journal: StaffWorkspaceSourceJournal, previous: StaffWorkspaceSourceJournal?,
+                                            store: SharedTimeLocalStore, scope: StaffReplicaSourceScope) throws {
+        guard journal != previous else { return }
+        do {
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+            try store.write(key(scope), encoder.encode(journal))
+        } catch { throw StaffReplicaSourceSyncError.storage }
     }
 }

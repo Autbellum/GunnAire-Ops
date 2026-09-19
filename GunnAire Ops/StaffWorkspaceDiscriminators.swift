@@ -11,7 +11,7 @@ nonisolated enum StaffWorkspaceDiscriminatorError: Error, Equatable {
 /// The owner persistence codecs remain lossless so rejected records can be
 /// retained and reviewed. This is not nested-envelope/financial validation,
 /// role projection, tenant authority, or permission to activate a staff store.
-@MainActor enum StaffWorkspaceDiscriminators {
+nonisolated enum StaffWorkspaceDiscriminators {
     enum Rule {
         case text((String) -> Bool)
         case integer((Int) -> Bool)

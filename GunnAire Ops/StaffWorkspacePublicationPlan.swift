@@ -2,7 +2,7 @@ import Foundation
 
 /// Small, exact-content baselines avoid keeping a second copy of every HR,
 /// financial and document field in the publication journal.
-struct StaffWorkspacePublicationFingerprint: Codable, Equatable {
+nonisolated struct StaffWorkspacePublicationFingerprint: Codable, Equatable {
     let key: String
     let revision: Int
     let deleted: Bool

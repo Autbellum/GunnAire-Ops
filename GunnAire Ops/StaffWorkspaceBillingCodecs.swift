@@ -4,7 +4,7 @@ import SwiftData
 /// Preserves original sold lines, taxes, approvals, balances and receipt identity.
 /// Reconstruction does not send, publish, charge, reconcile, or declare payment
 /// success. These owner-side records are not yet role-filtered staff payloads.
-extension StaffWorkspaceModelCodecs {
+nonisolated extension StaffWorkspaceModelCodecs {
     static var invoice: StaffWorkspaceModelCodec<Invoice> {
         .init(kind: "invoice", id: \.id, fields: [
             .value("quickBooksSyncStatus", \.quickBooksSyncStatus),

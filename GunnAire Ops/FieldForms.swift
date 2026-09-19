@@ -112,7 +112,7 @@ enum FieldFormCompletionPolicy {
     }
 }
 
-enum FieldFormTemplatePolicy {
+nonisolated enum FieldFormTemplatePolicy {
     static func validationIssue(title: String, questions: [FieldFormQuestion]) -> String? {
         guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return "Enter a form title."

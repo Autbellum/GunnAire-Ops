@@ -219,7 +219,7 @@ struct SharedTimeWorkerSave: Codable {
 /// Device-only, authenticated journals. A missing/corrupt existing key never
 /// becomes a new empty queue. Names are hashed, data is excluded from backup,
 /// and no bearer token or plaintext worker record is stored in preferences.
-struct SharedTimeLocalStore {
+nonisolated struct SharedTimeLocalStore {
     let read: (String) throws -> Data?
     let write: (String, Data) throws -> Void
     static func encrypted(directory: URL, maximumBytes: Int = 1024 * 1024, key: @escaping (Bool) throws -> Data) -> Self {

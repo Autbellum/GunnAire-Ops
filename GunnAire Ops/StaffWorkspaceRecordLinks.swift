@@ -24,7 +24,7 @@ nonisolated enum StaffWorkspaceLinkError: Error, Equatable {
 /// Every persisted UUID is either a real model reference, a grouping identity,
 /// or explicitly retained operation evidence. This is a persistence/lineage
 /// contract, not a business-membership grant or safe staff role projection.
-@MainActor enum StaffWorkspaceRecordLinks {
+nonisolated enum StaffWorkspaceRecordLinks {
     enum Disposition {
         case link(String, Set<StaffWorkspaceLinkScope>)
         case group(StaffWorkspaceLinkScope)

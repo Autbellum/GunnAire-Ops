@@ -348,7 +348,7 @@ enum StaffReplicaSourceStorage {
             // records through the existing role-projected core endpoint.
             // Re-checked after the core capture, which now suspends while its
             // fetches run off the main actor.
-            var ownerHistoryFenceHolds: (() throws -> Bool)?
+            var ownerHistoryFenceHolds: (() async throws -> Bool)?
             if let publisher = dependencies.fullWorkspace {
                 let summary = try await AppPerformanceDiagnostics.shared.operation("replica.fullWorkspace") { try await publisher.synchronize(context) }
                 try dependencies.check(context)
@@ -368,19 +368,21 @@ enum StaffReplicaSourceStorage {
                         message = prepared.message; hasMore = true; return
                     }
                 }
-                guard try publisher.matchesCurrent(summary.preparedStage, context: context) else {
+                let fenceHolds = try await AppPerformanceDiagnostics.shared.operation("replica.fence", { try await publisher.matchesCurrent(summary.preparedStage, context: context) })
+                guard fenceHolds else {
                     hasMore = true; message = "Checking newer saved work before sharing…"
                     return
                 }
                 // The core capture below suspends while its fetches run off the
                 // main actor, so this owner-history fence is checked again once
                 // it returns: both must describe the same verified owner workspace.
-                ownerHistoryFenceHolds = { try publisher.matchesCurrent(summary.preparedStage, context: context) }
+                ownerHistoryFenceHolds = { try await publisher.matchesCurrent(summary.preparedStage, context: context) }
             } else { try dependencies.prepareFullWorkspace?(context) }
             try dependencies.check(context)
             let capture = try await AppPerformanceDiagnostics.shared.operation("replica.capture") { try await dependencies.capture(context, journal.token) }
             try dependencies.check(context)
-            if let ownerHistoryFenceHolds, try !ownerHistoryFenceHolds() {
+            if let ownerHistoryFenceHolds,
+               try await !AppPerformanceDiagnostics.shared.operation("replica.fence", { try await ownerHistoryFenceHolds() }) {
                 hasMore = true; message = "Checking newer saved work before sharing…"
                 return
             }

@@ -4,7 +4,7 @@ import SwiftData
 /// A closed, versioned owner-domain catalog, not a network payload or staff
 /// membership grant. All 32 models must be represented before a full snapshot
 /// can be considered. Role projection and scalar-link lineage are separate gates.
-@MainActor struct StaffWorkspaceAnyModelCodec {
+nonisolated struct StaffWorkspaceAnyModelCodec {
     let kind: String
     let modelName: String
     let modelType: any PersistentModel.Type
@@ -78,7 +78,7 @@ import SwiftData
     }
 }
 
-@MainActor enum StaffWorkspaceModelCatalog {
+nonisolated enum StaffWorkspaceModelCatalog {
     static var all: [StaffWorkspaceAnyModelCodec] {
         typealias C = StaffWorkspaceModelCodecs
         return [
