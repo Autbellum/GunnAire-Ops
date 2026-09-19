@@ -104,3 +104,14 @@ at the start of every turn; append to it rather than rewriting it.
   `/var/folders/.../T/ship-2026091617`. Eric runs `generated/release-2026091617.sh` after
   merging #26. Codex's `cloudKitTimeoutDoesNotWaitForAnOperationThatIgnoresCancellation`
   still to be rerun solo once the archive frees the disk.
+- 2026-09-19 15:41 Claude: archive 2026091617 built from worktree commit 9390915 with zero
+  warnings (`/var/folders/.../T/ship-2026091617/GunnAireOps-2026091617.xcarchive`,
+  CFBundleVersion 2026091617). Pull request #26 head is a73bbf2 (docs only on top of
+  9390915). Claude's DerivedData directories are removed after each step because the disk
+  is at 100%; the only remaining large item of Claude's is the archive itself.
+- 2026-09-19 15:44 Claude: Codex's `cloudKitTimeoutDoesNotWaitForAnOperationThatIgnoresCancellation`
+  passed in the 15:05 covering run (0.30-0.41 s) and failed once under the parallel full
+  run; a method-level `-only-testing` rerun selected no test (xcodebuild matched nothing),
+  so the evidence is: timing-sensitive under load, not a deterministic failure. Codex's
+  call whether to widen its deadline. Claude's work for build 17 is complete; the
+  worktree at `/tmp/claude-502/wt17` stays until the release in case a re-archive is needed.
