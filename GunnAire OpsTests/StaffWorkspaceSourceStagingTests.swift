@@ -169,4 +169,20 @@ import Testing
         let resynced = try S.prepare(container: container, scope: f.scope, store: storage("Sync"), check: {})
         #expect(resynced == edited)
     }
+
+    /// Builds up to 2026091616 stored the owner key JSON-encoded through the
+    /// Codable keychain API; this build reads raw bytes. Both forms must yield
+    /// the same 32-byte key, and nothing else may be accepted as one.
+    @Test func ownerKeyReadsRawAndEarlierJSONEncodedFormsAndRejectsOthers() throws {
+        let key = Data((0..<32).map { UInt8($0) })
+        #expect(S.ownerKey(fromStored: key) == key)
+        let encoded = try JSONEncoder().encode(key)
+        #expect(encoded.count != 32 && encoded.first == UInt8(ascii: "\""))
+        #expect(S.ownerKey(fromStored: encoded) == key)
+        #expect(S.ownerKey(fromStored: Data(repeating: 1, count: 31)) == nil)
+        #expect(S.ownerKey(fromStored: Data(repeating: 1, count: 33)) == nil)
+        #expect(S.ownerKey(fromStored: try JSONEncoder().encode(Data(repeating: 1, count: 16))) == nil)
+        #expect(S.ownerKey(fromStored: Data("broken".utf8)) == nil)
+        #expect(S.ownerKey(fromStored: Data()) == nil)
+    }
 }

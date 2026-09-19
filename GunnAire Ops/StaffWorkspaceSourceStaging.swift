@@ -46,14 +46,30 @@ nonisolated struct StaffWorkspaceSourceJournal: Codable, Equatable {
 @MainActor enum StaffWorkspaceSourceStaging {
     nonisolated static func key(_ scope: StaffReplicaSourceScope) -> String { "full-owner-staging-v1\n" + scope.key }
 
+    /// The 32-byte owner-workspace key from what the keychain holds: the raw
+    /// bytes this build stores, or the JSON-encoded `Data` (a quoted base64
+    /// string) that builds up to 2026091616 stored through `saveCodable`.
+    /// Anything else is treated as a corrupt entry, never as a new key, so an
+    /// existing encrypted journal cannot become unreadable by a key reset.
+    nonisolated static func ownerKey(fromStored stored: Data) -> Data? {
+        if stored.count == 32 { return stored }
+        if let decoded = try? JSONDecoder().decode(Data.self, from: stored), decoded.count == 32 { return decoded }
+        return nil
+    }
+
     static var device: SharedTimeLocalStore {
         guard let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
             return .init(read: { _ in throw StaffReplicaSourceSyncError.storage }, write: { _, _ in throw StaffReplicaSourceSyncError.storage })
         }
         return .encrypted(directory: root.appendingPathComponent("StaffWorkspaceOwner-v1", isDirectory: true), maximumBytes: 64 * 1024 * 1024) { create in
             let account = "StaffWorkspaceOwnerEncryption-v1"
-            if let bytes = try KeychainStore.loadData(account: account) {
-                guard bytes.count == 32 else { throw StaffReplicaSourceSyncError.storage }; return bytes
+            if let stored = try KeychainStore.loadData(account: account) {
+                guard let bytes = ownerKey(fromStored: stored) else { throw StaffReplicaSourceSyncError.storage }
+                // Builds before 2026091617 wrote the key through the Codable API,
+                // which JSON-encodes `Data`. Rewrite it raw once; a failed rewrite
+                // is retried next time and never blocks the read.
+                if bytes != stored { try? KeychainStore.saveData(bytes, account: account) }
+                return bytes
             }
             guard create else { throw StaffReplicaSourceSyncError.storage }
             let bytes = SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }
