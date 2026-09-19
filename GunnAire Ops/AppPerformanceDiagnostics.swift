@@ -118,6 +118,9 @@ final class AppPerformanceDiagnostics: NSObject, ObservableObject {
     @Published private(set) var lastLaunchSeconds: Double?
 
     nonisolated private let store = AppPerformanceEventStore()
+    /// Which named operation was running when a stall happened; read by the
+    /// stall monitor's callback on the main thread, written by `operation`.
+    nonisolated private let operations = AppPerformanceOperationLog()
     private let persistence: AppPerformanceEventPersistence
     private let stallMonitor = MainThreadStallMonitor(threshold: AppPerformanceDiagnostics.stallThreshold)
     private var launchStopwatch: AppLaunchStopwatch?
@@ -192,6 +195,15 @@ final class AppPerformanceDiagnostics: NSObject, ObservableObject {
         currentContext = context
     }
 
+    /// Names a stretch of work so a stall that overlaps it is attributed to
+    /// it. Used around the steps of the staff-replica source pass, which the
+    /// recorder had only been able to place on a screen, never on a step.
+    func operation<T>(_ name: String, _ work: () async throws -> T) async rethrows -> T {
+        operations.begin(name)
+        defer { operations.end() }
+        return try await work()
+    }
+
     // MARK: - Recording
 
     private func recordLaunch(seconds: Double) {
@@ -218,14 +230,17 @@ final class AppPerformanceDiagnostics: NSObject, ObservableObject {
 
     private func recordStall(seconds: Double) {
         let screen = currentContext
+        let now = Date()
+        let running = operations.names(overlapping: now.addingTimeInterval(-seconds), end: now)
+        let attribution = running.isEmpty ? "" : " Running at the time: " + running.joined(separator: ", ") + "."
         append(
             AppPerformanceEvent(
                 id: UUID(),
                 kind: .stall,
-                occurredAt: Date(),
+                occurredAt: now,
                 headline: screen.map { String(format: "%@ froze for %.1f seconds", $0, seconds) }
                     ?? String(format: "The app froze for %.1f seconds", seconds),
-                detail: "The screen could not respond to taps for this long because the app was busy on the main thread.",
+                detail: "The screen could not respond to taps for this long because the app was busy on the main thread." + attribution,
                 seconds: seconds,
                 appVersion: Self.appVersion,
                 context: screen,
@@ -355,6 +370,51 @@ extension AppPerformanceDiagnostics: MXMetricManagerSubscriber {
             }
         }
         append(recorded)
+    }
+}
+
+/// The last few named operations and when each ran, so a stall recorded after
+/// the fact can be matched to the work that overlapped it. Steps of one pass
+/// run one after another, so a short ring is enough.
+nonisolated final class AppPerformanceOperationLog: @unchecked Sendable {
+    struct Entry: Equatable {
+        let name: String
+        let startedAt: Date
+        var endedAt: Date?
+    }
+
+    private let lock = NSLock()
+    private var entries: [Entry] = []
+    private let capacity: Int
+    private let clock: () -> Date
+
+    init(capacity: Int = 8, clock: @escaping () -> Date = Date.init) {
+        self.capacity = capacity
+        self.clock = clock
+    }
+
+    func begin(_ name: String) {
+        lock.lock(); defer { lock.unlock() }
+        entries.append(Entry(name: name, startedAt: clock(), endedAt: nil))
+        if entries.count > capacity { entries.removeFirst(entries.count - capacity) }
+    }
+
+    /// Ends the most recent operation that is still open.
+    func end() {
+        lock.lock(); defer { lock.unlock() }
+        guard let index = entries.lastIndex(where: { $0.endedAt == nil }) else { return }
+        entries[index].endedAt = clock()
+    }
+
+    /// Names of the operations that ran at any point between `start` and
+    /// `end`, oldest first, without duplicates.
+    func names(overlapping start: Date, end: Date) -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        var seen: [String] = []
+        for entry in entries where entry.startedAt <= end && (entry.endedAt ?? end) >= start {
+            if !seen.contains(entry.name) { seen.append(entry.name) }
+        }
+        return seen
     }
 }
 

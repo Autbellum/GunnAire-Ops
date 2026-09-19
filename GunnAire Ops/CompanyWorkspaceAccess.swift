@@ -53,11 +53,28 @@ enum CompanyWorkspaceSessionSignal {
     }
 }
 
-enum CompanyWorkspaceClock {
-    static func parse(_ text: String) -> Date? {
+/// Shared formatters behind a lock: this parser runs on every session read
+/// and inside the per-minute replica capture, where building two
+/// `ISO8601DateFormatter`s per call loaded ICU tables each time (Rule A).
+nonisolated enum CompanyWorkspaceClock {
+    private static let lock = NSLock()
+    private static let withFractionalSeconds: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.date(from: text) ?? ISO8601DateFormatter().date(from: text)
+        return formatter
+    }()
+    private static let withInternetDateTime = ISO8601DateFormatter()
+
+    static func parse(_ text: String) -> Date? {
+        lock.lock(); defer { lock.unlock() }
+        return withFractionalSeconds.date(from: text) ?? withInternetDateTime.date(from: text)
+    }
+
+    /// Internet date-time with fractional seconds, the form the replica
+    /// contract stores; the inverse of `parse` for such strings.
+    static func fractionalString(from date: Date) -> String {
+        lock.lock(); defer { lock.unlock() }
+        return withFractionalSeconds.string(from: date)
     }
 }
 

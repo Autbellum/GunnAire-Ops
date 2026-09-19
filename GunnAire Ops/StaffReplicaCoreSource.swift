@@ -3,7 +3,7 @@ import SwiftData
 
 /// Deliberately no generic object/dictionary case: a model or provider payload
 /// cannot be accidentally serialized through a scalar operational field.
-enum StaffReplicaScalar: Codable, Equatable {
+nonisolated enum StaffReplicaScalar: Codable, Equatable {
     case text(String), number(Double), flag(Bool), identifiers([String])
 
     init(from decoder: Decoder) throws {
@@ -24,7 +24,7 @@ enum StaffReplicaScalar: Codable, Equatable {
     }
 }
 
-struct StaffReplicaCoreRecord: Codable, Equatable {
+nonisolated struct StaffReplicaCoreRecord: Codable, Equatable {
     let kind: String
     let id: String
     let fields: [String: StaffReplicaScalar]
@@ -46,14 +46,14 @@ enum StaffReplicaSourceError: Error, LocalizedError {
 /// facts for the server's role-filtered ledger; it neither publishes a snapshot
 /// nor mounts a staff store. Billing, forms, media, agreements, time, tasks and
 /// financial workflows require their own explicit serializers before activation.
-struct StaffReplicaCoreSource: Codable, Equatable {
+nonisolated struct StaffReplicaCoreSource: Codable, Equatable {
     static let schemaVersion = "core-field-v1"
     static let recordKinds = ["customer", "equipment", "item", "job", "location", "technician"]
     let schema: String
     let coverage: [String]
     let records: [StaffReplicaCoreRecord]
 
-    static func captureSavedOwner() async throws -> (CompanyCloudKitBinding, Self) {
+    @MainActor static func captureSavedOwner() async throws -> (CompanyCloudKitBinding, Self) {
         let access = CompanyWorkspaceAccessController.shared
         guard !GunnAireCloudKit.usesTestDatabase, let stamp = access.operationStamp,
               access.verifiedRole == .admin, let container = access.authorizedContainer else { throw StaffReplicaSourceError.access }
@@ -76,7 +76,9 @@ struct StaffReplicaCoreSource: Codable, Equatable {
         return (binding, value)
     }
 
-    static func capture(customers: [Customer], locations: [CustomerServiceLocation], equipment: [CustomerEquipment],
+    /// Pure over the records it is handed; the source pass calls it on a
+    /// background task with records fetched on that task's own context.
+    nonisolated static func capture(customers: [Customer], locations: [CustomerServiceLocation], equipment: [CustomerEquipment],
                         technicians: [Technician], jobs: [ServiceCall], items: [Item]) throws -> Self {
         var records: [StaffReplicaCoreRecord] = []
         func append(_ kind: String, _ id: UUID, _ fields: [String: StaffReplicaScalar]) throws {
@@ -100,8 +102,7 @@ struct StaffReplicaCoreSource: Codable, Equatable {
         func date(_ fields: inout [String: StaffReplicaScalar], _ name: String, _ value: Date?) throws {
             if let value {
                 guard value.timeIntervalSince1970.isFinite else { throw StaffReplicaSourceError.invalid }
-                let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                let string = formatter.string(from: value)
+                let string = CompanyWorkspaceClock.fractionalString(from: value)
                 guard CompanyWorkspaceClock.parse(string) != nil else { throw StaffReplicaSourceError.invalid }
                 fields[name] = .text(string)
             }
