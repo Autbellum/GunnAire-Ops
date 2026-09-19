@@ -274,7 +274,7 @@ final class FieldFormTemplate {
         )
     }
 
-    static func ensureStarterTemplates(in modelContext: ModelContext) {
+    nonisolated static func ensureStarterTemplates(in modelContext: ModelContext) {
         let existing = (try? modelContext.fetch(FetchDescriptor<FieldFormTemplate>())) ?? []
         let operationalHVACTypes: Set<ServiceCallType> = [.service, .repair, .replacement, .maintenance, .install]
         let starters = [FieldFormTemplate(

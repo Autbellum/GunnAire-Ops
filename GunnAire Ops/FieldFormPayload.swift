@@ -3,7 +3,7 @@ import Foundation
 /// Bounded, duplicate-key-aware JSON for saved field evidence. Foundation's
 /// object decoding alone can discard duplicate keys before validation sees them.
 /// This parser never rewrites the stored string or coerces numbers into booleans.
-indirect enum FieldFormJSON {
+nonisolated indirect enum FieldFormJSON {
     case object([String: FieldFormJSON]), array([FieldFormJSON])
     case string(String), number(String), flag(Bool), null
 
@@ -112,7 +112,7 @@ indirect enum FieldFormJSON {
 
 enum FieldFormPayload {
     typealias Invalid = FieldFormJSON.Invalid
-    struct Assignment {
+    nonisolated struct Assignment {
         let serviceTypes: Set<ServiceCallType>
         let required: Bool
         let isLegacy: Bool
@@ -156,7 +156,7 @@ enum FieldFormPayload {
         }
     }
 
-    static func assignment(_ text: String?) throws -> Assignment {
+    nonisolated static func assignment(_ text: String?) throws -> Assignment {
         guard let text else { return Assignment(serviceTypes: [], required: false, isLegacy: true) }
         let json = try FieldFormJSON.parse(text)
         let raw: [FieldFormJSON]

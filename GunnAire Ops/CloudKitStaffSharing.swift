@@ -183,7 +183,7 @@ struct CloudKitStaffShareEvidence {
 }
 
 enum CloudKitStaffShareRecords {
-    static let rootType = "GAStaffWorkspace"
+    nonisolated static let rootType = "GAStaffWorkspace"
 
     /// Constructs an empty, isolated hierarchy. No model export, container
     /// attachment, CloudKit write, invitation send or automatic acceptance.

@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "ai-latency-optimizer": {
+      "source": "Winbda/claude-skills-collection",
+      "sourceType": "github",
+      "skillPath": "skills/ai-latency-optimizer/SKILL.md",
+      "computedHash": "838c7e4431850af3fd312dd3cfde208e245e640c34351a039819d4305aadb80c"
+    }
+  }
+}

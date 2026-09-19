@@ -14,7 +14,7 @@ enum StaffReplicaSourceSyncError: Error, LocalizedError, Equatable {
     }
 }
 
-extension StaffReplicaCoreRecord { var key: String { kind + ":" + id } }
+nonisolated extension StaffReplicaCoreRecord { var key: String { kind + ":" + id } }
 
 struct StaffReplicaSourceScope: Codable, Equatable {
     let backendOrigin: String

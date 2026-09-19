@@ -240,7 +240,7 @@ final class QuickBooksAccountingConfigurationStore: ObservableObject {
         }
     }
 
-    static let savedStatusMessage = "Accounting mappings saved for this QuickBooks company."
+    nonisolated static let savedStatusMessage = "Accounting mappings saved for this QuickBooks company."
 
     /// Sends `candidate` to the server, which validates every mapping and
     /// requires an administrator session. `statusMessage` is shown after a

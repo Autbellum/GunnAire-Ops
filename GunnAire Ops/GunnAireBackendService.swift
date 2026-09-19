@@ -587,7 +587,10 @@ enum GunnAireBackendService {
         let links: [BackendCustomerPortalLinkRecord]
     }
 
-    private struct CustomerCommunicationPayload: Codable {
+    /// Everything the server needs about one communication, read from the
+    /// model on whichever context owns it (see `communicationPayload(for:)`)
+    /// so the upload itself never touches a model object.
+    nonisolated struct CustomerCommunicationPayload: Codable, Sendable {
         let id: String
         let customerName: String
         let customerEmail: String?
@@ -1494,9 +1497,10 @@ enum GunnAireBackendService {
         return try JSONDecoder().decode(BackendStaffPushDeactivationResponse.self, from: data).deactivated
     }
 
+    /// Works on whichever context it is handed; the workspace unlock calls it
+    /// from a background model actor, the views from the main context.
     @discardableResult
-    @MainActor
-    static func applyVerifiedUser(
+    nonisolated static func applyVerifiedUser(
         _ remoteUser: BackendAppUserRecord,
         into modelContext: ModelContext,
         currentUsers: [AppUser],
@@ -1839,7 +1843,22 @@ enum GunnAireBackendService {
 
     @discardableResult
     static func uploadCustomerCommunication(_ communication: CustomerCommunication) async throws -> BackendCustomerCommunicationRecord {
-        let payload = CustomerCommunicationPayload(
+        try await uploadCustomerCommunication(payload: communicationPayload(for: communication))
+    }
+
+    /// Sends an already-built payload. Callers on a background model actor
+    /// build the payload on their own context, then await this.
+    @discardableResult
+    static func uploadCustomerCommunication(payload: CustomerCommunicationPayload) async throws -> BackendCustomerCommunicationRecord {
+        let data = try JSONEncoder().encode(payload)
+        let responseData = try await send(path: "/api/communications", method: "POST", body: data)
+        return try JSONDecoder().decode(BackendCustomerCommunicationRecord.self, from: responseData)
+    }
+
+    /// Reads the model synchronously, so it must be called on the context
+    /// that owns `communication`.
+    nonisolated static func communicationPayload(for communication: CustomerCommunication) -> CustomerCommunicationPayload {
+        CustomerCommunicationPayload(
             id: communication.id.uuidString,
             customerName: communication.customer.name,
             customerEmail: communication.customer.email,
@@ -1861,9 +1880,6 @@ enum GunnAireBackendService {
             providerMessageID: communication.providerMessageID,
             occurredAt: ISO8601DateFormatter().string(from: communication.createdAt)
         )
-        let data = try JSONEncoder().encode(payload)
-        let responseData = try await send(path: "/api/communications", method: "POST", body: data)
-        return try JSONDecoder().decode(BackendCustomerCommunicationRecord.self, from: responseData)
     }
 
     static func decodeDocuments(from data: Data) throws -> [BackendDocumentRecord] {
@@ -2015,11 +2031,27 @@ enum GunnAireBackendService {
         return try JSONDecoder().decode(BackendPaymentUploadResponse.self, from: responseData)
     }
 
-    @discardableResult
-    static func retrySharedCompanyDocumentUpload(_ attachment: ServiceDocumentAttachment) async throws -> BackendDocumentUploadResponse {
-        let data = try Data(contentsOf: attachment.localFileURL)
-        return try await uploadDocument(
-            data: data,
+    /// Everything the upload needs from one attachment, read on the context
+    /// that owns the model (see `sharedCompanyDocumentUploadRequest(for:)`),
+    /// so the network call never touches a model object.
+    nonisolated struct SharedCompanyDocumentUploadRequest: Sendable {
+        let data: Data
+        let filename: String
+        let contentType: String
+        let kind: String
+        let serviceCallID: UUID?
+        let invoiceID: UUID?
+        let estimateID: UUID?
+        let maintenanceContractID: UUID?
+        let customerEquipmentID: UUID?
+        let customerName: String?
+    }
+
+    /// Reads the model and its file synchronously; call it on the context
+    /// that owns `attachment`.
+    nonisolated static func sharedCompanyDocumentUploadRequest(for attachment: ServiceDocumentAttachment) throws -> SharedCompanyDocumentUploadRequest {
+        SharedCompanyDocumentUploadRequest(
+            data: try Data(contentsOf: attachment.localFileURL),
             filename: attachment.displayName,
             contentType: attachment.contentType,
             kind: attachment.kindRaw,
@@ -2029,6 +2061,27 @@ enum GunnAireBackendService {
             maintenanceContractID: attachment.maintenanceContractID,
             customerEquipmentID: attachment.customerEquipmentID,
             customerName: attachment.customer?.name
+        )
+    }
+
+    @discardableResult
+    static func retrySharedCompanyDocumentUpload(_ attachment: ServiceDocumentAttachment) async throws -> BackendDocumentUploadResponse {
+        try await retrySharedCompanyDocumentUpload(request: sharedCompanyDocumentUploadRequest(for: attachment))
+    }
+
+    @discardableResult
+    static func retrySharedCompanyDocumentUpload(request: SharedCompanyDocumentUploadRequest) async throws -> BackendDocumentUploadResponse {
+        try await uploadDocument(
+            data: request.data,
+            filename: request.filename,
+            contentType: request.contentType,
+            kind: request.kind,
+            serviceCallID: request.serviceCallID,
+            invoiceID: request.invoiceID,
+            estimateID: request.estimateID,
+            maintenanceContractID: request.maintenanceContractID,
+            customerEquipmentID: request.customerEquipmentID,
+            customerName: request.customerName
         )
     }
 

@@ -49,6 +49,47 @@ actor at first appearance (`collapseCloudKitUserDuplicatesIfNeeded`,
 and writes through the main context: rule 1 violated for sync; it runs on visits to
 QuickBooks Management, not at launch.
 
+## Rule H: this project defaults every unannotated type to the main actor
+
+The app target sets `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` (Swift 5 mode,
+approachable concurrency). `GunnAireBackendService`, `AppAccess`,
+`OperationsAccessPolicy`, `CustomerIntelligence`, `FieldFormJSON`, every static
+constant: all main-actor-isolated unless marked `nonisolated`. Two consequences:
+
+- Anything a background actor (`ContentStartupMaintenance`, a detached task) reaches
+  must be marked `nonisolated`; the compiler reports each missed one as a warning
+  that cascades one level per build. Mark pure helpers and immutable `static let`s
+  `nonisolated`, never `nonisolated(unsafe)` on mutable state.
+- The backend service's synchronous work (request building, JSON decoding of every
+  QuickBooks, Google and workspace response) runs on the main actor today. That is
+  rules 1 and 2 violated at the root and the next structural item; it is a large
+  change because the service reads main-actor singletons inline.
+
+## What the launch path does now (2026-09-19, build 2026091616)
+
+`CompanyWorkspaceAccessController.unlock` is `async`; the store identity read and
+the `ModelContainer` open run on a detached task, and every resumption re-checks
+the generation and session. The user reconciliation and template seeding stay on
+the main context (a handful of rows; the tests pin that an unchanged user never
+saves). `ContentView.onAppear` holds layout state only; token loads and the
+maintenance run in `.task`, with the full-table fetches, user-duplicate collapse
+and upload retries on `ContentStartupMaintenance` (`@ModelActor`). The recorder
+reads and writes its file off main. Debug build: 0 warnings (was 22).
+
+## Rule I: a periodic loop's synchronous work is a stall on every screen
+
+Build 15 on the owner's iPad (2026-09-19): no crashes, Command Center quiet after
+the first 20 s, and then one 0.8 to 1.1 s stall every 62 s on whichever screen was
+open. That signature (fixed period, screen-independent) is a timer or sleep loop,
+never a view body. It was `StaffReplicaSourceCoordinator` (`passInterval` 60 s)
+calling `StaffReplicaSourceHistory.capture` synchronously on the main actor: the
+full persistent-history fetch, all six core tables and the snapshot build. Fixed in
+41d4e99 with `captureOffMain` (fetches on a detached task, both unsaved fences on
+main, owner-history fence re-checked after the suspension). Any loop that reads
+the store must do it on its own context off main, and the recorder now names the
+pass step that overlapped a stall (`AppPerformanceDiagnostics.operation`), so read
+"Running at the time:" in the stall detail before guessing.
+
 ## What the device recorded (2026-09-19, TestFlight 2026091612, real data)
 
 73 stalls, all Command Center, 17–26 s each, back to back; two crashes were
@@ -95,8 +136,13 @@ across `suiteSynchronizationSection` and `accountIntelligenceSection`.
 
 The same rule applies to `OperationsAccessPolicy.capabilities`, `visiblePaymentIDs`,
 `visibleInvoiceIDs` and the `dashboardPayments` / `openInvoices` / `overdueInvoices`
-getters, which still recompute the policy independently (75% of what remained after
-the two fixes). Memoize per body pass before adding any new reader.
+getters. The worst case, proven by the symbolicated 2026-09-19 crash logs of build
+14: `outstandingBalance(for:)` read `dashboardPayments` inside the `openInvoices`
+**sort comparator**, so every comparison re-ran the payment policy (two capability
+passes, thirteen role checks each) and walked every payment's relationships. Since
+build 16 every such getter reads through `OperationsDashboardPassMemo`, cleared at
+the top of `body`, and balances come from one `[UUID: Double]` per pass. Any new
+getter on that view goes through the memo; any new sort key is precomputed.
 
 ## Rule C: `DisclosureGroup` content is built whether or not it is open
 

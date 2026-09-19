@@ -40,6 +40,37 @@ Eric shares it from **Sync & Integrations → App Performance → Share this rec
 Ask for it first. Crash stacks arrive unsymbolicated as `GunnAire Ops +0x…`; resolve
 them with `atos` against the matching archive's dSYM.
 
+## Rule 2a: the iPad's own crash logs need no navigation and no GUI
+
+When the recorder cannot be reached (the app is frozen, or the installed build
+predates it), pull the system crash logs over the cable:
+```
+xcrun devicectl device copy from --device 77009867-44B8-550E-B726-5C8BE1E7E883 \
+  --domain-type systemCrashLogs --source . --destination DIR
+```
+`GunnAire Ops-<date>.ips` (bug_type 309) is a crash; the JSON body after the first
+line has `termination.reasons` (`0x8BADF00D` = watchdog), `faultingThread`, and
+`usedImages[i].base`. `GunnAire Ops.cpu_resource-<date>.ips` (bug_type 202) is a
+CPU-limit report with a "Heaviest stack" section. Symbolicate app frames with
+```
+atos -o "<archive>/dSYMs/GunnAire Ops.app.dSYM/Contents/Resources/DWARF/GunnAire Ops" \
+  -arch arm64 -l <image base from the log> <absolute addresses>
+```
+Archives for builds 12 to 15 are under the unsandboxed temp dir `ship-<build>/`.
+On 2026-09-19 this is what proved the three morning crashes were build 14 in the
+formatter stack, while the recorder had been silent since the previous evening.
+
+## Rule 2b: confirm which build is installed and which is available
+
+```
+xcrun devicectl device info apps --device <id> --bundle-id com.gunnaire.businesssuite
+python3 .claude/skills/gunnaire-perf-measure/asc-builds.py
+```
+The second signs an App Store Connect token with the upload key (openssl, no
+PyJWT) and prints each build's `processingState`; `VALID` means installable. Eric
+was on the rollback build 14 while 15 sat processed and uninstalled; every
+conclusion about "the fix did not work" must first check this.
+
 ## Rule 3: when Instruments is appropriate
 
 Only on a simulator or on a device whose workspace is *meant* to be development,

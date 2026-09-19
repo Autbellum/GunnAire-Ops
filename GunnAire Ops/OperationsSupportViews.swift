@@ -5,8 +5,8 @@ import UIKit
 
 @MainActor
 enum CustomerDataMaintenance {
-    static let unassignedCalendarCustomerName = "Unassigned Calendar Event"
-    static let unassignedCalendarCustomerMarker = "local-calendar-unassigned"
+    nonisolated static let unassignedCalendarCustomerName = "Unassigned Calendar Event"
+    nonisolated static let unassignedCalendarCustomerMarker = "local-calendar-unassigned"
 
     struct DeletionSummary {
         var customers = 0
@@ -25,7 +25,7 @@ enum CustomerDataMaintenance {
         var businessTaskEvents = 0
     }
 
-    private static let genericCalendarCustomerNames: Set<String> = [
+    nonisolated private static let genericCalendarCustomerNames: Set<String> = [
         "service",
         "service call",
         "install",
@@ -48,13 +48,16 @@ enum CustomerDataMaintenance {
         "hvac service"
     ]
 
-    static func isGenericCalendarCustomer(_ customer: Customer) -> Bool {
+    /// Pure checks over one customer's fields. Nonisolated so the startup
+    /// maintenance actor can decide off the main thread whether a cleanup
+    /// pass is needed at all; the cleanup itself stays on the main actor.
+    nonisolated static func isGenericCalendarCustomer(_ customer: Customer) -> Bool {
         let name = customer.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let hasQuickBooksLink = customer.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         return genericCalendarCustomerNames.contains(name) && !hasQuickBooksLink
     }
 
-    static func isSystemCalendarCustomer(_ customer: Customer) -> Bool {
+    nonisolated static func isSystemCalendarCustomer(_ customer: Customer) -> Bool {
         customer.quickBooksID == unassignedCalendarCustomerMarker ||
             customer.name.trimmingCharacters(in: .whitespacesAndNewlines)
                 .caseInsensitiveCompare(unassignedCalendarCustomerName) == .orderedSame

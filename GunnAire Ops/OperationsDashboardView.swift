@@ -40,6 +40,9 @@ struct OperationsDashboardView: View {
     @State private var showingBusinessTasks = false
     @State private var showingTimeOffRequests = false
     @State private var showingLocalAIWorkspace = false
+    /// Per-pass cache for the role-filtered collections and reductions below.
+    /// Cleared at the top of `body`; see `OperationsDashboardPassMemo`.
+    @State private var passMemo = OperationsDashboardPassMemo()
 
     private let calendar = Calendar.current
 
@@ -78,90 +81,123 @@ struct OperationsDashboardView: View {
     }
 
     private var operationsAccess: OperationsAccessCapabilities {
-        OperationsAccessPolicy.capabilities(email: currentUserEmail, users: users)
+        passMemo.value("operationsAccess") {
+            OperationsAccessPolicy.capabilities(email: currentUserEmail, users: users)
+        }
     }
 
     /// CloudKit may hydrate relationship records after their owning records.
     /// Keep the command center available while those links converge instead of
     /// dereferencing the models' intentionally optional-at-rest relationships.
     private var dashboardServiceCalls: [ServiceCall] {
-        let visibleIDs = OperationsAccessPolicy.visibleServiceCallIDs(
-            email: currentUserEmail,
-            users: users,
-            serviceCalls: serviceCalls,
-            technicians: technicians
-        )
-        return serviceCalls.filter { visibleIDs.contains($0.id) }
+        passMemo.value("dashboardServiceCalls") {
+            let visibleIDs = OperationsAccessPolicy.visibleServiceCallIDs(
+                email: currentUserEmail,
+                users: users,
+                serviceCalls: serviceCalls,
+                technicians: technicians
+            )
+            return serviceCalls.filter { visibleIDs.contains($0.id) }
+        }
     }
 
     private var dashboardCustomers: [Customer] {
-        let visibleIDs = OperationsAccessPolicy.dashboardCustomerIDs(
-            email: currentUserEmail,
-            users: users,
-            customers: customers,
-            serviceCalls: serviceCalls,
-            invoices: invoices,
-            technicians: technicians
-        )
-        return customers.filter { visibleIDs.contains($0.id) }
+        passMemo.value("dashboardCustomers") {
+            let visibleIDs = OperationsAccessPolicy.dashboardCustomerIDs(
+                email: currentUserEmail,
+                users: users,
+                customers: customers,
+                serviceCalls: serviceCalls,
+                invoices: invoices,
+                technicians: technicians
+            )
+            return customers.filter { visibleIDs.contains($0.id) }
+        }
     }
 
     private var searchableCustomers: [Customer] {
-        let visibleIDs = OperationsAccessPolicy.searchableCustomerIDs(
-            email: currentUserEmail,
-            users: users,
-            customers: customers
-        )
-        return customers.filter { visibleIDs.contains($0.id) }
+        passMemo.value("searchableCustomers") {
+            let visibleIDs = OperationsAccessPolicy.searchableCustomerIDs(
+                email: currentUserEmail,
+                users: users,
+                customers: customers
+            )
+            return customers.filter { visibleIDs.contains($0.id) }
+        }
     }
 
     private var dashboardContracts: [RecurringMaintenanceContract] {
-        let customerIDs = Set(dashboardCustomers.map(\.id))
-        let visibleIDs = OperationsAccessPolicy.visibleContractIDs(
-            customerIDs: customerIDs,
-            contracts: recurringContracts
-        )
-        return recurringContracts.filter { visibleIDs.contains($0.id) }
+        passMemo.value("dashboardContracts") {
+            let customerIDs = Set(dashboardCustomers.map(\.id))
+            let visibleIDs = OperationsAccessPolicy.visibleContractIDs(
+                customerIDs: customerIDs,
+                contracts: recurringContracts
+            )
+            return recurringContracts.filter { visibleIDs.contains($0.id) }
+        }
     }
 
     private var dashboardEstimates: [Estimate] {
-        let visibleIDs = OperationsAccessPolicy.visibleEstimateIDs(
-            email: currentUserEmail,
-            users: users,
-            estimates: estimates
-        )
-        return estimates.filter { visibleIDs.contains($0.id) }
+        passMemo.value("dashboardEstimates") {
+            let visibleIDs = OperationsAccessPolicy.visibleEstimateIDs(
+                email: currentUserEmail,
+                users: users,
+                estimates: estimates
+            )
+            return estimates.filter { visibleIDs.contains($0.id) }
+        }
     }
 
     private var dashboardInvoices: [Invoice] {
-        let visibleIDs = OperationsAccessPolicy.visibleInvoiceIDs(
-            email: currentUserEmail,
-            users: users,
-            serviceCalls: serviceCalls,
-            invoices: invoices,
-            technicians: technicians
-        )
-        return invoices.filter { visibleIDs.contains($0.id) }
+        passMemo.value("dashboardInvoices") {
+            let visibleIDs = OperationsAccessPolicy.visibleInvoiceIDs(
+                email: currentUserEmail,
+                users: users,
+                serviceCalls: serviceCalls,
+                invoices: invoices,
+                technicians: technicians
+            )
+            return invoices.filter { visibleIDs.contains($0.id) }
+        }
     }
 
     private var dashboardPayments: [Payment] {
-        let visibleIDs = OperationsAccessPolicy.visiblePaymentIDs(
-            email: currentUserEmail,
-            users: users,
-            serviceCalls: serviceCalls,
-            invoices: invoices,
-            payments: payments,
-            technicians: technicians
-        )
-        return payments.filter { visibleIDs.contains($0.id) }
+        passMemo.value("dashboardPayments") {
+            let visibleIDs = OperationsAccessPolicy.visiblePaymentIDs(
+                email: currentUserEmail,
+                users: users,
+                serviceCalls: serviceCalls,
+                invoices: invoices,
+                payments: payments,
+                technicians: technicians
+            )
+            return payments.filter { visibleIDs.contains($0.id) }
+        }
     }
 
     private var dashboardCommunications: [CustomerCommunication] {
-        let visibleIDs = OperationsAccessPolicy.visibleCommunicationIDs(
-            customerIDs: Set(dashboardCustomers.map(\.id)),
-            communications: customerCommunications
-        )
-        return customerCommunications.filter { visibleIDs.contains($0.id) }
+        passMemo.value("dashboardCommunications") {
+            let visibleIDs = OperationsAccessPolicy.visibleCommunicationIDs(
+                customerIDs: Set(dashboardCustomers.map(\.id)),
+                communications: customerCommunications
+            )
+            return customerCommunications.filter { visibleIDs.contains($0.id) }
+        }
+    }
+
+    /// Outstanding balance of every visible invoice, computed once per pass.
+    /// The open-invoice sort compares balances, and before this map each
+    /// comparison re-ran the payment access policy and walked every payment.
+    private var outstandingBalancesByInvoiceID: [UUID: Double] {
+        passMemo.value("outstandingBalancesByInvoiceID") {
+            let payments = dashboardPayments
+            var balances: [UUID: Double] = [:]
+            balances.reserveCapacity(dashboardInvoices.count)
+            for invoice in dashboardInvoices {
+                balances[invoice.id] = Invoice.outstandingBalance(for: invoice, payments: payments)
+            }
+            return balances
+        }
     }
 
     private var assignableTechnicians: [Technician] {
@@ -177,12 +213,14 @@ struct OperationsDashboardView: View {
     }
 
     private var visibleTechnicians: [Technician] {
-        let visibleIDs = OperationsAccessPolicy.visibleTechnicianIDs(
-            email: currentUserEmail,
-            users: users,
-            technicians: technicians
-        )
-        return technicians.filter { visibleIDs.contains($0.id) }
+        passMemo.value("visibleTechnicians") {
+            let visibleIDs = OperationsAccessPolicy.visibleTechnicianIDs(
+                email: currentUserEmail,
+                users: users,
+                technicians: technicians
+            )
+            return technicians.filter { visibleIDs.contains($0.id) }
+        }
     }
 
     private var isAdminUser: Bool {
@@ -316,15 +354,21 @@ struct OperationsDashboardView: View {
     }
 
     private var openInvoices: [Invoice] {
-        dashboardInvoices
-            .filter { outstandingBalance(for: $0) > 0 }
-            .sorted { outstandingBalance(for: $0) > outstandingBalance(for: $1) }
+        passMemo.value("openInvoices") {
+            let balances = outstandingBalancesByInvoiceID
+            return dashboardInvoices
+                .filter { balances[$0.id, default: 0] > 0 }
+                .sorted { balances[$0.id, default: 0] > balances[$1.id, default: 0] }
+        }
     }
 
     private var overdueInvoices: [Invoice] {
-        return openInvoices
-            .filter { Invoice.isOverdue($0, payments: dashboardPayments) }
-            .sorted { $0.effectiveDueDate(calendar: calendar) < $1.effectiveDueDate(calendar: calendar) }
+        passMemo.value("overdueInvoices") {
+            let payments = dashboardPayments
+            return openInvoices
+                .filter { Invoice.isOverdue($0, payments: payments) }
+                .sorted { $0.effectiveDueDate(calendar: calendar) < $1.effectiveDueDate(calendar: calendar) }
+        }
     }
 
     private var quickBooksAttentionPayments: [Payment] {
@@ -594,6 +638,7 @@ struct OperationsDashboardView: View {
     // rather than once per body pass. A trace needs it named to attribute the
     // time to the dashboard rather than to SwiftData.
     private var suiteSnapshot: BusinessSuiteSnapshot {
+        passMemo.value("suiteSnapshot") {
         AppPerformanceSignposts.measure("Dashboard.suiteSnapshot") {
         BusinessSuiteIntelligence.snapshot(
             customers: dashboardCustomers,
@@ -615,11 +660,13 @@ struct OperationsDashboardView: View {
             calendar: calendar
         )
         }
+        }
     }
 
     // Same reduction shape as the suite snapshot, and read by three separate
     // computed properties below, so one body pass can run it several times.
     private var accountSnapshots: [CustomerIntelligenceSnapshot] {
+        passMemo.value("accountSnapshots") {
         AppPerformanceSignposts.measure("Dashboard.accountSnapshots") {
         CustomerIntelligence.snapshots(
             customers: dashboardCustomers,
@@ -631,6 +678,7 @@ struct OperationsDashboardView: View {
             now: Date(),
             calendar: calendar
         )
+        }
         }
     }
 
@@ -658,6 +706,9 @@ struct OperationsDashboardView: View {
     }
 
     var body: some View {
+        // A new pass: every memoized collection below is computed at most once
+        // from here until the next pass.
+        let _ = passMemo.clear()
         NavigationStack {
             ZStack {
                 WatermarkBackground()
@@ -1838,7 +1889,13 @@ struct OperationsDashboardView: View {
     }
 
     private func outstandingBalance(for invoice: Invoice) -> Double {
-        Invoice.outstandingBalance(for: invoice, payments: dashboardPayments)
+        if let balance = outstandingBalancesByInvoiceID[invoice.id] {
+            return balance
+        }
+        // An invoice outside the visible set (never on this dashboard, but
+        // the helper is called with rows chosen elsewhere) keeps the exact
+        // former computation.
+        return Invoice.outstandingBalance(for: invoice, payments: dashboardPayments)
     }
 
     private func estimate(for call: ServiceCall) -> Estimate? {

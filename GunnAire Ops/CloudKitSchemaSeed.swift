@@ -43,11 +43,11 @@ import Foundation
 ///   not from assumption.
 @MainActor
 enum CloudKitSchemaSeed {
-    static let zonePrefix = "ga-schemaseed-"
+    nonisolated static let zonePrefix = "ga-schemaseed-"
 
     /// Record types a staff invitation writes, in write order. Pinned against
     /// the real writers by `CloudKitSchemaSeedTests`.
-    static let seededTypes = [
+    nonisolated static let seededTypes = [
         CloudKitStaffShareRecords.rootType,
         "GAStaffWorkspaceHead",
         "GAStaffWorkspaceSealedPayload",
@@ -68,7 +68,7 @@ enum CloudKitSchemaSeed {
     /// Only the missing fields are written: everything else on these types is
     /// already registered, and a sparser record is less likely to resemble a
     /// real financial record if it is ever seen.
-    static let missingModelFields: [String: [String: FieldKind]] = [
+    nonisolated static let missingModelFields: [String: [String: FieldKind]] = [
         "CD_Payment": [
             "CD_collectionAttemptID": .string,
             "CD_providerPaymentStatus": .string,

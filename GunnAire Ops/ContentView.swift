@@ -495,18 +495,11 @@ struct ContentView: View {
             appWideFieldCollectionPromptBanner
         }
         .onAppear {
+            // Layout state only. Everything that reads the store or a
+            // credential runs in `.task` below, after the first frame.
             if prefersPersistentSidebar {
                 columnVisibility = .doubleColumn
             }
-            NetworkConnectivityMonitor.shared.start()
-            QuickBooksDataAPI.shared.loadTokens()
-            isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
-            isGoogleAuthenticated = GoogleAuthManager.shared.isAuthenticated
-            collapseCloudKitUserDuplicatesIfNeeded()
-            cleanupCalendarCreatedCustomersIfNeeded()
-            refreshGoogleAccountIdentityIfNeeded()
-            retryPendingSharedCompanyDocumentUploadsIfNeeded()
-            retryPendingCustomerCommunicationUploadsIfNeeded()
             selectedSidebarItem = SidebarNavigationPolicy.resolvedSelection(
                 selectedSidebarItem,
                 visibleItems: visibleSidebarItems
@@ -540,6 +533,18 @@ struct ContentView: View {
             }
         }
         .task {
+            // Startup work that used to run in `onAppear`, on the main context,
+            // before the first screen could respond. The credential reads stay
+            // on the main actor; the store maintenance runs on a background
+            // context (`ContentStartupMaintenance`).
+            NetworkConnectivityMonitor.shared.start()
+            QuickBooksDataAPI.shared.loadTokens()
+            isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+            isGoogleAuthenticated = GoogleAuthManager.shared.isAuthenticated
+            refreshGoogleAccountIdentityIfNeeded()
+            await runStartupDataMaintenance()
+            retryPendingSharedCompanyDocumentUploadsIfNeeded()
+            retryPendingCustomerCommunicationUploadsIfNeeded()
             await refreshOperationalContinuityState()
             await StaffPushNotificationManager.shared.activateForCurrentSessionIfNeeded()
         }
@@ -780,78 +785,40 @@ struct ContentView: View {
         }
     }
 
-    private func collapseCloudKitUserDuplicatesIfNeeded() {
-        _ = AppUserDataMaintenance.collapseCloudKitDuplicates(users, modelContext: modelContext)
-    }
-
-    private func cleanupCalendarCreatedCustomersIfNeeded() {
-        guard AppAccess.canDeleteCustomerRecords(email: currentUserEmail, users: users) else { return }
+    /// The store maintenance that used to run on the main context at first
+    /// appearance. The fetches and the user-duplicate collapse run on
+    /// `ContentStartupMaintenance`; the customer deletion pass, which walks
+    /// every related table, stays on the main context and runs only when the
+    /// actor has found something to delete.
+    private func runStartupDataMaintenance() async {
+        let maintenance = ContentStartupMaintenance(modelContainer: modelContext.container)
+        await maintenance.collapseCloudKitUserDuplicates()
+        guard AppAccess.canDeleteCustomerRecords(email: currentUserEmail, users: users),
+              await maintenance.hasCalendarCreatedCustomersToClean() else { return }
         _ = CustomerDataMaintenance.cleanupCalendarNamedCustomers(modelContext: modelContext)
     }
 
     private func retryPendingSharedCompanyDocumentUploadsIfNeeded() {
         guard GunnAireBackendService.isConfigured,
               !isRetryingSharedCompanyDocumentUploads else { return }
-        // Same selection as the former root query: newest first, then the
-        // first ten that still need the shared company upload.
-        let descriptor = FetchDescriptor<ServiceDocumentAttachment>(
-            sortBy: [SortDescriptor(\ServiceDocumentAttachment.createdAt, order: .reverse)]
-        )
-        let attachments = (try? modelContext.fetch(descriptor)) ?? []
-        let pending = Array(attachments.filter(\.needsSharedCompanyStorageUpload).prefix(10))
-        guard !pending.isEmpty else { return }
         // A second activation while these uploads run must not start a second
         // pass over the same attachments.
         isRetryingSharedCompanyDocumentUploads = true
-        Task {
-            defer { Task { @MainActor in isRetryingSharedCompanyDocumentUploads = false } }
-            for attachment in pending {
-                do {
-                    let response = try await GunnAireBackendService.retrySharedCompanyDocumentUpload(attachment)
-                    await MainActor.run {
-                        attachment.markSharedCompanyStored(id: response.id)
-                        try? modelContext.save()
-                    }
-                } catch {
-                    await MainActor.run {
-                        attachment.markSharedCompanyUploadFailed(error.localizedDescription)
-                        try? modelContext.save()
-                    }
-                }
-            }
+        let container = modelContext.container
+        Task { @MainActor in
+            await ContentStartupMaintenance(modelContainer: container).retryPendingSharedCompanyDocumentUploads()
+            isRetryingSharedCompanyDocumentUploads = false
         }
     }
 
     private func retryPendingCustomerCommunicationUploadsIfNeeded() {
         guard GunnAireBackendService.isConfigured,
               !isRetryingCustomerCommunicationUploads else { return }
-        // Same selection as the former root query: newest first, then the
-        // first ten that still need the shared company sync.
-        let descriptor = FetchDescriptor<CustomerCommunication>(
-            sortBy: [SortDescriptor(\CustomerCommunication.createdAt, order: .reverse)]
-        )
-        let customerCommunications = (try? modelContext.fetch(descriptor)) ?? []
-        let pending = Array(customerCommunications.filter(\.needsSharedCompanySync).prefix(10))
-        guard !pending.isEmpty else { return }
         isRetryingCustomerCommunicationUploads = true
-        Task {
-            for communication in pending {
-                do {
-                    let response = try await GunnAireBackendService.uploadCustomerCommunication(communication)
-                    await MainActor.run {
-                        communication.markSharedCompanySynced(id: response.id)
-                        try? modelContext.save()
-                    }
-                } catch {
-                    await MainActor.run {
-                        communication.markSharedCompanySyncFailed(error.localizedDescription)
-                        try? modelContext.save()
-                    }
-                }
-            }
-            await MainActor.run {
-                isRetryingCustomerCommunicationUploads = false
-            }
+        let container = modelContext.container
+        Task { @MainActor in
+            await ContentStartupMaintenance(modelContainer: container).retryPendingCustomerCommunicationUploads()
+            isRetryingCustomerCommunicationUploads = false
         }
     }
 

@@ -9,7 +9,7 @@ import os
 /// iPad and Mac signed in to the same approved business iCloud account.
 /// Company-user authorization remains enforced by the GunnAire backend.
 enum GunnAireCloudKit {
-    static let containerIdentifier = "iCloud.com.gunnaire.businesssuite"
+    nonisolated static let containerIdentifier = "iCloud.com.gunnaire.businesssuite"
 
     enum AccountReadiness: Equatable, Sendable {
         case available
@@ -97,7 +97,7 @@ enum GunnAireCloudKit {
     /// Always uses the signed app's production private database. This is kept
     /// separate so automated tests can prove release configuration without
     /// attempting to attach an unsigned XCTest host to iCloud.
-    static func productionModelConfiguration(for schema: Schema) -> ModelConfiguration {
+    nonisolated static func productionModelConfiguration(for schema: Schema) -> ModelConfiguration {
         ModelConfiguration(
             schema: schema,
             isStoredInMemoryOnly: false,
