@@ -92,6 +92,15 @@ nonisolated enum StaffPushNotificationRouteParser {
         }
         return invoiceID
     }
+
+    static func isServiceRequestsQueueNotification(_ userInfo: [AnyHashable: Any]) -> Bool {
+        guard let payload = userInfo["gunnaire"] as? [String: Any],
+              let version = payload["version"] as? NSNumber,
+              version.intValue == 1 else {
+            return false
+        }
+        return payload["route"] as? String == "serviceRequestsQueue"
+    }
 }
 
 @MainActor
@@ -420,9 +429,9 @@ extension StaffPushNotificationManager: UNUserNotificationCenterDelegate {
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        if StaffPushNotificationRouteParser.paymentCollectionInvoiceID(
-            from: notification.request.content.userInfo
-        ) != nil {
+        let userInfo = notification.request.content.userInfo
+        if StaffPushNotificationRouteParser.paymentCollectionInvoiceID(from: userInfo) != nil
+            || StaffPushNotificationRouteParser.isServiceRequestsQueueNotification(userInfo) {
             completionHandler([.banner, .list, .sound])
         } else {
             completionHandler([])
