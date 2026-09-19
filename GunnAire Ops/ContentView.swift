@@ -359,7 +359,7 @@ struct ContentView: View {
 
         switch selectedSidebarItem {
         case .commandCenter:
-            return AnyView(OperationsDashboardView(showingCommandPalette: $showingAppWideFind))
+            return AnyView(CommandCenterHost(showingCommandPalette: $showingAppWideFind))
         case .timeClock:
             return AnyView(TimeClockView())
         case .scheduleAndJobs:

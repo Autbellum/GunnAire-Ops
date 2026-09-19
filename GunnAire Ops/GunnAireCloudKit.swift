@@ -326,12 +326,23 @@ struct CloudKitMirroringState: Codable, Equatable, Sendable {
 /// not re-render the sidebar and detail host.
 final class GunnAireCloudKitAttentionMonitor: ObservableObject {
     @Published private(set) var operation: CloudKitMirroringOperation?
+    /// True from the moment a record import starts until it finishes. Published
+    /// only on the transition, so a long import costs the root two redraws, not
+    /// one per progress event. Command Center uses it to stay unmounted while
+    /// merges are arriving: on the owner's iPad each merge re-ran a body that
+    /// took 17 to 26 seconds, and iOS's watchdog killed the app for it.
+    @Published private(set) var isImportingRecords = false
     /// The full monitor, reachable without subscribing to its changes.
     fileprivate(set) weak var eventMonitor: GunnAireCloudKitEventMonitor?
 
     fileprivate func update(_ next: CloudKitMirroringOperation?) {
         guard next != operation else { return }
         operation = next
+    }
+
+    fileprivate func updateImporting(_ next: Bool) {
+        guard next != isImportingRecords else { return }
+        isImportingRecords = next
     }
 }
 
@@ -413,6 +424,7 @@ final class GunnAireCloudKitEventMonitor: ObservableObject {
         let durableChanged = next.durableSnapshot != state.durableSnapshot
         state = next
         attention.update(next.attentionFailure?.operation)
+        attention.updateImporting(next.runningOperations.contains(.importRecords))
         // Running-only transitions never change what must survive relaunch.
         guard durableChanged, persistenceEnabled,
               let data = try? JSONEncoder().encode(next.durableSnapshot) else { return }
