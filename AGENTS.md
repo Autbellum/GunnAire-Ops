@@ -81,3 +81,26 @@ at the start of every turn; append to it rather than rewriting it.
   off-main test. Committing Claude's files by path (staging off main, async fence,
   value-type marks, build 2026091617 bump, this file). Full suite running before the
   archive. Claim on `project.pbxproj` released.
+- 2026-09-19 15:16 Claude: committed b2b71a9 (40 files) on
+  `perf/command-center-memo-and-launch-off-main`, pushed, pull request #26 open against
+  main with 6 CI checks pending. Full unit suite running (896 passed, 0 failed at 15:15);
+  the 2026091617 archive follows it. Codex's 28 modified files are untouched and
+  uncommitted; `generated/omni_runner.py` (one-line message edit, 14:51) is among them.
+- 2026-09-19 15:22 Claude: full suite on the mixed tree: 2586 passed, 8 failed (7 in the
+  known-flaky `FieldCollectionNavigationTests`, 1 in Codex's uncommitted
+  `CompanyWorkspaceAccessTests/cloudKitTimeoutDoesNotWaitForAnOperationThatIgnoresCancellation`,
+  which passed in the solo covering run at 15:05; a timing test under the parallel run).
+  Building the committed state alone in a detached worktree showed one warning the mixed
+  tree hid: the `nonisolated` mark on `QuickBooksDocumentLinePublication.validateSnapshotTotals`
+  lives in `QuickBooksManagementView.swift`, which the commit had left out. Committed that
+  single line as 6b85821 from the HEAD blob; Codex's working-tree edits to that file are
+  untouched. The disk hit 100% full during the worktree link step (544 MiB free); Claude
+  removed only its own DerivedData (4 GB). Archive 2026091617 is built from the worktree,
+  so it contains exactly the pull request, none of the uncommitted work.
+- 2026-09-19 15:34 Claude: the committed branch alone (worktree at 9390915, which adds the
+  `currencyCents` mark that the `validateSnapshotTotals` mark exposed) builds with zero
+  warnings; covering suites there 402 passed, 0 failed. Pushed; pull request #26 body updated
+  with the verified results. Archive 2026091617 building from that worktree into
+  `/var/folders/.../T/ship-2026091617`. Eric runs `generated/release-2026091617.sh` after
+  merging #26. Codex's `cloudKitTimeoutDoesNotWaitForAnOperationThatIgnoresCancellation`
+  still to be rerun solo once the archive frees the disk.
