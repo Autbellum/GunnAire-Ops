@@ -227,7 +227,7 @@ enum QuickBooksDocumentLinePublication {
         return lines
     }
 
-    private static func currencyCents(_ amount: Double) -> Int64? {
+    nonisolated private static func currencyCents(_ amount: Double) -> Int64? {
         guard amount.isFinite,
               amount >= 0,
               (amount * 100).rounded() < Double(Int64.max) else { return nil }
