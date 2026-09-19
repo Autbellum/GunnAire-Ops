@@ -5,6 +5,61 @@ description: The SwiftUI and SwiftData rules GunnAire Ops must follow so Command
 
 # Performance rules for GunnAire Ops
 
+## The owner's standing policy (2026-09-19)
+
+Eric set these four as policy after the Command Center watchdog crashes. A
+violation is a defect, not a style note. Cite the number.
+
+1. **Never** perform JSON decoding, SwiftData saving, or API networking (QBO,
+   Google, CloudKit, Apple) inside a SwiftUI `body` or on the `@MainActor`.
+2. Every networking manager uses `async/await` and runs **off** the main actor,
+   touching it only to set `@Published` properties.
+3. Audit every `@StateObject` / `@ObservedObject` initializer; heavy loads go in
+   `.task { }`, never `onAppear`.
+4. Heavy `ForEach` loops use `LazyVStack` / `LazyHStack` or explicit identifiers.
+   Command Center's root is an eager `VStack` in a `ScrollView`
+   (`OperationsDashboardView.swift`, `body`): rule 4 violated at the top level.
+
+Rule 1 in SwiftData terms: `@Environment(\.modelContext)` is main-actor-bound by
+design, so *every* save through it is on main. For bulk sync writes the fix is a
+background `ModelActor`, not a smaller save.
+
+## The owner's launch and CloudKit policy (2026-09-19)
+
+5. No synchronous URLSession, CloudKit container, or OAuth state calls in
+   `AppDelegate`, the `@main` App struct, or an initial view's `init()`.
+6. `accountStatus()` is never called synchronously or awaited inside anything
+   blocking main during initialization.
+7. Persistent-store loading must not block the UI; splash while it completes if
+   migrations are heavy.
+8. Google and QBO token validation runs in detached background Tasks
+   (`Task(priority: .userInitiated)`).
+
+Scan of 2026-09-19 against 5–8: `App.init` and `didFinishLaunching` make no
+network, CloudKit, or OAuth calls; every `accountStatus()` is awaited in an async
+function (`GunnAireCloudKit.swift:60`, `CompanyWorkspaceHost.swift:204` with a 20 s
+timeout). `ModelContainer` is built synchronously in `App.init`; measured launch to
+first frame was 0.7–1.2 s, so it is not where the freeze is. The startup offender is
+`ContentView.onAppear`, which runs five functions that fetch and save on the main
+actor at first appearance (`collapseCloudKitUserDuplicatesIfNeeded`,
+`cleanupCalendarCreatedCustomersIfNeeded`, `refreshGoogleAccountIdentityIfNeeded`,
+`retryPendingSharedCompanyDocumentUploadsIfNeeded`,
+`retryPendingCustomerCommunicationUploadsIfNeeded`). The QuickBooks resource sync
+(`QuickBooksManagementView.syncAllQuickBooksData`) runs as `Task { @MainActor }`
+and writes through the main context: rule 1 violated for sync; it runs on visits to
+QuickBooks Management, not at launch.
+
+## What the device recorded (2026-09-19, TestFlight 2026091612, real data)
+
+73 stalls, all Command Center, 17–26 s each, back to back; two crashes were
+`0x8BADF00D` watchdog kills ("failed to terminate gracefully after 5.0s",
+"scene-update watchdog transgression"). The crash class is main-thread
+unresponsiveness, not memory. Pulled over the cable with
+`xcrun devicectl device copy from --domain-type appDataContainer
+--domain-identifier com.gunnaire.businesssuite --source "Library/Application
+Support/PerformanceDiagnostics-v1/events.json"`; `occurredAt` is seconds since
+2001-01-01.
+
 This app holds every business record as SwiftData model objects under
 NSPersistentCloudKitContainer mirroring. Two facts drive every rule below:
 
