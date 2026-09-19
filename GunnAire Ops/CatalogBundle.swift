@@ -1,6 +1,6 @@
 import Foundation
 
-enum CatalogBundleError: LocalizedError, Equatable {
+nonisolated enum CatalogBundleError: LocalizedError, Equatable {
     case refreshRequired, invalidMembers, invalidQuantity, originalBusiness, lastMember
     var errorDescription: String? {
         switch self {
@@ -15,7 +15,7 @@ enum CatalogBundleError: LocalizedError, Equatable {
 
 /// Member identity is a sold row, not a product ID. Two appearances of the same
 /// product can have independent quantities, prices, tax and equipment evidence.
-struct CatalogBundleSnapshot: Codable, Equatable {
+nonisolated struct CatalogBundleSnapshot: Codable, Equatable {
     struct Member: Codable, Equatable, Identifiable {
         let id: UUID
         let line: CatalogLineItemSnapshot
@@ -72,7 +72,7 @@ enum CatalogBundlePolicy {
         return snapshot
     }
 
-    static func validate(_ root: CatalogLineItemSnapshot) throws {
+    nonisolated static func validate(_ root: CatalogLineItemSnapshot) throws {
         guard root.itemTypeRawValue == CatalogItemType.group.rawValue,
               let reference = root.quickBooksItemID, QuickBooksSalesLineContract.validReference(reference),
               root.assembly == nil, let bundle = root.bundle,
@@ -205,7 +205,7 @@ enum CatalogBundlePolicy {
         return result
     }
 
-    static func validQuantity(_ value: Double) throws {
+    nonisolated static func validQuantity(_ value: Double) throws {
         guard let quantity = QuickBooksSalesLineContract.decimal(value, places: 5, maximum: 999_999), quantity > 0 else {
             throw CatalogBundleError.invalidQuantity
         }

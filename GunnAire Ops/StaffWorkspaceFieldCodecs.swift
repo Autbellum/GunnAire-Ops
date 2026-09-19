@@ -5,7 +5,7 @@ import SwiftData
 /// authorization, content delivery, or permission to activate a staff store.
 /// `make` closures may invent empty SwiftData defaults for owner import only —
 /// staff operational acceptance must never call them for restricted fields.
-extension StaffWorkspaceModelCodecs {
+nonisolated extension StaffWorkspaceModelCodecs {
     static var attachment: StaffWorkspaceModelCodec<ServiceDocumentAttachment> {
         .init(kind: "attachment", id: \.id, fields: [
             .value("kindRaw", \.kindRaw),

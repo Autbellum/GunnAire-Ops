@@ -3,7 +3,7 @@ import Foundation
 /// Reject unsupported or internally inconsistent field evidence before a
 /// detached full-workspace projection. Owner codecs remain lossless; this does
 /// not publish records, grant access, complete a job or issue a file URL.
-enum StaffWorkspaceFieldForms {
+nonisolated enum StaffWorkspaceFieldForms {
     static func validate(_ records: [StaffWorkspaceModelRecord]) throws {
         var templates: [UUID: (title: String, questions: [FieldFormQuestion])] = [:]
         func text(_ record: StaffWorkspaceModelRecord, _ name: String) throws -> String {

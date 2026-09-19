@@ -4,19 +4,19 @@ import SwiftData
 /// Lossless model-transfer primitives, not a server grant or a workspace lease.
 /// These records must pass the full domain/role projection before distribution.
 /// No generic model dump, KVC, reflection or unknown-field fallback is permitted.
-enum StaffWorkspaceValue: Codable, Equatable {
+nonisolated enum StaffWorkspaceValue: Codable, Equatable {
     case text(String), number(Double), integer(Int), flag(Bool), date(Date), identifier(UUID), null
 }
 
-enum StaffWorkspaceModelError: Error, Equatable {
+nonisolated enum StaffWorkspaceModelError: Error, Equatable {
     case invalid, incomplete, relationships, unsupported
 }
 
-enum StaffWorkspaceWireType: String, Codable {
+nonisolated enum StaffWorkspaceWireType: String, Codable {
     case text, number, integer, flag, date, identifier
 }
 
-struct StaffWorkspaceFieldSchema: Codable, Equatable {
+nonisolated struct StaffWorkspaceFieldSchema: Codable, Equatable {
     let type: StaffWorkspaceWireType
     let nullable: Bool
     let reference: String?
@@ -41,7 +41,7 @@ struct StaffWorkspaceFieldSchema: Codable, Equatable {
     }
 }
 
-struct StaffWorkspaceModelRecord: Codable, Equatable {
+nonisolated struct StaffWorkspaceModelRecord: Codable, Equatable {
     let version: Int
     let kind: String
     let id: UUID
@@ -64,12 +64,12 @@ struct StaffWorkspaceModelRecord: Codable, Equatable {
     }
 }
 
-@MainActor protocol StaffWorkspaceAtom {
+nonisolated protocol StaffWorkspaceAtom {
     static var wireType: StaffWorkspaceWireType { get }
     var staffValue: StaffWorkspaceValue { get }
     static func fromStaffValue(_ value: StaffWorkspaceValue) throws -> Self
 }
-extension String: StaffWorkspaceAtom {
+nonisolated extension String: StaffWorkspaceAtom {
     static var wireType: StaffWorkspaceWireType { .text }
     var staffValue: StaffWorkspaceValue { .text(self) }
     static func fromStaffValue(_ value: StaffWorkspaceValue) throws -> Self {
@@ -78,7 +78,7 @@ extension String: StaffWorkspaceAtom {
         return result
     }
 }
-extension Double: StaffWorkspaceAtom {
+nonisolated extension Double: StaffWorkspaceAtom {
     static var wireType: StaffWorkspaceWireType { .number }
     var staffValue: StaffWorkspaceValue { .number(self) }
     static func fromStaffValue(_ value: StaffWorkspaceValue) throws -> Self {
@@ -86,7 +86,7 @@ extension Double: StaffWorkspaceAtom {
         return result
     }
 }
-extension Int: StaffWorkspaceAtom {
+nonisolated extension Int: StaffWorkspaceAtom {
     static var wireType: StaffWorkspaceWireType { .integer }
     var staffValue: StaffWorkspaceValue { .integer(self) }
     static func fromStaffValue(_ value: StaffWorkspaceValue) throws -> Self {
@@ -94,14 +94,14 @@ extension Int: StaffWorkspaceAtom {
         return result
     }
 }
-extension Bool: StaffWorkspaceAtom {
+nonisolated extension Bool: StaffWorkspaceAtom {
     static var wireType: StaffWorkspaceWireType { .flag }
     var staffValue: StaffWorkspaceValue { .flag(self) }
     static func fromStaffValue(_ value: StaffWorkspaceValue) throws -> Self {
         guard case .flag(let result) = value else { throw StaffWorkspaceModelError.invalid }; return result
     }
 }
-extension Date: StaffWorkspaceAtom {
+nonisolated extension Date: StaffWorkspaceAtom {
     static var wireType: StaffWorkspaceWireType { .date }
     var staffValue: StaffWorkspaceValue { .date(self) }
     static func fromStaffValue(_ value: StaffWorkspaceValue) throws -> Self {
@@ -109,7 +109,7 @@ extension Date: StaffWorkspaceAtom {
               abs(result.timeIntervalSinceReferenceDate) <= 100_000_000_000 else { throw StaffWorkspaceModelError.invalid }; return result
     }
 }
-extension UUID: StaffWorkspaceAtom {
+nonisolated extension UUID: StaffWorkspaceAtom {
     static var wireType: StaffWorkspaceWireType { .identifier }
     var staffValue: StaffWorkspaceValue { .identifier(self) }
     static func fromStaffValue(_ value: StaffWorkspaceValue) throws -> Self {
@@ -119,7 +119,7 @@ extension UUID: StaffWorkspaceAtom {
 
 /// Resolver contains only the new detached graph, never objects fetched from
 /// an existing owner or staff store. Duplicate identity is an error, not a merge.
-@MainActor struct StaffWorkspaceModelResolver {
+nonisolated struct StaffWorkspaceModelResolver {
     private var models: [String: any PersistentModel] = [:]
     mutating func add<M: PersistentModel>(_ model: M, kind: String, id: UUID) throws {
         let key = kind + ":" + id.uuidString
@@ -136,7 +136,7 @@ extension UUID: StaffWorkspaceAtom {
     }
 }
 
-@MainActor struct StaffWorkspaceModelField<M: PersistentModel> {
+nonisolated struct StaffWorkspaceModelField<M: PersistentModel> {
     let name: String
     let referenceKind: String?
     let schema: StaffWorkspaceFieldSchema
@@ -179,7 +179,7 @@ extension UUID: StaffWorkspaceAtom {
     }
 }
 
-@MainActor struct StaffWorkspaceModelCodec<M: PersistentModel> {
+nonisolated struct StaffWorkspaceModelCodec<M: PersistentModel> {
     let kind: String
     let id: KeyPath<M, UUID>
     let fields: [StaffWorkspaceModelField<M>]

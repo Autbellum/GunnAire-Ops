@@ -2,7 +2,8 @@ import Foundation
 
 struct StaffWorkspacePublicationDependencies {
     let check: (StaffReplicaSourceContext) throws -> Void
-    let prepare: (StaffReplicaSourceContext) throws -> StaffWorkspaceSourceJournal
+    /// Stages the owner workspace off the main actor; see `StaffWorkspaceSourceStaging.prepareOffMain`.
+    let prepare: (StaffReplicaSourceContext) async throws -> StaffWorkspaceSourceJournal
     let request: (String, String, Data?) async throws -> Data
     let store: SharedTimeLocalStore
     var now: () -> Date = Date.init
@@ -13,7 +14,7 @@ struct StaffWorkspacePublicationDependencies {
             guard let container = CompanyWorkspaceAccessController.shared.authorizedContainer else {
                 throw StaffReplicaSourceSyncError.access
             }
-            return try StaffWorkspaceSourceStaging.prepare(container: container, scope: context.scope,
+            return try await StaffWorkspaceSourceStaging.prepareOffMain(container: container, scope: context.scope,
                 store: StaffWorkspaceSourceStaging.device, check: { try StaffReplicaSourceDependencies.verify(context) })
         }, request: { try await GunnAireBackendService.staffReplicaSourceRequest(path: $0, method: $1, body: $2) },
               store: StaffWorkspaceSourceStaging.device)
@@ -185,7 +186,7 @@ struct StaffWorkspacePublicationSummary {
             try StaffWorkspacePublicationContract.validateCatalog()
             var journal = try load(context)
             try await recover(&journal, context: context)
-            let stage = try dependencies.prepare(context)
+            let stage = try await dependencies.prepare(context)
             try dependencies.check(context)
             var snapshot = try await read(context)
             let plan = try StaffWorkspacePublicationPlan.reconcile(stage: stage, journal: &journal, remote: snapshot.records)
@@ -223,15 +224,16 @@ struct StaffWorkspacePublicationSummary {
         } catch { cache = nil; throw error }
     }
 
-    /// The caller must perform its core capture in the same synchronous actor
-    /// segment. A saved edit arriving during our earlier network awaits cannot
-    /// become newer staff facts ahead of its full owner-source publication.
-    func matchesCurrent(_ original: StaffWorkspaceSourceJournal, context: StaffReplicaSourceContext) throws -> Bool {
+    /// Whether the owner workspace still stages to `original`. The caller
+    /// checks this before its core capture and again after it, so a saved
+    /// edit arriving during any of the suspensions in between cannot become
+    /// newer staff facts ahead of its full owner-source publication.
+    func matchesCurrent(_ original: StaffWorkspaceSourceJournal, context: StaffReplicaSourceContext) async throws -> Bool {
         guard !running, original.scope == context.scope else { throw StaffReplicaSourceSyncError.access }
         let key = Self.key(context.scope), lock = try SharedTimeMutationGate.begin(key)
         defer { SharedTimeMutationGate.finish(key, id: lock) }
         try dependencies.check(context)
-        let current = try dependencies.prepare(context)
+        let current = try await dependencies.prepare(context)
         try dependencies.check(context)
         try current.validate(context.scope)
         return current == original

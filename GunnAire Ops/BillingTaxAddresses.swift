@@ -11,7 +11,7 @@ enum BillingTaxAddressError: LocalizedError, Equatable {
     }
 }
 
-struct BillingTaxAddressScope: Codable, Equatable {
+nonisolated struct BillingTaxAddressScope: Codable, Equatable {
     let customerID: UUID
     let serviceLocationID: UUID?
     let siteAddress: String?
@@ -26,7 +26,7 @@ struct BillingTaxAddressScope: Codable, Equatable {
 /// Stored inside the existing CloudKit-backed immutable line snapshot, not in
 /// device preferences. This is address evidence, never a tax-rate calculation or
 /// a financial approval. Estimate-to-invoice conversion retains the same scope.
-struct BillingTaxAddressContext: Codable, Equatable {
+nonisolated struct BillingTaxAddressContext: Codable, Equatable {
     let version: Int
     let scope: BillingTaxAddressScope
     let service: BillingPublicationAddress
@@ -90,7 +90,7 @@ struct BillingTaxAddressContext: Codable, Equatable {
     }
 }
 
-extension BillingPublicationAddress {
+nonisolated extension BillingPublicationAddress {
     static var empty: Self { .init(Line1: "", City: "", CountrySubDivisionCode: "", PostalCode: "") }
     var trimmed: Self {
         .init(Line1: Line1.trimmingCharacters(in: .whitespacesAndNewlines),

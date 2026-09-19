@@ -3,7 +3,7 @@ import SwiftData
 
 /// Explicit owner-side values. These mappings are not staff role projections,
 /// authorization, content delivery, or permission to activate a staff store.
-extension StaffWorkspaceModelCodecs {
+nonisolated extension StaffWorkspaceModelCodecs {
     static var user: StaffWorkspaceModelCodec<AppUser> {
         .init(kind: "user", id: \.id, fields: [
             .value("email", \.email),

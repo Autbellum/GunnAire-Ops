@@ -15,7 +15,7 @@ enum BillingPublicationError: LocalizedError, Equatable {
     }
 }
 
-enum BillingPublicationDocumentKind: String, Codable { case invoice = "Invoice", estimate = "Estimate" }
+nonisolated enum BillingPublicationDocumentKind: String, Codable, Sendable { case invoice = "Invoice", estimate = "Estimate" }
 enum BillingPublicationOperation: String, Codable { case create, update }
 enum BillingPublicationState: String, Codable { case reserved, sending, unknown, confirmed, cancelled }
 
@@ -43,7 +43,7 @@ struct BillingDocumentScope: Codable, Equatable {
 
 /// Complete, explicitly reviewed address fields. A free-form local address is
 /// never guessed into a tax jurisdiction or silently made nontaxable.
-struct BillingPublicationAddress: Codable, Equatable {
+nonisolated struct BillingPublicationAddress: Codable, Equatable {
     var Line1: String
     var City: String
     var CountrySubDivisionCode: String

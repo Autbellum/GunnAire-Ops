@@ -3,7 +3,7 @@
 import Foundation
 import SwiftData
 
-enum ServiceCallType: String, Codable, CaseIterable {
+nonisolated enum ServiceCallType: String, Codable, CaseIterable {
     case service
     case repair
     case estimate
