@@ -133,7 +133,7 @@ struct CompanyCloudKitAccount {
 
 /// Only reads metadata. No ModelContainer, model fetch, or mirroring is needed
 /// to distinguish an approved store from an unrelated restored/copied file.
-enum CompanyWorkspaceStore {
+nonisolated enum CompanyWorkspaceStore {
     static var url: URL { ModelConfiguration(schema: GunnAireModelSchema.schema, cloudKitDatabase: .none).url }
 
     static func identity(at url: URL) throws -> String? {
@@ -163,8 +163,11 @@ struct CompanyWorkspaceDependencies {
     var saveRegistration: (CompanyWorkspaceStoreRegistration) throws -> Void
     var readLease: () throws -> CompanyWorkspaceLease?
     var saveLease: (CompanyWorkspaceLease?) throws -> Void
-    var storeIdentity: () throws -> String?
-    var openStore: () throws -> ModelContainer
+    /// Both read the store file, and `openStore` loads it with CloudKit
+    /// mirroring attached; `unlock` runs them on a background task so the
+    /// "Verifying company access" screen keeps drawing while the store opens.
+    var storeIdentity: @Sendable () throws -> String?
+    var openStore: @Sendable () throws -> ModelContainer
     var now: () -> Date
     var sleep: (TimeInterval) async throws -> Void = { interval in
         try await Task.sleep(for: .seconds(interval))
@@ -384,7 +387,7 @@ final class CompanyWorkspaceAccessController: ObservableObject {
            registration.matches(session: session, binding: lease.binding, storeUUID: (try? dependencies.storeIdentity()) ?? nil) {
             do {
                 lastMismatchDetail = ""
-                try unlock(lease, allowLegacyAdoption: false, isOffline: true)
+                try await unlock(lease, allowLegacyAdoption: false, isOffline: true)
                 return
             } catch {
                 // A stale or unusable saved lease falls through to a full verification.
@@ -424,7 +427,7 @@ final class CompanyWorkspaceAccessController: ObservableObject {
                    let registration = try dependencies.readRegistration(),
                    registration.matches(session: session, binding: lease.binding, storeUUID: try dependencies.storeIdentity()) {
                     diagnosticStep = "iCloud unreachable. Using the verified workspace lease…"
-                    try unlock(lease, allowLegacyAdoption: false, isOffline: true)
+                    try await unlock(lease, allowLegacyAdoption: false, isOffline: true)
                     diagnosticStep = "Store opened. Ready."
                     return
                 }
@@ -460,7 +463,7 @@ final class CompanyWorkspaceAccessController: ObservableObject {
                 }
                 let lease = CompanyWorkspaceLease(session: session, binding: binding, user: response.user, verifiedAt: dependencies.now())
                 diagnosticStep = "Binding verified. Opening local data store…"
-                try unlock(lease, allowLegacyAdoption: false)
+                try await unlock(lease, allowLegacyAdoption: false)
                 diagnosticStep = "Store opened. Ready."
             } catch {
                 guard isCurrent(operation, session: session) else { return }
@@ -470,7 +473,7 @@ final class CompanyWorkspaceAccessController: ObservableObject {
                    lease.isValid(for: session, accountHash: account.accountHash, environment: account.environment, now: dependencies.now()),
                    let registration = try dependencies.readRegistration(),
                    registration.matches(session: session, binding: lease.binding, storeUUID: try dependencies.storeIdentity()) {
-                    try unlock(lease, allowLegacyAdoption: false, isOffline: true)
+                    try await unlock(lease, allowLegacyAdoption: false, isOffline: true)
                 } else { throw error }
             }
         } catch {
@@ -555,20 +558,28 @@ final class CompanyWorkspaceAccessController: ObservableObject {
                 throw mismatch("server returned a binding that does not match this device (valid=\(binding.isValid), environment \(binding.environment), account \(Self.fingerprint(binding.cloudAccountHash)) vs \(Self.fingerprint(account.accountHash)))")
             }
             let lease = CompanyWorkspaceLease(session: session, binding: binding, user: response.user, verifiedAt: dependencies.now())
-            try unlock(lease, allowLegacyAdoption: true)
+            try await unlock(lease, allowLegacyAdoption: true)
         } catch {
             guard isCurrent(operation, session: session) else { return }
             invalidate(reason: Self.failure(for: error, verifiedAccount: true))
         }
     }
 
-    private func unlock(_ lease: CompanyWorkspaceLease, allowLegacyAdoption: Bool, isOffline: Bool = false) throws {
+    /// Opens the store and prepares it for the verified user. The store file
+    /// reads and the store load (which attaches CloudKit mirroring) run off
+    /// the main actor so the "Verifying company access" screen keeps drawing.
+    /// Each resumption re-checks that this unlock is still the current one,
+    /// because the session can be signed out or the generation replaced while
+    /// the store is opening.
+    private func unlock(_ lease: CompanyWorkspaceLease, allowLegacyAdoption: Bool, isOffline: Bool = false) async throws {
+        let operation = generation
         guard dependencies.session() == lease.session, !mustRestart,
               lease.isValid(for: lease.session, accountHash: lease.binding.cloudAccountHash,
                             environment: lease.binding.environment, now: dependencies.now()) else {
             throw CompanyWorkspaceFailure.signIn
         }
-        let identity = try dependencies.storeIdentity()
+        let identity = try await Self.offMain(dependencies.storeIdentity)
+        try requireCurrent(operation, lease: lease)
         var registration = try dependencies.readRegistration()
         if let existing = registration, !existing.matches(session: lease.session, binding: lease.binding, storeUUID: identity) {
             if Self.canAdopt(registration: existing, session: lease.session, binding: lease.binding, storeUUID: identity) {
@@ -608,11 +619,23 @@ final class CompanyWorkspaceAccessController: ObservableObject {
             } else if isOffline { throw CompanyWorkspaceFailure.storage }
         }
 
-        let opened = try container ?? dependencies.openStore()
-        guard let storeUUID = try dependencies.storeIdentity() else { throw CompanyWorkspaceFailure.storage }
+        let opened: ModelContainer
+        if let container {
+            opened = container
+        } else {
+            opened = try await Self.offMain(dependencies.openStore)
+            try requireCurrent(operation, lease: lease)
+        }
+        guard let storeUUID = try await Self.offMain(dependencies.storeIdentity) else { throw CompanyWorkspaceFailure.storage }
+        try requireCurrent(operation, lease: lease)
         if registration == nil {
             try dependencies.saveRegistration(CompanyWorkspaceStoreRegistration(backendOrigin: lease.session.backendOrigin, binding: lease.binding, storeUUID: storeUUID))
         }
+        // The user reconciliation and template seeding stay on the main
+        // context on purpose: they touch a handful of rows, the screens that
+        // mount next read the result immediately, and the tests below pin
+        // that an unchanged user never saves. The store open above was the
+        // expensive part.
         let context = opened.mainContext
         let users = try context.fetch(FetchDescriptor<AppUser>())
         let technicians = try context.fetch(FetchDescriptor<Technician>())
@@ -638,6 +661,19 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         forgetSessionMemo()
         phase = .ready
         scheduleExpiry(for: lease)
+    }
+
+    /// `unlock` suspends while the store opens; anything that replaced this
+    /// generation or removed the session in the meantime ends the unlock.
+    private func requireCurrent(_ operation: UUID, lease: CompanyWorkspaceLease) throws {
+        guard operation == generation, !mustRestart, dependencies.session() == lease.session else {
+            throw CompanyWorkspaceFailure.signIn
+        }
+    }
+
+    /// Runs synchronous file work on a background task and returns its value.
+    private static func offMain<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
+        try await Task.detached(priority: .userInitiated) { try work() }.value
     }
 
     private func isCurrent(_ operation: UUID, session: CompanyWorkspaceSession) -> Bool {

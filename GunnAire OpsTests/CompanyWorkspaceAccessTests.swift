@@ -17,8 +17,11 @@ struct CompanyWorkspaceAccessTests {
         var environment = "development"
         var registration: CompanyWorkspaceStoreRegistration?
         var lease: CompanyWorkspaceLease?
-        var storeID: String? = "existing-store"
-        var openCount = 0
+        // Read and written by the store-opening closures, which the controller
+        // now runs on a background task; the test awaits the controller before
+        // reading them, so no two accesses overlap.
+        nonisolated(unsafe) var storeID: String? = "existing-store"
+        nonisolated(unsafe) var openCount = 0
         var approvalCount = 0
         var fetchError: Error?
         var fetchCount = 0

@@ -8,7 +8,7 @@ import UIKit
 /// One recorded observation about how the app behaved: a launch that was timed,
 /// a stretch where the main thread stopped answering, or a termination Apple
 /// reported back after the fact.
-struct AppPerformanceEvent: Codable, Identifiable, Equatable {
+nonisolated struct AppPerformanceEvent: Codable, Identifiable, Equatable {
     enum Kind: String, Codable {
         case launch
         case stall
@@ -117,13 +117,20 @@ final class AppPerformanceDiagnostics: NSObject, ObservableObject {
     /// can be shown without waiting for a MetricKit payload.
     @Published private(set) var lastLaunchSeconds: Double?
 
-    private let store = AppPerformanceEventStore()
+    nonisolated private let store = AppPerformanceEventStore()
+    private let persistence: AppPerformanceEventPersistence
     private let stallMonitor = MainThreadStallMonitor(threshold: AppPerformanceDiagnostics.stallThreshold)
     private var launchStopwatch: AppLaunchStopwatch?
     private var hasStarted = false
+    /// Set once the record on disk has been read back. Until then nothing is
+    /// written, so an event recorded during the first second of launch cannot
+    /// overwrite the history with a file that holds only itself.
+    private var hasRestored = false
+    private var persistSequence = 0
     private var currentContext: String?
 
     private override init() {
+        persistence = AppPerformanceEventPersistence(store: store)
         super.init()
     }
 
@@ -136,24 +143,47 @@ final class AppPerformanceDiagnostics: NSObject, ObservableObject {
         guard !hasStarted else { return }
         hasStarted = true
 
-        events = store.load()
-        store.pruneExpiredPayloads(olderThan: Self.payloadRetention)
-
         launchStopwatch = AppLaunchStopwatch { [weak self] seconds in
             self?.recordLaunch(seconds: seconds)
         }
         launchStopwatch?.start()
 
         MXMetricManager.shared.add(self)
-        // Payloads delivered while no subscriber was attached are still held by
-        // the system. Reading them here means the first run with this code
-        // already has whatever Apple kept.
-        ingest(diagnosticPayloads: MXMetricManager.shared.pastDiagnosticPayloads)
 
         stallMonitor.onStall = { [weak self] seconds in
             self?.recordStall(seconds: seconds)
         }
         stallMonitor.start()
+
+        // Reading the record back, pruning old payload files and translating
+        // whatever MetricKit held while no subscriber was attached are all
+        // disk work; none of it belongs on the main thread during launch.
+        let store = self.store
+        let retention = Self.payloadRetention
+        Task.detached(priority: .utility) { [weak self] in
+            let stored = store.load()
+            store.pruneExpiredPayloads(olderThan: retention)
+            let pastPayloads = MXMetricManager.shared.pastDiagnosticPayloads
+            let prepared = AppPerformanceDiagnosticTranslator.prepare(pastPayloads, writingPayloadsTo: store)
+            await self?.restore(stored, thenIngest: prepared)
+        }
+    }
+
+    /// Merges the record read from disk under the events recorded since
+    /// launch, then ingests the diagnostics MetricKit kept from earlier runs.
+    private func restore(_ stored: [AppPerformanceEvent], thenIngest prepared: [AppPerformanceDiagnosticTranslator.Result]) {
+        let liveIDs = Set(events.map(\.id))
+        let unseen = stored.filter { !liveIDs.contains($0.id) }
+        if !unseen.isEmpty {
+            events.append(contentsOf: unseen)
+            events.sort { $0.occurredAt > $1.occurredAt }
+            if events.count > Self.eventLimit {
+                events.removeLast(events.count - Self.eventLimit)
+            }
+        }
+        hasRestored = true
+        ingest(prepared: prepared)
+        persist()
     }
 
     /// Names the screen the owner is looking at, so a recorded stall says where
@@ -210,7 +240,7 @@ final class AppPerformanceDiagnostics: NSObject, ObservableObject {
             events.removeLast(events.count - Self.eventLimit)
         }
         logger.log("Performance event: \(event.kind.rawValue, privacy: .public) \(event.headline, privacy: .public)")
-        store.save(events)
+        persist()
     }
 
     private func append(_ newEvents: [AppPerformanceEvent]) {
@@ -220,7 +250,20 @@ final class AppPerformanceDiagnostics: NSObject, ObservableObject {
         if events.count > Self.eventLimit {
             events.removeLast(events.count - Self.eventLimit)
         }
-        store.save(events)
+        persist()
+    }
+
+    /// Writes the current record off the main thread. Writes carry a sequence
+    /// number so one that finishes late can never replace a newer record.
+    private func persist() {
+        guard hasRestored else { return }
+        persistSequence += 1
+        let snapshot = events
+        let sequence = persistSequence
+        let persistence = self.persistence
+        Task.detached(priority: .utility) {
+            await persistence.save(snapshot, sequence: sequence)
+        }
     }
 
     // MARK: - Reading
@@ -281,9 +324,11 @@ extension AppPerformanceDiagnostics: MXMetricManagerSubscriber {
     /// MetricKit calls this on a background queue, which is why the work hops
     /// back to the main actor before touching published state.
     nonisolated func didReceive(_ payloads: [MXDiagnosticPayload]) {
-        let translated = payloads.map { AppPerformanceDiagnosticTranslator.translate($0) }
+        // Translation and the payload file writes happen here, on MetricKit's
+        // queue; only the finished events cross to the main actor.
+        let prepared = AppPerformanceDiagnosticTranslator.prepare(payloads, writingPayloadsTo: store)
         Task { @MainActor [weak self] in
-            self?.ingest(translated: translated)
+            self?.ingest(prepared: prepared)
         }
     }
 
@@ -293,23 +338,19 @@ extension AppPerformanceDiagnostics: MXMetricManagerSubscriber {
         // stays valid if aggregate metrics become useful later.
     }
 
-    private func ingest(diagnosticPayloads payloads: [MXDiagnosticPayload]) {
-        ingest(translated: payloads.map { AppPerformanceDiagnosticTranslator.translate($0) })
-    }
-
-    private func ingest(translated: [AppPerformanceDiagnosticTranslator.Result]) {
+    /// Adds translated diagnostics to the record, skipping anything already on
+    /// record from a previous delivery of the same window; MetricKit can
+    /// repeat payloads.
+    private func ingest(prepared: [AppPerformanceDiagnosticTranslator.Result]) {
         var recorded: [AppPerformanceEvent] = []
-        for result in translated {
-            let fileName = store.writePayload(result.rawJSON, at: result.windowEnd)
+        for result in prepared {
             for var event in result.events {
-                // Skip anything already on record from a previous delivery of
-                // the same window; MetricKit can repeat payloads.
                 guard !events.contains(where: {
                     $0.kind == event.kind
                         && $0.occurredAt == event.occurredAt
                         && $0.headline == event.headline
                 }) else { continue }
-                event.payloadFileName = fileName
+                event.payloadFileName = result.payloadFileName
                 recorded.append(event)
             }
         }
@@ -317,13 +358,46 @@ extension AppPerformanceDiagnostics: MXMetricManagerSubscriber {
     }
 }
 
+/// Serializes the record's writes off the main thread. A write that finishes
+/// after a newer one is dropped by its sequence number.
+private actor AppPerformanceEventPersistence {
+    private let store: AppPerformanceEventStore
+    private var lastSequence = 0
+
+    init(store: AppPerformanceEventStore) {
+        self.store = store
+    }
+
+    func save(_ events: [AppPerformanceEvent], sequence: Int) {
+        guard sequence > lastSequence else { return }
+        lastSequence = sequence
+        store.save(events)
+    }
+}
+
 // MARK: - Translating Apple's diagnostics into something readable
 
-enum AppPerformanceDiagnosticTranslator {
-    struct Result {
+/// Pure translation plus the payload file write; runs wherever the payload
+/// arrives, never on the main actor.
+nonisolated enum AppPerformanceDiagnosticTranslator {
+    nonisolated struct Result: Sendable {
         var events: [AppPerformanceEvent]
         var rawJSON: Data?
         var windowEnd: Date
+        /// Name of the file holding Apple's original JSON, once written.
+        var payloadFileName: String?
+    }
+
+    /// Translates each payload and keeps its original JSON beside the record.
+    fileprivate static func prepare(
+        _ payloads: [MXDiagnosticPayload],
+        writingPayloadsTo store: AppPerformanceEventStore
+    ) -> [Result] {
+        payloads.map { payload in
+            var result = translate(payload)
+            result.payloadFileName = store.writePayload(result.rawJSON, at: result.windowEnd)
+            return result
+        }
     }
 
     static func translate(_ payload: MXDiagnosticPayload) -> Result {
@@ -587,7 +661,7 @@ private final class MainThreadStallMonitor: @unchecked Sendable {
 
 /// Keeps the record on the device between launches. A crash is only useful if
 /// it survives the launch that follows it.
-private struct AppPerformanceEventStore {
+nonisolated private struct AppPerformanceEventStore {
     private static let directoryName = "PerformanceDiagnostics-v1"
     private static let eventsFileName = "events.json"
 

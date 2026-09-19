@@ -1,6 +1,6 @@
 import SwiftData
 
-enum GunnAireModelSchema {
+nonisolated enum GunnAireModelSchema {
     /// Built once: store identity checks and the publication loop read it on
     /// every pass, and constructing a 32-model schema is not free.
     static let schema: Schema = Schema([

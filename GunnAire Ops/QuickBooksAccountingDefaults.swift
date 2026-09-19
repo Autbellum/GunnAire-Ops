@@ -318,8 +318,8 @@ enum QuickBooksAccountingDefaults {
 
     /// QuickBooks omits `Active` when it is true; only an explicit `false`
     /// marks a record inactive (the manual mapping picker applies the same reading).
-    private static func isActive(_ item: QuickBooksItem) -> Bool { item.Active != false }
-    private static func isActive(_ account: QuickBooksAccount) -> Bool { account.Active != false }
+    nonisolated private static func isActive(_ item: QuickBooksItem) -> Bool { item.Active != false }
+    nonisolated private static func isActive(_ account: QuickBooksAccount) -> Bool { account.Active != false }
 
     private static func matches(_ value: String?, _ expected: String) -> Bool {
         matches(value, [expected])
