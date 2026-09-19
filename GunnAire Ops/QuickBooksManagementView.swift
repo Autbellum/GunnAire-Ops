@@ -95,7 +95,7 @@ enum QuickBooksDocumentLinePublicationError: LocalizedError, Equatable {
 /// reuse an ambiguous QBO Item ID, or publish a different total than the local
 /// customer document.
 enum QuickBooksDocumentLinePublication {
-    static func validateSnapshotTotals(snapshotJSON: String?, expectedSubtotal: Double) throws {
+    nonisolated static func validateSnapshotTotals(snapshotJSON: String?, expectedSubtotal: Double) throws {
         let snapshots = try CatalogSnapshotPayload.read(snapshotJSON)?.lines ?? []
         guard !snapshots.isEmpty else { throw QuickBooksDocumentLinePublicationError.missingCatalogSnapshot }
         var gross = 0.0
