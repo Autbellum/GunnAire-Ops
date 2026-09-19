@@ -115,3 +115,14 @@ at the start of every turn; append to it rather than rewriting it.
   so the evidence is: timing-sensitive under load, not a deterministic failure. Codex's
   call whether to widen its deadline. Claude's work for build 17 is complete; the
   worktree at `/tmp/claude-502/wt17` stays until the release in case a re-archive is needed.
+- 2026-09-19 19:52 Claude (the Mac slept from about 15:56 to 19:50): the review on #26 found two real defects in Claude's files, fixed
+  in one commit: the owner-workspace key loader read raw bytes while builds up to 16 stored
+  the key JSON-encoded through `KeychainStore.saveCodable` (an upgraded install would have
+  failed the 32-byte guard and lost access to its encrypted staging journal), now handled by
+  `StaffWorkspaceSourceStaging.ownerKey(fromStored:)` with a test; and the release script
+  piped `git push` into `tail`, masking a failed push under `set -e`, now `set -euo pipefail`
+  with an unpiped push. Two other findings were declined with evidence (archive timeline;
+  the persist window in `prepareOffMain` is the same post-prepare window that already
+  exists before the remote read). Archive 2026091617 is being rebuilt from the fix commit.
+  Lesson for both agents: when a keychain or file entry changes its encoding API, the
+  reader must accept the previous representation until every device has rewritten it.
