@@ -114,7 +114,19 @@ import CloudKit
         guard Set(records.saveResults.keys) == [root.recordID, share.recordID], records.deleteResults.isEmpty else {
             throw CloudKitStaffSharingError.invalid
         }
-        for result in records.saveResults.values { _ = try result.get() }
+        // An atomic save fails all records together: the record that actually
+        // caused the failure carries the real CKError; every other record in
+        // the same batch reports a generic .batchRequestFailed placeholder.
+        // Throwing whichever result dictionary iteration reaches first risks
+        // surfacing that placeholder instead of the real cause, so prefer any
+        // non-placeholder failure when one is present.
+        let saveErrors = records.saveResults.values.compactMap { result -> Error? in
+            if case .failure(let error) = result { return error }
+            return nil
+        }
+        if let real = saveErrors.first(where: { ($0 as? CKError)?.code != .batchRequestFailed }) ?? saveErrors.first {
+            throw real
+        }
         let (confirmedRoot, confirmedShare) = try await readOwner(database: database, plan: plan, account: account, authorize: authorize)
         guard let confirmedRoot, let confirmedShare,
               let url = try verifyOwnerShare(confirmedShare, root: confirmedRoot, plan: plan, account: account, enforceParticipant: true)

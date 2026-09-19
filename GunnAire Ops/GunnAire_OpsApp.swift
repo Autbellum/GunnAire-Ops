@@ -76,11 +76,13 @@ struct GunnAire_OpsApp: App {
             AppRootView()
                 .modelContainer(sharedModelContainer)
                 .environmentObject(cloudKitEventMonitor)
+                .environmentObject(cloudKitEventMonitor.attention)
         case .failed(let message):
             StartupFailureView(message: message)
         case .requiresAuthorization:
             AppRootView()
                 .environmentObject(cloudKitEventMonitor)
+                .environmentObject(cloudKitEventMonitor.attention)
         }
     }
 

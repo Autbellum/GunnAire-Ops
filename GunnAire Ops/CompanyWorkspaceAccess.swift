@@ -36,11 +36,45 @@ struct CompanyWorkspaceSession: Codable, Equatable {
     }
 }
 
-enum CompanyWorkspaceClock {
-    static func parse(_ text: String) -> Date? {
+/// A Keychain-independent view of every in-memory input that can change the
+/// result of `CompanyWorkspaceSession.current` between two reads: the Apple
+/// session token, the Google application-session token, Apple's authenticated
+/// flag, and the signed-in email. `AppleAuthManager` and `GoogleAuthManager`
+/// update these in the same call that writes or removes the Keychain item, so
+/// a changed token is observed here before any Keychain read happens.
+enum CompanyWorkspaceSessionSignal {
+    static var current: String {
+        [
+            AppleAuthManager.shared.isAuthenticated ? "apple" : "",
+            AppleAuthManager.shared.sessionToken ?? "",
+            GoogleAuthManager.shared.applicationSessionToken ?? "",
+            AppIdentity.currentEmail ?? ""
+        ].joined(separator: "\u{1F}")
+    }
+}
+
+/// Shared formatters behind a lock: this parser runs on every session read
+/// and inside the per-minute replica capture, where building two
+/// `ISO8601DateFormatter`s per call loaded ICU tables each time (Rule A).
+nonisolated enum CompanyWorkspaceClock {
+    private static let lock = NSLock()
+    private static let withFractionalSeconds: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.date(from: text) ?? ISO8601DateFormatter().date(from: text)
+        return formatter
+    }()
+    private static let withInternetDateTime = ISO8601DateFormatter()
+
+    static func parse(_ text: String) -> Date? {
+        lock.lock(); defer { lock.unlock() }
+        return withFractionalSeconds.date(from: text) ?? withInternetDateTime.date(from: text)
+    }
+
+    /// Internet date-time with fractional seconds, the form the replica
+    /// contract stores; the inverse of `parse` for such strings.
+    static func fractionalString(from date: Date) -> String {
+        lock.lock(); defer { lock.unlock() }
+        return withFractionalSeconds.string(from: date)
     }
 }
 
@@ -116,7 +150,7 @@ struct CompanyCloudKitAccount {
 
 /// Only reads metadata. No ModelContainer, model fetch, or mirroring is needed
 /// to distinguish an approved store from an unrelated restored/copied file.
-enum CompanyWorkspaceStore {
+nonisolated enum CompanyWorkspaceStore {
     static var url: URL { ModelConfiguration(schema: GunnAireModelSchema.schema, cloudKitDatabase: .none).url }
 
     static func identity(at url: URL) throws -> String? {
@@ -146,13 +180,19 @@ struct CompanyWorkspaceDependencies {
     var saveRegistration: (CompanyWorkspaceStoreRegistration) throws -> Void
     var readLease: () throws -> CompanyWorkspaceLease?
     var saveLease: (CompanyWorkspaceLease?) throws -> Void
-    var storeIdentity: () throws -> String?
-    var openStore: () throws -> ModelContainer
+    /// Both read the store file, and `openStore` loads it with CloudKit
+    /// mirroring attached; `unlock` runs them on a background task so the
+    /// "Verifying company access" screen keeps drawing while the store opens.
+    var storeIdentity: @Sendable () throws -> String?
+    var openStore: @Sendable () throws -> ModelContainer
     var now: () -> Date
     var sleep: (TimeInterval) async throws -> Void = { interval in
         try await Task.sleep(for: .seconds(interval))
     }
     var clearContinuations: () -> Void = {}
+    /// Cheap identity inputs compared before a memoized `session()` result is
+    /// reused; any change forces a fresh read. See `CompanyWorkspaceSessionSignal`.
+    var sessionSignal: () -> String = { CompanyWorkspaceSessionSignal.current }
 
     static var live: Self {
         Self(
@@ -181,6 +221,11 @@ struct CompanyWorkspaceDependencies {
 @MainActor
 final class CompanyWorkspaceAccessController: ObservableObject {
     static let shared = CompanyWorkspaceAccessController(dependencies: .live, observesAccountChanges: true)
+    /// Which check produced the most recent .differentWorkspace failure, with
+    /// 8-character fingerprints of the accounts, bindings or store involved.
+    /// That failure covers five distinct conditions and its one sentence made
+    /// the owner's iPad undiagnosable from outside. No account or token content.
+    @Published private(set) var lastMismatchDetail: String = ""
     @Published private(set) var phase: CompanyWorkspacePhase = .checking
     /// Surfaced directly in the "Verifying company access…" spinner so a
     /// stuck verification can be localized to a specific step without needing
@@ -195,6 +240,20 @@ final class CompanyWorkspaceAccessController: ObservableObject {
     private var expiryTask: Task<Void, Never>?
     private let dependencies: CompanyWorkspaceDependencies
     private var accountObserver: NSObjectProtocol?
+    /// The render-time getters (`verifiedUser`, `verifiedRole`, `operationStamp`,
+    /// `verifiedCompanyID`) are evaluated hundreds of times per SwiftUI body
+    /// pass, and every fresh `dependencies.session()` read costs one or two
+    /// Keychain round-trips plus JSON decoding. The decoded session is therefore
+    /// memoized for at most `sessionMemoLifetime`. The memo never extends
+    /// authority: lease expiry, the email match and the clock are evaluated on
+    /// every call; the entry is discarded when the in-memory session tokens or
+    /// signed-in email change, when the clock moves backwards, and whenever
+    /// `invalidate()` or `unlock` run; and every verification path
+    /// (`enforceAccessDeadline`, `refresh`, `unlock`, `isCurrent`) reads the
+    /// session fresh.
+    static let sessionMemoLifetime: TimeInterval = 1
+    private var sessionMemo: (signal: String, readAt: Date, session: CompanyWorkspaceSession?)?
+    private var starterTemplatesGeneration: UUID?
     #if DEBUG
     private var testContainer: ModelContainer?
     func installTestContainer(_ container: ModelContainer) {
@@ -208,6 +267,7 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         if observesAccountChanges {
             accountObserver = NotificationCenter.default.addObserver(forName: .CKAccountChanged, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
+                    CompanyCloudKitRuntimeAccount.invalidateCache()
                     self?.invalidate(accountChanged: true)
                 }
             }
@@ -224,11 +284,37 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         #if DEBUG
         if GunnAireCloudKit.usesTestDatabase, let testContainer { return testContainer }
         #endif
-        guard phase == .ready, !mustRestart, let lease = activeLease,
-              let session = dependencies.session(),
+        // State checks first: while the workspace is not ready there is no
+        // lease to compare a session against, so no Keychain read is warranted
+        // (the gate re-renders several times per verification).
+        guard phase == .ready, !mustRestart, activeLease != nil else { return nil }
+        return authorizedContainer(for: memoizedSession())
+    }
+
+    private func authorizedContainer(for session: CompanyWorkspaceSession?) -> ModelContainer? {
+        #if DEBUG
+        if GunnAireCloudKit.usesTestDatabase, let testContainer { return testContainer }
+        #endif
+        guard phase == .ready, !mustRestart, let lease = activeLease, let session,
               lease.isValid(for: session, accountHash: lease.binding.cloudAccountHash,
                             environment: lease.binding.environment, now: dependencies.now()) else { return nil }
         return container
+    }
+
+    private func memoizedSession() -> CompanyWorkspaceSession? {
+        let now = dependencies.now()
+        let signal = dependencies.sessionSignal()
+        if let memo = sessionMemo, memo.signal == signal, now >= memo.readAt,
+           now.timeIntervalSince(memo.readAt) < Self.sessionMemoLifetime {
+            return memo.session
+        }
+        let session = dependencies.session()
+        sessionMemo = (signal, now, session)
+        return session
+    }
+
+    private func forgetSessionMemo() {
+        sessionMemo = nil
     }
 
     var operationStamp: CompanyWorkspaceOperationStamp? {
@@ -261,6 +347,7 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         activeLease = nil
         pending = nil
         container = nil
+        forgetSessionMemo()
         mustRestart = mustRestart || accountChanged
         dependencies.clearContinuations()
         if !preserveCachedLease { try? dependencies.saveLease(nil) }
@@ -271,6 +358,8 @@ final class CompanyWorkspaceAccessController: ObservableObject {
     /// mounted workspace never relies only on a non-observable getter.
     func enforceAccessDeadline() {
         guard activeLease != nil else { return }
+        // A deadline check must observe the live session, never the memo.
+        forgetSessionMemo()
         if authorizedContainer == nil { invalidate() }
     }
 
@@ -287,6 +376,43 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         if refreshTask?.id == id { refreshTask = nil }
     }
 
+    /// How long a server-verified lease is trusted before the workspace is
+    /// re-verified with the server: the lease itself is bounded to 24 hours,
+    /// so re-verification at 23 hours renews it before it lapses. Launches and
+    /// foreground activations inside the interval use the lease; sign-out,
+    /// revocation and expiry are still enforced locally by
+    /// `enforceAccessDeadline` on every activation and by the backend on every
+    /// proof-bearing request.
+    static let verificationInterval: TimeInterval = 23 * 60 * 60
+
+    /// Launch and foreground path: after the local deadline check, a workspace
+    /// whose lease was verified within `maxAge` stays open (or is opened from
+    /// the saved lease without a network round-trip); anything older, or a
+    /// lease that does not fit this session and store, runs a full `refresh()`.
+    func refreshIfStale(maxAge: TimeInterval) async {
+        enforceAccessDeadline()
+        let now = dependencies.now()
+        if authorizedContainer != nil, let lease = activeLease, now.timeIntervalSince(lease.verifiedAt) < maxAge {
+            return
+        }
+        if activeLease == nil, !mustRestart, let session = dependencies.session(),
+           let lease = try? dependencies.readLease(),
+           now.timeIntervalSince(lease.verifiedAt) < maxAge,
+           lease.isValid(for: session, accountHash: lease.binding.cloudAccountHash,
+                         environment: lease.binding.environment, now: now),
+           let registration = try? dependencies.readRegistration(),
+           registration.matches(session: session, binding: lease.binding, storeUUID: (try? dependencies.storeIdentity()) ?? nil) {
+            do {
+                lastMismatchDetail = ""
+                try await unlock(lease, allowLegacyAdoption: false, isOffline: true)
+                return
+            } catch {
+                // A stale or unusable saved lease falls through to a full verification.
+            }
+        }
+        await refresh()
+    }
+
     private func refreshWorkspace() async {
         guard !Task.isCancelled else { return }
         #if DEBUG
@@ -297,12 +423,33 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         #endif
         guard !mustRestart else { phase = .blocked(.restartRequired); return }
         guard let session = dependencies.session() else { invalidate(); return }
+        lastMismatchDetail = ""
         let operation = generation
-        if authorizedContainer == nil { phase = .checking }
+        if authorizedContainer(for: session) == nil { phase = .checking }
         diagnosticStep = "Checking iCloud account…"
         var verifiedAccount = false
         do {
-            let account = try await dependencies.account()
+            let account: CompanyCloudKitAccount
+            do {
+                account = try await dependencies.account()
+            } catch {
+                guard isCurrent(operation, session: session) else { return }
+                // A CloudKit stall or a network outage at the account step is
+                // transport failure, like an unreachable server: a lease that
+                // is still within its bound keeps the workspace open offline.
+                // Anything else (no iCloud account, configuration) still fails.
+                if Self.isConnectivityFailure(error), let lease = try dependencies.readLease(),
+                   lease.isValid(for: session, accountHash: lease.binding.cloudAccountHash,
+                                 environment: lease.binding.environment, now: dependencies.now()),
+                   let registration = try dependencies.readRegistration(),
+                   registration.matches(session: session, binding: lease.binding, storeUUID: try dependencies.storeIdentity()) {
+                    diagnosticStep = "iCloud unreachable. Using the verified workspace lease…"
+                    try await unlock(lease, allowLegacyAdoption: false, isOffline: true)
+                    diagnosticStep = "Store opened. Ready."
+                    return
+                }
+                throw error
+            }
             verifiedAccount = true
             diagnosticStep = "iCloud account confirmed. Contacting server…"
             guard isCurrent(operation, session: session) else { return }
@@ -317,19 +464,23 @@ final class CompanyWorkspaceAccessController: ObservableObject {
                 }
                 pending = (session, response, account)
                 let matching = response.workspace.bindings.filter { $0.environment == account.environment }
-                guard matching.count <= 1 else { throw CompanyWorkspaceFailure.differentWorkspace }
+                guard matching.count <= 1 else {
+                    throw mismatch("server lists \(matching.count) \(account.environment) bindings; expected one")
+                }
                 guard let binding = response.workspace.binding(for: account.environment) else {
                     guard matching.isEmpty, response.workspace.bindings.allSatisfy({ $0.isValid && $0.companyID == response.workspace.companyID }) else {
-                        throw CompanyWorkspaceFailure.differentWorkspace
+                        throw mismatch("no \(account.environment) binding; \(response.workspace.bindings.count) other binding(s) invalid or for another company")
                     }
                     diagnosticStep = "No binding yet. Requesting admin approval…"
                     try requireApproval(user: response.user)
                     return
                 }
-                guard binding.cloudAccountHash == account.accountHash else { throw CompanyWorkspaceFailure.differentWorkspace }
+                guard binding.cloudAccountHash == account.accountHash else {
+                    throw mismatch("iCloud account differs: approved \(Self.fingerprint(binding.cloudAccountHash)) on \(binding.approvedAt), this device \(Self.fingerprint(account.accountHash))")
+                }
                 let lease = CompanyWorkspaceLease(session: session, binding: binding, user: response.user, verifiedAt: dependencies.now())
                 diagnosticStep = "Binding verified. Opening local data store…"
-                try unlock(lease, allowLegacyAdoption: false)
+                try await unlock(lease, allowLegacyAdoption: false)
                 diagnosticStep = "Store opened. Ready."
             } catch {
                 guard isCurrent(operation, session: session) else { return }
@@ -339,7 +490,7 @@ final class CompanyWorkspaceAccessController: ObservableObject {
                    lease.isValid(for: session, accountHash: account.accountHash, environment: account.environment, now: dependencies.now()),
                    let registration = try dependencies.readRegistration(),
                    registration.matches(session: session, binding: lease.binding, storeUUID: try dependencies.storeIdentity()) {
-                    try unlock(lease, allowLegacyAdoption: false, isOffline: true)
+                    try await unlock(lease, allowLegacyAdoption: false, isOffline: true)
                 } else { throw error }
             }
         } catch {
@@ -356,11 +507,51 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         if authorizedContainer == nil { await refresh() }
     }
 
-    private func requireApproval(user: BackendAppUserRecord) throws {
+    private func requireApproval(user: BackendAppUserRecord, ignoringStaleRegistration: Bool = false) throws {
         guard user.role == AppUserRole.admin.rawValue else { throw CompanyWorkspaceFailure.administratorRequired }
         // Even an administrator cannot relabel a previously registered store.
-        guard try dependencies.readRegistration() == nil else { throw CompanyWorkspaceFailure.differentWorkspace }
+        if !ignoringStaleRegistration, let registration = try dependencies.readRegistration() {
+            throw mismatch("saved store \(Self.fingerprint(registration.storeUUID)) is already registered to the \(registration.binding.environment) binding for account \(Self.fingerprint(registration.binding.cloudAccountHash))")
+        }
         phase = .needsApproval(hasSavedStore: try dependencies.storeIdentity() != nil)
+    }
+
+    /// Records which check failed before the generic `.differentWorkspace` is
+    /// thrown, so the gate can show it. Cleared at the start of each refresh.
+    private func mismatch(_ detail: String) -> CompanyWorkspaceFailure {
+        lastMismatchDetail = detail
+        return .differentWorkspace
+    }
+
+    static func fingerprint(_ value: String) -> String {
+        String(value.prefix(8))
+    }
+
+    /// A registration may follow a re-approved binding only when every
+    /// identity component matches: same server, same store, same company,
+    /// container, environment and iCloud account. Only the approval date and
+    /// replica id may differ.
+    /// The registration names this same server and binding, but there is no
+    /// store on the device at all: the registered database is gone. A different
+    /// store in its place is not this case and remains refused, even to an
+    /// administrator, because a registered device's data must not be swapped.
+    static func registeredStoreIsGone(registration: CompanyWorkspaceStoreRegistration, session: CompanyWorkspaceSession,
+                                      binding: CompanyCloudKitBinding, storeUUID: String?) -> Bool {
+        registration.backendOrigin == session.backendOrigin
+            && registration.binding == binding
+            && !registration.storeUUID.isEmpty
+            && storeUUID == nil
+    }
+
+    static func canAdopt(registration: CompanyWorkspaceStoreRegistration, session: CompanyWorkspaceSession,
+                         binding: CompanyCloudKitBinding, storeUUID: String?) -> Bool {
+        registration.backendOrigin == session.backendOrigin
+            && !registration.storeUUID.isEmpty && registration.storeUUID == storeUUID
+            && registration.binding.companyID == binding.companyID
+            && registration.binding.containerID == binding.containerID
+            && registration.binding.environment == binding.environment
+            && registration.binding.cloudAccountHash == binding.cloudAccountHash
+            && binding.isValid
     }
 
     func approve(confirmed: Bool) async {
@@ -371,7 +562,7 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         do {
             let currentAccount = try await dependencies.account()
             guard currentAccount.accountHash == account.accountHash, currentAccount.environment == account.environment else {
-                throw CompanyWorkspaceFailure.differentWorkspace
+                throw mismatch("iCloud account changed during approval: was \(Self.fingerprint(account.accountHash)) (\(account.environment)), now \(Self.fingerprint(currentAccount.accountHash)) (\(currentAccount.environment))")
             }
             guard isCurrent(operation, session: session) else { return }
             let binding = try await dependencies.approve(CompanyCloudKitApprovalRequest(
@@ -381,43 +572,99 @@ final class CompanyWorkspaceAccessController: ObservableObject {
             guard isCurrent(operation, session: session) else { return }
             guard binding.isValid, binding.companyID == response.workspace.companyID,
                   binding.environment == account.environment, binding.cloudAccountHash == account.accountHash else {
-                throw CompanyWorkspaceFailure.differentWorkspace
+                throw mismatch("server returned a binding that does not match this device (valid=\(binding.isValid), environment \(binding.environment), account \(Self.fingerprint(binding.cloudAccountHash)) vs \(Self.fingerprint(account.accountHash)))")
             }
             let lease = CompanyWorkspaceLease(session: session, binding: binding, user: response.user, verifiedAt: dependencies.now())
-            try unlock(lease, allowLegacyAdoption: true)
+            try await unlock(lease, allowLegacyAdoption: true)
         } catch {
             guard isCurrent(operation, session: session) else { return }
             invalidate(reason: Self.failure(for: error, verifiedAccount: true))
         }
     }
 
-    private func unlock(_ lease: CompanyWorkspaceLease, allowLegacyAdoption: Bool, isOffline: Bool = false) throws {
+    /// Opens the store and prepares it for the verified user. The store file
+    /// reads and the store load (which attaches CloudKit mirroring) run off
+    /// the main actor so the "Verifying company access" screen keeps drawing.
+    /// Each resumption re-checks that this unlock is still the current one,
+    /// because the session can be signed out or the generation replaced while
+    /// the store is opening.
+    private func unlock(_ lease: CompanyWorkspaceLease, allowLegacyAdoption: Bool, isOffline: Bool = false) async throws {
+        let operation = generation
         guard dependencies.session() == lease.session, !mustRestart,
               lease.isValid(for: lease.session, accountHash: lease.binding.cloudAccountHash,
                             environment: lease.binding.environment, now: dependencies.now()) else {
             throw CompanyWorkspaceFailure.signIn
         }
-        let identity = try dependencies.storeIdentity()
-        if let registration = try dependencies.readRegistration() {
-            guard registration.matches(session: lease.session, binding: lease.binding, storeUUID: identity) else {
-                throw CompanyWorkspaceFailure.differentWorkspace
+        let identity = try await Self.offMain(dependencies.storeIdentity)
+        try requireCurrent(operation, lease: lease)
+        var registration = try dependencies.readRegistration()
+        if let existing = registration, !existing.matches(session: lease.session, binding: lease.binding, storeUUID: identity) {
+            if Self.canAdopt(registration: existing, session: lease.session, binding: lease.binding, storeUUID: identity) {
+                // The server re-approved the same iCloud account for the same
+                // company, container and environment (a new approval date or
+                // replica id). The store still belongs to this workspace; the
+                // registration follows the current binding.
+                let updated = CompanyWorkspaceStoreRegistration(
+                    backendOrigin: lease.session.backendOrigin, binding: lease.binding, storeUUID: existing.storeUUID
+                )
+                try dependencies.saveRegistration(updated)
+                registration = updated
+            } else if Self.registeredStoreIsGone(registration: existing, session: lease.session, binding: lease.binding, storeUUID: identity) {
+                // The registered store is no longer on this device and no other
+                // store is present: a reinstall leaves the Keychain registration
+                // behind, and it refused every unlock. The workspace identity
+                // still matches, so the device is treated as never registered
+                // and a fresh store is created and registered below. A different
+                // populated store in its place stays refused (see below).
+                registration = nil
+            } else {
+                let registration = existing
+                let parts = [
+                    registration.backendOrigin == lease.session.backendOrigin ? nil : "server origin differs",
+                    registration.binding == lease.binding ? nil
+                        : "binding differs (registered account \(Self.fingerprint(registration.binding.cloudAccountHash)) \(registration.binding.environment), current \(Self.fingerprint(lease.binding.cloudAccountHash)) \(lease.binding.environment))",
+                    registration.storeUUID.isEmpty || registration.storeUUID != identity
+                        ? "store differs (registered \(Self.fingerprint(registration.storeUUID)), on device \(identity.map(Self.fingerprint) ?? "none"))" : nil
+                ].compactMap { $0 }
+                throw mismatch("saved store registration does not match: " + parts.joined(separator: "; "))
             }
-        } else if identity != nil && !allowLegacyAdoption {
-            try requireApproval(user: lease.user)
-            return
-        } else if isOffline { throw CompanyWorkspaceFailure.storage }
+        }
+        if registration == nil {
+            if identity != nil && !allowLegacyAdoption {
+                try requireApproval(user: lease.user, ignoringStaleRegistration: true)
+                return
+            } else if isOffline { throw CompanyWorkspaceFailure.storage }
+        }
 
-        let opened = try container ?? dependencies.openStore()
-        guard let storeUUID = try dependencies.storeIdentity() else { throw CompanyWorkspaceFailure.storage }
-        if try dependencies.readRegistration() == nil {
+        let opened: ModelContainer
+        if let container {
+            opened = container
+        } else {
+            opened = try await Self.offMain(dependencies.openStore)
+            try requireCurrent(operation, lease: lease)
+        }
+        guard let storeUUID = try await Self.offMain(dependencies.storeIdentity) else { throw CompanyWorkspaceFailure.storage }
+        try requireCurrent(operation, lease: lease)
+        if registration == nil {
             try dependencies.saveRegistration(CompanyWorkspaceStoreRegistration(backendOrigin: lease.session.backendOrigin, binding: lease.binding, storeUUID: storeUUID))
         }
+        // The user reconciliation and template seeding stay on the main
+        // context on purpose: they touch a handful of rows, the screens that
+        // mount next read the result immediately, and the tests below pin
+        // that an unchanged user never saves. The store open above was the
+        // expensive part.
         let context = opened.mainContext
         let users = try context.fetch(FetchDescriptor<AppUser>())
         let technicians = try context.fetch(FetchDescriptor<Technician>())
         _ = GunnAireBackendService.applyVerifiedUser(lease.user, into: context, currentUsers: users, technicians: technicians)
-        FieldFormTemplate.ensureStarterTemplates(in: context)
-        try context.save()
+        // Starter templates are seeded once per workspace generation. Every
+        // foreground refresh re-runs unlock, and each unconditional save here
+        // is a CloudKit export candidate on the production store.
+        if starterTemplatesGeneration != generation {
+            FieldFormTemplate.ensureStarterTemplates(in: context)
+            starterTemplatesGeneration = generation
+        }
+        if context.hasChanges { try context.save() }
         if !isOffline { try dependencies.saveLease(lease) }
         if let activeLease, activeLease.user.role != lease.user.role {
             // Invalidate privileged sheets and late responses when the server
@@ -428,8 +675,22 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         container = opened
         activeLease = lease
         pending = nil
+        forgetSessionMemo()
         phase = .ready
         scheduleExpiry(for: lease)
+    }
+
+    /// `unlock` suspends while the store opens; anything that replaced this
+    /// generation or removed the session in the meantime ends the unlock.
+    private func requireCurrent(_ operation: UUID, lease: CompanyWorkspaceLease) throws {
+        guard operation == generation, !mustRestart, dependencies.session() == lease.session else {
+            throw CompanyWorkspaceFailure.signIn
+        }
+    }
+
+    /// Runs synchronous file work on a background task and returns its value.
+    private static func offMain<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
+        try await Task.detached(priority: .userInitiated) { try work() }.value
     }
 
     private func isCurrent(_ operation: UUID, session: CompanyWorkspaceSession) -> Bool {
@@ -452,6 +713,7 @@ final class CompanyWorkspaceAccessController: ObservableObject {
 
     static func failure(for error: Error, verifiedAccount: Bool) -> CompanyWorkspaceFailure {
         if let failure = error as? CompanyWorkspaceFailure { return failure }
+        if error is CompanyCloudKitTimeout { return .server }
         if let backend = error as? GunnAireBackendError {
             switch backend {
             case .missingBusinessIdentity: return .signIn
@@ -480,6 +742,7 @@ final class CompanyWorkspaceAccessController: ObservableObject {
     }
 
     static func isConnectivityFailure(_ error: Error) -> Bool {
+        if error is CompanyCloudKitTimeout { return true }
         if let error = error as? CKError {
             return [.networkFailure, .networkUnavailable].contains(error.code)
         }

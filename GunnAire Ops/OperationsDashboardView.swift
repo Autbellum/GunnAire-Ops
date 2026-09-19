@@ -40,6 +40,9 @@ struct OperationsDashboardView: View {
     @State private var showingBusinessTasks = false
     @State private var showingTimeOffRequests = false
     @State private var showingLocalAIWorkspace = false
+    /// Per-pass cache for the role-filtered collections and reductions below.
+    /// Cleared at the top of `body`; see `OperationsDashboardPassMemo`.
+    @State private var passMemo = OperationsDashboardPassMemo()
 
     private let calendar = Calendar.current
 
@@ -78,90 +81,123 @@ struct OperationsDashboardView: View {
     }
 
     private var operationsAccess: OperationsAccessCapabilities {
-        OperationsAccessPolicy.capabilities(email: currentUserEmail, users: users)
+        passMemo.value("operationsAccess") {
+            OperationsAccessPolicy.capabilities(email: currentUserEmail, users: users)
+        }
     }
 
     /// CloudKit may hydrate relationship records after their owning records.
     /// Keep the command center available while those links converge instead of
     /// dereferencing the models' intentionally optional-at-rest relationships.
     private var dashboardServiceCalls: [ServiceCall] {
-        let visibleIDs = OperationsAccessPolicy.visibleServiceCallIDs(
-            email: currentUserEmail,
-            users: users,
-            serviceCalls: serviceCalls,
-            technicians: technicians
-        )
-        return serviceCalls.filter { visibleIDs.contains($0.id) }
+        passMemo.value("dashboardServiceCalls") {
+            let visibleIDs = OperationsAccessPolicy.visibleServiceCallIDs(
+                email: currentUserEmail,
+                users: users,
+                serviceCalls: serviceCalls,
+                technicians: technicians
+            )
+            return serviceCalls.filter { visibleIDs.contains($0.id) }
+        }
     }
 
     private var dashboardCustomers: [Customer] {
-        let visibleIDs = OperationsAccessPolicy.dashboardCustomerIDs(
-            email: currentUserEmail,
-            users: users,
-            customers: customers,
-            serviceCalls: serviceCalls,
-            invoices: invoices,
-            technicians: technicians
-        )
-        return customers.filter { visibleIDs.contains($0.id) }
+        passMemo.value("dashboardCustomers") {
+            let visibleIDs = OperationsAccessPolicy.dashboardCustomerIDs(
+                email: currentUserEmail,
+                users: users,
+                customers: customers,
+                serviceCalls: serviceCalls,
+                invoices: invoices,
+                technicians: technicians
+            )
+            return customers.filter { visibleIDs.contains($0.id) }
+        }
     }
 
     private var searchableCustomers: [Customer] {
-        let visibleIDs = OperationsAccessPolicy.searchableCustomerIDs(
-            email: currentUserEmail,
-            users: users,
-            customers: customers
-        )
-        return customers.filter { visibleIDs.contains($0.id) }
+        passMemo.value("searchableCustomers") {
+            let visibleIDs = OperationsAccessPolicy.searchableCustomerIDs(
+                email: currentUserEmail,
+                users: users,
+                customers: customers
+            )
+            return customers.filter { visibleIDs.contains($0.id) }
+        }
     }
 
     private var dashboardContracts: [RecurringMaintenanceContract] {
-        let customerIDs = Set(dashboardCustomers.map(\.id))
-        let visibleIDs = OperationsAccessPolicy.visibleContractIDs(
-            customerIDs: customerIDs,
-            contracts: recurringContracts
-        )
-        return recurringContracts.filter { visibleIDs.contains($0.id) }
+        passMemo.value("dashboardContracts") {
+            let customerIDs = Set(dashboardCustomers.map(\.id))
+            let visibleIDs = OperationsAccessPolicy.visibleContractIDs(
+                customerIDs: customerIDs,
+                contracts: recurringContracts
+            )
+            return recurringContracts.filter { visibleIDs.contains($0.id) }
+        }
     }
 
     private var dashboardEstimates: [Estimate] {
-        let visibleIDs = OperationsAccessPolicy.visibleEstimateIDs(
-            email: currentUserEmail,
-            users: users,
-            estimates: estimates
-        )
-        return estimates.filter { visibleIDs.contains($0.id) }
+        passMemo.value("dashboardEstimates") {
+            let visibleIDs = OperationsAccessPolicy.visibleEstimateIDs(
+                email: currentUserEmail,
+                users: users,
+                estimates: estimates
+            )
+            return estimates.filter { visibleIDs.contains($0.id) }
+        }
     }
 
     private var dashboardInvoices: [Invoice] {
-        let visibleIDs = OperationsAccessPolicy.visibleInvoiceIDs(
-            email: currentUserEmail,
-            users: users,
-            serviceCalls: serviceCalls,
-            invoices: invoices,
-            technicians: technicians
-        )
-        return invoices.filter { visibleIDs.contains($0.id) }
+        passMemo.value("dashboardInvoices") {
+            let visibleIDs = OperationsAccessPolicy.visibleInvoiceIDs(
+                email: currentUserEmail,
+                users: users,
+                serviceCalls: serviceCalls,
+                invoices: invoices,
+                technicians: technicians
+            )
+            return invoices.filter { visibleIDs.contains($0.id) }
+        }
     }
 
     private var dashboardPayments: [Payment] {
-        let visibleIDs = OperationsAccessPolicy.visiblePaymentIDs(
-            email: currentUserEmail,
-            users: users,
-            serviceCalls: serviceCalls,
-            invoices: invoices,
-            payments: payments,
-            technicians: technicians
-        )
-        return payments.filter { visibleIDs.contains($0.id) }
+        passMemo.value("dashboardPayments") {
+            let visibleIDs = OperationsAccessPolicy.visiblePaymentIDs(
+                email: currentUserEmail,
+                users: users,
+                serviceCalls: serviceCalls,
+                invoices: invoices,
+                payments: payments,
+                technicians: technicians
+            )
+            return payments.filter { visibleIDs.contains($0.id) }
+        }
     }
 
     private var dashboardCommunications: [CustomerCommunication] {
-        let visibleIDs = OperationsAccessPolicy.visibleCommunicationIDs(
-            customerIDs: Set(dashboardCustomers.map(\.id)),
-            communications: customerCommunications
-        )
-        return customerCommunications.filter { visibleIDs.contains($0.id) }
+        passMemo.value("dashboardCommunications") {
+            let visibleIDs = OperationsAccessPolicy.visibleCommunicationIDs(
+                customerIDs: Set(dashboardCustomers.map(\.id)),
+                communications: customerCommunications
+            )
+            return customerCommunications.filter { visibleIDs.contains($0.id) }
+        }
+    }
+
+    /// Outstanding balance of every visible invoice, computed once per pass.
+    /// The open-invoice sort compares balances, and before this map each
+    /// comparison re-ran the payment access policy and walked every payment.
+    private var outstandingBalancesByInvoiceID: [UUID: Double] {
+        passMemo.value("outstandingBalancesByInvoiceID") {
+            let payments = dashboardPayments
+            var balances: [UUID: Double] = [:]
+            balances.reserveCapacity(dashboardInvoices.count)
+            for invoice in dashboardInvoices {
+                balances[invoice.id] = Invoice.outstandingBalance(for: invoice, payments: payments)
+            }
+            return balances
+        }
     }
 
     private var assignableTechnicians: [Technician] {
@@ -177,12 +213,14 @@ struct OperationsDashboardView: View {
     }
 
     private var visibleTechnicians: [Technician] {
-        let visibleIDs = OperationsAccessPolicy.visibleTechnicianIDs(
-            email: currentUserEmail,
-            users: users,
-            technicians: technicians
-        )
-        return technicians.filter { visibleIDs.contains($0.id) }
+        passMemo.value("visibleTechnicians") {
+            let visibleIDs = OperationsAccessPolicy.visibleTechnicianIDs(
+                email: currentUserEmail,
+                users: users,
+                technicians: technicians
+            )
+            return technicians.filter { visibleIDs.contains($0.id) }
+        }
     }
 
     private var isAdminUser: Bool {
@@ -316,15 +354,21 @@ struct OperationsDashboardView: View {
     }
 
     private var openInvoices: [Invoice] {
-        dashboardInvoices
-            .filter { outstandingBalance(for: $0) > 0 }
-            .sorted { outstandingBalance(for: $0) > outstandingBalance(for: $1) }
+        passMemo.value("openInvoices") {
+            let balances = outstandingBalancesByInvoiceID
+            return dashboardInvoices
+                .filter { balances[$0.id, default: 0] > 0 }
+                .sorted { balances[$0.id, default: 0] > balances[$1.id, default: 0] }
+        }
     }
 
     private var overdueInvoices: [Invoice] {
-        return openInvoices
-            .filter { Invoice.isOverdue($0, payments: dashboardPayments) }
-            .sorted { $0.effectiveDueDate(calendar: calendar) < $1.effectiveDueDate(calendar: calendar) }
+        passMemo.value("overdueInvoices") {
+            let payments = dashboardPayments
+            return openInvoices
+                .filter { Invoice.isOverdue($0, payments: payments) }
+                .sorted { $0.effectiveDueDate(calendar: calendar) < $1.effectiveDueDate(calendar: calendar) }
+        }
     }
 
     private var quickBooksAttentionPayments: [Payment] {
@@ -589,7 +633,13 @@ struct OperationsDashboardView: View {
         OnsitePaymentProcessor(rawValue: onsitePaymentProcessor) ?? .none
     }
 
+    // Signposted because this reduces every customer, call, estimate, invoice,
+    // payment and contract in the business, and it is recomputed on each access
+    // rather than once per body pass. A trace needs it named to attribute the
+    // time to the dashboard rather than to SwiftData.
     private var suiteSnapshot: BusinessSuiteSnapshot {
+        passMemo.value("suiteSnapshot") {
+        AppPerformanceSignposts.measure("Dashboard.suiteSnapshot") {
         BusinessSuiteIntelligence.snapshot(
             customers: dashboardCustomers,
             serviceCalls: dashboardServiceCalls,
@@ -609,9 +659,15 @@ struct OperationsDashboardView: View {
             now: Date(),
             calendar: calendar
         )
+        }
+        }
     }
 
+    // Same reduction shape as the suite snapshot, and read by three separate
+    // computed properties below, so one body pass can run it several times.
     private var accountSnapshots: [CustomerIntelligenceSnapshot] {
+        passMemo.value("accountSnapshots") {
+        AppPerformanceSignposts.measure("Dashboard.accountSnapshots") {
         CustomerIntelligence.snapshots(
             customers: dashboardCustomers,
             serviceCalls: dashboardServiceCalls,
@@ -622,10 +678,14 @@ struct OperationsDashboardView: View {
             now: Date(),
             calendar: calendar
         )
+        }
+        }
     }
 
-    private var activeAccountSnapshots: [CustomerIntelligenceSnapshot] {
-        accountSnapshots.filter {
+    // Derived from one already-computed set of snapshots rather than from
+    // `accountSnapshots`, which would run the reduction again per call.
+    private func activeAccountSnapshots(in snapshots: [CustomerIntelligenceSnapshot]) -> [CustomerIntelligenceSnapshot] {
+        snapshots.filter {
             $0.hasRisk ||
             $0.hasOpenWork ||
             $0.activeContractCount > 0 ||
@@ -633,19 +693,22 @@ struct OperationsDashboardView: View {
         }
     }
 
-    private var atRiskAccountCount: Int {
-        accountSnapshots.filter { $0.healthScore < 70 || $0.overdueInvoiceCount > 0 }.count
+    private func atRiskAccountCount(in snapshots: [CustomerIntelligenceSnapshot]) -> Int {
+        snapshots.filter { $0.healthScore < 70 || $0.overdueInvoiceCount > 0 }.count
     }
 
-    private var accountOpenBalanceTotal: Double {
-        accountSnapshots.reduce(0) { $0 + $1.openBalance }
+    private func accountOpenBalanceTotal(in snapshots: [CustomerIntelligenceSnapshot]) -> Double {
+        snapshots.reduce(0) { $0 + $1.openBalance }
     }
 
-    private var accountPipelineTotal: Double {
-        accountSnapshots.reduce(0) { $0 + $1.openEstimateTotal }
+    private func accountPipelineTotal(in snapshots: [CustomerIntelligenceSnapshot]) -> Double {
+        snapshots.reduce(0) { $0 + $1.openEstimateTotal }
     }
 
     var body: some View {
+        // A new pass: every memoized collection below is computed at most once
+        // from here until the next pass.
+        let _ = passMemo.clear()
         NavigationStack {
             ZStack {
                 WatermarkBackground()
@@ -659,12 +722,19 @@ struct OperationsDashboardView: View {
                         }
                         if operationsAccess.canShowBusinessOverview {
                             DisclosureGroup(isExpanded: $isBusinessOverviewExpanded) {
-                                VStack(alignment: .leading, spacing: 18) {
-                                    suiteSynchronizationSection
-                                    accountIntelligenceSection
-                                    workflowSection
+                                // Built only while open. SwiftUI evaluates this
+                                // content on every pass even when collapsed, and
+                                // these sections reduce the whole business each
+                                // time; on the owner's iPad they were two thirds of
+                                // main-thread time while nothing of them was shown.
+                                if isBusinessOverviewExpanded {
+                                    VStack(alignment: .leading, spacing: 18) {
+                                        suiteSynchronizationSection
+                                        accountIntelligenceSection
+                                        workflowSection
+                                    }
+                                    .padding(.top, 12)
                                 }
-                                .padding(.top, 12)
                             } label: {
                                 Label("Business overview", systemImage: "chart.bar.xaxis")
                                     .font(.headline)
@@ -673,11 +743,13 @@ struct OperationsDashboardView: View {
                             .background(Color(.secondarySystemBackground).opacity(0.64), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                         }
                         DisclosureGroup(isExpanded: $isOperationalStatusExpanded) {
-                            VStack(alignment: .leading, spacing: 18) {
-                                fieldTeamSection
-                                systemsSection
+                            if isOperationalStatusExpanded {
+                                VStack(alignment: .leading, spacing: 18) {
+                                    fieldTeamSection
+                                    systemsSection
+                                }
+                                .padding(.top, 12)
                             }
-                            .padding(.top, 12)
                         } label: {
                             Label("Field and system status", systemImage: "checklist.checked")
                                 .font(.headline)
@@ -892,16 +964,20 @@ struct OperationsDashboardView: View {
     }
 
     private var suiteSynchronizationSection: some View {
-        dashboardSection(title: "Suite Synchronization", systemImage: "point.3.connected.trianglepath.dotted") {
-            suiteScoreHeader
+        // `suiteSnapshot` recomputes the whole reduction on every read; this
+        // section and its header read it more than a dozen times. Take it once.
+        let snapshot = suiteSnapshot
+        let nextActions = Array(snapshot.actions.prefix(5))
+        return dashboardSection(title: "Suite Synchronization", systemImage: "point.3.connected.trianglepath.dotted") {
+            suiteScoreHeader(snapshot)
 
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 168), spacing: 12)], spacing: 12) {
-                ForEach(suiteSnapshot.workstreams) { workstream in
+                ForEach(snapshot.workstreams) { workstream in
                     suiteWorkstreamCard(workstream)
                 }
             }
 
-            if suiteSnapshot.actions.isEmpty {
+            if nextActions.isEmpty {
                 emptyState("Connected workstreams show no sync exceptions.")
             } else {
                 VStack(alignment: .leading, spacing: 8) {
@@ -909,9 +985,9 @@ struct OperationsDashboardView: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
 
-                    ForEach(suiteSnapshot.actions.prefix(5)) { action in
+                    ForEach(nextActions) { action in
                         suiteActionRow(action)
-                        if action.id != suiteSnapshot.actions.prefix(5).last?.id {
+                        if action.id != nextActions.last?.id {
                             Divider()
                         }
                     }
@@ -1026,39 +1102,46 @@ struct OperationsDashboardView: View {
     }
 
     private var accountIntelligenceSection: some View {
-        dashboardSection(title: "Account Intelligence", systemImage: "person.crop.rectangle.stack") {
+        // One reduction per pass; every figure below is derived from it.
+        let snapshots = accountSnapshots
+        let customers = dashboardCustomers
+        let watched = atRiskAccountCount(in: snapshots)
+        let openBalance = accountOpenBalanceTotal(in: snapshots)
+        let needsBillingReview = snapshots.contains(where: { $0.billingReviewMessage != nil })
+        let activeAccounts = Array(activeAccountSnapshots(in: snapshots).prefix(5))
+        return dashboardSection(title: "Account Intelligence", systemImage: "person.crop.rectangle.stack") {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 156), spacing: 12)], spacing: 12) {
                 dispatchMetric(
                     title: "Watched Accounts",
-                    value: "\(atRiskAccountCount)",
-                    detail: "\(dashboardCustomers.count) total",
+                    value: "\(watched)",
+                    detail: "\(customers.count) total",
                     systemImage: "person.crop.circle.badge.exclamationmark",
-                    tint: atRiskAccountCount == 0 ? .green : .orange
+                    tint: watched == 0 ? .green : .orange
                 )
                 dispatchMetric(
                     title: "Open Balance",
-                    value: accountSnapshots.contains(where: { $0.billingReviewMessage != nil }) ? "Review" : currency(accountOpenBalanceTotal),
-                    detail: accountSnapshots.contains(where: { $0.billingReviewMessage != nil }) ? "Milestone billing needs review" : "\(openInvoices.count) invoices",
+                    value: needsBillingReview ? "Review" : currency(openBalance),
+                    detail: needsBillingReview ? "Milestone billing needs review" : "\(openInvoices.count) invoices",
                     systemImage: "creditcard.trianglebadge.exclamationmark",
-                    tint: accountOpenBalanceTotal > 0 ? .red : .green
+                    tint: openBalance > 0 ? .red : .green
                 )
                 dispatchMetric(
                     title: "Estimate Pipeline",
-                    value: currency(accountPipelineTotal),
+                    value: currency(accountPipelineTotal(in: snapshots)),
                     detail: "\(openEstimateCount) open",
                     systemImage: "chart.bar.doc.horizontal",
                     tint: Color.brandGold
                 )
             }
 
-            if dashboardCustomers.isEmpty {
+            if customers.isEmpty {
                 emptyState("No customer accounts are on file yet.")
-            } else if activeAccountSnapshots.isEmpty {
+            } else if activeAccounts.isEmpty {
                 emptyState("Customer accounts are current across payments, agreements, and scheduled work.")
             } else {
-                ForEach(Array(activeAccountSnapshots.prefix(5))) { snapshot in
+                ForEach(activeAccounts) { snapshot in
                     accountIntelligenceRow(for: snapshot)
-                    if snapshot.id != activeAccountSnapshots.prefix(5).last?.id {
+                    if snapshot.id != activeAccounts.last?.id {
                         Divider()
                     }
                 }
@@ -1305,7 +1388,7 @@ struct OperationsDashboardView: View {
         .background(Color(.secondarySystemBackground).opacity(0.64), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
-    private var suiteScoreHeader: some View {
+    private func suiteScoreHeader(_ suiteSnapshot: BusinessSuiteSnapshot) -> some View {
         HStack(alignment: .center, spacing: 14) {
             ZStack {
                 Circle()
@@ -1806,7 +1889,13 @@ struct OperationsDashboardView: View {
     }
 
     private func outstandingBalance(for invoice: Invoice) -> Double {
-        Invoice.outstandingBalance(for: invoice, payments: dashboardPayments)
+        if let balance = outstandingBalancesByInvoiceID[invoice.id] {
+            return balance
+        }
+        // An invoice outside the visible set (never on this dashboard, but
+        // the helper is called with rows chosen elsewhere) keeps the exact
+        // former computation.
+        return Invoice.outstandingBalance(for: invoice, payments: dashboardPayments)
     }
 
     private func estimate(for call: ServiceCall) -> Estimate? {

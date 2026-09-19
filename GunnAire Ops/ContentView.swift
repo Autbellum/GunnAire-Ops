@@ -121,13 +121,16 @@ struct GunnAireIPadKeyCommandBridge: UIViewRepresentable {
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.gunnaireReduceMotion) private var reduceMotion
-    @EnvironmentObject private var cloudKitEventMonitor: GunnAireCloudKitEventMonitor
+    /// The root workspace observes only the coarse attention operation. The
+    /// full `GunnAireCloudKitEventMonitor` publishes on every mirroring event
+    /// and is observed by Settings, where the detail is shown.
+    @EnvironmentObject private var cloudKitAttention: GunnAireCloudKitAttentionMonitor
     @AppStorage("hasAuthenticatedUser") private var hasAuthenticatedUser = false
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
-    @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var attachments: [ServiceDocumentAttachment]
-    @Query(sort: \CustomerCommunication.createdAt, order: .reverse) private var customerCommunications: [CustomerCommunication]
+    // Pending document and communication uploads are fetched on demand inside
+    // the retry helpers rather than held as root `@Query` subscriptions, which
+    // re-rendered the whole sidebar and detail host on every CloudKit import.
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
-    @ObservedObject private var googleAuth = GoogleAuthManager.shared
 
     @State private var selectedSidebarItem: SidebarItem? = .commandCenter
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
@@ -139,6 +142,18 @@ struct ContentView: View {
     @State private var isCheckingFieldCollectionPrompts = false
     @State private var didLoadFieldCollectionPromptFixture = false
     @State private var isRetryingCustomerCommunicationUploads = false
+    @State private var isRetryingSharedCompanyDocumentUploads = false
+    @State private var cloudKitReadinessCheckedAt: Date?
+    /// Activations are frequent (privacy cover, Control Center, notifications);
+    /// the iCloud account status is re-read at most this often between them.
+    /// `CKAccountChanged` still triggers an immediate check.
+    static let cloudKitReadinessRecheckInterval: TimeInterval = 15 * 60
+
+    static func cloudKitReadinessIsStale(checkedAt: Date?, now: Date,
+                                         interval: TimeInterval = cloudKitReadinessRecheckInterval) -> Bool {
+        guard let checkedAt else { return true }
+        return now.timeIntervalSince(checkedAt) >= interval
+    }
     @State private var cloudKitReadiness: GunnAireCloudKit.AccountReadiness?
     @State private var showingCloudKitContinuityDetails = false
     @State private var isCheckingBusinessRole = false
@@ -180,7 +195,7 @@ struct ContentView: View {
         return cloudKitReadiness.flatMap {
             OperationalDataContinuity.cloudKitNotice(
                 for: $0,
-                mirroringState: cloudKitEventMonitor.state
+                attentionOperation: cloudKitAttention.operation
             )
         }
     }
@@ -229,30 +244,32 @@ struct ContentView: View {
         #endif
     }
 
+    /// Each element evaluates the verified business role. `body` reads this
+    /// once per pass and hands the result to every section and destination.
     private var visibleSidebarItems: [SidebarItem] {
         SidebarItem.allCases.filter { item in
             AppAccess.canAccessSidebarItem(item, email: currentUserEmail, users: users)
         }
     }
 
-    private var operationsItems: [SidebarItem] {
+    private func operationsItems(in visible: [SidebarItem]) -> [SidebarItem] {
         [.commandCenter, .timeClock, .scheduleAndJobs, .customers, .onsiteDocumentation]
-            .filter { visibleSidebarItems.contains($0) }
+            .filter { visible.contains($0) }
     }
 
-    private var backOfficeItems: [SidebarItem] {
+    private func backOfficeItems(in visible: [SidebarItem]) -> [SidebarItem] {
         [.mail, .estimates, .invoices, .payments, .reports, .receiptsBills]
-            .filter { visibleSidebarItems.contains($0) }
+            .filter { visible.contains($0) }
     }
 
-    private var integrationItems: [SidebarItem] {
+    private func integrationItems(in visible: [SidebarItem]) -> [SidebarItem] {
         [.syncIntegrations]
-            .filter { visibleSidebarItems.contains($0) }
+            .filter { visible.contains($0) }
     }
 
-    private var adminItems: [SidebarItem] {
+    private func adminItems(in visible: [SidebarItem]) -> [SidebarItem] {
         [.quickBooksManagement]
-            .filter { visibleSidebarItems.contains($0) }
+            .filter { visible.contains($0) }
     }
 
     private var pendingAppRoute: GunnAireAppRoute? {
@@ -272,7 +289,7 @@ struct ContentView: View {
     /// they all remain in one generic `ViewBuilder` switch, a physical device
     /// can recursively resolve every branch while navigating and exhaust the
     /// main-thread stack before the selected workspace appears.
-    private var selectedWorkspaceDetail: AnyView {
+    private func selectedWorkspaceDetail(visible visibleSidebarItems: [SidebarItem]) -> AnyView {
         guard !visibleSidebarItems.isEmpty else {
             return AnyView(
                 ContentUnavailableView {
@@ -342,7 +359,7 @@ struct ContentView: View {
 
         switch selectedSidebarItem {
         case .commandCenter:
-            return AnyView(OperationsDashboardView(showingCommandPalette: $showingAppWideFind))
+            return AnyView(CommandCenterHost(showingCommandPalette: $showingAppWideFind))
         case .timeClock:
             return AnyView(TimeClockView())
         case .scheduleAndJobs:
@@ -371,6 +388,13 @@ struct ContentView: View {
     }
     
     var body: some View {
+        // Evaluated once per body pass; every section, the detail host and the
+        // navigation command context read this snapshot.
+        let visible = visibleSidebarItems
+        let operationsItems = operationsItems(in: visible)
+        let backOfficeItems = backOfficeItems(in: visible)
+        let integrationItems = integrationItems(in: visible)
+        let adminItems = adminItems(in: visible)
         NavigationSplitView(columnVisibility: $columnVisibility) {
             List(selection: $selectedSidebarItem) {
                 if let cloudKitContinuityNotice {
@@ -423,7 +447,7 @@ struct ContentView: View {
                             .lineLimit(1)
                             .accessibilityIdentifier("SidebarAccountIdentity")
                     }
-                    if visibleSidebarItems.isEmpty {
+                    if visible.isEmpty {
                         Label("Verify business access", systemImage: "person.badge.key")
                             .font(.footnote)
                             .foregroundColor(.orange)
@@ -458,7 +482,7 @@ struct ContentView: View {
         } detail: {
             ZStack {
                 WatermarkBackground()
-                selectedWorkspaceDetail
+                selectedWorkspaceDetail(visible: visible)
                 .id(selectedSidebarItem)
                 .tint(Color.brandGold)
             }
@@ -471,25 +495,18 @@ struct ContentView: View {
             appWideFieldCollectionPromptBanner
         }
         .onAppear {
+            // Layout state only. Everything that reads the store or a
+            // credential runs in `.task` below, after the first frame.
             if prefersPersistentSidebar {
                 columnVisibility = .doubleColumn
             }
-            NetworkConnectivityMonitor.shared.start()
-            QuickBooksDataAPI.shared.loadTokens()
-            isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
-            isGoogleAuthenticated = GoogleAuthManager.shared.isAuthenticated
-            collapseCloudKitUserDuplicatesIfNeeded()
-            cleanupCalendarCreatedCustomersIfNeeded()
-            refreshGoogleAccountIdentityIfNeeded()
-            retryPendingSharedCompanyDocumentUploadsIfNeeded()
-            retryPendingCustomerCommunicationUploadsIfNeeded()
             selectedSidebarItem = SidebarNavigationPolicy.resolvedSelection(
                 selectedSidebarItem,
                 visibleItems: visibleSidebarItems
             )
             applyPendingAppRouteIfNeeded()
         }
-        .onChange(of: visibleSidebarItems) { _, updatedItems in
+        .onChange(of: visible) { _, updatedItems in
             let resolvedSelection = SidebarNavigationPolicy.resolvedSelection(
                 selectedSidebarItem,
                 visibleItems: updatedItems
@@ -498,6 +515,11 @@ struct ContentView: View {
             withAnimation(GunnAireAccessibilityMotionPolicy.easeInOut(duration: 0.2, reduceMotion: reduceMotion)) {
                 selectedSidebarItem = resolvedSelection
             }
+        }
+        .onChange(of: selectedSidebarItem, initial: true) { _, item in
+            // Names the open screen so a recorded freeze says where it happened
+            // rather than only how long it lasted.
+            AppPerformanceDiagnostics.shared.noteContext(item?.rawValue ?? "No screen")
         }
         .task(id: fieldCollectionPromptPollingKey) {
             guard fieldCollectionPromptPollingKey != nil else { return }
@@ -511,6 +533,18 @@ struct ContentView: View {
             }
         }
         .task {
+            // Startup work that used to run in `onAppear`, on the main context,
+            // before the first screen could respond. The credential reads stay
+            // on the main actor; the store maintenance runs on a background
+            // context (`ContentStartupMaintenance`).
+            NetworkConnectivityMonitor.shared.start()
+            QuickBooksDataAPI.shared.loadTokens()
+            isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+            isGoogleAuthenticated = GoogleAuthManager.shared.isAuthenticated
+            refreshGoogleAccountIdentityIfNeeded()
+            await runStartupDataMaintenance()
+            retryPendingSharedCompanyDocumentUploadsIfNeeded()
+            retryPendingCustomerCommunicationUploadsIfNeeded()
             await refreshOperationalContinuityState()
             await StaffPushNotificationManager.shared.activateForCurrentSessionIfNeeded()
         }
@@ -583,7 +617,9 @@ struct ContentView: View {
             applyPendingAppRouteIfNeeded()
             Task {
                 await refreshAppWideFieldCollectionPrompt()
-                await refreshOperationalContinuityState()
+                if Self.cloudKitReadinessIsStale(checkedAt: cloudKitReadinessCheckedAt, now: Date()) {
+                    await refreshOperationalContinuityState()
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .quickBooksAuthenticationDidChange)) { _ in
@@ -601,7 +637,7 @@ struct ContentView: View {
         .focusedSceneValue(
             \.gunnaireNavigationCommandContext,
             GunnAireNavigationCommandContext(
-                visibleSidebarItems: Set(visibleSidebarItems)
+                visibleSidebarItems: Set(visible)
             )
         )
         .tint(Color.brandGold)
@@ -617,8 +653,8 @@ struct ContentView: View {
         }
         if arguments.contains("-uiTestSeedCloudKitExportFailure") {
             cloudKitReadiness = .available
-            if cloudKitEventMonitor.state.attentionFailure?.operation != .exportRecords {
-                cloudKitEventMonitor.record(
+            if cloudKitAttention.operation != .exportRecords {
+                cloudKitAttention.eventMonitor?.record(
                     CloudKitMirroringEventSnapshot(
                         operation: .exportRecords,
                         outcome: .failed
@@ -636,7 +672,10 @@ struct ContentView: View {
         }
         #endif
 
-        cloudKitReadiness = await GunnAireCloudKit.accountReadiness()
+        let readiness = await GunnAireCloudKit.accountReadiness()
+        cloudKitReadinessCheckedAt = Date()
+        // Assigning an equal value would still re-render the whole tree.
+        if cloudKitReadiness != readiness { cloudKitReadiness = readiness }
     }
 
     @MainActor
@@ -746,61 +785,40 @@ struct ContentView: View {
         }
     }
 
-    private func collapseCloudKitUserDuplicatesIfNeeded() {
-        _ = AppUserDataMaintenance.collapseCloudKitDuplicates(users, modelContext: modelContext)
-    }
-
-    private func cleanupCalendarCreatedCustomersIfNeeded() {
-        guard AppAccess.canDeleteCustomerRecords(email: currentUserEmail, users: users) else { return }
+    /// The store maintenance that used to run on the main context at first
+    /// appearance. The fetches and the user-duplicate collapse run on
+    /// `ContentStartupMaintenance`; the customer deletion pass, which walks
+    /// every related table, stays on the main context and runs only when the
+    /// actor has found something to delete.
+    private func runStartupDataMaintenance() async {
+        let maintenance = ContentStartupMaintenance(modelContainer: modelContext.container)
+        await maintenance.collapseCloudKitUserDuplicates()
+        guard AppAccess.canDeleteCustomerRecords(email: currentUserEmail, users: users),
+              await maintenance.hasCalendarCreatedCustomersToClean() else { return }
         _ = CustomerDataMaintenance.cleanupCalendarNamedCustomers(modelContext: modelContext)
     }
 
     private func retryPendingSharedCompanyDocumentUploadsIfNeeded() {
-        guard GunnAireBackendService.isConfigured else { return }
-        let pending = Array(attachments.filter(\.needsSharedCompanyStorageUpload).prefix(10))
-        guard !pending.isEmpty else { return }
-        Task {
-            for attachment in pending {
-                do {
-                    let response = try await GunnAireBackendService.retrySharedCompanyDocumentUpload(attachment)
-                    await MainActor.run {
-                        attachment.markSharedCompanyStored(id: response.id)
-                        try? modelContext.save()
-                    }
-                } catch {
-                    await MainActor.run {
-                        attachment.markSharedCompanyUploadFailed(error.localizedDescription)
-                        try? modelContext.save()
-                    }
-                }
-            }
+        guard GunnAireBackendService.isConfigured,
+              !isRetryingSharedCompanyDocumentUploads else { return }
+        // A second activation while these uploads run must not start a second
+        // pass over the same attachments.
+        isRetryingSharedCompanyDocumentUploads = true
+        let container = modelContext.container
+        Task { @MainActor in
+            await ContentStartupMaintenance(modelContainer: container).retryPendingSharedCompanyDocumentUploads()
+            isRetryingSharedCompanyDocumentUploads = false
         }
     }
 
     private func retryPendingCustomerCommunicationUploadsIfNeeded() {
         guard GunnAireBackendService.isConfigured,
               !isRetryingCustomerCommunicationUploads else { return }
-        let pending = Array(customerCommunications.filter(\.needsSharedCompanySync).prefix(10))
-        guard !pending.isEmpty else { return }
         isRetryingCustomerCommunicationUploads = true
-        Task {
-            for communication in pending {
-                do {
-                    let response = try await GunnAireBackendService.uploadCustomerCommunication(communication)
-                    await MainActor.run {
-                        communication.markSharedCompanySynced(id: response.id)
-                        try? modelContext.save()
-                    }
-                } catch {
-                    await MainActor.run {
-                        communication.markSharedCompanySyncFailed(error.localizedDescription)
-                        try? modelContext.save()
-                    }
-                }
-            }
-            await MainActor.run {
-                isRetryingCustomerCommunicationUploads = false
-            }
+        let container = modelContext.container
+        Task { @MainActor in
+            await ContentStartupMaintenance(modelContainer: container).retryPendingCustomerCommunicationUploads()
+            isRetryingCustomerCommunicationUploads = false
         }
     }
 
@@ -5114,10 +5132,6 @@ struct EditServiceCallView: View {
         )
     }
 
-    private var visibleCustomers: [Customer] {
-        customers.filter { !CustomerDataMaintenance.isSystemCalendarCustomer($0) }
-    }
-
     private var isExternalGoogleCalendarEvent: Bool {
         GoogleCalendarScheduleSync.isExternalGoogleCalendarEvent(call)
     }
@@ -5207,14 +5221,34 @@ struct EditServiceCallView: View {
                             .foregroundColor(.secondary)
                     }
                 }
-                Picker("Customer", selection: $customer) {
-                    if CustomerDataMaintenance.isSystemCalendarCustomer(call.customer) {
-                        Text("Unassigned Calendar Event").tag(Customer?.some(call.customer))
+                // A bare Picker here left no way to search a real customer list
+                // and no way to add a customer who did not exist yet, which is
+                // exactly what a calendar-imported job needs: it arrives with no
+                // customer whenever the event carried no matching email.
+                CustomerSelectionSection(
+                    customer: $customer,
+                    customers: customers,
+                    identifierPrefix: "EditServiceCall",
+                    placeholder: CustomerDataMaintenance.isSystemCalendarCustomer(call.customer)
+                        ? call.customer : nil,
+                    onCreate: { created in
+                        // Mirror the new-job sheet: give the customer a reusable
+                        // primary location when they were entered with an
+                        // address, so billing and reports have one to attach to.
+                        guard let address = created.address else { return }
+                        let primaryLocation = CustomerServiceLocation(
+                            customer: created,
+                            name: "Primary Service Location",
+                            address: address,
+                            isPrimary: true
+                        )
+                        modelContext.insert(primaryLocation)
+                        selectedServiceLocationID = primaryLocation.id
+                        if siteAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            siteAddress = address
+                        }
                     }
-                    ForEach(visibleCustomers) { customer in
-                        Text(customer.name).tag(Customer?.some(customer))
-                    }
-                }
+                )
                 CustomerOperationalAlertInlineSummary(
                     alerts: selectedOperationalAlerts,
                     accessibilityIdentifier: "EditServiceCallOperationalAlerts"
@@ -6173,9 +6207,11 @@ private extension String {
 }
 
 #Preview {
+    let cloudKitEventMonitor = GunnAireCloudKitEventMonitor(isEnabled: false)
     ContentView()
         .modelContainer(for: [ServiceCall.self, Customer.self, Technician.self, RecurringMaintenanceContract.self], inMemory: true)
-        .environmentObject(GunnAireCloudKitEventMonitor(isEnabled: false))
+        .environmentObject(cloudKitEventMonitor)
+        .environmentObject(cloudKitEventMonitor.attention)
 }
 
 #Preview("Canvas Sanity") {

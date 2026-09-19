@@ -96,6 +96,46 @@ class ChangeCaptureProviderTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "change_limit")
         self.assertEqual(len(self.requests), 1)
 
+    def test_intuit_empty_group_means_no_changes(self):
+        # Intuit's real "nothing changed" reply is a bare {} group (observed live
+        # 2026-09-16), which must read as zero changes at the response time.
+        self.payload = {**cdc([]), "CDCResponse": [{"QueryResponse": [{}]}]}
+        self.assertEqual(self.provider.changes("Item", capture.stamp(NOW - timedelta(minutes=2))), ([], NOW))
+        # An empty group dated before the cursor is still refused.
+        self.payload = {**cdc([], when=NOW - timedelta(minutes=5)), "CDCResponse": [{"QueryResponse": [{}]}]}
+        with self.assertRaises(capture.AttemptError) as stale:
+            self.provider.changes("Item", capture.stamp(NOW - timedelta(minutes=2)))
+        self.assertEqual(stale.exception.code, "incomplete_changes")
+
+    def test_count_rejections_describe_the_reply_shape_without_record_content(self):
+        # A group with count fields missing is rejected, and staff can see why.
+        self.payload = {**cdc([]), "CDCResponse": [{"QueryResponse": [{"startPosition": 1}]}]}
+        with self.assertRaises(capture.AttemptError) as bare:
+            self.provider.changes("Item", capture.stamp(NOW - timedelta(minutes=2)))
+        self.assertEqual(bare.exception.code, "incomplete_changes")
+        self.assertIn("Reply shape: keys=['startPosition'], Item records=absent, maxResults=absent, startPosition=1, totalCount=absent.",
+                      str(bare.exception))
+        # A count mismatch names the counts, never the records themselves.
+        self.payload = cdc([record(Name="Private fixture service")])
+        self.payload["CDCResponse"][0]["QueryResponse"][0]["maxResults"] = 2
+        self.payload["CDCResponse"][0]["QueryResponse"][0]["totalCount"] = "2"
+        with self.assertRaises(capture.AttemptError) as mismatch:
+            self.provider.changes("Item", capture.stamp(NOW - timedelta(minutes=2)))
+        self.assertEqual(mismatch.exception.code, "incomplete_changes")
+        self.assertIn("keys=['Item', 'maxResults', 'startPosition', 'totalCount'], Item records=1, maxResults=2, "
+                      "startPosition=1, totalCount='2'.", str(mismatch.exception))
+        self.assertNotIn("Private fixture service", str(mismatch.exception))
+
+    def test_voided_records_are_present_versions_that_keep_their_marker(self):
+        voided = record("7", TotalAmt=0, status="Voided")
+        identifier, updated, status, raw = capture.record_evidence(voided, tombstone_allowed=False)
+        self.assertEqual((identifier, status), ("7", "present"))
+        self.assertIn('"status":"Voided"', raw.replace(" ", ""))
+        with self.assertRaises(Exception) as context:
+            capture.record_evidence(record("8", status="Pending"), tombstone_allowed=True)
+        self.assertEqual(getattr(context.exception, "code", None), "unsupported_status")
+        self.assertIn("(status=Pending)", str(getattr(context.exception, "message", context.exception)))
+
     def test_explicit_empty_and_deleted_records_are_distinct(self):
         self.payload = cdc([])
         self.assertEqual(self.provider.changes("Item", capture.stamp(NOW))[0], [])
@@ -106,7 +146,7 @@ class ChangeCaptureProviderTests(unittest.TestCase):
         self.assertEqual(self.provider.changes("Item", capture.stamp(NOW))[0], [])
 
     def test_sparse_invalid_status_nonfinite_and_missing_version_are_rejected(self):
-        for value in (record(sparse=True), record(status="Voided"), record(UnitPrice=float("nan")),
+        for value in (record(sparse=True), record(status="Pending"), record(UnitPrice=float("nan")),
                       {"Id": "42", "MetaData": {"LastUpdatedTime": capture.stamp(NOW)}}):
             with self.subTest(value=value), self.assertRaises(capture.AttemptError):
                 capture.record_evidence(value, tombstone_allowed=True)

@@ -12,7 +12,8 @@ struct StaffReplicaSourceContext {
 struct StaffReplicaSourceDependencies {
     let context: () async throws -> StaffReplicaSourceContext
     let check: (StaffReplicaSourceContext) throws -> Void
-    let capture: (StaffReplicaSourceContext, Data?) throws -> StaffReplicaSourceCapture
+    /// Runs its fetches off the main actor; see `StaffReplicaSourceHistory.captureOffMain`.
+    let capture: (StaffReplicaSourceContext, Data?) async throws -> StaffReplicaSourceCapture
     let request: (String, String, Data?) async throws -> Data
     let store: SharedTimeLocalStore
     var now: () -> Date = Date.init
@@ -39,6 +40,13 @@ struct StaffReplicaSourceDependencies {
             guard !GunnAireCloudKit.usesTestDatabase, let stamp = access.operationStamp, access.verifiedRole == .admin else {
                 throw StaffReplicaSourceSyncError.access
             }
+            // The workspace response and iCloud account are re-fetched at most
+            // every 15 minutes for the same operation stamp; `verify` still
+            // checks the live stamp, role, company, session and store on every pass.
+            if let cached = StaffReplicaSourceContextCache.entry, cached.stamp == stamp,
+               Date().timeIntervalSince(cached.resolvedAt) < StaffReplicaSourceContextCache.lifetime {
+                return cached.context
+            }
             let response = try await GunnAireBackendService.fetchCompanyWorkspace()
             let account = try await CompanyCloudKitRuntimeAccount.current()
             guard access.operationStamp == stamp, response.user.email == stamp.session.email, response.user.isActive,
@@ -48,11 +56,16 @@ struct StaffReplicaSourceDependencies {
                   registration.matches(session: stamp.session, binding: binding, storeUUID: try CompanyWorkspaceStore.identity(at: CompanyWorkspaceStore.url)) else {
                 throw StaffReplicaSourceSyncError.access
             }
-            return .init(scope: .init(backendOrigin: stamp.session.backendOrigin, actorEmail: stamp.session.email,
-                                     binding: binding, storeUUID: registration.storeUUID), stamp: stamp)
+            let context = StaffReplicaSourceContext(
+                scope: .init(backendOrigin: stamp.session.backendOrigin, actorEmail: stamp.session.email,
+                             binding: binding, storeUUID: registration.storeUUID),
+                stamp: stamp
+            )
+            StaffReplicaSourceContextCache.entry = (stamp, context, Date())
+            return context
         }, check: { try verify($0) }, capture: { context, token in
             guard let container = CompanyWorkspaceAccessController.shared.authorizedContainer else { throw StaffReplicaSourceSyncError.access }
-            return try StaffReplicaSourceHistory.capture(container: container, after: token, storeUUID: context.scope.storeUUID)
+            return try await StaffReplicaSourceHistory.captureOffMain(container: container, after: token, storeUUID: context.scope.storeUUID)
         }, request: { try await GunnAireBackendService.staffReplicaSourceRequest(path: $0, method: $1, body: $2) }, store: StaffReplicaSourceStorage.device,
               deliver: { try await StaffReplicaAutomaticDelivery().deliver(source: $0, sequence: $1) },
               fullWorkspace: .shared, fullContent: .shared, ownerFieldEdits: .shared, ownerInvoices: .shared)
@@ -76,10 +89,22 @@ enum StaffReplicaSourceStorage {
     }
 }
 
+@MainActor enum StaffReplicaSourceContextCache {
+    static let lifetime: TimeInterval = 15 * 60
+    static var entry: (stamp: CompanyWorkspaceOperationStamp, context: StaffReplicaSourceContext, resolvedAt: Date)?
+}
+
 /// The owner SwiftData store remains authoritative. This prepares the explicit
 /// core-field source ledger; it does not import partial models or claim delivery.
 @MainActor final class StaffReplicaSourceCoordinator: ObservableObject {
     static let shared = StaffReplicaSourceCoordinator()
+    /// A completed pass with nothing left to do is not repeated sooner than
+    /// this unless a save or a CloudKit import asks for one (`scheduleSync`).
+    static let passInterval: TimeInterval = 60
+    /// Saves and CloudKit events arrive in bursts; one pass serves the burst.
+    var scheduledSyncDelay: Duration = .seconds(10)
+    private(set) var lastCompletedAt: Date?
+    private var scheduledSync: Task<Void, Never>?
     @Published private(set) var isRunning = false
     @Published private(set) var message = "Saved changes will be prepared when the approved owner workspace is connected."
     @Published private(set) var conflicts: [StaffReplicaSourceConflict] = []
@@ -274,10 +299,38 @@ enum StaffReplicaSourceStorage {
         }
     }
 
+    /// Coalesces save/import-driven requests into one pass after a short delay.
+    func scheduleSync() {
+        guard scheduledSync == nil else { return }
+        scheduledSync = Task { [weak self] in
+            try? await Task.sleep(for: self?.scheduledSyncDelay ?? .seconds(10))
+            while let self, !Task.isCancelled, self.isRunning {
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.scheduledSync = nil
+            await self.sync()
+        }
+    }
+
+    /// The foreground loop's pass: skipped while the previous completed pass
+    /// (nothing left to do) is younger than `passInterval`, so an activation
+    /// that restarts the loop does not repeat a full read of the workspace.
+    /// `sync()` itself always runs.
+    func syncIfDue() async {
+        if !hasMore, let last = lastCompletedAt,
+           dependencies.now().timeIntervalSince(last) < Self.passInterval {
+            return
+        }
+        await sync()
+    }
+
     func sync() async {
         guard !isRunning else { return }
         isRunning = true; hasMore = false
         defer { isRunning = false }
+        var completed = false
+        defer { if completed { lastCompletedAt = dependencies.now() } }
         do {
             let context = try await dependencies.context()
             try dependencies.check(context)
@@ -293,8 +346,11 @@ enum StaffReplicaSourceStorage {
             // schema before publishing newer core facts. Never alter recovery
             // of an already submitted six-kind operation or send raw HR/billing
             // records through the existing role-projected core endpoint.
+            // Re-checked after the core capture, which now suspends while its
+            // fetches run off the main actor.
+            var ownerHistoryFenceHolds: (() throws -> Bool)?
             if let publisher = dependencies.fullWorkspace {
-                let summary = try await publisher.synchronize(context)
+                let summary = try await AppPerformanceDiagnostics.shared.operation("replica.fullWorkspace") { try await publisher.synchronize(context) }
                 try dependencies.check(context)
                 workspaceConflicts = summary.conflicts
                 if summary.hasMore || !summary.conflicts.isEmpty || summary.waitingForCloudKit > 0 {
@@ -306,7 +362,7 @@ enum StaffReplicaSourceStorage {
                 try await dependencies.ownerInvoices?.refresh(context, published: summary)
                 try dependencies.check(context)
                 if let content = dependencies.fullContent {
-                    let prepared = try await content.synchronize(context, published: summary)
+                    let prepared = try await AppPerformanceDiagnostics.shared.operation("replica.fullContent") { try await content.synchronize(context, published: summary) }
                     try dependencies.check(context)
                     if prepared.hasMore {
                         message = prepared.message; hasMore = true; return
@@ -316,17 +372,23 @@ enum StaffReplicaSourceStorage {
                     hasMore = true; message = "Checking newer saved work before sharing…"
                     return
                 }
-                // No suspension between this owner-history fence and the core
-                // capture below: both use the same verified owner workspace.
+                // The core capture below suspends while its fetches run off the
+                // main actor, so this owner-history fence is checked again once
+                // it returns: both must describe the same verified owner workspace.
+                ownerHistoryFenceHolds = { try publisher.matchesCurrent(summary.preparedStage, context: context) }
             } else { try dependencies.prepareFullWorkspace?(context) }
             try dependencies.check(context)
-            let capture = try dependencies.capture(context, journal.token)
+            let capture = try await AppPerformanceDiagnostics.shared.operation("replica.capture") { try await dependencies.capture(context, journal.token) }
             try dependencies.check(context)
+            if let ownerHistoryFenceHolds, try !ownerHistoryFenceHolds() {
+                hasMore = true; message = "Checking newer saved work before sharing…"
+                return
+            }
             journal.snapshot = capture.source; journal.token = capture.token
             journal.deletions.formUnion(capture.deletions)
             journal.deletions.subtract(capture.source.records.map(\.key))
             try save(journal, context) // Cursor and original facts durable before network publication.
-            let (sequence, records) = try await readSource(context)
+            let (sequence, records) = try await AppPerformanceDiagnostics.shared.operation("replica.readSource") { try await readSource(context) }
             let plan = try StaffReplicaSourcePlan.reconcile(journal: &journal, remote: records)
             conflicts = plan.conflicts
             try save(journal, context)
@@ -353,11 +415,12 @@ enum StaffReplicaSourceStorage {
                     hasMore = true; message = "Checking saved changes before sharing…"
                 } else {
                     message = "Sharing saved changes through iCloud…"
-                    let summary = try await deliver(context, sequence)
+                    let summary = try await AppPerformanceDiagnostics.shared.operation("replica.deliver") { try await deliver(context, sequence) }
                     try dependencies.check(context)
                     message = summary.message
                 }
             } else { message = "Core records prepared. Staff device delivery is a separate step." }
+            completed = !hasMore
         } catch is CancellationError {
             // The durable original is retained for the next foreground run.
         } catch {

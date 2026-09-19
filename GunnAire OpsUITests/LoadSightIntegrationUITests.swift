@@ -43,6 +43,11 @@ final class LoadSightIntegrationUITests: XCTestCase {
         let job = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Cooling system diagnostic")).firstMatch
         XCTAssertTrue(job.waitForExistence(timeout: 3)); job.tap()
         let author = app.textFields["OpsContextAuthor"]
+        // Tapping the job dismisses the selection sheet; the author field sits
+        // on the sheet underneath and is not hittable until that transition
+        // lands. On a cold simulator tap() fired first and hit the workspace
+        // behind it instead.
+        XCTAssertTrue(author.waitForExistence(timeout: 5))
         author.tap(); author.typeText("UI link recorder")
         let reason = app.textViews["OpsContextReason"].exists ? app.textViews["OpsContextReason"] : app.textFields["OpsContextReason"]
         reason.tap(); reason.typeText("Synthetic UI link")
@@ -83,6 +88,8 @@ final class LoadSightIntegrationUITests: XCTestCase {
         let job = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Cooling system diagnostic")).firstMatch
         XCTAssertTrue(job.waitForExistence(timeout: 3)); job.tap()
         let author = app.textFields["OpsContextAuthor"]
+        // Same transition as the link test: wait for the field before tapping.
+        XCTAssertTrue(author.waitForExistence(timeout: 5))
         author.tap(); author.typeText("UI recovery recorder")
         let reason = app.textViews["OpsContextReason"].exists ? app.textViews["OpsContextReason"] : app.textFields["OpsContextReason"]
         reason.tap(); reason.typeText("Synthetic restart recovery")

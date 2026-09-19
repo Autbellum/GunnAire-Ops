@@ -230,7 +230,7 @@ final class StaffWorkspaceOperationalImportTests: XCTestCase {
         let raw = Data(vector.payloadUtf8.utf8)
         let (scope, plan, _) = try scopeAndPlan()
         let memory = MemoryStore()
-        let view = try installAccepted(raw: raw, receipt: vector.receipt, scope: scope, plan: plan.id, memory: memory)
+        _ = try installAccepted(raw: raw, receipt: vector.receipt, scope: scope, plan: plan.id, memory: memory)
         let imported = try StaffWorkspaceOperationalImportStore.importAccepted(
             store: memory.store, scope: scope, plan: plan.id)
         XCTAssertFalse(imported.operationalWorkspaceReady)

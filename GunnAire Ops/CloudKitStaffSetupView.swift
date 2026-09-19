@@ -45,6 +45,12 @@ struct CloudKitStaffSetupView: View {
                 if let error = model.error ?? inbox.error {
                     Section("Needs attention") {
                         Text(error.localizedDescription).accessibilityIdentifier("StaffCloudKitSetupError")
+                        if error == .unavailable, !CloudKitStaffSetupDiagnostics.lastUnavailableDetail.isEmpty {
+                            Text(CloudKitStaffSetupDiagnostics.lastUnavailableDetail)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.secondary)
+                                .accessibilityIdentifier("StaffCloudKitSetupUnavailableDetail")
+                        }
                         Button("Check Again") { Task { await model.refresh() } }
                             .disabled(model.busy)
                     }
@@ -154,7 +160,15 @@ private struct CloudKitStaffRequestView: View {
                     LabeledContent("Status", value: plan.setupStatus)
                 }
                 if let error = model.error {
-                    Section("Needs attention") { Text(error.localizedDescription).accessibilityIdentifier("StaffCloudKitSetupError") }
+                    Section("Needs attention") {
+                        Text(error.localizedDescription).accessibilityIdentifier("StaffCloudKitSetupError")
+                        if error == .unavailable, !CloudKitStaffSetupDiagnostics.lastUnavailableDetail.isEmpty {
+                            Text(CloudKitStaffSetupDiagnostics.lastUnavailableDetail)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.secondary)
+                                .accessibilityIdentifier("StaffCloudKitSetupUnavailableDetail")
+                        }
+                    }
                 }
                 if model.busy { ProgressView("Checking original access…") }
                 if model.needsRecovery {

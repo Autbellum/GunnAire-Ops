@@ -63,6 +63,9 @@ struct StaffPushNotificationPreference: Codable, Equatable {
     var ownerEmail: String?
     var isOptedIn: Bool
     var pendingServerDeactivation: Bool
+    /// When the server last confirmed this installation's registration.
+    /// Absent in preferences saved before it existed.
+    var lastRegisteredAt: Date? = nil
 
     static func newInstallation() -> Self {
         Self(
@@ -138,8 +141,16 @@ final class StaffPushNotificationManager: NSObject, ObservableObject {
         Task { await refreshAndRegisterIfNeeded() }
     }
 
+    /// Registration is repeated at launch and, on activation, at most this
+    /// often; the privacy cover alone must not re-register the device.
+    static let activationRegistrationInterval: TimeInterval = 12 * 60 * 60
+
     func applicationDidBecomeActive() {
         guard !applyUITestStateIfRequested() else { return }
+        if state == .ready, let last = preference.lastRegisteredAt,
+           Date().timeIntervalSince(last) < Self.activationRegistrationInterval {
+            return
+        }
         Task { await refreshAndRegisterIfNeeded() }
     }
 
@@ -205,6 +216,7 @@ final class StaffPushNotificationManager: NSObject, ObservableObject {
             )
             preference.ownerEmail = nil
             preference.pendingServerDeactivation = false
+            preference.lastRegisteredAt = nil
             savePreference()
             state = .off
         } catch {
@@ -280,6 +292,7 @@ final class StaffPushNotificationManager: NSObject, ObservableObject {
                       response.registered,
                       response.device?.isActive == true else { return }
                 preference.pendingServerDeactivation = false
+                preference.lastRegisteredAt = Date()
                 savePreference()
                 state = .ready
             } catch {
@@ -358,6 +371,14 @@ final class StaffPushNotificationManager: NSObject, ObservableObject {
                 return "Sign in again with Apple or Google before retrying staff alerts."
             case .notConfigured:
                 return "The GunnAire business server is not configured in this build."
+            case .server(let statusCode, let message):
+                // The server states the exact reason (for example, staff
+                // notifications not configured, or no application session).
+                // Hiding it behind a generic sentence sent the owner looking
+                // for a device or account problem that did not exist.
+                let reason = message.trimmingCharacters(in: .whitespacesAndNewlines)
+                let suffix = reason.isEmpty ? "" : " \(reason.hasSuffix(".") ? reason : reason + ".")"
+                return "Apple registration succeeded, but the GunnAire server declined this device (HTTP \(statusCode)).\(suffix)"
             default:
                 break
             }
@@ -446,6 +467,9 @@ final class GunnAireApplicationDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        // Started first so the launch stopwatch sees as much of startup as the
+        // app can observe, and so a crash during startup is still recorded.
+        AppPerformanceDiagnostics.shared.start()
         StaffPushNotificationManager.shared.configureAtLaunch()
         return true
     }

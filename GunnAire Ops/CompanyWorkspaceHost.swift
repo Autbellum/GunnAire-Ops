@@ -8,7 +8,14 @@ import StoreKit
 /// CloudKit's async calls carry no built-in timeout, so a stalled network
 /// path (rather than a clean error) can leave a caller awaiting forever with
 /// no feedback. Races the operation against a deadline and throws
-/// `CompanyWorkspaceFailure.server` if the deadline wins.
+/// `CompanyCloudKitTimeout` if the deadline wins. The access controller
+/// treats that like a network outage (a bounded lease may keep the workspace
+/// open) and reports it as a server-side failure otherwise.
+struct CompanyCloudKitTimeout: Error, CustomStringConvertible {
+    let seconds: TimeInterval
+    var description: String { "CloudKit call exceeded \(Int(seconds)) s" }
+}
+
 private func withCloudKitTimeout<T: Sendable>(
     seconds: TimeInterval,
     _ operation: @escaping @Sendable () async throws -> T
@@ -17,7 +24,7 @@ private func withCloudKitTimeout<T: Sendable>(
         group.addTask { try await operation() }
         group.addTask {
             try await Task.sleep(for: .seconds(seconds))
-            throw CompanyWorkspaceFailure.server
+            throw CompanyCloudKitTimeout(seconds: seconds)
         }
         defer { group.cancelAll() }
         return try await group.next()!
@@ -42,6 +49,10 @@ enum CompanyWorkspaceDiagnostics {
     /// GunnAireBackendError, so the on-screen message alone can't distinguish
     /// a real backend problem from a URLError/DecodingError on this device.
     static var lastServerFailureDetail: String = ""
+    /// The CloudKit environment this build resolved to. It namespaces the
+    /// account hash, the workspace binding and every staff share plan, so a
+    /// mismatch surfaces only as an opaque "workspace does not match".
+    static var lastResolvedEnvironment: String = ""
 }
 
 enum CompanyCloudKitRuntimeAccount {
@@ -65,9 +76,12 @@ enum CompanyCloudKitRuntimeAccount {
                   let containers = entitlements["com.apple.developer.icloud-container-identifiers"] as? [String],
                   containers.contains(GunnAireCloudKit.containerIdentifier) else { return nil }
             // Provisioning profiles encode this entitlement as a single String
-            // for a distribution-only profile, but as a String array (e.g.
-            // ["Production", "Development"]) for profiles that support both
-            // environments. Accept either shape and prefer Production.
+            // for a single-environment profile, but as a String array (e.g.
+            // ["Production", "Development"]) for profiles that permit both.
+            // The array is an ALLOWLIST, not a selection: both the development
+            // and the store profile for this app carry both values (verified
+            // by decoding the installed profiles), so it cannot by itself say
+            // which environment a build actually reaches.
             let rawEnvironmentValues: [String]
             if let single = entitlements["com.apple.developer.icloud-container-environment"] as? String {
                 rawEnvironmentValues = [single]
@@ -76,14 +90,46 @@ enum CompanyCloudKitRuntimeAccount {
             } else {
                 return nil
             }
-            guard let value = rawEnvironmentValues.first(where: { $0 == "Production" }) ?? rawEnvironmentValues.first(where: { $0 == "Development" }) else { return nil }
-            return value.lowercased()
+            let allowsProduction = rawEnvironmentValues.contains("Production")
+            let allowsDevelopment = rawEnvironmentValues.contains("Development")
+            guard allowsProduction || allowsDevelopment else { return nil }
+            guard allowsProduction && allowsDevelopment else {
+                return allowsProduction ? "production" : "development"
+            }
+            // Both permitted: disambiguate with get-task-allow, the signed,
+            // tamper-evident marker of a development-signed build. Apple's
+            // development profiles carry true and distribution profiles
+            // (App Store, Ad Hoc, Enterprise) carry false - verified by
+            // decoding this app's own installed profiles. A missing key is
+            // treated as distribution, the conservative choice. Never infer
+            // this from DEBUG, a receipt file, or QBO.
+            let debuggable = (entitlements["get-task-allow"] as? Bool) ?? false
+            return debuggable ? "development" : "production"
         }
         return hasVerifiedStoreDistribution ? "production" : nil
     }
 
+    /// Resolving the account costs a StoreKit transaction lookup (with
+    /// retries) and two CloudKit calls, and every foreground verification,
+    /// publication pass and staff delivery repeats it. A successful result is
+    /// reused briefly; CloudKit's account-change notification drops it.
+    static let cacheLifetime: TimeInterval = 15 * 60
+    @MainActor private static var cachedAccount: (account: CompanyCloudKitAccount, resolvedAt: Date)?
+
+    @MainActor static func invalidateCache() { cachedAccount = nil }
+
     static func current() async throws -> CompanyCloudKitAccount {
         guard !GunnAireCloudKit.usesTestDatabase else { throw CompanyWorkspaceFailure.configuration }
+        if let cached = await MainActor.run(body: { Self.cachedAccount }),
+           Date().timeIntervalSince(cached.resolvedAt) < Self.cacheLifetime {
+            return cached.account
+        }
+        let account = try await resolve()
+        await MainActor.run { Self.cachedAccount = (account, Date()) }
+        return account
+    }
+
+    private static func resolve() async throws -> CompanyCloudKitAccount {
         let profileURLs = [
             Bundle.main.bundleURL.appendingPathComponent("embedded.mobileprovision"),
             Bundle.main.bundleURL.appendingPathComponent("Contents/embedded.provisionprofile")
@@ -142,6 +188,13 @@ enum CompanyCloudKitRuntimeAccount {
         guard let environment = environment(profileData: profileData, hasVerifiedStoreDistribution: hasVerifiedDistribution) else {
             throw CompanyWorkspaceFailure.configuration
         }
+        // The resolved environment namespaces accountHash, the workspace
+        // binding lookup and every staff share plan, so a wrong value fails as
+        // an opaque "workspace does not match". Record it where it can be read
+        // off the device instead of inferred.
+        await MainActor.run {
+            CompanyWorkspaceDiagnostics.lastResolvedEnvironment = environment
+        }
         let container = CKContainer(identifier: GunnAireCloudKit.containerIdentifier)
         // CKContainer's async calls have no built-in timeout. A stalled
         // network path (rather than a clean error) previously left staff
@@ -182,6 +235,10 @@ struct CompanyWorkspaceHost: View {
     @Binding var hasAuthenticatedUser: Bool
     @State private var confirmsOwnership = false
     @State private var showingStaffSetup = false
+    #if DEBUG
+    @State private var schemaSeedResult = ""
+    @State private var isSeedingSchema = false
+    #endif
     @StateObject private var staffNavigation = StaffWorkspaceNavigationController()
     @ObservedObject private var staffInvitations = CloudKitStaffInvitationInbox.shared
 
@@ -258,6 +315,19 @@ struct CompanyWorkspaceHost: View {
                                     .foregroundStyle(.secondary)
                                     .accessibilityIdentifier("CompanyWorkspaceServerFailureDetail")
                             }
+                            if failure == .differentWorkspace, !CompanyWorkspaceDiagnostics.lastResolvedEnvironment.isEmpty {
+                                Text("environment=\(CompanyWorkspaceDiagnostics.lastResolvedEnvironment)")
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("CompanyWorkspaceResolvedEnvironment")
+                            }
+                            if failure == .differentWorkspace, !access.lastMismatchDetail.isEmpty {
+                                Text(access.lastMismatchDetail)
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                                    .accessibilityIdentifier("CompanyWorkspaceMismatchDetail")
+                            }
                             if failure != .restartRequired {
                                 Button("Check Again") { Task { await access.refresh() } }
                                     .buttonStyle(.borderedProminent)
@@ -266,6 +336,35 @@ struct CompanyWorkspaceHost: View {
                                     .accessibilityIdentifier("OpenStaffCloudKitSetup")
                             }
                         }
+                        #if DEBUG
+                        // Reachable in every blocked state on purpose: seeding
+                        // the Development schema needs CloudKit only, not an
+                        // approved workspace, so this must not sit behind the
+                        // approval it exists to make unnecessary.
+                        VStack(alignment: .leading, spacing: 8) {
+                            Divider()
+                            Text("Developer")
+                                .font(.caption.bold())
+                                .foregroundStyle(.secondary)
+                            Button(isSeedingSchema ? "Seeding…" : "Seed Development schema") {
+                                isSeedingSchema = true
+                                Task {
+                                    schemaSeedResult = await CloudKitSchemaSeed.seedDevelopmentSchema()
+                                    isSeedingSchema = false
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(isSeedingSchema)
+                            .accessibilityIdentifier("SeedCloudKitShareType")
+                            if !schemaSeedResult.isEmpty {
+                                Text(schemaSeedResult)
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                                    .accessibilityIdentifier("SeedCloudKitShareTypeResult")
+                            }
+                        }
+                        #endif
                         Button("Sign Out") {
                             access.invalidate()
                             FieldPaymentHandoff.shared.end()
@@ -301,7 +400,7 @@ struct CompanyWorkspaceHost: View {
         .onReceive(staffInvitations.$pending) { invitation in
             if invitation != nil { showingStaffSetup = true }
         }
-        .task { await access.refresh() }
+        .task { await access.refreshIfStale(maxAge: CompanyWorkspaceAccessController.verificationInterval) }
         .task(id: receive.presentation?.context.stamp.session.expiresAt) {
             guard let expires = receive.presentation?.context.stamp.session.expiresAt else { return }
             do { try await Task.sleep(for: .seconds(max(0, expires.timeIntervalSinceNow))) }
@@ -315,7 +414,7 @@ struct CompanyWorkspaceHost: View {
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             access.enforceAccessDeadline()
             receive.enforceAccessDeadline()
-            Task { await access.refresh() }
+            Task { await access.refreshIfStale(maxAge: CompanyWorkspaceAccessController.verificationInterval) }
         }
     }
 }

@@ -1224,6 +1224,7 @@ struct QuickBooksManagementView: View {
     @Query(sort: \Invoice.createdAt, order: .reverse) private var localInvoices: [Invoice]
     @Query(sort: \Payment.date, order: .reverse) private var localPayments: [Payment]
     @Query(sort: \RecurringMaintenanceContract.nextDate, order: .forward) private var localMaintenanceAgreements: [RecurringMaintenanceContract]
+    @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     private let liveAPI = QuickBooksAPI.shared
 
     @State private var customers: [QuickBooksCustomer] = []
@@ -1263,6 +1264,10 @@ struct QuickBooksManagementView: View {
     @State private var statusMessage = "Connect QuickBooks in Settings to start live sync."
     @State private var actionMessage: String?
     @State private var syncResourceStatuses: [QuickBooksSyncResourceStatus] = Self.defaultSyncResourceStatuses
+    /// True once this app session derived and saved the accounting mappings
+    /// from QuickBooks usage, so the Overview can say where they came from.
+    @State private var accountingDefaultsSetAutomatically = false
+    @State private var lastChangeHistoryFailure: QuickBooksChangeHistoryFailure?
     @State private var lastSuccessfulSyncAt: Date?
     @State private var lastSyncStartedAt: Date?
     @State private var activeEmailEstimateID: String?
@@ -1429,6 +1434,12 @@ struct QuickBooksManagementView: View {
                 environment: quickBooksDataAPI.currentEnvironment
               ) else { return nil }
         return configuration
+    }
+
+    /// Same role decision as the rest of the app: the verified server user
+    /// and the local replica must agree on the Admin role.
+    private var isAdminUser: Bool {
+        AppAccess.activeRole(email: AppIdentity.currentEmail, users: users) == .admin
     }
 
     private var quickBooksConfigurationWarnings: [String] {
@@ -1745,6 +1756,13 @@ struct QuickBooksManagementView: View {
                         .foregroundStyle(accountingConfiguration == nil ? Color.orange : Color.green)
                         .accessibilityIdentifier("QBOAccountingMappingStatus")
 
+                        if accountingConfiguration != nil, accountingDefaultsSetAutomatically {
+                            Text("Set automatically from QuickBooks usage - review anytime.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .accessibilityIdentifier("QBOAccountingMappingAutomaticCaption")
+                        }
+
                         if let accountingConfiguration {
                             LabeledContent(
                                 "Sales",
@@ -1882,6 +1900,13 @@ struct QuickBooksManagementView: View {
                             }
                         }
 
+                        if let failure = lastChangeHistoryFailure {
+                            Text("Last shared history failure (\(failure.entity ?? "Accounting"), \(failure.at.formatted(date: .omitted, time: .shortened))). \(failure.summary)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .accessibilityIdentifier("QuickBooksChangeHistoryFailureDetail")
+                        }
+
                         if syncResourceStatuses.contains(where: { $0.state != .idle }) {
                             ForEach(accountingStatuses) { status in
                                 syncResourceRow(status)
@@ -1945,7 +1970,10 @@ struct QuickBooksManagementView: View {
                                             .buttonStyle(.borderedProminent)
                                             .tint(Color.brandGold)
                                             .foregroundStyle(Color.primaryBlack)
-                                            .disabled(activeLocalEstimatePublicationID != nil)
+                                            // Same gate as the invoice control below: publication
+                                            // needs the device's QuickBooks session as well as the
+                                            // shared business login.
+                                            .disabled(!isAuthenticated || activeLocalEstimatePublicationID != nil)
 
                                             BillingPublicationReviewLink(document: .estimate(estimate), context: modelContext)
 
@@ -3409,6 +3437,8 @@ struct QuickBooksManagementView: View {
         quickBooksReconnectRequired = false
         lastSyncStartedAt = Date()
         resetSyncStatusesForRun()
+        QuickBooksChangeHistoryDiagnostics.reset()
+        lastChangeHistoryFailure = nil
         statusMessage = "Refreshing QuickBooks…"
 
         resourceSyncTask = Task { @MainActor in
@@ -3435,8 +3465,8 @@ struct QuickBooksManagementView: View {
                 clearQuickBooksSyncSnapshot()
                 let message = error is CancellationError
                     ? "QuickBooks sync stopped. Saved work has been retained."
-                    : error.localizedDescription
-                markAllSyncStatusesFailed(message)
+                    : error.localizedDescription + changeHistoryFailureSuffix(for: error)
+                markSyncStatusesAfterRunFailure(message)
                 statusMessage = "QuickBooks sync stopped. \(message)"
             }
         }
@@ -3487,7 +3517,7 @@ struct QuickBooksManagementView: View {
                 updateSyncStatus(id: id, state: .success, detail: "Loaded \(records.count) records.", count: records.count)
                 return true
             case .failure(let error):
-                let message = userFacingQuickBooksMessage(for: error)
+                let message = userFacingQuickBooksMessage(for: error) + changeHistoryFailureSuffix(for: error)
                 if let qbError = error as? QuickBooksDataAPI.QBError,
                    qbError.requiresReconnect {
                     quickBooksReconnectRequired = true
@@ -3588,7 +3618,132 @@ struct QuickBooksManagementView: View {
         guard try await run(id: "salesReceipts", required: true, fetch: liveAPI.fetchSalesReceipts, apply: { records in salesReceipts = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
         guard try await run(id: "deposits", required: true, fetch: liveAPI.fetchDeposits, apply: { records in deposits = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
 
+        // Every resource the derivation reads has now run in this sync.
+        try await setAccountingDefaultsAutomaticallyIfNeeded(syncRun)
+
         try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures)
+    }
+
+    /// Resources whose records `QuickBooksAccountingDefaults.propose` reads.
+    private static let accountingDefaultsSourceResourceIDs: Set<String> = [
+        "catalog", "accounts", "invoices", "salesReceipts", "payments", "deposits", "bills", "purchases"
+    ]
+
+    /// Derives the six accounting mappings from what this sync received and
+    /// saves them through the store's normal path, so the server validates
+    /// the payload and enforces the Admin session. Runs only when no mapping
+    /// exists for this company and environment; a saved mapping is never
+    /// overwritten here, and a rejected save is reported, never retried.
+    private func setAccountingDefaultsAutomaticallyIfNeeded(_ syncRun: QuickBooksSyncRun) async throws {
+        try syncRun.check()
+        guard accountingConfiguration == nil, isAdminUser else { return }
+        #if DEBUG
+        if accountingMappingFixtureRequested { return }
+        #endif
+        guard GunnAireBackendService.isConfigured else { return }
+        guard let realmID = syncRun.workflow.realmID else { return }
+        let environment = syncRun.workflow.environment
+        // Only an explicit "no mapping" answer from this run's refresh may
+        // lead to a save; a failed fetch must not be mistaken for absence.
+        guard accountingConfigurationStore.hasConfirmedNoConfiguration(
+            realmID: realmID, environment: environment
+        ) else { return }
+
+        let sources = Self.accountingDefaultsSourceResourceIDs
+        guard sources.isSubset(of: syncRun.successfulResourceIDs) else {
+            let pending = syncResourceStatuses
+                .filter { sources.contains($0.id) && !syncRun.successfulResourceIDs.contains($0.id) }
+                .map(\.name)
+            updateSyncStatus(
+                id: "mappings",
+                state: .warning,
+                detail: "Accounting defaults were not derived because these resources did not sync: \(pending.joined(separator: ", ")).",
+                count: 0
+            )
+            return
+        }
+
+        guard let proposal = QuickBooksAccountingDefaults.propose(
+            items: items,
+            accounts: accounts,
+            invoices: invoices,
+            salesReceipts: salesReceipts,
+            payments: payments,
+            deposits: deposits,
+            bills: bills,
+            purchases: purchases,
+            realmID: realmID,
+            environment: environment
+        ) else {
+            updateSyncStatus(
+                id: "mappings",
+                state: .warning,
+                detail: "QuickBooks returned no catalog items or accounts, so accounting defaults could not be derived.",
+                count: 0
+            )
+            return
+        }
+
+        switch proposal {
+        case .incomplete(let missing):
+            updateSyncStatus(
+                id: "mappings",
+                state: .warning,
+                detail: QuickBooksAccountingDefaults.incompleteMessage(missing),
+                count: 0
+            )
+        case .complete(let candidate):
+            try syncRun.check()
+            // Absence was confirmed several fetches ago and the server's save is
+            // an unconditional upsert, so ask again immediately before saving: a
+            // mapping an administrator saved elsewhere meanwhile must win. The
+            // contract has no create-only semantics, so a sub-second race remains.
+            await accountingConfigurationStore.refresh(
+                realmID: realmID,
+                environment: environment,
+                force: true,
+                validate: { try syncRun.check() }
+            )
+            try syncRun.check()
+            if accountingConfiguration != nil {
+                updateSyncStatus(
+                    id: "mappings",
+                    state: .success,
+                    detail: "Loaded accounting defaults saved on the server during this sync.",
+                    count: 6
+                )
+                return
+            }
+            guard accountingConfigurationStore.hasConfirmedNoConfiguration(realmID: realmID, environment: environment) else {
+                updateSyncStatus(
+                    id: "mappings",
+                    state: .warning,
+                    detail: "The server could not reconfirm that no accounting mapping exists; nothing was changed.",
+                    count: 0
+                )
+                return
+            }
+            do {
+                let successMessage = "Accounting defaults set automatically from this company's QuickBooks usage."
+                _ = try await accountingConfigurationStore.save(
+                    candidate,
+                    realmID: realmID,
+                    environment: environment,
+                    statusMessage: successMessage
+                )
+                try syncRun.check()
+                accountingDefaultsSetAutomatically = true
+                updateSyncStatus(id: "mappings", state: .success, detail: successMessage, count: 6)
+            } catch {
+                try syncRun.check()
+                updateSyncStatus(
+                    id: "mappings",
+                    state: .warning,
+                    detail: "Automatic accounting defaults were not saved. \(error.localizedDescription)",
+                    count: 0
+                )
+            }
+        }
     }
 
     private func createCustomer(name: String, email: String?, phone: String?) {
@@ -5130,6 +5285,37 @@ struct QuickBooksManagementView: View {
         }
     }
 
+    /// A run that stops part-way used to rewrite every row, including the
+    /// ones that had already synced, with the same sentence, so the owner saw
+    /// "almost done, then everything red" with no indication of where it
+    /// stopped. Finished rows keep their result and counts; the row that was
+    /// in progress carries the failure; rows never reached say so. The local
+    /// import gate is unchanged and still requires every required resource.
+    private func markSyncStatusesAfterRunFailure(_ detail: String) {
+        let now = Date()
+        let stoppedAt = syncResourceStatuses.first { $0.state == .syncing }?.name
+        let stoppedSuffix = stoppedAt.map { " at \($0)" } ?? ""
+        syncResourceStatuses = syncResourceStatuses.map { status in
+            var status = status
+            switch status.state {
+            case .success:
+                status.detail = "Synced before the run stopped\(stoppedSuffix)."
+            case .syncing:
+                status.state = status.required ? .failed : .warning
+                status.detail = detail
+                status.count = nil
+            case .idle:
+                status.state = status.required ? .failed : .warning
+                status.detail = "Not reached: the run stopped\(stoppedSuffix)."
+                status.count = nil
+            case .warning, .failed:
+                break // keeps its own, more specific message
+            }
+            status.updatedAt = now
+            return status
+        }
+    }
+
     private func markPendingSyncStatusesFailed(_ detail: String) {
         let now = Date()
         syncResourceStatuses = syncResourceStatuses.map { status in
@@ -5250,6 +5436,19 @@ struct QuickBooksManagementView: View {
             return qbError.localizedDescription
         }
         return error.localizedDescription
+    }
+
+    /// For a shared accounting history failure, the server's own status,
+    /// code and staff message (or the device transport error) recorded by the
+    /// change-history client during this run. Empty for every other error.
+    private func changeHistoryFailureSuffix(for error: Error) -> String {
+        // Only a failure recorded during this run: the diagnostics are shared
+        // with the billing catalog refresh, which must not be attributed here.
+        guard error is QuickBooksChangeHistoryError,
+              let failure = QuickBooksChangeHistoryDiagnostics.lastFailure,
+              failure.at >= (lastSyncStartedAt ?? .distantPast) else { return "" }
+        lastChangeHistoryFailure = failure
+        return failure.detailSuffix
     }
 
     @ViewBuilder

@@ -96,6 +96,42 @@ import Testing
         }
     }
 
+    /// A completed pass with nothing left to do is not repeated within the
+    /// pass interval (every foreground activation restarts the loop); an
+    /// explicit force or a save-driven schedule still runs one, and several
+    /// schedules in a burst coalesce into a single pass.
+    @Test func completedPassesAreNotRepeatedWithinTheIntervalUnlessForcedOrScheduled() async throws {
+        let h = Fixture()
+        var clock = Date(timeIntervalSince1970: 1_788_800_000)
+        var dependencies = h.dependencies()
+        dependencies.now = { clock }
+        let coordinator = StaffReplicaSourceCoordinator(dependencies: dependencies)
+        coordinator.scheduledSyncDelay = .milliseconds(50)
+        await coordinator.syncIfDue()
+        #expect(!coordinator.hasMore)
+        let captures = h.captures
+        #expect(captures >= 1)
+
+        await coordinator.syncIfDue()
+        #expect(h.captures == captures)
+
+        clock = clock.addingTimeInterval(StaffReplicaSourceCoordinator.passInterval)
+        await coordinator.syncIfDue()
+        #expect(h.captures == captures + 1)
+
+        // An explicit pass always runs.
+        await coordinator.sync()
+        #expect(h.captures == captures + 2)
+
+        // A burst of save/import requests becomes exactly one pass.
+        coordinator.scheduleSync(); coordinator.scheduleSync(); coordinator.scheduleSync()
+        for _ in 0..<40 where h.captures < captures + 3 {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(h.captures == captures + 3)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(h.captures == captures + 3)
+    }
     @Test func automaticDeliveryWaitsForRecapturedAcknowledgedSourceAndUsesExactSequence() async throws {
         let h = Fixture(); h.local = [h.record("Original")]
         var sequences: [Int] = []

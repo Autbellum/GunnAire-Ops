@@ -17,8 +17,11 @@ struct CompanyWorkspaceAccessTests {
         var environment = "development"
         var registration: CompanyWorkspaceStoreRegistration?
         var lease: CompanyWorkspaceLease?
-        var storeID: String? = "existing-store"
-        var openCount = 0
+        // Read and written by the store-opening closures, which the controller
+        // now runs on a background task; the test awaits the controller before
+        // reading them, so no two accesses overlap.
+        nonisolated(unsafe) var storeID: String? = "existing-store"
+        nonisolated(unsafe) var openCount = 0
         var approvalCount = 0
         var fetchError: Error?
         var fetchCount = 0
@@ -27,6 +30,9 @@ struct CompanyWorkspaceAccessTests {
         var delayedSleep: ((TimeInterval) async throws -> Void)?
         var clearedContinuations = 0
         var registrationError = false
+        var sessionReads = 0
+        var sessionSignal = "signal-a"
+        var accountError: Error?
         let modelContainer: ModelContainer
 
         init() throws {
@@ -49,8 +55,11 @@ struct CompanyWorkspaceAccessTests {
 
         func controller() -> CompanyWorkspaceAccessController {
             CompanyWorkspaceAccessController(dependencies: CompanyWorkspaceDependencies(
-                session: { self.session },
-                account: { CompanyCloudKitAccount(environment: self.environment, accountHash: self.cloudAccountHash) },
+                session: { self.sessionReads += 1; return self.session },
+                account: {
+                    if let error = self.accountError { throw error }
+                    return CompanyCloudKitAccount(environment: self.environment, accountHash: self.cloudAccountHash)
+                },
                 fetchWorkspace: {
                     self.fetchCount += 1
                     if let delayed = self.delayedFetch { return try await delayed() }
@@ -81,9 +90,274 @@ struct CompanyWorkspaceAccessTests {
                     if let delayed = self.delayedSleep { try await delayed(interval) }
                     else { try await Task.sleep(for: .seconds(interval)) }
                 },
-                clearContinuations: { self.clearedContinuations += 1 }
+                clearContinuations: { self.clearedContinuations += 1 },
+                sessionSignal: { self.sessionSignal }
             ))
         }
+    }
+
+    /// Render-time authority reads (`verifiedRole`, `verifiedUser`,
+    /// `operationStamp`, `verifiedCompanyID`) reuse one decoded session within
+    /// the memo lifetime, re-read it once the lifetime passes or the in-memory
+    /// token signal changes, and never let the memo outlive a removed session
+    /// when the deadline is enforced.
+    @Test func renderTimeAuthorityReadsMemoizeTheSessionWithoutExtendingIt() async throws {
+        let h = try Harness(); h.register()
+        let controller = h.controller(); await controller.refresh()
+        #expect(controller.phase == .ready)
+
+        let baseline = h.sessionReads
+        for _ in 0..<100 {
+            #expect(controller.verifiedRole == .fieldTechnician)
+            #expect(controller.verifiedUser?.email == h.user.email)
+            #expect(controller.operationStamp != nil)
+            #expect(controller.verifiedCompanyID == h.binding.companyID)
+        }
+        #expect(h.sessionReads - baseline <= 1)
+
+        let beforeLifetime = h.sessionReads
+        h.now = h.now.addingTimeInterval(CompanyWorkspaceAccessController.sessionMemoLifetime)
+        #expect(controller.verifiedRole == .fieldTechnician)
+        #expect(h.sessionReads == beforeLifetime + 1)
+        #expect(controller.verifiedRole == .fieldTechnician)
+        #expect(h.sessionReads == beforeLifetime + 1)
+
+        let beforeSignal = h.sessionReads
+        h.sessionSignal = "signal-b"
+        #expect(controller.verifiedRole == .fieldTechnician)
+        #expect(h.sessionReads == beforeSignal + 1)
+
+        // Within the lifetime the memo is reused, but the deadline check always
+        // observes the live session and closes the workspace immediately.
+        let beforeRemoval = h.sessionReads
+        h.session = nil
+        #expect(controller.verifiedRole == .fieldTechnician)
+        #expect(h.sessionReads == beforeRemoval)
+        controller.enforceAccessDeadline()
+        #expect(controller.phase == .blocked(.signIn))
+        #expect(controller.authorizedContainer == nil && controller.verifiedRole == nil)
+    }
+
+    /// A repeated verification with an unchanged server user must not dirty or
+    /// save the main context: every save is a CloudKit export candidate.
+    @Test func repeatedVerificationWithUnchangedUserDoesNotSaveTheMainContext() async throws {
+        let h = try Harness(); h.register()
+        let context = h.modelContainer.mainContext
+        var saves = 0
+        let observation = NotificationCenter.default.publisher(for: ModelContext.didSave)
+            .filter { ($0.object as AnyObject?) === context }
+            .sink { _ in saves += 1 }
+        let controller = h.controller(); await controller.refresh()
+        #expect(controller.phase == .ready)
+        #expect(saves >= 1)
+        #expect(!context.hasChanges)
+        let firstPassSaves = saves
+        let templates = try context.fetch(FetchDescriptor<FieldFormTemplate>()).count
+        #expect(templates >= 5)
+        let users = try context.fetch(FetchDescriptor<AppUser>()).count
+
+        await controller.refresh()
+        #expect(controller.phase == .ready)
+        #expect(!context.hasChanges)
+        #expect(saves == firstPassSaves)
+        #expect(try context.fetch(FetchDescriptor<FieldFormTemplate>()).count == templates)
+        #expect(try context.fetch(FetchDescriptor<AppUser>()).count == users)
+
+        // A changed server role is still written and saved.
+        h.user = BackendAppUserRecord(email: h.user.email, role: "Standard", isActive: true, createdAt: nil)
+        await controller.refresh()
+        #expect(controller.phase == .ready)
+        #expect(saves == firstPassSaves + 1)
+        #expect(try context.fetch(FetchDescriptor<AppUser>()).allSatisfy { $0.role == .standard })
+        withExtendedLifetime(observation) {}
+    }
+
+    /// Starter templates are seeded once per workspace generation, not on every
+    /// foreground verification; a new generation (here, a server role change)
+    /// seeds again on the unlock that follows it.
+    @Test func starterTemplatesAreSeededOncePerWorkspaceGeneration() async throws {
+        let h = try Harness(); h.register()
+        let context = h.modelContainer.mainContext
+        let controller = h.controller(); await controller.refresh()
+        #expect(controller.phase == .ready)
+        let seeded = try context.fetch(FetchDescriptor<FieldFormTemplate>())
+        #expect(seeded.count >= 5)
+        context.delete(try #require(seeded.first)); try context.save()
+        let afterDelete = try context.fetch(FetchDescriptor<FieldFormTemplate>()).count
+
+        await controller.refresh()
+        #expect(controller.phase == .ready)
+        #expect(try context.fetch(FetchDescriptor<FieldFormTemplate>()).count == afterDelete)
+
+        let generation = controller.generation
+        h.user = BackendAppUserRecord(email: h.user.email, role: "Standard", isActive: true, createdAt: nil)
+        await controller.refresh()
+        #expect(controller.generation != generation)
+        // The seed check ran before the role change bumped the generation.
+        #expect(try context.fetch(FetchDescriptor<FieldFormTemplate>()).count == afterDelete)
+        await controller.refresh()
+        #expect(try context.fetch(FetchDescriptor<FieldFormTemplate>()).count == afterDelete + 1)
+    }
+
+    /// A foreground activation re-verifies with the server only once the lease
+    /// is older than the interval; the local deadline check still runs every time.
+    @Test func foregroundReverificationSkipsTheServerWhileTheLeaseIsFresh() async throws {
+        let h = try Harness(); h.register()
+        let controller = h.controller(); await controller.refresh()
+        #expect(controller.phase == .ready)
+        #expect(h.fetchCount == 1)
+
+        h.now = h.now.addingTimeInterval(14 * 60)
+        await controller.refreshIfStale(maxAge: 15 * 60)
+        #expect(h.fetchCount == 1)
+        #expect(controller.phase == .ready)
+
+        h.now = h.now.addingTimeInterval(2 * 60)
+        await controller.refreshIfStale(maxAge: 15 * 60)
+        #expect(h.fetchCount == 2)
+        #expect(controller.phase == .ready)
+
+        // A removed session closes the workspace on the very next activation.
+        h.session = nil
+        await controller.refreshIfStale(maxAge: 15 * 60)
+        #expect(controller.phase == .blocked(.signIn))
+        #expect(controller.authorizedContainer == nil)
+    }
+
+    /// A CloudKit stall at the account step is transport failure: a lease
+    /// verified within its bound keeps the workspace open offline, exactly as
+    /// an unreachable server already did.
+    @Test func iCloudTimeoutKeepsAVerifiedLeaseOpenOffline() async throws {
+        let h = try Harness(); h.register(); h.cache()
+        h.accountError = CompanyCloudKitTimeout(seconds: 20)
+        let controller = h.controller(); await controller.refresh()
+        #expect(controller.phase == .ready)
+        #expect(controller.authorizedContainer != nil)
+        #expect(h.fetchCount == 0)
+        #expect(h.lease != nil)
+    }
+
+    @Test func iCloudTimeoutWithoutALeaseBlocksAsAServerFailure() async throws {
+        let h = try Harness(); h.register()
+        h.accountError = CompanyCloudKitTimeout(seconds: 20)
+        let controller = h.controller(); await controller.refresh()
+        #expect(controller.phase == .blocked(.server))
+        #expect(controller.authorizedContainer == nil)
+        #expect(h.openCount == 0)
+    }
+
+    /// The gate names the failing check: an approved iCloud account that
+    /// differs from this device's, or a saved-store registration that belongs
+    /// to another server or binding. Only 8-character fingerprints are shown.
+    @Test func workspaceMismatchNamesTheFailingCheckWithFingerprints() async throws {
+        let h = try Harness(); h.register()
+        h.cloudAccountHash = String(repeating: "b", count: 64)
+        let controller = h.controller(); await controller.refresh()
+        #expect(controller.phase == .blocked(.differentWorkspace))
+        #expect(controller.lastMismatchDetail
+                == "iCloud account differs: approved aaaaaaaa on \(h.binding.approvedAt), this device bbbbbbbb")
+
+        let other = try Harness(); other.register()
+        other.registration = CompanyWorkspaceStoreRegistration(
+            backendOrigin: "https://other.example.test", binding: other.binding, storeUUID: "existing-store"
+        )
+        let second = other.controller(); await second.refresh()
+        #expect(second.phase == .blocked(.differentWorkspace))
+        #expect(second.lastMismatchDetail
+                == "saved store registration does not match: server origin differs")
+
+        // A later successful refresh clears the detail.
+        other.registration = CompanyWorkspaceStoreRegistration(
+            backendOrigin: other.session!.backendOrigin, binding: other.binding, storeUUID: "existing-store"
+        )
+        await second.refresh()
+        #expect(second.phase == .ready)
+        #expect(second.lastMismatchDetail.isEmpty)
+    }
+
+    /// A server re-approval of the same iCloud account (new approval date and
+    /// replica id) must not lock a device out: the saved store registration
+    /// follows the current binding. Any other difference still blocks.
+    @Test func registrationFollowsAReapprovedBindingForTheSameAccount() async throws {
+        let h = try Harness(); h.register()
+        let previous = CompanyCloudKitBinding(
+            companyID: h.binding.companyID, containerID: h.binding.containerID, environment: h.binding.environment,
+            replicaID: UUID(), cloudAccountHash: h.binding.cloudAccountHash, approvedAt: "2026-08-01T12:00:00+00:00"
+        )
+        h.registration = CompanyWorkspaceStoreRegistration(backendOrigin: h.session!.backendOrigin, binding: previous, storeUUID: "existing-store")
+        let controller = h.controller(); await controller.refresh()
+        #expect(controller.phase == .ready)
+        #expect(h.registration?.binding == h.binding)
+        #expect(h.registration?.storeUUID == "existing-store")
+        #expect(controller.lastMismatchDetail.isEmpty)
+
+        // A different company is never adopted.
+        let other = try Harness(); other.register()
+        let foreign = CompanyCloudKitBinding(
+            companyID: UUID(), containerID: other.binding.containerID, environment: other.binding.environment,
+            replicaID: other.binding.replicaID, cloudAccountHash: other.binding.cloudAccountHash, approvedAt: other.binding.approvedAt
+        )
+        other.registration = CompanyWorkspaceStoreRegistration(backendOrigin: other.session!.backendOrigin, binding: foreign, storeUUID: "existing-store")
+        let second = other.controller(); await second.refresh()
+        #expect(second.phase == .blocked(.differentWorkspace))
+        #expect(second.lastMismatchDetail.hasPrefix("saved store registration does not match: binding differs"))
+    }
+
+    /// A Keychain registration that names a store no longer on the device
+    /// (reinstall, rebuilt database) must not refuse every unlock. With no
+    /// store present, a fresh one is created and registered.
+    @Test func staleRegistrationWithNoStoreOnDeviceCreatesAndRegistersAFreshStore() async throws {
+        let h = try Harness(); h.register()
+        h.registration = CompanyWorkspaceStoreRegistration(backendOrigin: h.session!.backendOrigin, binding: h.binding, storeUUID: "4d8dcc46-old-store")
+        h.storeID = nil
+        let controller = h.controller(); await controller.refresh()
+        #expect(controller.phase == .ready)
+        #expect(controller.lastMismatchDetail.isEmpty)
+        #expect(h.openCount == 1)
+        #expect(h.registration?.storeUUID == "new-store")
+        #expect(h.registration?.binding == h.binding)
+    }
+
+    /// A registered device whose store was swapped for a different populated
+    /// one stays refused for every role (a registration is never relabelled to
+    /// another store); the gate names the check.
+    @Test func staleRegistrationWithADifferentStorePresentStaysRefused() async throws {
+        let h = try Harness(); h.register()
+        h.user = BackendAppUserRecord(email: h.user.email, role: "Admin", isActive: true, createdAt: nil)
+        h.registration = CompanyWorkspaceStoreRegistration(backendOrigin: h.session!.backendOrigin, binding: h.binding, storeUUID: "4d8dcc46-old-store")
+        let controller = h.controller(); await controller.refresh()
+        #expect(controller.phase == .blocked(.differentWorkspace))
+        #expect(h.openCount == 0)
+        #expect(controller.lastMismatchDetail
+                == "saved store registration does not match: store differs (registered 4d8dcc46, on device existing)")
+    }
+
+    /// A launch inside the verification interval opens the workspace from the
+    /// saved lease with no server round-trip; once the lease is older than the
+    /// interval the next launch or activation re-verifies, and a lease for
+    /// another session is never used.
+    @Test func launchInsideTheVerificationIntervalOpensFromTheSavedLease() async throws {
+        let h = try Harness(); h.register(); h.cache()
+        h.now = h.now.addingTimeInterval(6 * 60 * 60)
+        let controller = h.controller()
+        await controller.refreshIfStale(maxAge: CompanyWorkspaceAccessController.verificationInterval)
+        #expect(controller.phase == .ready)
+        #expect(h.fetchCount == 0)
+        #expect(h.openCount == 1)
+        #expect(controller.verifiedRole == .fieldTechnician)
+
+        h.now = h.now.addingTimeInterval(CompanyWorkspaceAccessController.verificationInterval)
+        await controller.refreshIfStale(maxAge: CompanyWorkspaceAccessController.verificationInterval)
+        #expect(controller.phase == .ready)
+        #expect(h.fetchCount == 1)
+
+        let other = try Harness(); other.register(); other.cache()
+        let s = other.session!
+        other.session = CompanyWorkspaceSession(backendOrigin: s.backendOrigin, email: "someone-else@example.test",
+                                                tokenFingerprint: "another-digest", expiresAt: s.expiresAt)
+        let second = other.controller()
+        await second.refreshIfStale(maxAge: CompanyWorkspaceAccessController.verificationInterval)
+        #expect(other.fetchCount == 1)
     }
 
     @Test func noBusinessSessionNeverOpensAnExistingStore() async throws {
@@ -270,13 +544,54 @@ struct CompanyWorkspaceAccessTests {
     /// always return nil for real installs, surfacing as a false
     /// "Company workspace needs attention" / accountUnavailable block.
     @Test func signedCloudKitEnvironmentAcceptsArrayShapedEntitlement() throws {
-        let plist = ["Entitlements": ["com.apple.developer.icloud-container-identifiers": [GunnAireCloudKit.containerIdentifier], "com.apple.developer.icloud-container-environment": ["Production", "Development"]]]
-        let xml = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
-        #expect(CompanyCloudKitRuntimeAccount.environment(profileData: Data([0, 1, 2]) + xml + Data([3, 4]), hasVerifiedStoreDistribution: false) == "production")
-
         let developmentOnlyPlist = ["Entitlements": ["com.apple.developer.icloud-container-identifiers": [GunnAireCloudKit.containerIdentifier], "com.apple.developer.icloud-container-environment": ["Development"]]]
         let developmentOnlyXML = try PropertyListSerialization.data(fromPropertyList: developmentOnlyPlist, format: .xml, options: 0)
         #expect(CompanyCloudKitRuntimeAccount.environment(profileData: developmentOnlyXML, hasVerifiedStoreDistribution: false) == "development")
+
+        let productionOnlyPlist = ["Entitlements": ["com.apple.developer.icloud-container-identifiers": [GunnAireCloudKit.containerIdentifier], "com.apple.developer.icloud-container-environment": ["Production"]]]
+        let productionOnlyXML = try PropertyListSerialization.data(fromPropertyList: productionOnlyPlist, format: .xml, options: 0)
+        #expect(CompanyCloudKitRuntimeAccount.environment(profileData: productionOnlyXML, hasVerifiedStoreDistribution: false) == "production")
+    }
+
+    /// Both the development and the store profile for this app carry
+    /// ["Production", "Development"] - the entitlement is an allowlist, not a
+    /// selection. Preferring Production unconditionally made a debug build
+    /// call itself "production" while CloudKit served it the Development
+    /// database, so its account hash could never match the production binding
+    /// and every run failed as an opaque "workspace does not match".
+    /// get-task-allow is the signed discriminator: true only for development
+    /// profiles, false for App Store, Ad Hoc and Enterprise.
+    @Test func bothEnvironmentsAllowedResolvesByDebuggableSigning() throws {
+        func profile(debuggable: Bool?) throws -> Data {
+            var entitlements: [String: Any] = [
+                "com.apple.developer.icloud-container-identifiers": [GunnAireCloudKit.containerIdentifier],
+                "com.apple.developer.icloud-container-environment": ["Production", "Development"]
+            ]
+            if let debuggable { entitlements["get-task-allow"] = debuggable }
+            let xml = try PropertyListSerialization.data(fromPropertyList: ["Entitlements": entitlements], format: .xml, options: 0)
+            return Data([0, 1, 2]) + xml + Data([3, 4])
+        }
+        #expect(CompanyCloudKitRuntimeAccount.environment(profileData: try profile(debuggable: true), hasVerifiedStoreDistribution: false) == "development")
+        #expect(CompanyCloudKitRuntimeAccount.environment(profileData: try profile(debuggable: false), hasVerifiedStoreDistribution: false) == "production")
+        // A missing key must fail closed to distribution, never to development.
+        #expect(CompanyCloudKitRuntimeAccount.environment(profileData: try profile(debuggable: nil), hasVerifiedStoreDistribution: false) == "production")
+    }
+
+    /// A single-environment profile is unambiguous and must ignore
+    /// get-task-allow entirely: a development-signed build of a
+    /// Production-only profile still reaches Production.
+    @Test func singleEnvironmentEntitlementIgnoresDebuggableSigning() throws {
+        for (value, expected) in [("Production", "production"), ("Development", "development")] {
+            for debuggable in [true, false] {
+                let entitlements: [String: Any] = [
+                    "com.apple.developer.icloud-container-identifiers": [GunnAireCloudKit.containerIdentifier],
+                    "com.apple.developer.icloud-container-environment": [value],
+                    "get-task-allow": debuggable
+                ]
+                let xml = try PropertyListSerialization.data(fromPropertyList: ["Entitlements": entitlements], format: .xml, options: 0)
+                #expect(CompanyCloudKitRuntimeAccount.environment(profileData: xml, hasVerifiedStoreDistribution: false) == expected)
+            }
+        }
     }
 
     @Test func businessDataRequestsRequireWorkspaceProofButIdentityEstablishmentDoesNot() {

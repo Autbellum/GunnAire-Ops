@@ -174,8 +174,15 @@ def record_evidence(value, *, tombstone_allowed):
     metadata = value.get("MetaData")
     updated = timestamp(metadata.get("LastUpdatedTime") if isinstance(metadata, dict) else None)
     deleted = value.get("status") == "Deleted"
-    if "status" in value and value["status"] != "Deleted":
-        raise failure("unsupported_status", "Review the accounting record's unrecognized lifecycle state.")
+    # QuickBooks marks a voided transaction with a top-level status of
+    # "Voided" and keeps the record (amounts zeroed) in every read; it is a
+    # present version whose record carries the marker through to the app.
+    if "status" in value and value["status"] not in ("Deleted", "Voided"):
+        # Name the value so the owner's sync caption says which lifecycle
+        # state QuickBooks sent; it is a status word, never record content.
+        observed = re.sub(r"[^A-Za-z0-9_.-]", "", str(value["status"]))[:40] or "empty"
+        raise failure("unsupported_status",
+                      f"Review the accounting record's unrecognized lifecycle state (status={observed}).")
     if deleted and not tombstone_allowed:
         raise failure("incomplete_census", "The initial accounting collection changed while it was being read.")
     if not deleted:
@@ -186,6 +193,22 @@ def record_evidence(value, *, tombstone_allowed):
     except (TypeError, ValueError, RecursionError):
         raise failure("incomplete_record", "QuickBooks returned invalid accounting record data.") from None
     return identifier, stamp(updated), "deleted" if deleted else "present", raw
+
+
+def reply_shape(group, entity):
+    """Describe a change-capture group for staff: key names, the record count and
+    the scalar count fields' types/values only - never any record content."""
+    def scalar(name):
+        if name not in group:
+            return f"{name}=absent"
+        value = group[name]
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            return f"{name}=<{type(value).__name__}>"
+        return f"{name}={repr(value)[:24]}"
+    records = group.get(entity)
+    count = len(records) if isinstance(records, list) else ("absent" if records is None else f"<{type(records).__name__}>")
+    return (f"Reply shape: keys={sorted(str(key) for key in group)}, {entity} records={count}, "
+            f"{scalar('maxResults')}, {scalar('startPosition')}, {scalar('totalCount')}.")
 
 
 class ChangeCaptureQBOProvider:
@@ -263,13 +286,22 @@ class ChangeCaptureQBOProvider:
         if not isinstance(groups, list) or len(groups) != 1 or not isinstance(groups[0], dict):
             raise failure("incomplete_changes", "QuickBooks did not confirm the requested accounting collection.")
         group = groups[0]
+        if not group:
+            # Intuit answers "nothing changed since changedSince" with an empty
+            # group - no entity key and no count fields - not with maxResults=0.
+            # Verified live on 2026-09-16 (production realm, every collection).
+            if response_time < timestamp(stamp_since):
+                raise failure("incomplete_changes", "QuickBooks returned an older change-capture response.")
+            return [], response_time
         if set(group) - {entity, "startPosition", "maxResults", "totalCount"}:
-            raise failure("incomplete_changes", "QuickBooks returned a different or incomplete accounting collection.")
+            raise failure("incomplete_changes", "QuickBooks returned a different or incomplete accounting collection. "
+                          + reply_shape(group, entity))
         records = group.get(entity, [])
         if (not isinstance(records, list) or type(group.get("maxResults")) is not int
                 or group["maxResults"] != len(records) or group.get("startPosition", 1) != 1
                 or ("totalCount" in group and (type(group["totalCount"]) is not int or group["totalCount"] != len(records)))):
-            raise failure("incomplete_changes", "QuickBooks returned incomplete change counts. The original cursor is retained.")
+            raise failure("incomplete_changes", "QuickBooks returned incomplete change counts. The original cursor is retained. "
+                          + reply_shape(group, entity))
         # Exactly 1000 is ambiguous: CDC has no documented pagination/end-time.
         # Never move changedSince forward to make a saturated result look complete.
         if len(records) >= 1000:

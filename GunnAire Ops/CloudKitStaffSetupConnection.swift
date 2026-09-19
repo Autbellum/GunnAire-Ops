@@ -24,6 +24,15 @@ struct CloudKitStaffSetupStamp: Equatable {
     }
 }
 
+/// .unavailable is a catch-all: any error from a CKShare accept/invite/cleanup
+/// operation that isn't a recognized CloudKitStaffSharingError or backend
+/// status code collapses into one generic message. That made a real-device
+/// "recover" loop on the accept step undiagnosable - captures the actual
+/// underlying error (a CKError, URLError, etc.) so it can be read on-screen.
+@MainActor enum CloudKitStaffSetupDiagnostics {
+    static var lastUnavailableDetail: String = ""
+}
+
 enum CloudKitStaffSetupPolicy {
     static let base = "/api/workspace/staff-shares"
     static let actions: Set<String> = ["approve", "invite", "accept", "revoke", "confirm-cleanup"]
@@ -66,6 +75,8 @@ enum CloudKitStaffSetupPolicy {
         }
         if case SharedTimeError.storage = error { return .storage }
         if StaffSyncNetworkFailure.isTransient(error) { return .offline }
+        let detail = "\(type(of: error)): \(error.localizedDescription)"
+        Task { @MainActor in CloudKitStaffSetupDiagnostics.lastUnavailableDetail = detail }
         return .unavailable
     }
 

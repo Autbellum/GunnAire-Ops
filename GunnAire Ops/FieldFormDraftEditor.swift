@@ -21,6 +21,9 @@ struct FieldFormResponseEditor: View {
     @State private var showingDiscard = false
     @State private var showingReload = false
     @State private var completion: FieldFormDraftWorkflow.Completion?
+    /// Coalesces draft writes while the technician is typing. See
+    /// `scheduleAnswerPersist()`.
+    @State private var persistTask: Task<Void, Never>?
 
     init(template: FieldFormTemplate, serviceCall: ServiceCall, actorEmail: String?) {
         self.init(serviceCallID: serviceCall.id, templateID: template.id, actorEmail: actorEmail)
@@ -103,7 +106,11 @@ struct FieldFormResponseEditor: View {
         .interactiveDismissDisabled(isSaving || unsaved)
         .navigationBarBackButtonHidden(isSaving || unsaved)
         .task { if workflow == nil { load() } }
-        .onChange(of: scenePhase) { _, phase in if phase == .active { checkAccessAndContext() } }
+        .onChange(of: scenePhase) { _, phase in
+            // Leaving the foreground must not strand keystrokes in the debounce.
+            if phase == .active { checkAccessAndContext() } else { flushPendingAnswers() }
+        }
+        .onDisappear { flushPendingAnswers() }
         .onChange(of: access.phase) { _, _ in checkAccessAndContext() }
         .confirmationDialog("Discard this unfinished form?", isPresented: $showingDiscard, titleVisibility: .visible) {
             Button("Discard draft", role: .destructive) {
@@ -132,7 +139,10 @@ struct FieldFormResponseEditor: View {
                 case .toggle:
                     Toggle(question.required ? "Confirmed" : "Yes", isOn: Binding(
                         get: { answers[question.id] == "true" },
-                        set: { answers[question.id] = $0 ? "true" : "false"; persistAnswers() }))
+                        // Same coalesced path as text and choice answers, so
+                        // every answer change shares one invariant: writes
+                        // coalesce, every exit flushes.
+                        set: { answers[question.id] = $0 ? "true" : "false"; scheduleAnswerPersist() }))
                         .accessibilityLabel(question.label)
                         .accessibilityIdentifier("FieldFormAnswer-\(question.id.uuidString)")
                 case .text:
@@ -153,7 +163,39 @@ struct FieldFormResponseEditor: View {
     }
 
     private func answerBinding(_ id: UUID) -> Binding<String> {
-        Binding(get: { answers[id] ?? "" }, set: { answers[id] = $0; persistAnswers() })
+        Binding(get: { answers[id] ?? "" }, set: { answers[id] = $0; scheduleAnswerPersist() })
+    }
+
+    /// Typing must not rebuild the form.
+    ///
+    /// Persisting on every keystroke reassigned `record`, and the form's whole
+    /// body is derived from it — `record.content` feeds the
+    /// `ForEach(content.questions)` that owns these text fields. Rebuilding that
+    /// ForEach replaced the focused field, so entering a single character ended
+    /// editing. Each keystroke also wrote the full answer set to the store,
+    /// which is slow on its own and far slower while CloudKit is retrying a
+    /// failing export.
+    ///
+    /// Answers still update `answers` synchronously, so nothing typed is lost if
+    /// the view goes away before the write lands — every exit path flushes.
+    private func scheduleAnswerPersist() {
+        unsaved = true
+        persistTask?.cancel()
+        persistTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+            persistAnswers()
+        }
+    }
+
+    /// Writes any keystrokes still inside the debounce window. Field data is not
+    /// recoverable once the view is gone, so completing, backgrounding and
+    /// dismissing all call this before they can drop it.
+    private func flushPendingAnswers() {
+        guard persistTask != nil || unsaved else { return }
+        persistTask?.cancel()
+        persistTask = nil
+        persistAnswers()
     }
 
     @ViewBuilder private func savedFormLink(_ record: FieldFormDraftRecord) -> some View {
@@ -210,7 +252,13 @@ struct FieldFormResponseEditor: View {
         do {
             guard let workflow, let session else { throw FieldFormDraftError.storage }
             try workflow.verifyContext(session.record)
-            try session.save(answers); record = session.record
+            try session.save(answers)
+            // Reassigning `record` re-derives `content` and rebuilds the
+            // question ForEach, evicting the focused field. An answer write
+            // never changes the record's content — only its state can move — so
+            // publish it only when that actually happens.
+            let saved = session.record
+            if saved.state != record?.state { record = saved }
             unsaved = false; message = nil
         } catch {
             message = error.localizedDescription
@@ -220,6 +268,9 @@ struct FieldFormResponseEditor: View {
     }
 
     private func save() {
+        // Completing validates and writes `answers`, so any keystroke still
+        // waiting in the debounce window has to land first.
+        flushPendingAnswers()
         guard let workflow, let session, let content = session.record.content else { return }
         if let issue = FieldFormCompletionPolicy.validationIssue(questions: content.questions, answers: answers) {
             message = issue; return

@@ -94,10 +94,21 @@ enum OperationalDataContinuity {
         for readiness: GunnAireCloudKit.AccountReadiness,
         mirroringState: CloudKitMirroringState
     ) -> CloudKitContinuityNotice? {
+        cloudKitNotice(for: readiness, attentionOperation: mirroringState.attentionFailure?.operation)
+    }
+
+    /// The notice text depends only on which operation needs attention, so the
+    /// root workspace can build it from the coarse attention monitor without
+    /// subscribing to every mirroring event.
+    static func cloudKitNotice(
+        for readiness: GunnAireCloudKit.AccountReadiness,
+        attentionOperation: CloudKitMirroringOperation?
+    ) -> CloudKitContinuityNotice? {
         let title: String
         switch readiness {
         case .available:
-            if let failure = mirroringState.attentionFailure {
+            if let attentionOperation {
+                let failure = CloudKitMirroringFailure(operation: attentionOperation, occurredAt: Date())
                 return CloudKitContinuityNotice(
                     title: failure.title,
                     systemImage: "externaldrive.badge.exclamationmark",

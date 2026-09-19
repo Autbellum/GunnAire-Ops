@@ -3646,11 +3646,15 @@ struct QuickBooksInvoice: Codable, Identifiable {
     let ShipAddr: QuickBooksAddress?
     let TxnTaxDetail: QuickBooksTxnTaxDetail?
     let Line: [QuickBooksLineItem]?
+    /// QuickBooks' lifecycle marker: "Voided" on a voided invoice (amounts
+    /// already zeroed by QuickBooks), absent otherwise.
+    let status: String?
 
     var id: String { Id }
+    var isVoided: Bool { status == "Voided" }
 
     private enum CodingKeys: String, CodingKey {
-        case Id, SyncToken, DocNumber, CustomerRef, TotalAmt, Balance, TxnDate, DueDate, PrivateNote, BillEmail, EmailStatus, ShipAddr, TxnTaxDetail, Line
+        case Id, SyncToken, DocNumber, CustomerRef, TotalAmt, Balance, TxnDate, DueDate, PrivateNote, BillEmail, EmailStatus, ShipAddr, TxnTaxDetail, Line, status
     }
 
     init(from decoder: Decoder) throws {
@@ -3675,6 +3679,7 @@ struct QuickBooksInvoice: Codable, Identifiable {
         ShipAddr = try container.decodeIfPresent(QuickBooksAddress.self, forKey: .ShipAddr)
         TxnTaxDetail = try container.decodeIfPresent(QuickBooksTxnTaxDetail.self, forKey: .TxnTaxDetail)
         Line = try container.decodeIfPresent([QuickBooksLineItem].self, forKey: .Line)
+        status = try container.decodeIfPresent(String.self, forKey: .status)
     }
 
     private static func decodeFlexibleDouble(_ container: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) -> Double? {
@@ -4642,10 +4647,12 @@ private enum QuickBooksFlexibleDecoding {
         if let value = try? container.decodeIfPresent(String.self, forKey: key) {
             return value
         }
-        if let value = try? container.decodeIfPresent(Double.self, forKey: key) {
+        // Whole numbers first: a transaction or reference identifier read as a
+        // Double would gain a ".0" suffix and stop matching the record it names.
+        if let value = try? container.decodeIfPresent(Int.self, forKey: key) {
             return String(value)
         }
-        if let value = try? container.decodeIfPresent(Int.self, forKey: key) {
+        if let value = try? container.decodeIfPresent(Double.self, forKey: key) {
             return String(value)
         }
         if let value = try? container.decodeIfPresent(Bool.self, forKey: key) {
@@ -5262,6 +5269,16 @@ struct QuickBooksCreditChargeInfo: Codable {
     init(ProcessPayment: String?) {
         self.ProcessPayment = ProcessPayment
     }
+
+    private enum CodingKeys: String, CodingKey { case ProcessPayment }
+
+    // QuickBooks reads this back as a JSON boolean while the write contract
+    // takes a string, so the synthesized decoder rejected every payment and
+    // sales receipt that carried a card charge.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        ProcessPayment = QuickBooksFlexibleDecoding.string(container, .ProcessPayment)
+    }
 }
 
 struct QuickBooksCreditChargeResponse: Codable {
@@ -5269,6 +5286,15 @@ struct QuickBooksCreditChargeResponse: Codable {
 
     init(CCTransId: String?) {
         self.CCTransId = CCTransId
+    }
+
+    private enum CodingKeys: String, CodingKey { case CCTransId }
+
+    /// Transaction identifiers arrive as strings or numbers depending on the
+    /// processor path; either is the same identifier.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        CCTransId = QuickBooksFlexibleDecoding.string(container, .CCTransId)
     }
 }
 

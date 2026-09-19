@@ -2516,11 +2516,12 @@ GunnAire
     private func loadInitialContextIfNeeded() {
         guard !didLoadInitialContext else { return }
         didLoadInitialContext = true
-        // A focused saved-invoice visit is navigation only. Do not seed/save
-        // templates, import/reprice items, or consume an unrelated queued job.
+        // A focused saved-invoice visit is navigation only. Do not import or
+        // reprice items, or consume an unrelated queued job. Starter field-form
+        // templates are seeded once per workspace generation when the company
+        // workspace unlocks (and at startup for the test database), so this
+        // visit no longer re-seeds and saves the main context every time.
         guard focusedInvoiceID == nil else { return }
-        FieldFormTemplate.ensureStarterTemplates(in: modelContext)
-        try? modelContext.save()
         selectedInvoicePaymentTerms = configuredDefaultInvoicePaymentTerms
         invoiceCustomDueDate = configuredDefaultInvoicePaymentTerms.dueDate(from: Date())
             ?? Calendar.current.startOfDay(for: Date())
@@ -3803,6 +3804,12 @@ GunnAire
                                     get: { expandedInvoiceIDs.contains(invoice.id) },
                                     set: { if $0 { expandedInvoiceIDs.insert(invoice.id) } else { expandedInvoiceIDs.remove(invoice.id) } }
                                 )) {
+                                    // The row identifier below is applied to the whole
+                                    // DisclosureGroup, and SwiftUI pushes a container's
+                                    // accessibility identifier down onto every child
+                                    // element. Without a container boundary here it
+                                    // overwrote BillingReview-/EditInvoice-/SyncSavedInvoice-
+                                    // on the expanded controls, so no UI test could find them.
                                     VStack(alignment: .leading, spacing: 8) {
                                         Text(invoice.lineItemSummary)
                                             .font(.caption)
@@ -3888,6 +3895,7 @@ GunnAire
                                         .buttonStyle(.bordered)
                                     }
                                     .padding(.top, 6)
+                                    .accessibilityElement(children: .contain)
                                 } label: {
                                     HStack {
                                         VStack(alignment: .leading) {

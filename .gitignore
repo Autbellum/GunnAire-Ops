@@ -69,3 +69,6 @@ Config/Local.xcconfig
 /dist/
 __pycache__/
 *.pyc
+
+# Output of generated/capture_freeze.sh
+generated/launch_diagnostic.log

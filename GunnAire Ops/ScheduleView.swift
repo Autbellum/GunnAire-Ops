@@ -59,6 +59,7 @@ struct ScheduleView: View {
     @State private var deleteConfirmationCall: ScheduleDeletionConfirmation?
     @State private var jobSearchText = ""
     @State private var showingNewRequestSheet = false
+    @State private var showingCalendarPicker = false
     @State private var showingAvailabilityBlocks = false
     @State private var showingDispatchWeekBoard = false
     @State private var showingWorkQueue = false
@@ -302,15 +303,31 @@ struct ScheduleView: View {
                     scheduleCardRow {
                         VStack(alignment: .leading, spacing: 10) {
                             sectionTitle("Calendar")
-                            DatePicker(
-                                "Select Date",
-                                selection: $selectedDate,
-                                displayedComponents: [.date]
-                            )
-                            .labelsHidden()
-                            .datePickerStyle(.graphical)
-                            .padding(12)
-                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            // A graphical DatePicker's day grid is its own
+                            // UIKit-backed, gesture-driven control; nested
+                            // directly inside this List's rows, its day taps
+                            // never reached the picker (the same class of
+                            // nested-scrollable-control conflict as the dead
+                            // job buttons this List conversion fixed
+                            // elsewhere). Presenting it in a sheet keeps it
+                            // outside the List's own scroll/gesture handling.
+                            Button {
+                                showingCalendarPicker = true
+                            } label: {
+                                HStack {
+                                    Image(systemName: "calendar")
+                                    Text(selectedDate.formatted(.dateTime.weekday(.wide).month(.wide).day().year()))
+                                        .fontWeight(.semibold)
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(12)
+                                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("OpenCalendarPicker")
                         }
                     }
 
@@ -468,6 +485,28 @@ struct ScheduleView: View {
                     } else {
                         dispatchAccessRequiredView
                     }
+                }
+                .sheet(isPresented: $showingCalendarPicker) {
+                    NavigationStack {
+                        DatePicker(
+                            "Select Date",
+                            selection: $selectedDate,
+                            displayedComponents: [.date]
+                        )
+                        .labelsHidden()
+                        .datePickerStyle(.graphical)
+                        .padding()
+                        .navigationTitle("Select Date")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") { showingCalendarPicker = false }
+                                    .tint(Color.brandGold)
+                            }
+                        }
+                    }
+                    .tint(Color.brandGold)
+                    .presentationDetents([.medium])
                 }
                 .sheet(item: $requestForQualification) { request in
                     if canManageDispatch {

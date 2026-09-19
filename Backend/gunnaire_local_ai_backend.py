@@ -166,9 +166,11 @@ class GunnAireLocalAIBackendHandler(backend.GunnAireBackendHandler):
 def main() -> None:
     if backend.AUTH_MODE == "api-token" and not backend.API_TOKEN:
         raise SystemExit("Set GUNNAIRE_BACKEND_API_TOKEN before starting api-token mode.")
+    backend.configure_live_logging()
     backend.initialize_database()
     backend.STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
     backend.start_push_delivery_worker()
+    backend.start_backup_worker()
     server = ThreadingHTTPServer((backend.HOST, backend.PORT), GunnAireLocalAIBackendHandler)
     print(f"GunnAire backend with local-first AI listening on http://{backend.HOST}:{backend.PORT}")
     print(f"Service version: {backend.SERVICE_VERSION}")

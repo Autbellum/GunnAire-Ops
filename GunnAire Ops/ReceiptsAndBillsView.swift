@@ -557,6 +557,204 @@ struct ReceiptsAndBillsView: View {
             refreshQuickBooksAccountingMappings(force: true)
         }
         .onDisappear { clearAttachLookup() }
+        // MARK: Purchase-order, warranty and inventory sheets
+        // These nine presentations were dropped from this modifier chain in
+        // c4ec72a (the app-suite integration merge) while their @State bindings
+        // and the buttons that set them survived, so every tap in the purchasing,
+        // warranty and inventory queues set state that nothing observed.
+        // Restored verbatim from that commit's parent.
+        .sheet(item: $purchaseOrderPendingConfirmation) { order in
+            SupplierOrderConfirmationSheet(
+                order: order,
+                onConfirm: { channel, reference, location, lineCosts, shippingCost in
+                    confirmPurchaseOrder(
+                        order,
+                        channel: channel,
+                        reference: reference,
+                        supplierLocation: location,
+                        confirmedLineUnitCosts: lineCosts,
+                        confirmedShippingCost: shippingCost
+                    )
+                },
+                onConnectorConfirm: { connectorKind, location in
+                    await confirmPurchaseOrderThroughConnector(
+                        order,
+                        connectorKind: connectorKind,
+                        supplierLocation: location
+                    )
+                }
+            )
+            .tint(Color.brandGold)
+        }
+        .sheet(item: $purchaseOrderPendingReceipt) { order in
+            let openLines = order.purchaseOrderLines.filter {
+                order.remainingQuantity(for: $0.id) > 0.0001
+            }
+            let defaultDestinations = Dictionary(uniqueKeysWithValues: openLines.map { line in
+                (
+                    line.id,
+                    PurchaseOrderReceiving.defaultDestination(
+                        for: order,
+                        lineID: line.id,
+                        catalogItems: catalogItems
+                    )
+                )
+            })
+            let inventoryTrackedLineIDs = Set(openLines.compactMap { line in
+                PurchaseOrderReceiving.matchedItem(
+                    for: order,
+                    lineID: line.id,
+                    catalogItems: catalogItems
+                )?.tracksInventory == true ? line.id : nil
+            })
+            PurchaseOrderReceiptSheet(
+                order: order,
+                defaultDestinations: defaultDestinations,
+                inventoryTrackedLineIDs: inventoryTrackedLineIDs,
+                onReceive: { lineID, quantity, destination, note, serialNumbers, manufacturer, modelNumber in
+                    receivePurchaseOrder(
+                        order,
+                        lineID: lineID,
+                        quantity: quantity,
+                        destinationLocation: destination,
+                        note: note,
+                        serialNumbers: serialNumbers,
+                        manufacturer: manufacturer,
+                        modelNumber: modelNumber
+                    )
+                }
+            )
+            .tint(Color.brandGold)
+        }
+        .sheet(item: $purchaseOrderPendingAssetInstallation) { context in
+            PurchaseOrderEquipmentInstallationSheet(
+                context: context,
+                onInstall: { equipmentType, name, location, installDate, warrantyExpiration in
+                    installPurchaseOrderAsset(
+                        context,
+                        equipmentType: equipmentType,
+                        name: name,
+                        location: location,
+                        installDate: installDate,
+                        warrantyExpiration: warrantyExpiration
+                    )
+                }
+            )
+            .tint(Color.brandGold)
+        }
+        .sheet(item: $purchaseOrderPendingBill) { order in
+            PurchaseOrderVendorBillSheet(
+                order: order,
+                initialDocumentName: billURL?.lastPathComponent,
+                onRecord: {
+                    invoiceNumber,
+                    invoiceDate,
+                    lineAllocations,
+                    shippingCost,
+                    taxAmount,
+                    otherCharges,
+                    sourceDocumentName,
+                    quickBooksBillID,
+                    note in
+                    recordVendorBill(
+                        on: order,
+                        invoiceNumber: invoiceNumber,
+                        invoiceDate: invoiceDate,
+                        lineAllocations: lineAllocations,
+                        shippingCost: shippingCost,
+                        taxAmount: taxAmount,
+                        otherCharges: otherCharges,
+                        sourceDocumentName: sourceDocumentName,
+                        quickBooksBillID: quickBooksBillID,
+                        note: note
+                    )
+                }
+            )
+            .tint(Color.brandGold)
+        }
+        .sheet(item: $purchaseOrderPendingVendorReturn) { order in
+            PurchaseOrderVendorReturnSheet(
+                order: order,
+                onCreate: { reference, sourceLocation, reason, allocations in
+                    createVendorReturn(
+                        on: order,
+                        reference: reference,
+                        sourceLocation: sourceLocation,
+                        reason: reason,
+                        lineAllocations: allocations
+                    )
+                }
+            )
+            .tint(Color.brandGold)
+        }
+        .sheet(item: $purchaseOrderPendingVendorReturnAction) { context in
+            PurchaseOrderVendorReturnActionSheet(
+                context: context,
+                onConfirm: { note in
+                    updateVendorReturn(context, note: note)
+                }
+            )
+            .tint(Color.brandGold)
+        }
+        .sheet(item: $purchaseOrderPendingVendorCredit) { context in
+            PurchaseOrderVendorCreditSheet(
+                context: context,
+                onRecord: {
+                    reference,
+                    creditDate,
+                    creditAmount,
+                    restockingFee,
+                    taxCredit,
+                    shippingCredit,
+                    sourceDocumentName,
+                    quickBooksVendorCreditID,
+                    note in
+                    recordVendorCredit(
+                        context,
+                        reference: reference,
+                        creditDate: creditDate,
+                        creditAmount: creditAmount,
+                        restockingFee: restockingFee,
+                        taxCredit: taxCredit,
+                        shippingCredit: shippingCredit,
+                        sourceDocumentName: sourceDocumentName,
+                        quickBooksVendorCreditID: quickBooksVendorCreditID,
+                        note: note
+                    )
+                }
+            )
+            .tint(Color.brandGold)
+        }
+        .sheet(item: $warrantyClaimsEquipment) { equipment in
+            EquipmentWarrantyClaimsSheet(equipment: equipment)
+                .tint(Color.brandGold)
+        }
+        .sheet(item: $inventoryCountItem) { item in
+            InventoryCycleCountSheet(
+                item: item,
+                initialLocation: item.defaultInventoryLocation ?? "Warehouse",
+                reservedQuantity: InventoryLedger.reservedQuantity(
+                    for: item.id,
+                    movements: inventoryMovements
+                ),
+                expectedQuantity: { location in
+                    InventoryLedger.onHandQuantity(
+                        for: item.id,
+                        at: location,
+                        movements: inventoryMovements
+                    )
+                },
+                onSave: { location, count, reason in
+                    reconcileInventoryCount(
+                        for: item,
+                        location: location,
+                        countedQuantity: count,
+                        reason: reason
+                    )
+                }
+            )
+            .tint(Color.brandGold)
+        }
 
     }
 

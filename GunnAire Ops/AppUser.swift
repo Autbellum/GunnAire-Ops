@@ -36,11 +36,11 @@ final class AppUser {
 enum AppAccess {
     static let primaryAdminEmail = "eric.gunn@gunnaire.com"
 
-    static func normalizedEmail(_ email: String?) -> String {
+    nonisolated static func normalizedEmail(_ email: String?) -> String {
         email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
     }
 
-    static func inferredDisplayName(fromEmail email: String) -> String {
+    nonisolated static func inferredDisplayName(fromEmail email: String) -> String {
         normalizedEmail(email)
             .components(separatedBy: "@")
             .first?
@@ -650,7 +650,7 @@ enum AppAccess {
     }
 
     @discardableResult
-    static func ensureTechnicianRecord(
+    nonisolated static func ensureTechnicianRecord(
         for email: String,
         technicians: [Technician],
         modelContext: ModelContext
@@ -712,7 +712,7 @@ enum AppUserDataMaintenance {
     /// state are reduced to a safe, standard inactive/limited state until the
     /// approved server role sync supplies one authoritative record.
     @discardableResult
-    static func collapseCloudKitDuplicates(
+    nonisolated static func collapseCloudKitDuplicates(
         _ users: [AppUser],
         modelContext: ModelContext
     ) -> Int {

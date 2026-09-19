@@ -16,10 +16,28 @@ enum QuickBooksChangeHistoryError: Error, LocalizedError, Equatable {
         }
     }
 
+    /// Short, record-free cause for the diagnostics line ("Response: code
+    /// message"). Access errors already carry a specific user sentence and
+    /// are not diagnostics.
+    var diagnosticCause: (code: String, message: String)? {
+        switch self {
+        case .access: nil
+        case .changed: ("collection_changed", "The accounting connection or the collection revision changed during the run.")
+        case .invalid: ("reply_invalid", "The history reply failed validation.")
+        case .incomplete: ("capture_incomplete", "The server reported an incomplete capture or events awaiting review.")
+        case .lifecycleReview: ("lifecycle_review", "A deleted, voided, or conflicting record version needs reconciliation.")
+        case .unavailable: ("history_unavailable", "The shared history was unavailable.")
+        case .limit: ("transfer_limit", "The history exceeded the staged transfer limit.")
+        }
+    }
+
     static func safe(_ error: Error) -> Self {
         if let own = error as? Self { return own }
         if error is WorkspaceProviderAccessError || error is CompanyWorkspaceFailure { return .access }
         if error is DecodingError { return .invalid }
+        // A change-capture reply that kept its status and staff message maps
+        // by status exactly like the plain backend error it replaces.
+        if let failure = error as? QuickBooksChangeHistoryServerFailure { return safe(failure.backendError) }
         if case GunnAireBackendError.server(let status, _) = error {
             if status == 401 || status == 403 { return .access }
             if status == 409 { return .changed }
@@ -163,7 +181,11 @@ struct QuickBooksHistoryVersion: Decodable {
         guard identity.Id == entityID, identity.sparse != true,
               try QuickBooksHistoryTimestamp(identity.MetaData.LastUpdatedTime) == updated,
               status == "deleted" ? identity.status == "Deleted" :
-                (identity.status == nil && identity.SyncToken.map(QuickBooksChangeHistoryScope.validReference) == true)
+                // A present version carries no lifecycle marker, or QuickBooks'
+                // "Voided" marker on a voided transaction it keeps with zeroed
+                // amounts; both still need a valid SyncToken.
+                ((identity.status == nil || identity.status == "Voided")
+                 && identity.SyncToken.map(QuickBooksChangeHistoryScope.validReference) == true)
         else { throw QuickBooksChangeHistoryError.invalid }
         return updated
     }
@@ -288,6 +310,7 @@ struct QuickBooksHistoryPage: Decodable {
             return page
         } catch {
             try check()
+            QuickBooksChangeHistoryDiagnostics.record(error, entity: entity)
             throw QuickBooksChangeHistoryError.safe(error)
         }
     }
@@ -306,7 +329,10 @@ struct QuickBooksHistoryPage: Decodable {
                 guard bytes <= Self.maximumHistoryBytes, count < 100_000 else { throw QuickBooksChangeHistoryError.limit }
                 let updated: QuickBooksHistoryTimestamp
                 do { updated = try version.validate() }
-                catch { throw QuickBooksChangeHistoryError.safe(error) }
+                catch {
+                    QuickBooksChangeHistoryDiagnostics.record(error, entity: entity)
+                    throw QuickBooksChangeHistoryError.safe(error)
+                }
                 count += 1
                 if let prior = latest[version.entityID] {
                     if updated > prior.1 { latest[version.entityID] = (version, updated, false) }
@@ -331,7 +357,10 @@ struct QuickBooksHistoryPage: Decodable {
                 try version.validateProjection(for: entity)
                 return try JSONDecoder().decode(T.self, from: Data(version.recordJSON.utf8))
             }
-        } catch { throw QuickBooksChangeHistoryError.safe(error) }
+        } catch {
+            QuickBooksChangeHistoryDiagnostics.record(error, entity: entity)
+            throw QuickBooksChangeHistoryError.safe(error)
+        }
         // An empty final read rechecks the server session, role, grant and
         // collection revision before even exposing this collection to the UI.
         _ = try await request(entity: entity, original: first, after: first.throughSequence)

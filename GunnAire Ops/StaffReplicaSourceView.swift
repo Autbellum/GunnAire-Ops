@@ -17,7 +17,7 @@ struct StaffReplicaSourceRecoveryModifier: ViewModifier {
                 // Bounded, foreground-only recovery. Cancelling this task never
                 // discards the original request; it is recovered next launch.
                 while !Task.isCancelled {
-                    await source.sync()
+                    await source.syncIfDue()
                     do { try await Task.sleep(for: .seconds(source.hasMore ? 1 : 60)) }
                     catch { return }
                 }
@@ -32,7 +32,7 @@ struct StaffReplicaSourceRecoveryModifier: ViewModifier {
     }
     private func resumeAfterSavedChange() {
         guard scenePhase == .active, !GunnAireCloudKit.usesTestDatabase, access.verifiedRole == .admin else { return }
-        Task { await source.sync() }
+        source.scheduleSync()
     }
 }
 

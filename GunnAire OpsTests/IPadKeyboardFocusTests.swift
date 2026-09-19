@@ -21,11 +21,45 @@ import UIKit
         let controller = UIViewController()
         window.rootViewController = controller
         window.makeKeyAndVisible()
-        defer {
-            window.isHidden = true
-            previous?.makeKey()
+        // makeKeyAndVisible() only requests key status; UIKit does not promise
+        // it has taken effect by the time the call returns. A view can only
+        // become first responder while its window is key, so the body must not
+        // start until the request has actually landed.
+        try #require(await spin { window.isKeyWindow }, "window never became key")
+        do {
+            try await body(window, controller)
+        } catch {
+            await restoreKeyWindow(from: window, to: previous)
+            throw error
         }
-        try await body(window, controller)
+        await restoreKeyWindow(from: window, to: previous)
+    }
+
+    /// Hands key status back and waits for the handoff to finish.
+    ///
+    /// `makeKey()` is asynchronous. Releasing the window in a `defer` let the
+    /// hand-back land *after* the next test had already made its own window
+    /// key, which stole key status back, resigned that window's first responder
+    /// and failed an unrelated expectation partway through the test. `.serialized`
+    /// orders the tests but does not wait for UIKit, so the wait has to be here.
+    /// That is why this suite began failing intermittently — on a varying test —
+    /// as the rest of the test target grew and the main queue got busier.
+    private func restoreKeyWindow(from window: UIWindow, to previous: UIWindow?) async {
+        window.isHidden = true
+        previous?.makeKey()
+        _ = await spin { !window.isKeyWindow && (previous.map(\.isKeyWindow) ?? true) }
+    }
+
+    /// Turns the main queue until `condition` holds, bounded so a genuine
+    /// regression still fails instead of hanging.
+    private func spin(attempts: Int = 200, until condition: () -> Bool) async -> Bool {
+        for _ in 0..<attempts {
+            if condition() { return true }
+            await withCheckedContinuation { continuation in
+                DispatchQueue.main.async { continuation.resume() }
+            }
+        }
+        return condition()
     }
 
     private func finishQueuedActivation() async {

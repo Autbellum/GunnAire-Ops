@@ -212,6 +212,12 @@ GUNNAIRE_APNS_KEY_ID=your-10-character-apple-key-id
 GUNNAIRE_APNS_PRIVATE_KEY_BASE64=your-base64-p8-private-key
 GUNNAIRE_APNS_TOPIC=com.gunnaire.businesssuite
 GUNNAIRE_BACKEND_DATA_DIR=/var/data
+# In-service backups are on by default: a verified artifact is written to
+# <data dir>/backups whenever the latest verified backup is 20 hours old, and
+# the newest 3 are kept. Set GUNNAIRE_BACKUP_DIR to place them elsewhere.
+GUNNAIRE_BACKUP_AUTOMATION=on
+GUNNAIRE_BACKUP_INTERVAL_HOURS=20
+GUNNAIRE_BACKUP_RETAIN_COUNT=3
 ```
 
 Use `api.gunnaire.com` as the custom HTTPS domain after Render provides its DNS target. Do not enable public booking, customer portal, or customer financing until the corresponding customer-facing route, privacy notice, provider approval, and production acceptance tests are complete. Establish an off-host backup of the mounted data before production use.
@@ -339,5 +345,14 @@ paths, tokens, secrets, or customer content.
 Use `Backend/backup_backend.py` for manifest-backed backup creation,
 verification, and a non-overwriting restore drill. See
 `BACKEND_OPERATIONS_RUNBOOK.md` for the production procedure and ownership
-gates. A `backup_status.json` record proves local verification only; retain the
+gates. The running service also creates a verified backup on its own once the
+latest verified backup is `GUNNAIRE_BACKUP_INTERVAL_HOURS` old (default 20,
+always below the 24-hour readiness target). Its artifacts are named
+`<data dir>/backups/gunnaire-auto-backup-<timestamp>`; it rotates them to the
+newest `GUNNAIRE_BACKUP_RETAIN_COUNT` (default 3) before checking that free
+disk space is at least twice the live data size, never removes the artifact
+`backup_status.json` cites or any directory it did not create, sweeps
+leftovers of an interrupted copy, backs off after repeated failures, and
+records the outcome of its last attempt in the readiness detail. A
+`backup_status.json` record proves local verification only; retain the
 artifact outside Render and its persistent disk.

@@ -263,6 +263,41 @@ the overlap before selecting a deployment candidate.
    the last reviewed commit; do not restore the database solely to remove
    additive `.12`, `.13`, or `.15` schema changes.
 
+## Automatic in-service backups
+
+The service runs a backup worker (`start_backup_worker` in
+`Backend/gunnaire_backend.py`). Ninety seconds after start and every fifteen
+minutes afterwards it checks `backup_status.json`; once the latest verified
+backup is `GUNNAIRE_BACKUP_INTERVAL_HOURS` old (default 20 hours) it runs, in
+this order, under `GUNNAIRE_BACKUP_DIR` (default `/var/data/backups` when
+`GUNNAIRE_BACKEND_DATA_DIR=/var/data`):
+
+1. Sweeps `gunnaire-auto-backup-*` directories that have no `manifest.json`
+   and have not changed for six hours (leftovers of a process stopped
+   mid-copy).
+2. Rotates its own complete artifacts down to `GUNNAIRE_BACKUP_RETAIN_COUNT`
+   minus one (default 3, so two remain), never removing the artifact
+   `backup_status.json` cites, so retention can free the space the next
+   artifact needs.
+3. Refuses to continue when free disk space is under twice the live data size
+   plus 64 MiB.
+4. Creates `gunnaire-auto-backup-<UTC timestamp>` with the same `create_backup`
+   routine as the manual command below (read-only source, stepped SQLite
+   online copy so requests are never blocked for the whole copy), verifies it,
+   rewrites `backup_status.json`, then rotates again to the retain count.
+
+Only directories with the `gunnaire-auto-backup-` prefix are ever removed;
+manual `gunnaire-backup-*` copies are left alone. After a failure the worker
+doubles its wait (capped at the backup interval) instead of repeating the copy
+every check. The readiness detail for **Verified Backup** reports the last
+automatic failure without paths or filenames. Set
+`GUNNAIRE_BACKUP_AUTOMATION=off` to disable the worker.
+
+These artifacts live on the service's persistent disk. Off-host custody still
+requires copying the newest `gunnaire-auto-backup-*` directory to the approved
+encrypted business-storage account and running `backup_backend.py verify`
+against that copy.
+
 ## Create and verify a backup
 
 The utility uses SQLite's online backup API, copies every shared document,

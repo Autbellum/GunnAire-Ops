@@ -12,7 +12,9 @@ import math
 import os
 import re
 import secrets
+import shutil
 import sqlite3
+import sys
 import tempfile
 import time
 import urllib.error
@@ -38,6 +40,7 @@ try:
     from Backend.billing_provider import BillingQBOProvider
     from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads
     from Backend import document_storage
+    from Backend import backup_backend
     from Backend import staff_owner_field_edits
     from Backend import staff_workspace_field_updates
     from Backend import staff_invoice_lines
@@ -60,6 +63,7 @@ except ModuleNotFoundError:
     from billing_provider import BillingQBOProvider
     import google_connections
     import document_storage
+    import backup_backend
     import staff_owner_field_edits
     import staff_workspace_field_updates
     import staff_invoice_lines
@@ -84,7 +88,7 @@ except ModuleNotFoundError:
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.11.64"
+SERVICE_VERSION = "2026.09.18.69"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -148,6 +152,36 @@ BACKUP_STATUS_PATH = Path(
     )
 ).expanduser()
 BACKUP_MAX_AGE_HOURS = min(max(int(os.environ.get("GUNNAIRE_BACKUP_MAX_AGE_HOURS", "24")), 1), 24 * 30)
+# In-service automatic backups: verified artifacts written beside the live data
+# (default <data dir>/backups) whenever the latest verified backup reaches the
+# interval. The interval stays below the readiness target so a backup is never
+# reported stale merely because the worker's next check has not run yet.
+BACKUP_DIRECTORY_RAW = os.environ.get("GUNNAIRE_BACKUP_DIR", "").strip()
+BACKUP_DIRECTORY = (
+    Path(BACKUP_DIRECTORY_RAW).expanduser()
+    if BACKUP_DIRECTORY_RAW
+    else (DATA_ROOT / "backups" if DATA_ROOT else None)
+)
+BACKUP_AUTOMATION_ENABLED = os.environ.get("GUNNAIRE_BACKUP_AUTOMATION", "on").strip().lower() not in {"off", "false", "0", "no"}
+BACKUP_WORKER_CHECK_SECONDS = min(max(int(os.environ.get("GUNNAIRE_BACKUP_WORKER_CHECK_SECONDS", "900")), 30), 6 * 3600)
+# The interval plus one check cadence must fit inside the readiness target so
+# a backup is never reported stale merely because the next check is pending.
+BACKUP_INTERVAL_HOURS = min(
+    max(int(os.environ.get("GUNNAIRE_BACKUP_INTERVAL_HOURS", "20")), 1),
+    max(BACKUP_MAX_AGE_HOURS - math.ceil(BACKUP_WORKER_CHECK_SECONDS / 3600) - 1, 1),
+)
+BACKUP_RETAIN_COUNT = min(max(int(os.environ.get("GUNNAIRE_BACKUP_RETAIN_COUNT", "3")), 1), 30)
+BACKUP_WORKER_STARTUP_DELAY_SECONDS = min(max(int(os.environ.get("GUNNAIRE_BACKUP_WORKER_STARTUP_DELAY_SECONDS", "90")), 0), 3600)
+BACKUP_AUTOMATION_STATUS_PATH = BACKUP_STATUS_PATH.with_name("backup_automation.json")
+# Worker-created artifacts carry their own prefix so retention and the
+# partial-artifact sweep never touch an operator's manual gunnaire-backup-* copy.
+BACKUP_ARTIFACT_PREFIX = "gunnaire-auto-backup-"
+BACKUP_PARTIAL_ARTIFACT_MAX_AGE_SECONDS = 6 * 3600
+BACKUP_FREE_SPACE_MULTIPLIER = 2
+BACKUP_FREE_SPACE_RESERVE_BYTES = 64 * 1024 * 1024
+BACKUP_LOCK = threading.Lock()
+BACKUP_WAKE_EVENT = threading.Event()
+BACKUP_WORKER_STOP_EVENT = threading.Event()
 QBO_CLIENT_ID = os.environ.get("GUNNAIRE_QBO_CLIENT_ID", "").strip()
 QBO_CLIENT_SECRET = os.environ.get("GUNNAIRE_QBO_CLIENT_SECRET", "").strip()
 QBO_REDIRECT_URI = os.environ.get("GUNNAIRE_QBO_REDIRECT_URI", "").strip()
@@ -2283,25 +2317,91 @@ def push_notification_readiness_component(now: datetime | None = None) -> dict[s
     )
 
 
+def verified_backup_record() -> tuple[str, datetime]:
+    """The artifact ID and UTC verification time of the last manifest-verified backup.
+
+    Raises ValueError (or an OSError/JSON error) when no usable record exists.
+    """
+    if not BACKUP_STATUS_PATH.is_file() or BACKUP_STATUS_PATH.stat().st_size > 64 * 1024:
+        raise ValueError("missing backup status")
+    payload = json.loads(BACKUP_STATUS_PATH.read_text(encoding="utf-8"))
+    verified_at_raw = payload.get("verifiedAt") if isinstance(payload, dict) else None
+    artifact_id = payload.get("artifactID") if isinstance(payload, dict) else None
+    if not isinstance(verified_at_raw, str) or not isinstance(artifact_id, str):
+        raise ValueError("invalid backup status")
+    verified_at = datetime.fromisoformat(verified_at_raw.replace("Z", "+00:00"))
+    if verified_at.tzinfo is None:
+        raise ValueError("backup status lacks timezone")
+    return artifact_id, verified_at.astimezone(timezone.utc)
+
+
+def verified_backup_age_hours(now: datetime) -> float | None:
+    """Hours since the last verified backup, or None when no valid record exists."""
+    try:
+        _, verified_at = verified_backup_record()
+        return max((now - verified_at).total_seconds() / 3600, 0)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def cited_backup_artifact_id() -> str | None:
+    """The artifact readiness currently cites; retention never removes it."""
+    try:
+        artifact_id, _ = verified_backup_record()
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    return artifact_id
+
+
+def backup_automation_note() -> str:
+    """Readiness sentence about in-service automatic backups; never a path or filename."""
+    if not BACKUP_AUTOMATION_ENABLED or BACKUP_DIRECTORY is None:
+        return " Automatic in-service backups are off."
+    note = (
+        f" Automatic in-service backups run every {BACKUP_INTERVAL_HOURS} hours"
+        f" and keep the newest {BACKUP_RETAIN_COUNT}."
+    )
+    try:
+        if BACKUP_AUTOMATION_STATUS_PATH.is_file() and BACKUP_AUTOMATION_STATUS_PATH.stat().st_size <= 64 * 1024:
+            payload = json.loads(BACKUP_AUTOMATION_STATUS_PATH.read_text(encoding="utf-8"))
+            if isinstance(payload, dict) and payload.get("outcome") == "failed":
+                attempted_at = payload.get("attemptedAt")
+                error = payload.get("error")
+                if isinstance(attempted_at, str) and isinstance(error, str):
+                    note += f" The last automatic attempt failed at {attempted_at}: {error}."
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        pass
+    return note
+
+
 def backup_readiness_component(now: datetime | None = None) -> dict[str, str]:
     checked_at = now or datetime.now(timezone.utc)
     try:
-        if not BACKUP_STATUS_PATH.is_file() or BACKUP_STATUS_PATH.stat().st_size > 64 * 1024:
-            raise ValueError("missing backup status")
-        payload = json.loads(BACKUP_STATUS_PATH.read_text(encoding="utf-8"))
-        verified_at_raw = payload.get("verifiedAt") if isinstance(payload, dict) else None
-        artifact_id = payload.get("artifactID") if isinstance(payload, dict) else None
-        if not isinstance(verified_at_raw, str) or not isinstance(artifact_id, str):
-            raise ValueError("invalid backup status")
-        verified_at = datetime.fromisoformat(verified_at_raw.replace("Z", "+00:00"))
-        if verified_at.tzinfo is None:
-            raise ValueError("backup status lacks timezone")
-        age_hours = max((checked_at - verified_at.astimezone(timezone.utc)).total_seconds() / 3600, 0)
-        if age_hours > BACKUP_MAX_AGE_HOURS:
-            return readiness_component("backup", "Verified Backup", "attention", f"Latest verified backup is {age_hours:.1f} hours old; target is {BACKUP_MAX_AGE_HOURS} hours or less.")
-        return readiness_component("backup", "Verified Backup", "ready", f"Backup {artifact_id[:12]} was verified {age_hours:.1f} hours ago; retain a copy off-host.")
+        artifact_id, verified_at = verified_backup_record()
+        age_hours = max((checked_at - verified_at).total_seconds() / 3600, 0)
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        return readiness_component("backup", "Verified Backup", "attention", "No recent verified backup record is available; create and retain an off-host backup.")
+        return readiness_component(
+            "backup",
+            "Verified Backup",
+            "attention",
+            "No recent verified backup record is available; create and retain an off-host backup."
+            + backup_automation_note(),
+        )
+    if age_hours > BACKUP_MAX_AGE_HOURS:
+        return readiness_component(
+            "backup",
+            "Verified Backup",
+            "attention",
+            f"Latest verified backup is {age_hours:.1f} hours old; target is {BACKUP_MAX_AGE_HOURS} hours or less."
+            + backup_automation_note(),
+        )
+    return readiness_component(
+        "backup",
+        "Verified Backup",
+        "ready",
+        f"Backup {artifact_id[:12]} was verified {age_hours:.1f} hours ago; retain a copy off-host."
+        + backup_automation_note(),
+    )
 
 
 def backend_readiness_snapshot(now: datetime | None = None) -> dict[str, object]:
@@ -3310,6 +3410,208 @@ def push_delivery_worker() -> None:
 
 def start_push_delivery_worker() -> threading.Thread:
     worker = threading.Thread(target=push_delivery_worker, name="gunnaire-apns-worker", daemon=True)
+    worker.start()
+    return worker
+
+
+def scheduled_backup_data_bytes() -> int:
+    total = DB_PATH.stat().st_size if DB_PATH.is_file() else 0
+    for path in STORAGE_ROOT.rglob("*"):
+        if backup_backend.is_transient_storage_entry(path):
+            continue
+        try:
+            if path.is_file():
+                total += path.stat().st_size
+        except FileNotFoundError:
+            continue
+    return total
+
+
+def ensure_scheduled_backup_space(directory: Path) -> None:
+    """Refuse a backup that could fill the persistent disk the live data shares."""
+    needed = scheduled_backup_data_bytes() * BACKUP_FREE_SPACE_MULTIPLIER + BACKUP_FREE_SPACE_RESERVE_BYTES
+    if shutil.disk_usage(directory).free < needed:
+        raise backup_backend.BackupVerificationError(
+            "Insufficient free disk space for a verified backup; free space or retain fewer backups."
+        )
+
+
+def worker_backup_directories(directory: Path) -> list[Path]:
+    """Directories carrying the worker's own artifact prefix (complete or not)."""
+    if not directory.is_dir():
+        return []
+    return [
+        path
+        for path in directory.iterdir()
+        if path.is_dir() and not path.is_symlink() and path.name.startswith(BACKUP_ARTIFACT_PREFIX)
+    ]
+
+
+def scheduled_backup_artifacts(directory: Path) -> list[Path]:
+    """Complete artifacts the worker created, newest first by their timestamped names."""
+    return sorted(
+        (
+            path
+            for path in worker_backup_directories(directory)
+            if (path / backup_backend.MANIFEST_FILENAME).is_file()
+        ),
+        key=lambda path: path.name,
+        reverse=True,
+    )
+
+
+def partial_scheduled_backup_artifacts(directory: Path, *, now: datetime) -> list[Path]:
+    """Worker-prefixed directories without a manifest that stopped changing long ago.
+
+    They are what a process that died mid-copy leaves behind; nothing else
+    writes under the worker's prefix.
+    """
+    cutoff = now.timestamp() - BACKUP_PARTIAL_ARTIFACT_MAX_AGE_SECONDS
+    stale: list[Path] = []
+    for path in worker_backup_directories(directory):
+        if (path / backup_backend.MANIFEST_FILENAME).is_file():
+            continue
+        try:
+            newest = max([path.stat().st_mtime] + [entry.stat().st_mtime for entry in path.rglob("*")])
+        except OSError:
+            continue
+        if newest < cutoff:
+            stale.append(path)
+    return stale
+
+
+def sweep_partial_scheduled_backups(directory: Path, *, now: datetime) -> int:
+    removed = 0
+    for path in partial_scheduled_backup_artifacts(directory, now=now):
+        shutil.rmtree(path, ignore_errors=True)
+        removed += 1
+    return removed
+
+
+def prune_scheduled_backups(directory: Path, *, keep: int, protect: set[str]) -> int:
+    """Delete worker-created artifacts beyond the newest `keep`, never a protected one.
+
+    `protect` holds artifact IDs (manifest hash prefixes) that must survive: the
+    artifact readiness cites and the one just created.
+    """
+    removed = 0
+    for artifact in scheduled_backup_artifacts(directory)[keep:]:
+        try:
+            manifest_id = backup_backend.sha256_file(artifact / backup_backend.MANIFEST_FILENAME)[:16]
+        except OSError:
+            manifest_id = None
+        if manifest_id in protect:
+            continue
+        shutil.rmtree(artifact, ignore_errors=True)
+        removed += 1
+    return removed
+
+
+def backup_automation_error(error: BaseException) -> str:
+    """A path-free description: OSError text and manifest messages can name files."""
+    if isinstance(error, OSError):
+        return f"OSError errno {error.errno}"
+    return f"{type(error).__name__}: {str(error).split(':', 1)[0].strip()}"[:300]
+
+
+def record_backup_automation(payload: dict[str, object]) -> None:
+    try:
+        backup_backend.write_json_atomic(BACKUP_AUTOMATION_STATUS_PATH, payload)
+    except OSError:
+        pass
+
+
+def run_scheduled_backup_if_due(now: datetime | None = None, *, force: bool = False) -> dict[str, object]:
+    """Create, verify, and retain an in-service backup once the last verified one reaches the interval.
+
+    The SQLite copy uses the online backup API, so the snapshot is consistent
+    while requests continue. Document files are copied after the snapshot; the
+    upload route writes a file before inserting its row, so every document row
+    in the snapshot already has a complete file when it is copied, and a file
+    uploaded during the copy can only be an extra the snapshot never references.
+    The artifact shares the disk with the live data, so readiness keeps asking
+    for an off-host copy.
+    """
+    checked_at = now or datetime.now(timezone.utc)
+    directory = BACKUP_DIRECTORY
+    if not BACKUP_AUTOMATION_ENABLED or directory is None:
+        return {"outcome": "disabled"}
+    if not BACKUP_LOCK.acquire(blocking=False):
+        return {"outcome": "busy"}
+    try:
+        age_hours = verified_backup_age_hours(checked_at)
+        if not force and age_hours is not None and age_hours < BACKUP_INTERVAL_HOURS:
+            return {"outcome": "fresh", "ageHours": age_hours}
+        attempted_at = checked_at.isoformat()
+        cited = cited_backup_artifact_id()
+        protect = {cited} if cited else set()
+        swept = 0
+        pruned = 0
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            swept = sweep_partial_scheduled_backups(directory, now=checked_at)
+            # Rotate before measuring space so retention (and a lowered retain
+            # count) frees the room the next artifact needs. The artifact
+            # readiness cites is never removed, and at least one stays.
+            pruned = prune_scheduled_backups(directory, keep=max(BACKUP_RETAIN_COUNT - 1, 1), protect=protect)
+            ensure_scheduled_backup_space(directory)
+            destination = directory / f"{BACKUP_ARTIFACT_PREFIX}{checked_at.strftime('%Y%m%dT%H%M%S%fZ')}"
+            summary = backup_backend.create_backup(
+                DB_PATH, STORAGE_ROOT, destination, state_file=BACKUP_STATUS_PATH, created_at=checked_at
+            )
+        except Exception as error:  # noqa: BLE001 - every failure is recorded for readiness
+            description = backup_automation_error(error)
+            record_backup_automation(
+                {"attemptedAt": attempted_at, "outcome": "failed", "error": description, "swept": swept, "pruned": pruned}
+            )
+            return {"outcome": "failed", "error": description}
+        record: dict[str, object] = {
+            "attemptedAt": attempted_at,
+            "outcome": "verified",
+            "artifactID": summary["artifactID"],
+            "documentCount": summary["documentCount"],
+            "totalBytes": summary["totalBytes"],
+            "swept": swept,
+        }
+        try:
+            pruned += prune_scheduled_backups(
+                directory, keep=BACKUP_RETAIN_COUNT, protect=protect | {str(summary["artifactID"])}
+            )
+        except OSError as error:
+            # The backup itself is verified and recorded; only rotation failed.
+            record["pruneError"] = backup_automation_error(error)
+        record["pruned"] = pruned
+        record_backup_automation(record)
+        return {"outcome": "verified", "artifactID": summary["artifactID"], "pruned": pruned, "swept": swept}
+    finally:
+        BACKUP_LOCK.release()
+
+
+def backup_worker() -> None:
+    BACKUP_WAKE_EVENT.wait(timeout=BACKUP_WORKER_STARTUP_DELAY_SECONDS)
+    consecutive_failures = 0
+    while not BACKUP_WORKER_STOP_EVENT.is_set():
+        BACKUP_WAKE_EVENT.clear()
+        try:
+            outcome = run_scheduled_backup_if_due()
+        except Exception:
+            # Failures are recorded for readiness; the worker never terminates.
+            outcome = {"outcome": "failed"}
+        consecutive_failures = consecutive_failures + 1 if outcome.get("outcome") == "failed" else 0
+        # A persistent failure backs off (doubling, capped at the backup
+        # interval) instead of repeating the full copy every check.
+        delay = min(
+            BACKUP_WORKER_CHECK_SECONDS * (2 ** min(consecutive_failures, 8)),
+            BACKUP_INTERVAL_HOURS * 3600,
+        )
+        BACKUP_WAKE_EVENT.wait(timeout=delay)
+
+
+def start_backup_worker() -> threading.Thread | None:
+    if not BACKUP_AUTOMATION_ENABLED or BACKUP_DIRECTORY is None:
+        return None
+    BACKUP_WORKER_STOP_EVENT.clear()
+    worker = threading.Thread(target=backup_worker, name="gunnaire-backup-worker", daemon=True)
     worker.start()
     return worker
 
@@ -7556,12 +7858,32 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         print(f"{timestamp} {self.address_string()} {message}")
 
 
+def configure_live_logging() -> None:
+    """Flush each request log line immediately.
+
+    Request lines are printed to stdout, which Python block-buffers when it is
+    a pipe (Render captures logs through one), so on the hosted service they
+    surfaced only when the process exited at the next deploy. Line buffering
+    makes the log usable for live diagnosis; PYTHONUNBUFFERED=1 in the service
+    environment has the same effect and is kept as a belt-and-braces setting.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(line_buffering=True)
+            except (OSError, ValueError):
+                pass
+
+
 def main() -> None:
     if AUTH_MODE == "api-token" and not API_TOKEN:
         raise SystemExit("Set GUNNAIRE_BACKEND_API_TOKEN before starting api-token mode.")
+    configure_live_logging()
     initialize_database()
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
     start_push_delivery_worker()
+    start_backup_worker()
     server = ThreadingHTTPServer((HOST, PORT), GunnAireBackendHandler)
     print(f"GunnAire backend listening on http://{HOST}:{PORT}")
     print(f"Service version: {SERVICE_VERSION}")

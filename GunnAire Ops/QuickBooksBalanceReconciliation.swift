@@ -12,8 +12,22 @@ enum QuickBooksBalanceReconciliation {
         invoice.quickBooksSyncDetail = detail
     }
 
+    static let voidedStatus = "voided"
+    static let voidedDetail = "Voided in QuickBooks. Nothing is owed on this invoice; it is kept for the record."
+
     @discardableResult
     static func apply(_ source: QuickBooksInvoice, to invoice: Invoice, at date: Date = Date()) -> Bool {
+        if source.isVoided {
+            // QuickBooks keeps a voided invoice with zeroed amounts. Recording
+            // it as "paid" would misstate what happened; nothing is owed and
+            // nothing was collected.
+            invoice.quickBooksBalanceDue = 0
+            invoice.quickBooksLastSyncedAt = date
+            invoice.status = voidedStatus
+            invoice.quickBooksSyncStatus = "synced"
+            invoice.quickBooksSyncDetail = voidedDetail
+            return true
+        }
         guard source.TotalAmt.isFinite, source.TotalAmt >= 0,
               let balance = source.Balance, balance.isFinite,
               balance >= 0, balance <= source.TotalAmt + 0.009 else {

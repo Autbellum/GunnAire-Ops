@@ -48,6 +48,46 @@ import Testing
         for name in names { #expect(current.entitiesByName[name]?.attributesByName["id"]?.options.contains(.preserveValueOnDeletion) == true) }
     }
 
+    /// The source pass captures off the main actor every minute. The result
+    /// must equal the synchronous capture, the fence must still refuse a store
+    /// the main context is editing, and the token must advance the same way.
+    @Test func offMainCaptureMatchesTheSynchronousCaptureAndKeepsTheUnsavedFence() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("GAOwnerOffMain-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("Original.store"), schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(for: schema, configurations: [.init(schema: schema, url: url, cloudKitDatabase: .none)])
+        let context = container.mainContext
+        let customer = Customer(name: "Off-main fixture"), technician = Technician(name: "Tech", contactInfo: "tech@example.invalid")
+        context.insert(customer); context.insert(technician)
+        context.insert(ServiceCall(type: .service, scheduledDate: Date(), assignedTechnician: technician, customer: customer))
+        try context.save()
+        let storeID = try #require(try CompanyWorkspaceStore.identity(at: url))
+
+        let synchronous = try StaffReplicaSourceHistory.capture(container: container, after: nil, storeUUID: storeID)
+        let offMain = try await StaffReplicaSourceHistory.captureOffMain(container: container, after: nil, storeUUID: storeID)
+        #expect(offMain == synchronous)
+        #expect(offMain.source.records.count == 3)
+
+        // Nothing new: the token holds and no deletions appear.
+        let again = try await StaffReplicaSourceHistory.captureOffMain(container: container, after: offMain.token, storeUUID: storeID)
+        #expect(again.token == offMain.token && again.deletions.isEmpty)
+
+        // An unsaved edit on the main context is refused before any fetch.
+        customer.name = "Edited but not saved"
+        await #expect(throws: StaffReplicaSourceError.unsaved) {
+            try await StaffReplicaSourceHistory.captureOffMain(container: container, after: offMain.token, storeUUID: storeID)
+        }
+        context.rollback()
+
+        // A deletion saved after the token is reported, off main as on it.
+        context.delete(technician)
+        try context.save()
+        let afterDelete = try await StaffReplicaSourceHistory.captureOffMain(container: container, after: offMain.token, storeUUID: storeID)
+        #expect(afterDelete.deletions == ["technician:" + technician.id.uuidString.lowercased()])
+        #expect(afterDelete.source.records.count == 2)
+    }
+
     @Test func realDiskHistoryKeepsAllSixDeletedBusinessIdentitiesAndResumesAfterReopen() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("GAOwnerHistory-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
