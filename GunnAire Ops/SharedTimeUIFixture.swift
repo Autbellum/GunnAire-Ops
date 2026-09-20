@@ -13,11 +13,11 @@ import SwiftData
         let entries = try context.fetch(FetchDescriptor<TimeEntry>())
         for entry in entries where entry.userEmail == email && entry.id != id { context.delete(entry) }
         if !entries.contains(where: { $0.id == id }) {
-            let now = Date()
-            context.insert(TimeEntry(id: id, userEmail: email, clockIn: now.addingTimeInterval(-4 * 3600),
-                clockOut: now.addingTimeInterval(-2 * 3600), notes: "Reviewed heat-pump service training.", activity: .training,
+            let anchor = reviewAnchor(now: Date())
+            context.insert(TimeEntry(id: id, userEmail: email, clockIn: anchor.addingTimeInterval(-4 * 3600),
+                clockOut: anchor.addingTimeInterval(-2 * 3600), notes: "Reviewed heat-pump service training.", activity: .training,
                 reviewStatus: .approved, reviewedByEmail: AppIdentity.currentEmail ?? AppAccess.primaryAdminEmail,
-                reviewedAt: now.addingTimeInterval(-3600)))
+                reviewedAt: anchor.addingTimeInterval(-3600)))
         }
         if !(try context.fetch(FetchDescriptor<Technician>())).contains(where: { $0.contactInfo == email }) {
             context.insert(Technician(name: "Shared Time Technician", contactInfo: email))
@@ -46,6 +46,18 @@ import SwiftData
     }
 
     #if DEBUG
+    /// The moment the fixture's two-hour entry is measured back from. Team
+    /// Review lists "This Week" by `weekOfYear` of the device calendar, and the
+    /// entry clocks in four hours before this anchor, so in the first four
+    /// hours of a week a plain `now` would put the entry in the previous week
+    /// and the UI tests would not find the technician (CI runs in UTC; this
+    /// failed every Sunday between 00:00 and 04:00 UTC). The anchor is never
+    /// earlier than four hours into the current week.
+    nonisolated static func reviewAnchor(now: Date, calendar: Calendar = .current) -> Date {
+        let weekStart = calendar.dateInterval(of: .weekOfYear, for: now)?.start ?? calendar.startOfDay(for: now)
+        return max(now, weekStart.addingTimeInterval(4 * 3600))
+    }
+
     private static let email = "shared-time@example.invalid"
     private static var enabled: Bool {
         GunnAireCloudKit.usesTestDatabase && ProcessInfo.processInfo.arguments.contains("-uiTestSharedTime")

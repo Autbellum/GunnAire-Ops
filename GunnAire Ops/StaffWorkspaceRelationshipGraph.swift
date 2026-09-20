@@ -4,7 +4,7 @@ import SwiftData
 /// Complete explicit model-reference preflight, not full domain validity or
 /// tenant authorization. Nested billing/approval JSON, financial semantics, role
 /// projection, content delivery and an authenticated store lease remain gates.
-@MainActor struct StaffWorkspaceRelationshipGraph {
+nonisolated struct StaffWorkspaceRelationshipGraph {
     typealias Key = StaffWorkspaceRecordKey
     private let records: [Key: StaffWorkspaceModelRecord]
 

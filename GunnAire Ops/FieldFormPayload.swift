@@ -110,7 +110,7 @@ nonisolated indirect enum FieldFormJSON {
     }
 }
 
-enum FieldFormPayload {
+nonisolated enum FieldFormPayload {
     typealias Invalid = FieldFormJSON.Invalid
     nonisolated struct Assignment {
         let serviceTypes: Set<ServiceCallType>

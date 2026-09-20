@@ -5,7 +5,7 @@ enum StaffWorkspacePublicationReview {
         Set(conflict.local?.fields.keys.map { $0 } ?? []).union(conflict.remote.fields.keys)
             .filter { conflict.local?.fields[$0] != conflict.remote.fields[$0] }.sorted()
     }
-    static func label(_ field: String) -> String {
+    nonisolated static func label(_ field: String) -> String {
         let base = field.hasSuffix("JSON") ? String(field.dropLast(4)) : field
         return base.replacingOccurrences(of: "([a-z])([A-Z])", with: "$1 $2", options: .regularExpression).capitalized
     }

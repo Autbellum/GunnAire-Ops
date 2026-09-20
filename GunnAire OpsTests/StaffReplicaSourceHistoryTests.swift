@@ -93,7 +93,8 @@ import Testing
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("Original.store"), schema = GunnAireModelSchema.schema
-        var token: Data?, storeID: String?, expected = Set<String>()
+        var token: Data?, expected = Set<String>()
+        let storeID: String
         do {
             let container = try ModelContainer(for: schema, configurations: [.init(schema: schema, url: url, cloudKitDatabase: .none)])
             let context = container.mainContext; context.autosaveEnabled = false
@@ -104,19 +105,21 @@ import Testing
             let item = Item(name: "Service", unitPrice: 95)
             for model: any PersistentModel in [customer, location, equipment, technician, job, item] { context.insert(model) }
             try context.save()
-            let identity = try CompanyWorkspaceStore.identity(at: url)
-            storeID = try #require(identity)
-            let first = try StaffReplicaSourceHistory.capture(container: container, after: nil, storeUUID: storeID!)
+            guard let identity = try CompanyWorkspaceStore.identity(at: url) else {
+                throw CompanyWorkspaceFailure.storage
+            }
+            storeID = identity
+            let first = try StaffReplicaSourceHistory.capture(container: container, after: nil, storeUUID: storeID)
             #expect(first.source.records.count == 6 && first.deletions.isEmpty && first.token != nil)
             expected = Set(first.source.records.map(\.key)); token = first.token
             context.delete(job); context.delete(equipment); context.delete(location); context.delete(customer); context.delete(technician); context.delete(item)
             try context.save()
         }
         let reopened = try ModelContainer(for: schema, configurations: [.init(schema: schema, url: url, cloudKitDatabase: .none)])
-        let captured = try StaffReplicaSourceHistory.capture(container: reopened, after: token, storeUUID: storeID!)
+        let captured = try StaffReplicaSourceHistory.capture(container: reopened, after: token, storeUUID: storeID)
         #expect(captured.deletions == expected && captured.deletions.count == 6)
         #expect(captured.source.records.isEmpty && captured.token != token)
-        let resumed = try StaffReplicaSourceHistory.capture(container: reopened, after: captured.token, storeUUID: storeID!)
+        let resumed = try StaffReplicaSourceHistory.capture(container: reopened, after: captured.token, storeUUID: storeID)
         #expect(resumed.deletions.isEmpty && resumed.token == captured.token)
     }
 
@@ -132,8 +135,11 @@ import Testing
             try StaffReplicaSourceHistory.capture(container: container, after: nil, storeUUID: "different-store")
         }
         customer.name = "Unsaved original edit"
+        guard let storeID = try CompanyWorkspaceStore.identity(at: url) else {
+            throw CompanyWorkspaceFailure.storage
+        }
         #expect(throws: StaffReplicaSourceError.self) {
-            try StaffReplicaSourceHistory.capture(container: container, after: nil, storeUUID: CompanyWorkspaceStore.identity(at: url)!)
+            try StaffReplicaSourceHistory.capture(container: container, after: nil, storeUUID: storeID)
         }
         #expect(customer.name == "Unsaved original edit" && container.mainContext.hasChanges)
     }

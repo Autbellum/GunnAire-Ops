@@ -5,7 +5,7 @@ import SwiftData
 /// explicitly classified payment-service handles. This is the owner-side codec,
 /// NOT a field-staff projection: costs and provider metadata still require
 /// server-side filtering. Other business models and role projection remain required.
-@MainActor enum StaffWorkspaceModelCodecs {
+nonisolated enum StaffWorkspaceModelCodecs {
     static var customer: StaffWorkspaceModelCodec<Customer> {
         .init(kind: "customer", id: \.id, fields: [
             .value("name", \.name),

@@ -77,7 +77,7 @@ enum QuickBooksChangeEntity: String, Codable, CaseIterable {
     }
 }
 
-struct QuickBooksChangeHistoryScope: Codable, Equatable {
+nonisolated struct QuickBooksChangeHistoryScope: Codable, Equatable, Sendable {
     let companyID: UUID
     let realmID: String
     let environment: String

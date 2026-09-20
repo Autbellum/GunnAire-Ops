@@ -8,7 +8,7 @@
 import Foundation
 import SwiftData
 
-enum CatalogItemType: String, Codable, CaseIterable, Identifiable {
+nonisolated enum CatalogItemType: String, Codable, CaseIterable, Identifiable {
     case service = "Service"
     case nonInventory = "NonInventory"
     case inventory = "Inventory"
@@ -42,7 +42,7 @@ enum PricebookReviewStatus: String, Codable, CaseIterable {
 /// line or expand into its individual approved pricebook lines. The definition
 /// lives on the service item; every estimate/invoice captures an immutable
 /// snapshot so later pricebook edits cannot rewrite sold work.
-enum CatalogAssemblyPresentation: String, Codable, CaseIterable, Identifiable, Sendable {
+nonisolated enum CatalogAssemblyPresentation: String, Codable, CaseIterable, Identifiable, Sendable {
     case flatRate = "flat_rate"
     case itemized
 
@@ -65,14 +65,14 @@ enum CatalogAssemblyPresentation: String, Codable, CaseIterable, Identifiable, S
     }
 }
 
-struct CatalogAssemblyComponentDefinition: Codable, Equatable, Identifiable, Sendable {
+nonisolated struct CatalogAssemblyComponentDefinition: Codable, Equatable, Identifiable, Sendable {
     let itemID: UUID
     let quantity: Double
 
     var id: UUID { itemID }
 }
 
-struct CatalogAssemblyDefinition: Codable, Equatable, Sendable {
+nonisolated struct CatalogAssemblyDefinition: Codable, Equatable, Sendable {
     static let currentSchemaVersion = 1
 
     let schemaVersion: Int
@@ -106,7 +106,7 @@ struct CatalogAssemblyDefinition: Codable, Equatable, Sendable {
     }
 }
 
-struct CatalogAssemblyComponentSnapshot: Codable, Equatable, Identifiable, Sendable {
+nonisolated struct CatalogAssemblyComponentSnapshot: Codable, Equatable, Identifiable, Sendable {
     let itemID: UUID
     let name: String
     let sku: String?
@@ -117,7 +117,7 @@ struct CatalogAssemblyComponentSnapshot: Codable, Equatable, Identifiable, Senda
     var id: UUID { itemID }
 }
 
-struct CatalogLineAssemblySnapshot: Codable, Equatable, Identifiable, Sendable {
+nonisolated struct CatalogLineAssemblySnapshot: Codable, Equatable, Identifiable, Sendable {
     let assemblyItemID: UUID
     let name: String
     let revision: Int
@@ -153,7 +153,7 @@ struct AuthorizedLinePriceAdjustment: Codable, Equatable {
     let authorizedAt: Date
 }
 
-enum BillingDocumentDiscountKind: String, Codable, CaseIterable, Identifiable {
+nonisolated enum BillingDocumentDiscountKind: String, Codable, CaseIterable, Identifiable {
     case percentage
     case fixedAmount = "fixed_amount"
 
@@ -170,7 +170,7 @@ enum BillingDocumentDiscountKind: String, Codable, CaseIterable, Identifiable {
 /// A revenue-reducing adjustment authorized against one exact document scope.
 /// Keeping the gross subtotal in the immutable evidence prevents later line
 /// edits from silently expanding a previously approved percentage discount.
-struct AuthorizedDocumentDiscount: Codable, Equatable {
+nonisolated struct AuthorizedDocumentDiscount: Codable, Equatable {
     let kind: BillingDocumentDiscountKind
     let value: Double
     let grossSubtotalAtAuthorization: Double
@@ -178,7 +178,7 @@ struct AuthorizedDocumentDiscount: Codable, Equatable {
     let authorizedByEmail: String
     let authorizedAt: Date
 
-    func amount(for grossSubtotal: Double) -> Double? {
+    nonisolated func amount(for grossSubtotal: Double) -> Double? {
         guard let cents = BillingDocumentDiscountPolicy.currencyCents(grossSubtotal),
               cents == BillingDocumentDiscountPolicy.currencyCents(grossSubtotalAtAuthorization),
               value.isFinite, value >= 0,
@@ -301,19 +301,19 @@ enum BillingDocumentDiscountPolicy {
         return roundCurrency(grossSubtotal)
     }
 
-    static func grossSubtotal(snapshotJSON: String?) -> Double? {
+    nonisolated static func grossSubtotal(snapshotJSON: String?) -> Double? {
         let lines = CatalogLineItemSnapshot.decoded(from: snapshotJSON)
         guard !lines.isEmpty else { return nil }
         let total = lines.reduce(0) { $0 + $1.extendedAmount }
         return total.isFinite && total >= 0 ? roundCurrency(total) : nil
     }
 
-    static func roundCurrency(_ value: Double) -> Double {
+    nonisolated static func roundCurrency(_ value: Double) -> Double {
         guard value.isFinite, let decimal = Decimal(string: String(value), locale: Locale(identifier: "en_US_POSIX")) else { return value }
         return QuickBooksSalesLineContract.double(QuickBooksSalesLineContract.rounded(decimal))
     }
 
-    static func currencyCents(_ value: Double) -> Int64? {
+    nonisolated static func currencyCents(_ value: Double) -> Int64? {
         guard value.isFinite, value >= 0,
               let decimal = Decimal(string: String(value), locale: Locale(identifier: "en_US_POSIX")) else { return nil }
         let cents = QuickBooksSalesLineContract.rounded(decimal) * 100
@@ -323,7 +323,7 @@ enum BillingDocumentDiscountPolicy {
 }
 
 enum BillingDocumentDiscountAudit {
-    static func quickBooksPrivateNote(existing: String?, snapshotJSON: String?) -> String? {
+    nonisolated static func quickBooksPrivateNote(existing: String?, snapshotJSON: String?) -> String? {
         var entries = [existing]
             .compactMap(normalized)
         if let discount = CatalogLineItemSnapshot.documentDiscount(from: snapshotJSON),
@@ -412,7 +412,7 @@ enum BillingPriceAdjustmentAudit {
     /// QuickBooks PrivateNote is internal accounting context. Keep the existing
     /// job note first, append traceable adjustment evidence, and stay within the
     /// provider's practical text limit.
-    static func quickBooksPrivateNote(existing: String?, snapshotJSON: String?) -> String? {
+    nonisolated static func quickBooksPrivateNote(existing: String?, snapshotJSON: String?) -> String? {
         var entries: [String] = []
         if let existing = normalized(existing) {
             entries.append(existing)
@@ -446,12 +446,12 @@ enum BillingPriceAdjustmentAudit {
         return summaries.joined(separator: "\n")
     }
 
-    private static func normalized(_ value: String?) -> String? {
+    nonisolated private static func normalized(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == false ? trimmed : nil
     }
 
-    private static func currency(_ value: Double) -> String {
+    nonisolated private static func currency(_ value: Double) -> String {
         value.formatted(.currency(code: "USD"))
     }
 }
@@ -459,7 +459,7 @@ enum BillingPriceAdjustmentAudit {
 /// Immutable customer-system identity captured with a document line. This keeps
 /// service history and QuickBooks descriptions understandable after the live
 /// equipment profile is edited or deactivated.
-struct CatalogLineEquipmentSnapshot: Codable, Equatable, Identifiable, Sendable {
+nonisolated struct CatalogLineEquipmentSnapshot: Codable, Equatable, Identifiable, Sendable {
     let equipmentID: UUID
     let name: String
     let equipmentType: String?
@@ -567,7 +567,7 @@ enum CatalogLineEquipmentAssignmentPolicy {
 /// Immutable pricebook context captured when a customer-facing document is created.
 /// The live catalog remains editable; completed estimates and invoices retain the
 /// price, cost, tax treatment, part identity, and serviced system that were approved.
-struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
+nonisolated struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
     let catalogItemID: UUID
     /// New documents retain accounting meaning as well as price. Legacy lines
     /// without these fields still require the current approved mapping.
@@ -880,7 +880,7 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
     }
 }
 
-private struct CatalogDocumentSnapshotEnvelope: Codable {
+nonisolated private struct CatalogDocumentSnapshotEnvelope: Codable {
     let version: Int
     let lines: [CatalogLineItemSnapshot]
     let documentDiscount: AuthorizedDocumentDiscount?
@@ -1431,7 +1431,7 @@ struct QuickBooksCatalogMappingConflict: Identifiable {
     var id: String { QuickBooksCatalogMappingIntegrity.normalizedIdentifier(quickBooksID) }
 }
 
-enum QuickBooksCatalogMappingIntegrityError: LocalizedError, Equatable {
+nonisolated enum QuickBooksCatalogMappingIntegrityError: LocalizedError, Equatable {
     case ambiguousIdentifier(quickBooksID: String, localItemNames: [String])
     case identifierAlreadyAssigned(quickBooksID: String, localItemName: String)
     case invalidResolution

@@ -3,7 +3,7 @@ import CryptoKit
 
 /// Full owner records are never a staff projection, permission grant, or a
 /// financial command. Keep this protocol separate from core-field-v1.
-enum StaffWorkspacePublicationContract {
+nonisolated enum StaffWorkspacePublicationContract {
     static let schema = "owner-workspace-v1"
     static let schemaDigest = "d713a48445601f87bff3a47f101bd2173793fdc0d405f3a547851df5a9e4c6d3"
     static let maximumResponseBytes = 8 * 1024 * 1024
@@ -59,7 +59,7 @@ enum StaffWorkspacePublicationContract {
 /// Scan object keys without materializing another full workspace tree. The
 /// Codable/JSONSerialization decoders below still validate the JSON grammar.
 /// Duplicate keys (including Unicode-escaped aliases) must not be discarded.
-private struct StaffWorkspacePublicationJSON {
+nonisolated private struct StaffWorkspacePublicationJSON {
     let bytes: [UInt8]
     var collectSignedZeros = false
     var signedZeros: [Range<Int>] = []
@@ -139,7 +139,7 @@ private struct StaffWorkspacePublicationJSON {
     }
 }
 
-struct StaffWorkspacePublishedRecord: Codable, Equatable {
+nonisolated struct StaffWorkspacePublishedRecord: Codable, Equatable {
     let companyID: String
     let environment: String
     let replicaID: String
@@ -164,7 +164,7 @@ struct StaffWorkspacePublishedRecord: Codable, Equatable {
     }
 }
 
-struct StaffWorkspacePublicationPage: Codable {
+nonisolated struct StaffWorkspacePublicationPage: Codable {
     let companyID: String
     let environment: String
     let replicaID: String
@@ -197,7 +197,7 @@ struct StaffWorkspacePublicationPage: Codable {
     }
 }
 
-struct StaffWorkspacePublicationChange: Codable, Equatable {
+nonisolated struct StaffWorkspacePublicationChange: Codable, Equatable {
     let kind: String
     let id: String
     let expectedRevision: Int
@@ -218,7 +218,7 @@ struct StaffWorkspacePublicationChange: Codable, Equatable {
     }
 }
 
-struct StaffWorkspacePublicationBatch: Codable, Equatable {
+nonisolated struct StaffWorkspacePublicationBatch: Codable, Equatable {
     let companyID: String
     let environment: String
     let replicaID: String
@@ -245,7 +245,7 @@ struct StaffWorkspacePublicationBatch: Codable, Equatable {
 
 /// Keep the original wire bytes, not just a value that could be re-encoded
 /// differently after a relaunch or SDK update.
-struct StaffWorkspacePublicationPending: Codable, Equatable {
+nonisolated struct StaffWorkspacePublicationPending: Codable, Equatable {
     let body: Data
     let previous: [String: StaffWorkspacePublicationFingerprint]
     func batch(_ scope: StaffReplicaSourceScope) throws -> StaffWorkspacePublicationBatch {
@@ -264,7 +264,7 @@ struct StaffWorkspacePublicationPending: Codable, Equatable {
     }
 }
 
-struct StaffWorkspacePublicationReceipt: Codable {
+nonisolated struct StaffWorkspacePublicationReceipt: Codable {
     struct Change: Codable, Equatable { let kind: String; let id: String; let revision: Int; let deleted: Bool }
     let companyID: String
     let environment: String
@@ -285,7 +285,7 @@ struct StaffWorkspacePublicationReceipt: Codable {
     }
 }
 
-enum StaffWorkspacePublicationTransportPolicy {
+nonisolated enum StaffWorkspacePublicationTransportPolicy {
     static let root = "/api/workspace/full-records"
     static func path(scope: StaffReplicaSourceScope, sequence: Int? = nil, after: String? = nil) -> String {
         var result = root + "?companyID=" + scope.binding.companyID.uuidString.lowercased()

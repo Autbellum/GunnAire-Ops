@@ -3,7 +3,7 @@ import Foundation
 /// Strict saved-document input, separate from the lossless historical display
 /// decoder. Validation never rewrites the saved JSON, fetches current prices,
 /// authorizes an adjustment, or publishes accounting data.
-enum CatalogSnapshotPayload {
+nonisolated enum CatalogSnapshotPayload {
     enum Invalid: LocalizedError, Equatable {
         case evidence
         var errorDescription: String? {

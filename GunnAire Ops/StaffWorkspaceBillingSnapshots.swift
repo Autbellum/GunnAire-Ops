@@ -3,7 +3,7 @@ import Foundation
 /// Sold rows are historical evidence, not instructions to create catalog items
 /// or an authority to charge. Current catalog prices and equipment descriptions
 /// may differ; original identity and customer lineage may not.
-enum StaffWorkspaceBillingSnapshots {
+nonisolated enum StaffWorkspaceBillingSnapshots {
     static func validate(_ records: [StaffWorkspaceModelRecord]) throws {
         guard Set(records.map { StaffWorkspaceRecordKey(kind: $0.kind, id: $0.id) }).count == records.count else {
             throw StaffWorkspaceModelError.invalid

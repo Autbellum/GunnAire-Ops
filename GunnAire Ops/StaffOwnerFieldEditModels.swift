@@ -9,7 +9,7 @@ import SwiftData
 }
 
 @MainActor enum StaffOwnerFieldEditModels {
-    static func title(_ model: any PersistentModel, record: StaffWorkspaceModelRecord) -> String {
+    nonisolated static func title(_ model: any PersistentModel, record: StaffWorkspaceModelRecord) -> String {
         if let job = model as? ServiceCall {
             return [job.customer?.name, job.type.displayName, job.scheduledDate.formatted(date: .abbreviated, time: .omitted)]
                 .compactMap { $0 }.joined(separator: " · ")
