@@ -202,3 +202,8 @@ at the start of every turn; append to it rather than rewriting it.
   retry recorded "Failed to determine hittability". The default is now 10 s (waits return
   as soon as the control is usable; the two negative call sites only capture evidence
   before asserting). Explicit per-call timeouts are unchanged.
+- 2026-09-20 12:50 Claude: 3120503 verified locally in the worktree: both catalog tests run
+  twice at `accessibility-extra-extra-extra-large` pass (rotation 78 s, inventory 155 s),
+  and the rotation test passed twice at normal size on 0ebcd56. Full unit suite running on
+  3120503 as the pre-merge bar: 2576 passed, 7 failed, all seven in the known-flaky
+  `FieldCollectionNavigationTests` and none outside it. CI is running on the same commit.
