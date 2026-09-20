@@ -133,3 +133,10 @@ at the start of every turn; append to it rather than rewriting it.
   clones, July 19 to today) was deleted, but the volume's used space did not move, so that
   figure was `du` counting APFS clone files that shared blocks with the base simulators;
   the real consumer of the 940 GB is still being located with a volume-wide scan.
+- 2026-09-19 20:15 Claude, correcting the 20:05 entry: the 660 GB of leftover parallel-test
+  simulator clones was real data, not a `du` overcount. `simctl delete` moves each device's
+  data to `$TMPDIR/Deleting-<UUID>` and CoreSimulator reclaims it asynchronously; the 290
+  such folders, all stamped 19:58, are that reclamation in progress (free space 8 -> 25 GiB
+  so far). Root cause of the full disk: xcodebuild's parallel-testing clones were never
+  cleaned up, 267 of them since July 19. Watch `~/Library/Developer/XCTestDevices` after
+  interrupted test runs.
