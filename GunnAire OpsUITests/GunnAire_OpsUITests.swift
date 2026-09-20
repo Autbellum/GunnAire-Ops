@@ -73,6 +73,14 @@ final class GunnAire_OpsUITests: XCTestCase {
                 guard frame.origin.x.isFinite, frame.origin.y.isFinite,
                       frame.width.isFinite, frame.height.isFinite,
                       frame.width > 0, frame.height > 0 else { return false }
+                // Right after a rotation (and at the largest accessibility text
+                // sizes) a control can hold a finite frame that is still outside
+                // the window. Asking isHittable then throws "Activation point
+                // invalid" and ends the test instead of waiting. Keep polling
+                // until the centre is inside the window; a control that never
+                // returns still fails this bounded wait.
+                let window = XCUIApplication().frame
+                guard window.contains(CGPoint(x: frame.midX, y: frame.midY)) else { return false }
                 return element.isHittable
             },
             object: element

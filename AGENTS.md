@@ -171,3 +171,13 @@ at the start of every turn; append to it rather than rewriting it.
   accessibility-tree state during rotation. The test now waits up to 3 s for the count to
   settle at one and still fails if a duplicate persists. Shared-time fixture fix confirmed:
   those three tests no longer fail.
+- 2026-09-19 23:58 Claude: on 4d304d9 the regular iPad shards passed (rotation test included);
+  the dedicated "Verify largest-text catalog editing" step failed with XCTest's "Failed to
+  determine hittability of DoneEditingCatalogItem: Activation point invalid", thrown from
+  `waitForHittable` right after the final rotation back to portrait. Main's own 17:40 run
+  died with the identical error, so it predates this branch and is intermittent (the other
+  session's branch passed the step at 18:54 on the same app code). `waitForHittable` now
+  also requires the control's centre to be inside the app window before asking
+  `isHittable`, so the bounded wait keeps polling instead of aborting; a control that never
+  returns on screen still fails. One hunk from the HEAD blob; Codex's working-tree edits
+  to the file untouched.
