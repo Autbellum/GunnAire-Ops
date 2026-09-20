@@ -46,6 +46,7 @@ struct SettingsView: View {
     @State private var showingSupplierConnectorDetails = false
     @State private var showingFieldFormTemplates = false
     @State private var showingCustomerPortalLinks = false
+    @State private var showingCustomerAccountSignups = false
     @State private var showingGoogleServerAccess = false
     @State private var showingStaffCloudKitSetup = false
     @State private var cloudKitReadiness: GunnAireCloudKit.AccountReadiness = .couldNotDetermine
@@ -592,6 +593,10 @@ struct SettingsView: View {
                 CustomerPortalLinkManagerView()
                     .tint(Color.brandGold)
             }
+            .sheet(isPresented: $showingCustomerAccountSignups) {
+                CustomerAccountSignupsView()
+                    .tint(Color.brandGold)
+            }
             .navigationDestination(isPresented: $showingStaffCloudKitSetup) { CloudKitStaffSetupView(embedded: true) }
             .navigationDestination(isPresented: $showingGoogleServerAccess) {
                 GoogleServerAccessView(context: modelContext)
@@ -888,6 +893,17 @@ struct SettingsView: View {
                 Text(GunnAireBackendService.isConfigured
                      ? "Review active, expired, and revoked link metadata. Capability URLs are never shown again after creation."
                      : "Configure the shared backend before managing customer portal links.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Button {
+                    showingCustomerAccountSignups = true
+                } label: {
+                    Label("Review Customer Account Signups", systemImage: "person.crop.circle.badge.questionmark")
+                }
+                .disabled(!GunnAireBackendService.isConfigured)
+
+                Text("Link a new customer self-service signup to an existing customer, or create a new one. A signup has no business data access until linked here.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }

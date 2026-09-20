@@ -285,6 +285,22 @@ struct BackendServiceRequestRecord: Codable, Identifiable {
     let source: String?
     let preferredDate: String?
     let createdAt: String
+    let customerAccountID: String?
+}
+
+/// Non-authoritative metadata about a customer's self-service account signup.
+/// A pending account is never treated as a real business Customer until a
+/// staff member links it to one from `CustomerAccountSignupsView`.
+struct BackendCustomerAccountRecord: Codable, Identifiable {
+    let id: String
+    let email: String
+    let name: String
+    let phone: String?
+    let linkStatus: String
+    let linkedCustomerID: String?
+    let linkedCustomerQuickBooksID: String?
+    let createdAt: String
+    let linkedAt: String?
 }
 
 struct BackendAuditEventRecord: Codable, Identifiable {
@@ -585,6 +601,19 @@ enum GunnAireBackendService {
 
     private struct CustomerPortalLinksResponse: Codable {
         let links: [BackendCustomerPortalLinkRecord]
+    }
+
+    private struct CustomerAccountsResponse: Codable {
+        let customerAccounts: [BackendCustomerAccountRecord]
+    }
+
+    private struct CustomerAccountLinkResponse: Codable {
+        let customerAccount: BackendCustomerAccountRecord
+    }
+
+    private struct CustomerAccountLinkPayload: Codable {
+        let customerID: String
+        let quickBooksID: String?
     }
 
     /// Everything the server needs about one communication, read from the
@@ -1740,6 +1769,19 @@ enum GunnAireBackendService {
     static func claimServiceRequest(id: String) async throws {
         let encodedID = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
         _ = try await send(path: "/api/service-requests/\(encodedID)/claim", method: "POST")
+    }
+
+    static func fetchCustomerAccounts() async throws -> [BackendCustomerAccountRecord] {
+        let data = try await send(path: "/api/customer-accounts", method: "GET")
+        return try JSONDecoder().decode(CustomerAccountsResponse.self, from: data).customerAccounts
+    }
+
+    static func linkCustomerAccount(id: String, customerID: UUID, quickBooksID: String?) async throws -> BackendCustomerAccountRecord {
+        let encodedID = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        let payload = CustomerAccountLinkPayload(customerID: customerID.uuidString, quickBooksID: quickBooksID)
+        let data = try JSONEncoder().encode(payload)
+        let responseData = try await send(path: "/api/customer-accounts/\(encodedID)/link", method: "POST", body: data)
+        return try JSONDecoder().decode(CustomerAccountLinkResponse.self, from: responseData).customerAccount
     }
 
     static func createCustomerPortalLink(
