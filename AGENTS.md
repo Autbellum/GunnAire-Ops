@@ -140,3 +140,10 @@ at the start of every turn; append to it rather than rewriting it.
   so far). Root cause of the full disk: xcodebuild's parallel-testing clones were never
   cleaned up, 267 of them since July 19. Watch `~/Library/Developer/XCTestDevices` after
   interrupted test runs.
+- 2026-09-19 20:36 Claude, final on the disk (supersedes 20:05 and 20:15): the leftover
+  parallel-test clones were mostly shared APFS blocks; deleting all 267 returned about
+  44 GB (volume used 876 -> 832 GiB), and six stale DerivedData folders from earlier
+  sessions under `$TMPDIR` returned 9 GB more. Free space 544 MiB -> 61 GiB. `du` totals
+  under CoreSimulator are not trustworthy; use `df`/`diskutil` deltas. Where the remaining
+  ~820 GiB lives was not established and is for Eric to look at in Storage settings.
+  Rule 6 in `gunnaire-perf-measure` records the cleanup procedure.

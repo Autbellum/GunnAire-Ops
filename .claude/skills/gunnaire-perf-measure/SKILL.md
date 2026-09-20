@@ -107,17 +107,25 @@ number you report.
 
 On 2026-09-19 the Mac's data volume reached 100% full (544 MiB free of 926 GiB)
 and an archive's link step failed with "No space left on device". The consumer
-was `~/Library/Developer/XCTestDevices`: 267 "Clone N of …" simulators, 660 GB,
-dating from July 19 to that day, left behind by xcodebuild's parallel testing
-whenever a run was killed or the machine slept mid-run. `du` on the home folder
-finds it; `xcrun simctl --set testing list devices` shows them all Shutdown.
-Cleanup is `xcrun simctl --set testing delete all` followed by removing any
-UUID directories still in that folder (unregistered orphans); CoreSimulator then
-moves each device to `$TMPDIR/Deleting-<UUID>` and reclaims it asynchronously,
-so free space rises over minutes, not instantly. Never delete Eric's own
-simulators under `~/Library/Developer/CoreSimulator/Devices`; those hold his
-QA devices (`GunnAire QA iPad 20260828`). After any interrupted test run in a
-session, count that folder before starting the next build.
+was `~/Library/Developer/XCTestDevices`: 267 "Clone N of …" simulators dating
+from July 19 to that day, left behind by xcodebuild's parallel testing whenever
+a run was killed or the machine slept mid-run. `du` reported them as 660 GB,
+but on APFS a clone shares most blocks with its base simulator and `du` counts
+the shared blocks once per clone; deleting all of them returned about 44 GB
+(volume used 876 -> 832 GiB), and removing six stale DerivedData folders from
+earlier sessions under `$TMPDIR` returned 9 GB more. Trust `df` / `diskutil`
+used-space deltas, never a `du` total, for anything under CoreSimulator.
+`xcrun simctl --set testing list devices` shows the clones (all Shutdown);
+cleanup is `xcrun simctl --set testing delete all` followed by removing any
+UUID directories still in that folder (unregistered orphans). CoreSimulator
+moves each device to `$TMPDIR/Deleting-<UUID>` and reclaims it asynchronously
+(about 20 devices a minute), so free space rises over minutes. Never delete
+Eric's own simulators under `~/Library/Developer/CoreSimulator/Devices`; those
+hold his QA devices (`GunnAire QA iPad 20260828`). Also delete this session's
+`-derivedDataPath` folders under `$TMPDIR` when done with them; each is 1 to 3
+GB. After any interrupted test run, count the clone folder before the next
+build. Where the remaining ~820 GiB lives was not established; `du` cannot
+attribute it under APFS cloning, so that is for Eric's Storage settings pane.
 
 ## What the 2026-09-18 baseline looked like
 
