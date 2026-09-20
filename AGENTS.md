@@ -207,3 +207,10 @@ at the start of every turn; append to it rather than rewriting it.
   and the rotation test passed twice at normal size on 0ebcd56. Full unit suite running on
   3120503 as the pre-merge bar: 2576 passed, 7 failed, all seven in the known-flaky
   `FieldCollectionNavigationTests` and none outside it. CI is running on the same commit.
+- 2026-09-20 15:50 Claude: pull request #26 merged as ef3299d; local `main` fast-forwarded
+  to it. The release script's `git push origin main` was rejected as a non-fast-forward
+  because the merge happened on GitHub and the local ref was behind, and `set -euo pipefail`
+  correctly stopped the release before the upload. The script now runs
+  `git fetch origin main:main` first; `git push origin main --dry-run` then reports
+  "Everything up-to-date". Recorded in the `gunnaire-ship` skill. Build 17 still needs
+  Eric to re-run `generated/release-2026091617.sh`.

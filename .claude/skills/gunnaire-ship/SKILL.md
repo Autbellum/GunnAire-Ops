@@ -43,6 +43,16 @@ xcodebuild -exportArchive -archivePath <same> -exportOptionsPlist TestFlightExpo
   -exportPath <out> <same three authentication flags>
 ```
 
+**Sync `main` before the push, verified 2026-09-20.** The release script pushes
+`main` because Render deploys from it. When the pull request was merged on
+GitHub, the local `main` ref is behind and `git push origin main` is **rejected**
+as a non-fast-forward ("Updates were rejected because the remote contains work
+that you do not have locally"), so with `set -euo pipefail` the release stops
+before uploading. It is not a no-op; that was assumed once and was wrong. Run
+`git fetch origin main:main` first (safe while another branch is checked out,
+fast-forward only), then push, which reports "Everything up-to-date" in the
+merged case. Confirm with `git push origin main --dry-run` before believing it.
+
 Success is `** ARCHIVE SUCCEEDED **`, `** EXPORT SUCCEEDED **`, and a line
 containing `Upload succeeded`. About twelve minutes end to end; run it as one
 background job and watch the logs. App id 6758308973 for App Store Connect queries.

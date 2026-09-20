@@ -8,6 +8,11 @@ KEY=(-allowProvisioningUpdates -authenticationKeyPath ~/.appstoreconnect/private
 OUT=/var/folders/6t/lzhbzk216q3d5mbvsys_lbww0000gp/T/ship-2026091617
 
 [ -d "$OUT/GunnAireOps-2026091617.xcarchive" ] || { echo "archive missing; build it first"; exit 1; }
+# Render deploys from main. When the pull request was merged on GitHub, main
+# already carries this build and the local ref is behind, which git rejects as
+# a non-fast-forward; fast-forward it first, then push what is left (a no-op in
+# the merged case). A genuine divergence stops the release.
+git fetch origin main:main
 git push origin main
 
 xcodebuild -exportArchive -archivePath "$OUT/GunnAireOps-2026091617.xcarchive" \
