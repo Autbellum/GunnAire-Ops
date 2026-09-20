@@ -79,9 +79,24 @@ final class GunnAire_OpsUITests: XCTestCase {
                 // invalid" and ends the test instead of waiting. Keep polling
                 // until the centre is inside the window; a control that never
                 // returns still fails this bounded wait.
-                let window = XCUIApplication().frame
-                guard window.contains(CGPoint(x: frame.midX, y: frame.midY)) else { return false }
-                return element.isHittable
+                let app = XCUIApplication()
+                guard app.frame.contains(CGPoint(x: frame.midX, y: frame.midY)) else { return false }
+                // While the keyboard animates in, a control that will sit above
+                // it can still overlap its frame; XCTest then finds no hit point.
+                let keyboard = app.keyboards.firstMatch
+                if keyboard.exists, keyboard.frame.intersects(frame) { return false }
+                // Even then XCTest can record "Failed to determine hittability"
+                // for a control whose layout has not settled. During this
+                // bounded wait that is "not yet", not a failure: the assertion
+                // on the returned value still fails if it never becomes hittable.
+                let options = XCTExpectedFailure.Options()
+                options.isStrict = false
+                options.issueMatcher = { $0.compactDescription.contains("Failed to determine hittability") }
+                var hittable = false
+                XCTExpectFailure("Hittability can be undetermined while the layout settles.", options: options) {
+                    hittable = element.isHittable
+                }
+                return hittable
             },
             object: element
         )

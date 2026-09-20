@@ -187,3 +187,11 @@ at the start of every turn; append to it rather than rewriting it.
   Mac Release", after all test steps passed. Cherry-picked caf320a and 0672dc5 from
   `claude/nifty-franklin-vqzs4q` (Mac limit 45 -> 60 and the shard contract test), which
   that branch already verified green.
+- 2026-09-20 12:25 Claude: on 0358ce2 the Mac job passed under the 60-minute limit (52 min);
+  iPad shard 2 failed the rotation test again with "Failed to determine hittability", this
+  time before any rotation, inside `waitForHittable` right after typing the price while the
+  keyboard was appearing (frame on screen, so the window guard passed). The helper now also
+  keeps polling while the control overlaps the keyboard, and reads `isHittable` under a
+  non-strict `XCTExpectFailure` matching that message, so an undeterminable hit point during
+  the bounded wait is "not yet" rather than a recorded failure; the returned value is still
+  asserted. One hunk from the HEAD blob; Codex's working-tree edits untouched.
