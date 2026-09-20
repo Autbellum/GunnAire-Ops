@@ -126,3 +126,10 @@ at the start of every turn; append to it rather than rewriting it.
   exists before the remote read). Archive 2026091617 is being rebuilt from the fix commit.
   Lesson for both agents: when a keychain or file entry changes its encoding API, the
   reader must accept the previous representation until every device has rewritten it.
+- 2026-09-19 20:05 Claude: archive 2026091617 rebuilt from 6c8df18 (zero warnings) and the
+  superseded 9390915 archive removed; pull request #26 body updated; all four review threads
+  answered (two fixed, two declined with evidence) and resolved. Disk: the 660 GB that `du`
+  reported under `~/Library/Developer/XCTestDevices` (267 leftover parallel-test simulator
+  clones, July 19 to today) was deleted, but the volume's used space did not move, so that
+  figure was `du` counting APFS clone files that shared blocks with the base simulators;
+  the real consumer of the 940 GB is still being located with a volume-wide scan.
