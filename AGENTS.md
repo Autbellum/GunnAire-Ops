@@ -195,3 +195,10 @@ at the start of every turn; append to it rather than rewriting it.
   non-strict `XCTExpectFailure` matching that message, so an undeterminable hit point during
   the bounded wait is "not yet" rather than a recorded failure; the returned value is still
   asserted. One hunk from the HEAD blob; Codex's working-tree edits untouched.
+- 2026-09-20 12:35 Claude: the CI evidence artifact settles the rotation failure. The
+  captured hierarchy for `DoneEditingCatalogItem` reads
+  `{{inf, inf}, {0.0, 0.0}}`: on CI's runner the control is still unlaid-out after the
+  3-second `waitForHittable` default, so the wait timed out, the evidence hook ran, and the
+  retry recorded "Failed to determine hittability". The default is now 10 s (waits return
+  as soon as the control is usable; the two negative call sites only capture evidence
+  before asserting). Explicit per-call timeouts are unchanged.

@@ -62,7 +62,12 @@ final class GunnAire_OpsUITests: XCTestCase {
         return calendar.date(byAdding: .day, value: -offsetFromMonday, to: day) ?? day
     }
 
-    private func waitForHittable(_ element: XCUIElement, timeout: TimeInterval = 3) -> Bool {
+    /// The default is generous because CI's runner lays SwiftUI toolbar and
+    /// keyboard-accessory controls out well after they appear: the evidence
+    /// from the failing run shows `DoneEditingCatalogItem` still reporting
+    /// `{{inf, inf}, {0, 0}}` three seconds in. A wait returns as soon as the
+    /// control is usable, so only a genuinely missing control costs the time.
+    private func waitForHittable(_ element: XCUIElement, timeout: TimeInterval = 10) -> Bool {
         let hittable = XCTNSPredicateExpectation(
             // Keyboard accessory windows can briefly report an infinite,
             // zero-sized frame while appearing. Querying isHittable then makes
