@@ -156,3 +156,18 @@ at the start of every turn; append to it rather than rewriting it.
   UTC and ran Sunday 2026-09-20 00:56-01:26 UTC; every passing run was mid-day. Main has
   the same defect every Sunday morning UTC. Fix: `SharedTimeUIFixture.reviewAnchor(now:)`
   keeps the entry inside the current week, pinned by `SharedTimeUIFixtureTests`.
+- 2026-09-19 22:25 Claude: on 08feb74 the "Mac native tests" job failed only in its last
+  step, "Retain native test evidence": `Failed to CreateArtifact: Unable to make request:
+  ENOTFOUND`, a DNS failure on the GitHub runner; every test step passed. Not code. The
+  failed job is re-run automatically once the iPad shards finish (GitHub refuses re-runs
+  while a run is in progress). If this recurs, the evidence-upload step could take
+  `continue-on-error: true`, but that hides lost evidence, so it is left as is for now.
+- 2026-09-19 22:50 Claude (claim: one hunk of `GunnAire OpsUITests/GunnAire_OpsUITests.swift`,
+  committed from the HEAD blob; Codex's working-tree edits to that file untouched): CI's
+  iPad shard 2 on 08feb74 failed `testCatalogEditingControlsStayInsideTheSheetAcrossRotation`
+  at the `count == 1` check for `DoneEditingCatalogItem`, taken right after a rotation. The
+  same test failed on main at 3a56bc9 and on c1c8cce and passed on 510ca3d: flaky, pre-dating
+  this branch. The app declares exactly one such control, so a count of two is a transient
+  accessibility-tree state during rotation. The test now waits up to 3 s for the count to
+  settle at one and still fails if a duplicate persists. Shared-time fixture fix confirmed:
+  those three tests no longer fail.

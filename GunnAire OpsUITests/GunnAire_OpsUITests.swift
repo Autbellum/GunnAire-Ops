@@ -8334,7 +8334,13 @@ final class GunnAire_OpsUITests: XCTestCase {
         func requireContextualControl(_ evidenceName: String) {
             if !waitForHittable(done) { retainNavigationFailure(app, name: evidenceName) }
             XCTAssertTrue(waitForHittable(done))
-            XCTAssertEqual(app.buttons.matching(identifier: "DoneEditingCatalogItem").count, 1)
+            // Right after a rotation the accessibility tree can briefly hold the
+            // outgoing and incoming copies of the control. Wait for it to settle;
+            // a duplicate that persists still fails here.
+            let doneControls = app.buttons.matching(identifier: "DoneEditingCatalogItem")
+            let single = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 1"), object: doneControls)
+            XCTAssertEqual(XCTWaiter.wait(for: [single], timeout: 3), .completed,
+                           "Exactly one Done Editing control must remain once the layout settles (found \(doneControls.count)).")
             XCTAssertEqual(done.label, "Done Editing Catalog Item")
             // The sheet's navigation bar establishes its horizontal bounds.
             // A global keyboard accessory outside the sheet must not pass.
