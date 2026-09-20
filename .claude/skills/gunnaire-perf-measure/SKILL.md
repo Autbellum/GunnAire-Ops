@@ -103,6 +103,22 @@ Before reading any figure, confirm in the same run that the workspace was
 dashboard is not a result. State the environment and data condition next to every
 number you report.
 
+## Rule 6: parallel test runs leave simulator clones behind; check before the disk fills
+
+On 2026-09-19 the Mac's data volume reached 100% full (544 MiB free of 926 GiB)
+and an archive's link step failed with "No space left on device". The consumer
+was `~/Library/Developer/XCTestDevices`: 267 "Clone N of …" simulators, 660 GB,
+dating from July 19 to that day, left behind by xcodebuild's parallel testing
+whenever a run was killed or the machine slept mid-run. `du` on the home folder
+finds it; `xcrun simctl --set testing list devices` shows them all Shutdown.
+Cleanup is `xcrun simctl --set testing delete all` followed by removing any
+UUID directories still in that folder (unregistered orphans); CoreSimulator then
+moves each device to `$TMPDIR/Deleting-<UUID>` and reclaims it asynchronously,
+so free space rises over minutes, not instantly. Never delete Eric's own
+simulators under `~/Library/Developer/CoreSimulator/Devices`; those hold his
+QA devices (`GunnAire QA iPad 20260828`). After any interrupted test run in a
+session, count that folder before starting the next build.
+
 ## What the 2026-09-18 baseline looked like
 
 Denied dashboard, Release, no interaction: launch 626 ms; main thread hung 40.5 s
