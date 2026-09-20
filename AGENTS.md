@@ -181,3 +181,9 @@ at the start of every turn; append to it rather than rewriting it.
   `isHittable`, so the bounded wait keeps polling instead of aborting; a control that never
   returns on screen still fails. One hunk from the HEAD blob; Codex's working-tree edits
   to the file untouched.
+- 2026-09-20 11:20 Claude (claim: `.github/workflows/native-app-regression.yml`,
+  `Tools/test_native_workflow_shards.py`, released on commit): on 98a1a4c both iPad shards
+  passed; the Mac job was cancelled at 46m21s by its 45-minute limit during "Build universal
+  Mac Release", after all test steps passed. Cherry-picked caf320a and 0672dc5 from
+  `claude/nifty-franklin-vqzs4q` (Mac limit 45 -> 60 and the shard contract test), which
+  that branch already verified green.
