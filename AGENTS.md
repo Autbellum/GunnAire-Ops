@@ -147,3 +147,12 @@ at the start of every turn; append to it rather than rewriting it.
   under CoreSimulator are not trustworthy; use `df`/`diskutil` deltas. Where the remaining
   ~820 GiB lives was not established and is for Eric to look at in Storage settings.
   Rule 6 in `gunnaire-perf-measure` records the cleanup procedure.
+- 2026-09-19 21:45 Claude (claim: `GunnAire Ops/SharedTimeUIFixture.swift`, new
+  `GunnAire OpsTests/SharedTimeUIFixtureTests.swift`; released on commit): CI's iPad shards on
+  #26 failed three shared-time UI tests at the fixture line that waits for the technician
+  row. Verified cause, not this branch's code: Team Review defaults to "This Week"
+  (`weekOfYear`, device calendar) and filters on clock-in; the fixture clocked in four
+  hours before `now`, so any run in a week's first four hours hid the entry. CI runs in
+  UTC and ran Sunday 2026-09-20 00:56-01:26 UTC; every passing run was mid-day. Main has
+  the same defect every Sunday morning UTC. Fix: `SharedTimeUIFixture.reviewAnchor(now:)`
+  keeps the entry inside the current week, pinned by `SharedTimeUIFixtureTests`.
