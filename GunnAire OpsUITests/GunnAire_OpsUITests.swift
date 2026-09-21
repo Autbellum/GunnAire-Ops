@@ -192,7 +192,13 @@ final class GunnAire_OpsUITests: XCTestCase {
 
     private func replaceText(in field: XCUIElement, with replacement: String) {
         field.tap()
-        field.typeKey("a", modifierFlags: .command)
+        // Empty SwiftUI fields expose their placeholder as the value. There
+        // is nothing to select there, so keep ordinary text entry in one
+        // keyboard mode instead of synthesizing an unnecessary hardware key.
+        let priorValue = field.value as? String ?? ""
+        if !priorValue.isEmpty && priorValue != field.placeholderValue {
+            field.typeKey("a", modifierFlags: .command)
+        }
         field.typeText(replacement)
 
         guard (field.value as? String) != replacement else { return }

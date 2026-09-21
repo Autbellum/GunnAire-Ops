@@ -359,3 +359,21 @@ at the start of every turn; append to it rather than rewriting it.
   clean. Deterministic comparison proves the workflow differs only in the job
   budget expression, with no app/native-test changes. Claims released for the
   CI-only commit and a fresh complete CI run. The signed archive is unchanged.
+
+- 2026-09-21 Codex keyboard-helper claim: `GunnAire OpsUITests/GunnAire_OpsUITests.swift`
+  only. CI attempt 2 crashed inside UIKit keyboard constraints after Command-A
+  and text entry into an empty name field. Three unchanged local executions
+  passed, with repeated XCTest animation waits in the first two. Avoid the
+  unnecessary select-all on empty/placeholder fields; retain populated-field
+  replacement, fallback, all assertions and explicit hardware-keyboard tests.
+  This is a test-input mitigation, not a proven app/runtime crash fix. Native
+  app source and the signed archive remain unchanged; root owns validation.
+
+- 2026-09-21 Codex keyboard-helper verification: three full inventory UI
+  executions passed with zero failures, skips, compiler warnings or XCTest
+  animation timeout warnings. The 184 UI test methods, every assertion, the
+  populated-field path, fallback and explicit hardware-keyboard sequences are
+  otherwise byte-for-byte unchanged. All 452 app/project/resource files match
+  frozen dd5d56d, so the prior clean app build and 2,613-unit validation still
+  apply. Claim released for the test-only commit; complete CI remains required
+  before the already-authorized TestFlight upload.
