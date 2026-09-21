@@ -343,3 +343,19 @@ at the start of every turn; append to it rather than rewriting it.
   substring rule. All 23 tooling tests passed. Claims released; runtime source
   and the signed dd5d56d archive are unchanged. Existing Apple Distribution
   identity was found; local export validation is running without upload.
+
+- 2026-09-21 Codex CI budget claim: `.github/workflows/native-app-regression.yml`
+  and `Tools/test_native_workflow_shards.py`. Run 35602644328 passed all Mac
+  tests/universal Release and both iPad main suites. GitHub cancelled iPad shard
+  2 at the 90-minute job limit during largest-text coverage, with no assertion
+  failure recorded. Mac completed in 59m52 against a 60-minute limit. Extend
+  only the hosted job budgets to 120 minutes for iPad and 90 for Mac; preserve
+  every selector, command, result verifier, and app/archive source. Eric's
+  Proceed authorizes upload of frozen build 2026092101 after CI passes; it does
+  not authorize pushing main or deploying the backend.
+
+- 2026-09-21 Codex CI budget verification: all 27 workflow sharding, execution
+  identity/count, and simulator-preparation tests passed; whitespace checks are
+  clean. Deterministic comparison proves the workflow differs only in the job
+  budget expression, with no app/native-test changes. Claims released for the
+  CI-only commit and a fresh complete CI run. The signed archive is unchanged.
