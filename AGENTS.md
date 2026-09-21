@@ -326,3 +326,20 @@ at the start of every turn; append to it rather than rewriting it.
   emitted no compiler/linker warnings. App/test source hashes match the tested
   snapshot. Export options now preserve the exact build number. Claims released;
   preparing the committed frozen archive and PR. No upload or main push.
+
+- 2026-09-21 Codex archive validation: frozen app source dd5d56d built successfully
+  with zero warnings after moving generated output outside synced Documents.
+  Strict signature, app/dSYM UUID, version, and entitlement inspection passed.
+  auth_review now owns a narrow Tools/release_preflight.py and tooling-test fix:
+  the generic bootstrap substring falsely flags the production bootstrapStore
+  property. Preserve detection of real schema/debug markers, prove the distinction
+  with regressions, and keep this tooling correction separate from archived app
+  source. No app/runtime change or upload.
+
+- 2026-09-21 Codex preflight tooling correction verified: exact complete strings
+  lines named bootstrapStore are recognized as the production private property;
+  prefixed/suffixed variants remain forbidden. Actual DEBUG schema/probe entry
+  points are now explicit markers, including capitalized names missed by the old
+  substring rule. All 23 tooling tests passed. Claims released; runtime source
+  and the signed dd5d56d archive are unchanged. Existing Apple Distribution
+  identity was found; local export validation is running without upload.
