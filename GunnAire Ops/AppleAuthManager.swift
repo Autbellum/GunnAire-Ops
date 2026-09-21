@@ -3,7 +3,7 @@ import Combine
 import Foundation
 import Security
 
-struct GunnAireApplicationSession: Codable, Equatable {
+nonisolated struct GunnAireApplicationSession: Codable, Equatable, Sendable {
     let token: String
     let expiresAt: String
     let email: String
@@ -45,14 +45,60 @@ final class AppleAuthManager: ObservableObject {
     @Published private(set) var signedInEmail: String?
     @Published private(set) var appleUserIdentifier: String?
 
-    private(set) var sessionToken: String?
+    private(set) var sessionToken: String? {
+        willSet { invalidateWorkspaceMutations() }
+    }
+    private(set) var businessApplicationSessionSnapshot: GunnAireApplicationSession?
+    private(set) var workspaceSessionProof: CompanyWorkspaceSession?
     private var pendingNonce: String?
+    private var sessionGeneration = UUID()
+    private var invalidateWorkspaceMutations: () -> Void = {
+        CompanyWorkspaceAccessController.shared.invalidateMutationPermits()
+    }
 
     private let keychainAccount = "GunnAireAppleApplicationSession"
     private static let businessEmailStorageKey = "SignedInBusinessEmail"
 
-    private init() {
-        loadSession()
+    private init() {}
+
+    #if DEBUG
+    /// A session-clear fixture that never reads or removes stored credentials.
+    init(testMutationInvalidation: @escaping () -> Void) {
+        invalidateWorkspaceMutations = testMutationInvalidation
+    }
+    #endif
+
+    /// Restore a saved login without waiting for Security.framework on the UI actor.
+    func restoreStoredSession() async {
+        let generation = sessionGeneration
+        let account = keychainAccount
+        let backendOrigin = Config.Backend.normalizedBaseURL
+        let result = await Task.detached(priority: .userInitiated) { () -> (
+            session: GunnAireApplicationSession?, proof: CompanyWorkspaceSession?, readFailed: Bool
+        ) in
+            do {
+                guard let saved = try KeychainStore.loadCodable(GunnAireApplicationSession.self, account: account),
+                      Self.isFuture(saved.expiresAt) else {
+                    return (nil, nil, false)
+                }
+                return (saved, CompanyWorkspaceSession.validated(
+                    token: saved.token, email: saved.email, expiry: saved.expiresAt,
+                    backendOrigin: backendOrigin
+                ), false)
+            } catch {
+                return (nil, nil, true)
+            }
+        }.value
+        guard sessionGeneration == generation else { return }
+        guard !result.readFailed else {
+            clearLocalSession(removeStoredCredential: false)
+            return
+        }
+        guard let stored = result.session else {
+            clearLocalSession(removeStoredCredential: false)
+            return
+        }
+        apply(stored, proof: result.proof)
     }
 
     func prepare(_ request: ASAuthorizationAppleIDRequest) {
@@ -88,11 +134,16 @@ final class AppleAuthManager: ObservableObject {
             throw AppleAuthError.missingNonce
         }
         pendingNonce = nil
+        let generation = sessionGeneration
 
         let response = try await GunnAireBackendService.exchangeAppleIdentity(
             identityToken: identityToken,
             nonce: nonce
         )
+        guard sessionGeneration == generation else {
+            try? await GunnAireBackendService.revokeApplicationSession(response.sessionToken)
+            throw AppleAuthError.canceled
+        }
         guard response.providerSubject == credential.user else {
             throw AppleAuthError.identityMismatch
         }
@@ -107,13 +158,19 @@ final class AppleAuthManager: ObservableObject {
             email: normalizedEmail,
             appleUserIdentifier: credential.user
         )
+        let backendOrigin = Config.Backend.normalizedBaseURL
+        let proof = await Task.detached(priority: .userInitiated) {
+            CompanyWorkspaceSession.validated(token: stored.token, email: stored.email,
+                                              expiry: stored.expiresAt, backendOrigin: backendOrigin)
+        }.value
+        guard sessionGeneration == generation else { throw AppleAuthError.canceled }
         do {
             try KeychainStore.saveCodable(stored, account: keychainAccount)
         } catch {
             try? await GunnAireBackendService.revokeApplicationSession(response.sessionToken)
             throw AppleAuthError.sessionStorageFailed
         }
-        apply(stored)
+        apply(stored, proof: proof)
         return response.user
     }
 
@@ -127,39 +184,39 @@ final class AppleAuthManager: ObservableObject {
         }
     }
 
+    /// Called only after a background foreground check proves that the
+    /// stored business session no longer matches this in-memory snapshot.
+    /// Leave the changed Keychain item untouched for the next explicit login.
+    func discardBusinessSessionProof() {
+        clearLocalSession(removeStoredCredential: false)
+    }
+
     func validateCredentialState() async -> Bool {
-        guard let userIdentifier = appleUserIdentifier, !userIdentifier.isEmpty else {
-            return false
-        }
-        let state: ASAuthorizationAppleIDProvider.CredentialState = await withCheckedContinuation { continuation in
-            ASAuthorizationAppleIDProvider().getCredentialState(forUserID: userIdentifier) { state, _ in
-                continuation.resume(returning: state)
+        guard let userIdentifier = appleUserIdentifier, !userIdentifier.isEmpty,
+              let session = businessApplicationSessionSnapshot else { return false }
+        let generation = sessionGeneration
+        let result = await AppleCredentialValidation.check { completion in
+            ASAuthorizationAppleIDProvider().getCredentialState(forUserID: userIdentifier) { state, error in
+                completion(AppleCredentialValidation.result(state: state, hadError: error != nil))
             }
         }
-        switch state {
-        case .authorized:
-            return true
-        case .revoked, .notFound, .transferred:
+        // A late response must never sign out a different session or account.
+        guard sessionGeneration == generation else { return isAuthenticated }
+        guard !Task.isCancelled else { return isAuthenticated }
+        if result == .revoked {
             clearLocalSession()
             return false
-        @unknown default:
-            return false
         }
+        return AppleCredentialValidation.permitsSession(
+            result: result, expiresAt: CompanyWorkspaceClock.parse(session.expiresAt), now: Date()
+        )
     }
 
-    private func loadSession() {
-        guard let stored = try? KeychainStore.loadCodable(
-            GunnAireApplicationSession.self,
-            account: keychainAccount
-        ), Self.isFuture(stored.expiresAt) else {
-            clearLocalSession()
-            return
-        }
-        apply(stored)
-    }
-
-    private func apply(_ session: GunnAireApplicationSession) {
+    private func apply(_ session: GunnAireApplicationSession, proof: CompanyWorkspaceSession?) {
+        sessionGeneration = UUID()
         sessionToken = session.token
+        businessApplicationSessionSnapshot = session
+        workspaceSessionProof = proof
         signedInEmail = AppAccess.normalizedEmail(session.email)
         appleUserIdentifier = session.appleUserIdentifier
         isAuthenticated = !session.token.isEmpty && signedInEmail?.isEmpty == false
@@ -168,14 +225,17 @@ final class AppleAuthManager: ObservableObject {
         }
     }
 
-    private func clearLocalSession() {
+    private func clearLocalSession(removeStoredCredential: Bool = true) {
+        sessionGeneration = UUID()
         let previousEmail = signedInEmail
         sessionToken = nil
+        businessApplicationSessionSnapshot = nil
+        workspaceSessionProof = nil
         signedInEmail = nil
         appleUserIdentifier = nil
         pendingNonce = nil
         isAuthenticated = false
-        try? KeychainStore.remove(account: keychainAccount)
+        if removeStoredCredential { try? KeychainStore.remove(account: keychainAccount) }
         if UserDefaults.standard.string(forKey: Self.businessEmailStorageKey) == previousEmail {
             UserDefaults.standard.removeObject(forKey: Self.businessEmailStorageKey)
         }
@@ -193,7 +253,7 @@ final class AppleAuthManager: ObservableObject {
             .replacingOccurrences(of: "=", with: "")
     }
 
-    private static func isFuture(_ value: String) -> Bool {
+    nonisolated private static func isFuture(_ value: String) -> Bool {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let parsed = formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)

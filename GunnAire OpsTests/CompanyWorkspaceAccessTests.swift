@@ -2,10 +2,115 @@ import Foundation
 import SwiftData
 import Testing
 import Combine
+import CloudKit
+import StoreKit
 @testable import GunnAire_Ops
 
 @MainActor
 struct CompanyWorkspaceAccessTests {
+    private actor AccountResolutionProbe {
+        private var pending: [Int: CheckedContinuation<CompanyCloudKitAccount, Error>] = [:]
+        private(set) var reads = 0
+
+        func resolve(started: AsyncStream<Int>.Continuation) async throws -> CompanyCloudKitAccount {
+            let index = reads
+            reads += 1
+            return try await withCheckedThrowingContinuation { continuation in
+                pending[index] = continuation
+                started.yield(index)
+            }
+        }
+
+        func finish(_ index: Int, result: Result<CompanyCloudKitAccount, Error>) {
+            pending.removeValue(forKey: index)?.resume(with: result)
+        }
+    }
+
+    private actor AccountStatusProbe {
+        private var statuses: [CKAccountStatus]
+        private(set) var reads = 0
+
+        init(_ statuses: [CKAccountStatus]) { self.statuses = statuses }
+
+        func next() throws -> CKAccountStatus {
+            reads += 1
+            guard !statuses.isEmpty else { throw CompanyWorkspaceFailure.configuration }
+            return statuses.removeFirst()
+        }
+    }
+
+    nonisolated private enum DistributionOutcome: Sendable {
+        case verified, rejected, timeout, networkFailure, cancelled
+    }
+
+    private actor DistributionProbe {
+        private var outcomes: [DistributionOutcome]
+        private(set) var reads = 0
+
+        init(_ outcomes: [DistributionOutcome]) { self.outcomes = outcomes }
+
+        func next() throws -> Bool {
+            reads += 1
+            guard !outcomes.isEmpty else { throw CompanyWorkspaceFailure.configuration }
+            switch outcomes.removeFirst() {
+            case .verified: return true
+            case .rejected: return false
+            case .timeout: throw CompanyCloudKitTimeout(seconds: 6)
+            case .networkFailure: throw StoreKitError.networkError(URLError(.notConnectedToInternet))
+            case .cancelled: throw CancellationError()
+            }
+        }
+    }
+
+    nonisolated private final class SuspendedCloudKitCall: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Int, Never>?
+        private var released = false
+
+        func hold(signaling started: AsyncStream<Void>.Continuation) async -> Int {
+            await withCheckedContinuation { continuation in
+                lock.lock()
+                let shouldResume = released
+                if !shouldResume { self.continuation = continuation }
+                lock.unlock()
+                started.yield(())
+                if shouldResume { continuation.resume(returning: 42) }
+            }
+        }
+
+        func release() {
+            lock.lock()
+            released = true
+            let pending = continuation
+            continuation = nil
+            lock.unlock()
+            pending?.resume(returning: 42)
+        }
+
+        var hasReleased: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return released
+        }
+    }
+
+    private final class SaveCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+
+        func record() {
+            lock.lock()
+            count += 1
+            lock.unlock()
+        }
+
+        var snapshot: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return count
+        }
+    }
+
     @MainActor
     private final class Harness {
         var now = Date(timeIntervalSince1970: 1_788_800_000)
@@ -22,12 +127,17 @@ struct CompanyWorkspaceAccessTests {
         // reading them, so no two accesses overlap.
         nonisolated(unsafe) var storeID: String? = "existing-store"
         nonisolated(unsafe) var openCount = 0
+        nonisolated(unsafe) var storeIdentityWasOnMainThread = false
+        nonisolated(unsafe) var onStoreIdentity: (@Sendable () -> Void)?
         var approvalCount = 0
         var fetchError: Error?
         var fetchCount = 0
         var approvalError: Error?
         var delayedFetch: (() async throws -> BackendCompanyWorkspaceResponse)?
         var delayedSleep: ((TimeInterval) async throws -> Void)?
+        var delayedReadLease: (() async throws -> CompanyWorkspaceLease?)?
+        var sessionStorageValid: (() async -> Bool)?
+        var discardedProofCount = 0
         var clearedContinuations = 0
         var registrationError = false
         var sessionReads = 0
@@ -79,7 +189,14 @@ struct CompanyWorkspaceAccessTests {
                     self.registration = $0
                 },
                 readLease: { self.lease }, saveLease: { self.lease = $0 },
-                storeIdentity: { self.storeID },
+                readLeaseAsync: delayedReadLease,
+                sessionStorageValidAsync: sessionStorageValid,
+                clearSessionProofs: { self.discardedProofCount += 1 },
+                storeIdentity: {
+                    self.storeIdentityWasOnMainThread = self.storeIdentityWasOnMainThread || Thread.isMainThread
+                    self.onStoreIdentity?()
+                    return self.storeID
+                },
                 openStore: {
                     self.openCount += 1
                     if self.storeID == nil { self.storeID = "new-store" }
@@ -93,6 +210,27 @@ struct CompanyWorkspaceAccessTests {
                 clearContinuations: { self.clearedContinuations += 1 },
                 sessionSignal: { self.sessionSignal }
             ))
+        }
+    }
+
+    @Test func cleanupPermitIsRetiredByWorkspaceInvalidationBeforeCommit() async throws {
+        let h = try Harness()
+        h.user = BackendAppUserRecord(email: h.user.email, role: AppUserRole.admin.rawValue,
+            isActive: true, createdAt: nil)
+        h.register()
+        let controller = h.controller()
+        await controller.refresh()
+        let permit = try controller.customerCleanupPermit(generation: controller.generation, container: h.modelContainer)
+        controller.invalidate(accountChanged: true)
+        #expect(throws: CustomerCalendarCleanupError.self) { try permit.beginCommit(now: h.now) }
+    }
+
+    @Test func fieldRoleCannotObtainCustomerCleanupPermit() async throws {
+        let h = try Harness(); h.register()
+        let controller = h.controller(); await controller.refresh()
+        #expect(controller.phase == .ready)
+        #expect(throws: CustomerCalendarCleanupError.self) {
+            try controller.customerCleanupPermit(generation: controller.generation, container: h.modelContainer)
         }
     }
 
@@ -138,38 +276,54 @@ struct CompanyWorkspaceAccessTests {
         #expect(controller.authorizedContainer == nil && controller.verifiedRole == nil)
     }
 
-    /// A repeated verification with an unchanged server user must not dirty or
-    /// save the main context: every save is a CloudKit export candidate.
-    @Test func repeatedVerificationWithUnchangedUserDoesNotSaveTheMainContext() async throws {
+    /// A repeated verification with an unchanged server user must not save
+    /// the store: every save is a CloudKit export candidate. Reconciliation
+    /// saves through a private context, never on the UI thread.
+    @Test func repeatedVerificationWithUnchangedUserDoesNotSaveTheStore() async throws {
         let h = try Harness(); h.register()
-        let context = h.modelContainer.mainContext
-        var saves = 0
+        let container = h.modelContainer
+        let saves = SaveCounter()
         let observation = NotificationCenter.default.publisher(for: ModelContext.didSave)
-            .filter { ($0.object as AnyObject?) === context }
-            .sink { _ in saves += 1 }
+            .filter { ($0.object as? ModelContext)?.container === container }
+            .sink { _ in saves.record() }
         let controller = h.controller(); await controller.refresh()
         #expect(controller.phase == .ready)
-        #expect(saves >= 1)
-        #expect(!context.hasChanges)
-        let firstPassSaves = saves
-        let templates = try context.fetch(FetchDescriptor<FieldFormTemplate>()).count
+        #expect(saves.snapshot >= 1)
+        let firstPassSaves = saves.snapshot
+        let initialContext = ModelContext(container)
+        let templates = try initialContext.fetch(FetchDescriptor<FieldFormTemplate>()).count
         #expect(templates >= 5)
-        let users = try context.fetch(FetchDescriptor<AppUser>()).count
+        let users = try initialContext.fetch(FetchDescriptor<AppUser>()).count
 
         await controller.refresh()
         #expect(controller.phase == .ready)
-        #expect(!context.hasChanges)
-        #expect(saves == firstPassSaves)
-        #expect(try context.fetch(FetchDescriptor<FieldFormTemplate>()).count == templates)
-        #expect(try context.fetch(FetchDescriptor<AppUser>()).count == users)
+        #expect(saves.snapshot == firstPassSaves)
+        let repeatedContext = ModelContext(container)
+        #expect(try repeatedContext.fetch(FetchDescriptor<FieldFormTemplate>()).count == templates)
+        #expect(try repeatedContext.fetch(FetchDescriptor<AppUser>()).count == users)
 
         // A changed server role is still written and saved.
         h.user = BackendAppUserRecord(email: h.user.email, role: "Standard", isActive: true, createdAt: nil)
         await controller.refresh()
         #expect(controller.phase == .ready)
-        #expect(saves == firstPassSaves + 1)
-        #expect(try context.fetch(FetchDescriptor<AppUser>()).allSatisfy { $0.role == .standard })
+        #expect(saves.snapshot == firstPassSaves + 1)
+        #expect(try ModelContext(container).fetch(FetchDescriptor<AppUser>()).allSatisfy { $0.role == .standard })
         withExtendedLifetime(observation) {}
+    }
+
+    @Test func verifiedUserMaintenanceExecutesOffTheMainThread() async throws {
+        let h = try Harness()
+        let container = h.modelContainer
+        let worker = await Task.detached(priority: .userInitiated) {
+            CompanyWorkspaceUnlockMaintenance(modelContainer: container)
+        }.value
+        let projection = try await worker.prepareVerifiedUser(
+            email: h.user.email, role: h.user.role, isActive: h.user.isActive,
+            createdAt: h.user.createdAt, seedStarterTemplates: true
+        )
+        #expect(!projection.ranOnMainThread)
+        #expect(projection.records.count == 1)
+        #expect(try ModelContext(container).fetch(FetchDescriptor<AppUser>()).count == 1)
     }
 
     /// Starter templates are seeded once per workspace generation, not on every
@@ -177,26 +331,26 @@ struct CompanyWorkspaceAccessTests {
     /// seeds again on the unlock that follows it.
     @Test func starterTemplatesAreSeededOncePerWorkspaceGeneration() async throws {
         let h = try Harness(); h.register()
-        let context = h.modelContainer.mainContext
         let controller = h.controller(); await controller.refresh()
         #expect(controller.phase == .ready)
-        let seeded = try context.fetch(FetchDescriptor<FieldFormTemplate>())
+        let initialContext = ModelContext(h.modelContainer)
+        let seeded = try initialContext.fetch(FetchDescriptor<FieldFormTemplate>())
         #expect(seeded.count >= 5)
-        context.delete(try #require(seeded.first)); try context.save()
-        let afterDelete = try context.fetch(FetchDescriptor<FieldFormTemplate>()).count
+        initialContext.delete(try #require(seeded.first)); try initialContext.save()
+        let afterDelete = try ModelContext(h.modelContainer).fetch(FetchDescriptor<FieldFormTemplate>()).count
 
         await controller.refresh()
         #expect(controller.phase == .ready)
-        #expect(try context.fetch(FetchDescriptor<FieldFormTemplate>()).count == afterDelete)
+        #expect(try ModelContext(h.modelContainer).fetch(FetchDescriptor<FieldFormTemplate>()).count == afterDelete)
 
         let generation = controller.generation
         h.user = BackendAppUserRecord(email: h.user.email, role: "Standard", isActive: true, createdAt: nil)
         await controller.refresh()
         #expect(controller.generation != generation)
         // The seed check ran before the role change bumped the generation.
-        #expect(try context.fetch(FetchDescriptor<FieldFormTemplate>()).count == afterDelete)
+        #expect(try ModelContext(h.modelContainer).fetch(FetchDescriptor<FieldFormTemplate>()).count == afterDelete)
         await controller.refresh()
-        #expect(try context.fetch(FetchDescriptor<FieldFormTemplate>()).count == afterDelete + 1)
+        #expect(try ModelContext(h.modelContainer).fetch(FetchDescriptor<FieldFormTemplate>()).count == afterDelete + 1)
     }
 
     /// A foreground activation re-verifies with the server only once the lease
@@ -235,6 +389,7 @@ struct CompanyWorkspaceAccessTests {
         #expect(controller.authorizedContainer != nil)
         #expect(h.fetchCount == 0)
         #expect(h.lease != nil)
+        #expect(!h.storeIdentityWasOnMainThread)
     }
 
     @Test func iCloudTimeoutWithoutALeaseBlocksAsAServerFailure() async throws {
@@ -244,6 +399,238 @@ struct CompanyWorkspaceAccessTests {
         #expect(controller.phase == .blocked(.server))
         #expect(controller.authorizedContainer == nil)
         #expect(h.openCount == 0)
+    }
+
+    @Test func storeDistributionRetriesTransportFailureAndAcceptsVerifiedEvidence() async throws {
+        let probe = DistributionProbe([.networkFailure, .timeout, .verified])
+        try await CompanyCloudKitRuntimeAccount.verifyStoreDistribution(
+            attempt: { try await probe.next() }, pause: {}
+        )
+        #expect(await probe.reads == 3)
+    }
+
+    @Test func unverifiedDistributionRejectsAnExistingLeaseWithoutRetrying() async throws {
+        let h = try Harness(); h.register(); h.cache()
+        let probe = DistributionProbe([.rejected, .verified])
+        do {
+            try await CompanyCloudKitRuntimeAccount.verifyStoreDistribution(
+                attempt: { try await probe.next() }, pause: {}
+            )
+            Issue.record("Unverified StoreKit evidence must not authorize the workspace")
+        } catch { h.accountError = error }
+        let controller = h.controller(); await controller.refresh()
+        #expect(await probe.reads == 1)
+        #expect(controller.phase == .blocked(.configuration))
+        #expect(controller.authorizedContainer == nil)
+        #expect(h.openCount == 0 && h.lease == nil)
+    }
+
+    @Test func storeDistributionOutageKeepsExistingLeaseWithoutExtendingIt() async throws {
+        let h = try Harness(); h.register(); h.cache()
+        let verifiedAt = h.lease?.verifiedAt
+        h.now = h.now.addingTimeInterval(23 * 60 * 60)
+        let probe = DistributionProbe([.networkFailure, .timeout, .networkFailure])
+        do {
+            try await CompanyCloudKitRuntimeAccount.verifyStoreDistribution(
+                attempt: { try await probe.next() }, pause: {}
+            )
+            Issue.record("An outage cannot produce verified distribution evidence")
+        } catch { h.accountError = error }
+        let controller = h.controller(); await controller.refresh()
+        #expect(await probe.reads == 3)
+        #expect(controller.phase == .ready)
+        #expect(controller.authorizedContainer != nil)
+        #expect(h.fetchCount == 0)
+        #expect(h.lease?.verifiedAt == verifiedAt)
+
+        let fresh = try Harness(); fresh.register(); fresh.accountError = h.accountError
+        let freshController = fresh.controller(); await freshController.refresh()
+        #expect(freshController.authorizedContainer == nil)
+        #expect(fresh.openCount == 0 && fresh.lease == nil)
+    }
+
+    @Test func cancelledDistributionVerificationDoesNotRetry() async throws {
+        let probe = DistributionProbe([.cancelled, .verified])
+        do {
+            try await CompanyCloudKitRuntimeAccount.verifyStoreDistribution(
+                attempt: { try await probe.next() }, pause: {}
+            )
+            Issue.record("Cancelled verification must not resume authorization")
+        } catch { #expect(error is CancellationError) }
+        #expect(await probe.reads == 1)
+    }
+
+    @Test func indeterminateAccountStatusRetriesWithinItsBound() async throws {
+        let probe = AccountStatusProbe([.couldNotDetermine, .couldNotDetermine, .available])
+        try await CompanyCloudKitRuntimeAccount.requireAvailableAccount(
+            status: { try await probe.next() }, pause: {}
+        )
+        #expect(await probe.reads == 3)
+
+        let exhausted = AccountStatusProbe([.couldNotDetermine, .couldNotDetermine, .couldNotDetermine, .available])
+        do {
+            try await CompanyCloudKitRuntimeAccount.requireAvailableAccount(
+                status: { try await exhausted.next() }, pause: {}
+            )
+            Issue.record("Indeterminate status must not retry without a bound")
+        } catch { #expect(CompanyWorkspaceAccessController.isConnectivityFailure(error)) }
+        #expect(await exhausted.reads == 3)
+    }
+
+    @Test func temporarilyUnavailableAccountRetainsProofWithoutOpeningCloudKitStore() async throws {
+        let h = try Harness(); h.register(); h.cache()
+        let probe = AccountStatusProbe([.temporarilyUnavailable, .available])
+        do {
+            try await CompanyCloudKitRuntimeAccount.requireAvailableAccount(
+                status: { try await probe.next() }, pause: {}
+            )
+            Issue.record("A temporarily unavailable account must not start new CloudKit operations")
+        } catch { h.accountError = error }
+        let controller = h.controller(); await controller.refresh()
+        #expect(await probe.reads == 1)
+        #expect(controller.phase == .blocked(.accountUnavailable))
+        #expect(controller.authorizedContainer == nil)
+        #expect(h.openCount == 0 && h.fetchCount == 0)
+        #expect(h.lease != nil)
+
+        // A foreground refresh must not bypass the observed unavailable
+        // account through the otherwise valid saved-lease fast path.
+        await controller.refreshIfStale(maxAge: CompanyWorkspaceAccessController.verificationInterval)
+        #expect(controller.phase == .blocked(.accountUnavailable))
+        #expect(h.openCount == 0 && h.lease != nil)
+
+        h.accountError = nil
+        await controller.refreshIfStale(maxAge: CompanyWorkspaceAccessController.verificationInterval)
+        #expect(controller.phase == .ready)
+        #expect(h.openCount == 1 && h.fetchCount == 1)
+    }
+
+    @Test func missingOrRestrictedAccountDoesNotRetryOrRetainAuthorization() async throws {
+        for status in [CKAccountStatus.noAccount, .restricted] {
+            let h = try Harness(); h.register(); h.cache()
+            let probe = AccountStatusProbe([status, .available])
+            do {
+                try await CompanyCloudKitRuntimeAccount.requireAvailableAccount(
+                    status: { try await probe.next() }, pause: {}
+                )
+                Issue.record("An unavailable account must not authorize the workspace")
+            } catch { h.accountError = error }
+            let controller = h.controller(); await controller.refresh()
+            #expect(await probe.reads == 1)
+            #expect(controller.phase == .blocked(.accountUnavailable))
+            #expect(controller.authorizedContainer == nil)
+            #expect(h.openCount == 0 && h.lease == nil)
+        }
+    }
+
+    @Test func unavailableAccountRetiresCachedAndLateSiblingResolution() async throws {
+        let cache = CompanyCloudKitAccountCache(lifetime: 900)
+        let probe = AccountResolutionProbe()
+        let account = CompanyCloudKitAccount(environment: "development", accountHash: "approved")
+        let (started, signal) = AsyncStream<Int>.makeStream()
+        var starts = started.makeAsyncIterator()
+        let first = Task { try await cache.current { try await probe.resolve(started: signal) } }
+        #expect(await starts.next() == 0)
+        let second = Task { try await cache.current { try await probe.resolve(started: signal) } }
+        #expect(await starts.next() == 1)
+        let late = Task { try await cache.current { try await probe.resolve(started: signal) } }
+        #expect(await starts.next() == 2)
+
+        await probe.finish(0, result: .success(account))
+        #expect(try await first.value.accountHash == "approved")
+        await probe.finish(1, result: .failure(CompanyCloudKitAccountTemporarilyUnavailable()))
+        do {
+            _ = try await second.value
+            Issue.record("Temporary account unavailability must be reported")
+        } catch { #expect(error is CompanyCloudKitAccountTemporarilyUnavailable) }
+        await probe.finish(2, result: .success(account))
+        do {
+            _ = try await late.value
+            Issue.record("An older overlapping success must not restore unavailable account proof")
+        } catch { #expect(error is CompanyCloudKitAccountVerificationSuperseded) }
+
+        let reread = try await cache.current {
+            CompanyCloudKitAccount(environment: "development", accountHash: "freshly-verified")
+        }
+        #expect(reread.accountHash == "freshly-verified")
+    }
+
+    @Test func accountChangeInvalidationRejectsPendingResolutionAndItsLateFailure() async throws {
+        let cache = CompanyCloudKitAccountCache(lifetime: 900)
+        let probe = AccountResolutionProbe()
+        let (started, signal) = AsyncStream<Int>.makeStream()
+        var starts = started.makeAsyncIterator()
+        let lateSuccess = Task { try await cache.current { try await probe.resolve(started: signal) } }
+        #expect(await starts.next() == 0)
+        let lateFailure = Task { try await cache.current { try await probe.resolve(started: signal) } }
+        #expect(await starts.next() == 1)
+        cache.invalidate()
+        let fresh = try await cache.current {
+            CompanyCloudKitAccount(environment: "development", accountHash: "replacement")
+        }
+        #expect(fresh.accountHash == "replacement")
+
+        await probe.finish(0, result: .success(.init(environment: "development", accountHash: "old")))
+        do {
+            _ = try await lateSuccess.value
+            Issue.record("Account-change invalidation must reject old pending account evidence")
+        } catch { #expect(error is CompanyCloudKitAccountVerificationSuperseded) }
+        await probe.finish(1, result: .failure(CompanyCloudKitAccountTemporarilyUnavailable()))
+        do { _ = try await lateFailure.value }
+        catch { #expect(error is CompanyCloudKitAccountVerificationSuperseded) }
+
+        // A failure from the old epoch must not erase the replacement's cache.
+        let retained = try await cache.current { throw CompanyWorkspaceFailure.configuration }
+        #expect(retained.accountHash == "replacement")
+    }
+
+    @Test func supersededAccountVerificationKeepsLeaseButRequiresFreshAccountProof() async throws {
+        let h = try Harness(); h.register(); h.cache()
+        h.accountError = CompanyCloudKitAccountVerificationSuperseded()
+        let controller = h.controller(); await controller.refresh()
+        #expect(controller.phase == .blocked(.accountUnavailable))
+        #expect(h.lease != nil && h.openCount == 0)
+        await controller.refreshIfStale(maxAge: CompanyWorkspaceAccessController.verificationInterval)
+        #expect(controller.phase == .blocked(.accountUnavailable))
+        #expect(h.lease != nil && h.openCount == 0)
+        h.accountError = nil
+        await controller.refreshIfStale(maxAge: CompanyWorkspaceAccessController.verificationInterval)
+        #expect(controller.phase == .ready)
+        #expect(h.openCount == 1 && h.fetchCount == 1)
+    }
+
+    @Test func cloudKitTimeoutDoesNotWaitForAnOperationThatIgnoresCancellation() async throws {
+        let gate = SuspendedCloudKitCall()
+        let (started, signal) = AsyncStream<Void>.makeStream()
+        let failsafe = Task.detached {
+            do { try await Task.sleep(for: .seconds(10)) }
+            catch { return }
+            gate.release()
+        }
+        let work = Task { () -> Error? in
+            do {
+                _ = try await withCloudKitTimeout(seconds: 0.05) {
+                    await gate.hold(signaling: signal)
+                }
+                return nil
+            } catch {
+                return error
+            }
+        }
+        for await _ in started { break }
+        let error = await work.value
+        let operationWasReleased = gate.hasReleased
+        gate.release()
+        failsafe.cancel()
+        #expect(error is CompanyCloudKitTimeout)
+        // Completion must precede releasing the operation; this checks the
+        // cancellation-ignoring failure without a narrow wall-clock budget.
+        #expect(!operationWasReleased)
+    }
+
+    @Test func cloudKitTimeoutReturnsAnOperationThatFinishesBeforeDeadline() async throws {
+        let value = try await withCloudKitTimeout(seconds: 1) { 42 }
+        #expect(value == 42)
     }
 
     /// The gate names the failing check: an approved iCloud account that
@@ -345,6 +732,7 @@ struct CompanyWorkspaceAccessTests {
         #expect(h.fetchCount == 0)
         #expect(h.openCount == 1)
         #expect(controller.verifiedRole == .fieldTechnician)
+        #expect(!h.storeIdentityWasOnMainThread)
 
         h.now = h.now.addingTimeInterval(CompanyWorkspaceAccessController.verificationInterval)
         await controller.refreshIfStale(maxAge: CompanyWorkspaceAccessController.verificationInterval)
@@ -358,6 +746,53 @@ struct CompanyWorkspaceAccessTests {
         let second = other.controller()
         await second.refreshIfStale(maxAge: CompanyWorkspaceAccessController.verificationInterval)
         #expect(other.fetchCount == 1)
+    }
+
+    /// The metadata lookup is allowed to take time, but a session removed
+    /// while it runs must never unlock or publish the saved container.
+    @Test func savedLeaseCannotOpenAfterSessionChangesDuringStoreIdentityRead() async throws {
+        let h = try Harness(); h.register(); h.cache()
+        let (entered, signal) = AsyncStream<Void>.makeStream()
+        let release = DispatchSemaphore(value: 0)
+        h.onStoreIdentity = {
+            signal.yield(())
+            _ = release.wait(timeout: .now() + 3)
+        }
+        let controller = h.controller()
+        let work = Task {
+            await controller.refreshIfStale(maxAge: CompanyWorkspaceAccessController.verificationInterval)
+        }
+        for await _ in entered { break }
+        h.session = nil
+        controller.invalidate(accountChanged: true)
+        release.signal()
+        await work.value
+        #expect(controller.phase == .blocked(.restartRequired))
+        #expect(controller.authorizedContainer == nil)
+        #expect(h.openCount == 0)
+        #expect(!h.storeIdentityWasOnMainThread)
+    }
+
+    @Test func approvalGateCannotReappearAfterAccountChangeDuringStoreIdentityRead() async throws {
+        let h = try Harness()
+        h.user = BackendAppUserRecord(email: h.user.email, role: "Admin", isActive: true, createdAt: nil)
+        h.remoteBindings = []
+        let (entered, signal) = AsyncStream<Void>.makeStream()
+        let release = DispatchSemaphore(value: 0)
+        h.onStoreIdentity = {
+            signal.yield(())
+            _ = release.wait(timeout: .now() + 3)
+        }
+        let controller = h.controller()
+        let work = Task { await controller.refresh() }
+        for await _ in entered { break }
+        controller.invalidate(accountChanged: true)
+        release.signal()
+        await work.value
+        #expect(controller.phase == .blocked(.restartRequired))
+        #expect(controller.authorizedContainer == nil)
+        #expect(h.openCount == 0 && h.approvalCount == 0)
+        #expect(!h.storeIdentityWasOnMainThread)
     }
 
     @Test func noBusinessSessionNeverOpensAnExistingStore() async throws {
@@ -420,6 +855,7 @@ struct CompanyWorkspaceAccessTests {
         h.user = BackendAppUserRecord(email: h.user.email, role: "Admin", isActive: true, createdAt: nil)
         let admin = h.controller(); await admin.refresh()
         #expect(admin.phase == .needsApproval(hasSavedStore: true))
+        #expect(!h.storeIdentityWasOnMainThread)
         await admin.approve(confirmed: false)
         #expect(h.openCount == 0 && h.approvalCount == 0)
         await admin.approve(confirmed: true)
@@ -464,6 +900,7 @@ struct CompanyWorkspaceAccessTests {
             let controller = h.controller(); await controller.refresh()
             #expect((controller.authorizedContainer != nil) == (age == 0))
             #expect(h.openCount == (age == 0 ? 1 : 0))
+            #expect(!h.storeIdentityWasOnMainThread)
         }
         let h = try Harness(); h.register(); h.cache()
         let old = h.session!
@@ -699,6 +1136,61 @@ struct CompanyWorkspaceAccessTests {
         #expect(controller.phase == .ready && h.openCount == 1)
     }
 
+    @Test func replacedSessionCannotUseALeaseReturnedByDelayedSecureStorage() async throws {
+        let h = try Harness(); h.register(); h.cache()
+        let savedLease = h.lease
+        let (started, signal) = AsyncStream<Void>.makeStream()
+        var resume: CheckedContinuation<CompanyWorkspaceLease?, Never>?
+        h.delayedReadLease = {
+            await withCheckedContinuation { continuation in
+                resume = continuation
+                signal.yield(())
+            }
+        }
+        let controller = h.controller()
+        let work = Task { await controller.refreshIfStale(maxAge: 60) }
+        for await _ in started { break }
+        h.session = nil
+        resume?.resume(returning: savedLease)
+        await work.value
+        #expect(controller.phase == .blocked(.signIn))
+        #expect(controller.authorizedContainer == nil)
+        #expect(h.lease == nil)
+    }
+
+    @Test func cachedSessionProofRejectsExpiredAndEmptyTokens() async {
+        let origin = "https://company.example.test"
+        let valid = await Task.detached {
+            CompanyWorkspaceSession.validated(
+                token: "opaque-session", email: " STAFF@example.test ",
+                expiry: "2099-01-01T00:00:00Z", backendOrigin: origin
+            )
+        }.value
+        #expect(valid?.email == "staff@example.test")
+        #expect(valid?.tokenFingerprint == CompanyWorkspaceSession.digest("opaque-session"))
+        let empty = await Task.detached {
+            CompanyWorkspaceSession.validated(token: "", email: "staff@example.test",
+                                              expiry: "2099-01-01T00:00:00Z", backendOrigin: origin)
+        }.value
+        let expired = await Task.detached {
+            CompanyWorkspaceSession.validated(token: "opaque-session", email: "staff@example.test",
+                                              expiry: "2020-01-01T00:00:00Z", backendOrigin: origin)
+        }.value
+        #expect(empty == nil && expired == nil)
+    }
+
+    @Test func foregroundStorageMismatchRevokesMountedWorkspace() async throws {
+        let h = try Harness(); h.register()
+        h.sessionStorageValid = { false }
+        let controller = h.controller(); await controller.refresh()
+        #expect(controller.phase == .ready)
+        await controller.revalidateSessionStorageOnForeground()
+        #expect(controller.phase == .blocked(.signIn))
+        #expect(controller.authorizedContainer == nil)
+        #expect(h.discardedProofCount == 1)
+        #expect(h.lease == nil)
+    }
+
     @Test func staleApprovalExplainsReauthenticationWithoutOpeningTheStore() async throws {
         let h = try Harness()
         h.user = BackendAppUserRecord(email: h.user.email, role: "Admin", isActive: true, createdAt: nil)
@@ -743,10 +1235,22 @@ struct CompanyWorkspaceAccessTests {
         user.role = .admin
         try h.modelContainer.mainContext.save()
         #expect(controller.verifiedRole == .fieldTechnician)
-        #expect(AppAccess.activeRole(email: user.email, users: users, verifiedUser: controller.verifiedUser) == nil)
-        await controller.refresh()
-        #expect(user.role == .fieldTechnician)
         #expect(AppAccess.activeRole(email: user.email, users: users, verifiedUser: controller.verifiedUser) == .fieldTechnician)
+        let editedCreationDate = user.createdAt.addingTimeInterval(1)
+        user.createdAt = editedCreationDate
+        await controller.refresh()
+        #expect(controller.verifiedRole == .fieldTechnician)
+        #expect(user.role == .fieldTechnician)
+        #expect(user.createdAt == editedCreationDate)
+        #expect(AppAccess.activeRole(email: user.email, users: users, verifiedUser: controller.verifiedUser) == .fieldTechnician)
+        let persistedBeforeEdit = try ModelContext(h.modelContainer).fetch(FetchDescriptor<AppUser>())
+        #expect(persistedBeforeEdit.first { $0.email == user.email }?.role == .fieldTechnician)
+        // Saving a previously unsaved unrelated edit on the registered main
+        // object must not restore its old administrator role to the store.
+        try h.modelContainer.mainContext.save()
+        let persistedAfterEdit = try ModelContext(h.modelContainer).fetch(FetchDescriptor<AppUser>())
+        #expect(persistedAfterEdit.first { $0.email == user.email }?.role == .fieldTechnician)
+        #expect(persistedAfterEdit.first { $0.email == user.email }?.createdAt == editedCreationDate)
     }
 
     @Test func expiredAndRevokedLeasesCannotAuthorizeMirroredUsers() async throws {

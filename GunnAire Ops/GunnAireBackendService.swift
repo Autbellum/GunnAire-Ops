@@ -1,7 +1,7 @@
 import Foundation
 import SwiftData
 
-struct BackendAppUserRecord: Codable, Identifiable {
+nonisolated struct BackendAppUserRecord: Codable, Identifiable, Sendable {
     let email: String
     let role: String
     let isActive: Bool
@@ -23,7 +23,7 @@ struct BackendApplicationSessionResponse: Codable {
 
 typealias BackendAppleSessionResponse = BackendApplicationSessionResponse
 
-struct BackendDocumentUploadResponse: Codable {
+nonisolated struct BackendDocumentUploadResponse: Codable, Sendable {
     let id: String
     let filename: String
     let storedPath: String?
@@ -248,7 +248,7 @@ enum FieldCollectionInvoiceRouteResolver {
     }
 }
 
-struct BackendCustomerCommunicationRecord: Codable, Identifiable {
+nonisolated struct BackendCustomerCommunicationRecord: Codable, Identifiable, Sendable {
     let id: String
     let customerName: String
     let customerEmail: String?
@@ -575,7 +575,7 @@ enum GunnAireBackendService {
         let acceptance: SupplierOrderAcceptanceWire
     }
 
-    private struct ServerErrorResponse: Codable {
+    nonisolated private struct ServerErrorResponse: Codable, Sendable {
         let error: String
     }
 
@@ -619,7 +619,7 @@ enum GunnAireBackendService {
         let isActive: Bool
     }
 
-    private struct DocumentUploadPayload: Codable {
+    nonisolated private struct DocumentUploadPayload: Codable, Sendable {
         let filename: String
         let contentType: String
         let kind: String
@@ -1849,10 +1849,19 @@ enum GunnAireBackendService {
     /// Sends an already-built payload. Callers on a background model actor
     /// build the payload on their own context, then await this.
     @discardableResult
-    static func uploadCustomerCommunication(payload: CustomerCommunicationPayload) async throws -> BackendCustomerCommunicationRecord {
-        let data = try JSONEncoder().encode(payload)
-        let responseData = try await send(path: "/api/communications", method: "POST", body: data)
-        return try JSONDecoder().decode(BackendCustomerCommunicationRecord.self, from: responseData)
+    static func uploadCustomerCommunication(payload: CustomerCommunicationPayload,
+                                            originatingOperation: WorkspaceProviderOperation? = nil) async throws -> BackendCustomerCommunicationRecord {
+        let operation = try retainingUploadOperation(originatingOperation)
+        let responseData = try await operation.prepareAndPerformExternalMutation(prepare: {
+            try await Task.detached(priority: .utility) { try JSONEncoder().encode(payload) }.value
+        }, perform: { data in
+            try await send(path: "/api/communications", method: "POST", body: data)
+        })
+        let decoded = try await Task.detached(priority: .utility) {
+            try JSONDecoder().decode(BackendCustomerCommunicationRecord.self, from: responseData)
+        }.value
+        try operation.check()
+        return decoded
     }
 
     /// Reads the model synchronously, so it must be called on the context
@@ -1987,24 +1996,36 @@ enum GunnAireBackendService {
         maintenanceContractID: UUID? = nil,
         customerEquipmentID: UUID? = nil,
         equipmentName: String? = nil,
-        customerName: String?
+        customerName: String?,
+        originatingOperation: WorkspaceProviderOperation? = nil
     ) async throws -> BackendDocumentUploadResponse {
-        let payload = DocumentUploadPayload(
-            filename: filename,
-            contentType: contentType,
-            kind: kind,
-            serviceCallID: serviceCallID?.uuidString,
-            invoiceID: invoiceID?.uuidString,
-            estimateID: estimateID?.uuidString,
-            maintenanceContractID: maintenanceContractID?.uuidString,
-            customerEquipmentID: customerEquipmentID?.uuidString,
-            equipmentName: equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank,
-            customerName: customerName,
-            dataBase64: data.base64EncodedString()
-        )
-        let body = try JSONEncoder().encode(payload)
-        let responseData = try await send(path: "/api/documents", method: "POST", body: body)
-        return try JSONDecoder().decode(BackendDocumentUploadResponse.self, from: responseData)
+        let operation = try retainingUploadOperation(originatingOperation)
+        let responseData = try await operation.prepareAndPerformExternalMutation(prepare: {
+            try await Task.detached(priority: .utility) {
+                let trimmedEquipmentName = equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let payload = DocumentUploadPayload(
+                    filename: filename,
+                    contentType: contentType,
+                    kind: kind,
+                    serviceCallID: serviceCallID?.uuidString,
+                    invoiceID: invoiceID?.uuidString,
+                    estimateID: estimateID?.uuidString,
+                    maintenanceContractID: maintenanceContractID?.uuidString,
+                    customerEquipmentID: customerEquipmentID?.uuidString,
+                    equipmentName: trimmedEquipmentName?.isEmpty == false ? trimmedEquipmentName : nil,
+                    customerName: customerName,
+                    dataBase64: data.base64EncodedString()
+                )
+                return try JSONEncoder().encode(payload)
+            }.value
+        }, perform: { body in
+            try await send(path: "/api/documents", method: "POST", body: body)
+        })
+        let decoded = try await Task.detached(priority: .utility) {
+            try JSONDecoder().decode(BackendDocumentUploadResponse.self, from: responseData)
+        }.value
+        try operation.check()
+        return decoded
     }
 
     @discardableResult
@@ -2070,8 +2091,10 @@ enum GunnAireBackendService {
     }
 
     @discardableResult
-    static func retrySharedCompanyDocumentUpload(request: SharedCompanyDocumentUploadRequest) async throws -> BackendDocumentUploadResponse {
-        try await uploadDocument(
+    static func retrySharedCompanyDocumentUpload(request: SharedCompanyDocumentUploadRequest,
+                                                 originatingOperation: WorkspaceProviderOperation? = nil) async throws -> BackendDocumentUploadResponse {
+        let operation = try retainingUploadOperation(originatingOperation)
+        return try await uploadDocument(
             data: request.data,
             filename: request.filename,
             contentType: request.contentType,
@@ -2081,8 +2104,19 @@ enum GunnAireBackendService {
             estimateID: request.estimateID,
             maintenanceContractID: request.maintenanceContractID,
             customerEquipmentID: request.customerEquipmentID,
-            customerName: request.customerName
+            customerName: request.customerName,
+            originatingOperation: operation
         )
+    }
+
+    /// Validate a background caller's original authority before capturing any replacement login.
+    static func retainingUploadOperation(
+        _ originatingOperation: WorkspaceProviderOperation?,
+        capture: @MainActor () throws -> WorkspaceProviderOperation = { try WorkspaceProviderOperation.capture { true } }
+    ) throws -> WorkspaceProviderOperation {
+        let operation = try originatingOperation ?? capture()
+        try operation.check()
+        return operation
     }
 
     static func googleConnectionRequest(path: String, method: String, body: Data?) async throws -> Data {
@@ -2255,9 +2289,12 @@ enum GunnAireBackendService {
         }
         Task { @MainActor in ServerClockSync.shared.record(from: httpResponse) }
         guard (200..<300).contains(httpResponse.statusCode) else {
-            let message = (try? JSONDecoder().decode(ServerErrorResponse.self, from: data).error)
-                ?? String(data: data, encoding: .utf8)
-                ?? HTTPURLResponse.localizedString(forStatusCode: httpResponse.statusCode)
+            let statusCode = httpResponse.statusCode
+            let message = await Task.detached(priority: .utility) {
+                (try? JSONDecoder().decode(ServerErrorResponse.self, from: data).error)
+                    ?? String(data: data, encoding: .utf8)
+                    ?? HTTPURLResponse.localizedString(forStatusCode: statusCode)
+            }.value
             throw GunnAireBackendError.server(statusCode: httpResponse.statusCode, message: message)
         }
         return data

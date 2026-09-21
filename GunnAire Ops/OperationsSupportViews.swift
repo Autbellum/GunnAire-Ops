@@ -3,12 +3,11 @@ import SwiftData
 import UniformTypeIdentifiers
 import UIKit
 
-@MainActor
-enum CustomerDataMaintenance {
+nonisolated enum CustomerDataMaintenance {
     nonisolated static let unassignedCalendarCustomerName = "Unassigned Calendar Event"
     nonisolated static let unassignedCalendarCustomerMarker = "local-calendar-unassigned"
 
-    struct DeletionSummary {
+    struct DeletionSummary: Sendable {
         var customers = 0
         var serviceCalls = 0
         var estimates = 0
@@ -50,7 +49,7 @@ enum CustomerDataMaintenance {
 
     /// Pure checks over one customer's fields. Nonisolated so the startup
     /// maintenance actor can decide off the main thread whether a cleanup
-    /// pass is needed at all; the cleanup itself stays on the main actor.
+    /// pass is needed at all.
     nonisolated static func isGenericCalendarCustomer(_ customer: Customer) -> Bool {
         let name = customer.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let hasQuickBooksLink = customer.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
@@ -63,24 +62,25 @@ enum CustomerDataMaintenance {
                 .caseInsensitiveCompare(unassignedCalendarCustomerName) == .orderedSame
     }
 
-    static func cleanupCalendarNamedCustomers(modelContext: ModelContext) -> DeletionSummary {
-        let customers = (try? modelContext.fetch(FetchDescriptor<Customer>())) ?? []
+    static func stageCalendarNamedCustomers(modelContext: ModelContext) throws -> CustomerCalendarCleanupPlan {
+        let customers = try modelContext.fetch(FetchDescriptor<Customer>())
         let genericCustomers = customers.filter { isGenericCalendarCustomer($0) && !isSystemCalendarCustomer($0) }
-        guard !genericCustomers.isEmpty else { return DeletionSummary() }
+        guard !genericCustomers.isEmpty else { return .init(candidates: [], summary: .init()) }
+        let candidates = genericCustomers.map(CustomerCalendarCleanupPlan.Candidate.init)
 
-        let serviceCalls = (try? modelContext.fetch(FetchDescriptor<ServiceCall>())) ?? []
-        let estimates = (try? modelContext.fetch(FetchDescriptor<Estimate>())) ?? []
-        let invoices = (try? modelContext.fetch(FetchDescriptor<Invoice>())) ?? []
-        let payments = (try? modelContext.fetch(FetchDescriptor<Payment>())) ?? []
-        let contracts = (try? modelContext.fetch(FetchDescriptor<RecurringMaintenanceContract>())) ?? []
-        let timeEntries = (try? modelContext.fetch(FetchDescriptor<TimeEntry>())) ?? []
-        let documentAttachments = (try? modelContext.fetch(FetchDescriptor<ServiceDocumentAttachment>())) ?? []
-        let equipmentProfiles = (try? modelContext.fetch(FetchDescriptor<CustomerEquipment>())) ?? []
-        let serviceLocations = (try? modelContext.fetch(FetchDescriptor<CustomerServiceLocation>())) ?? []
-        let customerCommunications = (try? modelContext.fetch(FetchDescriptor<CustomerCommunication>())) ?? []
-        let operationalAlerts = (try? modelContext.fetch(FetchDescriptor<CustomerOperationalAlert>())) ?? []
-        let businessTasks = (try? modelContext.fetch(FetchDescriptor<BusinessTask>())) ?? []
-        let businessTaskEvents = (try? modelContext.fetch(FetchDescriptor<BusinessTaskEvent>())) ?? []
+        let serviceCalls = try modelContext.fetch(FetchDescriptor<ServiceCall>())
+        let estimates = try modelContext.fetch(FetchDescriptor<Estimate>())
+        let invoices = try modelContext.fetch(FetchDescriptor<Invoice>())
+        let payments = try modelContext.fetch(FetchDescriptor<Payment>())
+        let contracts = try modelContext.fetch(FetchDescriptor<RecurringMaintenanceContract>())
+        let timeEntries = try modelContext.fetch(FetchDescriptor<TimeEntry>())
+        let documentAttachments = try modelContext.fetch(FetchDescriptor<ServiceDocumentAttachment>())
+        let equipmentProfiles = try modelContext.fetch(FetchDescriptor<CustomerEquipment>())
+        let serviceLocations = try modelContext.fetch(FetchDescriptor<CustomerServiceLocation>())
+        let customerCommunications = try modelContext.fetch(FetchDescriptor<CustomerCommunication>())
+        let operationalAlerts = try modelContext.fetch(FetchDescriptor<CustomerOperationalAlert>())
+        let businessTasks = try modelContext.fetch(FetchDescriptor<BusinessTask>())
+        let businessTaskEvents = try modelContext.fetch(FetchDescriptor<BusinessTaskEvent>())
 
         var summary = DeletionSummary()
         for customer in genericCustomers {
@@ -102,8 +102,7 @@ enum CustomerDataMaintenance {
                 businessTaskEvents: businessTaskEvents
             ))
         }
-        try? modelContext.save()
-        return summary
+        return .init(candidates: candidates, summary: summary)
     }
 
     static func deleteCustomer(
@@ -193,7 +192,7 @@ enum CustomerDataMaintenance {
 }
 
 private extension CustomerDataMaintenance.DeletionSummary {
-    mutating func merge(_ other: CustomerDataMaintenance.DeletionSummary) {
+    nonisolated mutating func merge(_ other: CustomerDataMaintenance.DeletionSummary) {
         customers += other.customers
         serviceCalls += other.serviceCalls
         estimates += other.estimates
@@ -243,6 +242,7 @@ struct CustomersView: View {
     @State private var customerSearchText = ""
     @State private var customerSyncMessage: String?
     @State private var isSyncingCustomers = false
+    @State private var isCleaningCalendarCustomers = false
 
     private var currentEmail: String? {
         AppIdentity.currentEmail
@@ -463,8 +463,9 @@ struct CustomersView: View {
                         Button {
                             cleanupCalendarCreatedCustomers()
                         } label: {
-                            Label("Clean Calendar Imports", systemImage: "wand.and.stars")
+                            Label(isCleaningCalendarCustomers ? "Cleaning Calendar Imports" : "Clean Calendar Imports", systemImage: "wand.and.stars")
                         }
+                        .disabled(isCleaningCalendarCustomers)
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {
@@ -620,12 +621,37 @@ struct CustomersView: View {
     }
 
     private func cleanupCalendarCreatedCustomers() {
+        guard !isCleaningCalendarCustomers else { return }
         guard canDeleteCustomerRecords else {
             customerSyncMessage = "Only an administrator can remove imported customer records."
             return
         }
-        let summary = CustomerDataMaintenance.cleanupCalendarNamedCustomers(modelContext: modelContext)
-        customerSyncMessage = summary.customerScreenMessage
+        isCleaningCalendarCustomers = true
+        customerSyncMessage = "Cleaning calendar imports..."
+        let container = modelContext.container
+        let generation = CompanyWorkspaceAccessController.shared.generation
+        Task { @MainActor in
+            guard !Task.isCancelled,
+                  CompanyWorkspaceAccessController.shared.generation == generation,
+                  canDeleteCustomerRecords else {
+                isCleaningCalendarCustomers = false
+                customerSyncMessage = "Calendar cleanup stopped because administrator access changed."
+                return
+            }
+            defer { isCleaningCalendarCustomers = false }
+            do {
+                let summary = try await ContentStartupColdMaintenance(modelContainer: container)
+                    .cleanupCalendarNamedCustomers {
+                        guard canDeleteCustomerRecords else { throw CustomerCalendarCleanupError.accessChanged }
+                        return try CompanyWorkspaceAccessController.shared.customerCleanupPermit(
+                            generation: generation, container: container)
+                    }
+                guard CompanyWorkspaceAccessController.shared.generation == generation else { return }
+                customerSyncMessage = summary.customerScreenMessage
+            } catch {
+                customerSyncMessage = error.localizedDescription
+            }
+        }
     }
 
     private func syncCustomersToQuickBooks() {

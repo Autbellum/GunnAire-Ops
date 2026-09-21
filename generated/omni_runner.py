@@ -89,7 +89,7 @@ def main():
             sys.exit(1)
 
     if success:
-        log_status("🎉 SYSTEM COMPILED CLEANLY WITH ZERO CRITICAL THROTTLING ERROR MARGINS!", "success")
+        log_status("Simulator app compiled with zero compiler warnings. Runtime behavior requires separate tests and telemetry.", "success")
         sys.exit(0)
     log_status("🚨 PIPELINE CRASHED. Refactoring protocol required.", "error")
     sys.exit(1)

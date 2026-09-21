@@ -11,7 +11,7 @@ import os
 enum GunnAireCloudKit {
     nonisolated static let containerIdentifier = "iCloud.com.gunnaire.businesssuite"
 
-    enum AccountReadiness: Equatable, Sendable {
+    nonisolated enum AccountReadiness: Equatable, Sendable {
         case available
         case unavailable
         case restricted
@@ -48,16 +48,17 @@ enum GunnAireCloudKit {
         }
     }
 
-    static func accountReadiness() async -> AccountReadiness {
-        // An unsigned XCTest host has no CloudKit entitlement. Constructing a
-        // named CKContainer in that process traps before Swift can catch an
-        // error, so mirror the test-store policy and report an indeterminate
-        // state without touching CloudKit.
+    nonisolated static func accountReadiness() async -> AccountReadiness {
+        // Test-store processes do not access CloudKit. A production workspace
+        // is admitted only after its authorization and configuration checks.
         if usesTestDatabase {
             return .couldNotDetermine
         }
         do {
-            switch try await CKContainer(identifier: containerIdentifier).accountStatus() {
+            let status = try await withCloudKitTimeout(seconds: 20) {
+                try await CKContainer(identifier: containerIdentifier).accountStatus()
+            }
+            switch status {
             case .available:
                 return .available
             case .noAccount:
@@ -74,11 +75,14 @@ enum GunnAireCloudKit {
         }
     }
 
-    static var usesTestDatabase: Bool {
+    nonisolated static var usesTestDatabase: Bool {
         #if DEBUG
         // UI tests run in an unsigned simulator process without the production
         // CloudKit entitlement. This switch is compiled out of release builds.
         let processInfo = ProcessInfo.processInfo
+        if processInfo.arguments.contains("-uiTestCloudKitEntitlementProbe") {
+            return false
+        }
         if processInfo.arguments.contains("-disableCloudKitForTesting") ||
             processInfo.environment["XCTestConfigurationFilePath"] != nil {
             return true
@@ -140,7 +144,7 @@ enum GunnAireCloudKit {
     #endif
 }
 
-enum CloudKitMirroringOperation: String, CaseIterable, Codable, Hashable, Sendable {
+nonisolated enum CloudKitMirroringOperation: String, CaseIterable, Codable, Hashable, Sendable {
     case setup
     case importRecords
     case exportRecords
@@ -220,7 +224,7 @@ struct CloudKitMirroringEventSnapshot: Equatable, Sendable {
     }
 }
 
-struct CloudKitMirroringFailure: Codable, Equatable, Sendable {
+nonisolated struct CloudKitMirroringFailure: Codable, Equatable, Sendable {
     let operation: CloudKitMirroringOperation
     let occurredAt: Date
 
@@ -258,7 +262,7 @@ struct CloudKitMirroringFailure: Codable, Equatable, Sendable {
     }
 }
 
-struct CloudKitMirroringState: Codable, Equatable, Sendable {
+nonisolated struct CloudKitMirroringState: Codable, Equatable, Sendable {
     private(set) var runningOperations: Set<CloudKitMirroringOperation> = []
     private(set) var failures: [CloudKitMirroringOperation: CloudKitMirroringFailure] = [:]
     private(set) var latestSuccessAt: [CloudKitMirroringOperation: Date] = [:]
@@ -346,6 +350,70 @@ final class GunnAireCloudKitAttentionMonitor: ObservableObject {
     }
 }
 
+/// Orders durable mirroring-health snapshots. This project's default actor
+/// isolation can place the coordinator on MainActor, so all UserDefaults and
+/// JSON work itself runs in explicitly detached utility tasks.
+actor CloudKitMirroringStateStore {
+    private let defaults: UserDefaults
+    private let key: String
+    private var latestScheduledVersion = 0
+    private var writeTail: Task<Bool, Never>?
+    private(set) var lastLoadRanOnMainThread: Bool?
+    private(set) var lastSaveRanOnMainThread: Bool?
+
+    init(defaults: UserDefaults, key: String) {
+        self.defaults = defaults
+        self.key = key
+    }
+
+    nonisolated private static func read(
+        defaults: UserDefaults,
+        key: String
+    ) -> (CloudKitMirroringState?, Bool) {
+        let ranOnMainThread = Thread.isMainThread
+        guard let data = defaults.data(forKey: key) else { return (nil, ranOnMainThread) }
+        let state = try? JSONDecoder().decode(CloudKitMirroringState.self, from: data)
+        return (state, ranOnMainThread || Thread.isMainThread)
+    }
+
+    nonisolated private static func write(
+        _ snapshot: CloudKitMirroringState,
+        defaults: UserDefaults,
+        key: String
+    ) -> Bool {
+        let ranOnMainThread = Thread.isMainThread
+        guard let data = try? JSONEncoder().encode(snapshot) else { return ranOnMainThread }
+        defaults.set(data, forKey: key)
+        return ranOnMainThread || Thread.isMainThread
+    }
+
+    func load() async -> CloudKitMirroringState? {
+        let defaults = defaults
+        let key = key
+        let priorWrite = writeTail
+        let result = await Task.detached(priority: .utility) { () -> (CloudKitMirroringState?, Bool) in
+            _ = await priorWrite?.value
+            return Self.read(defaults: defaults, key: key)
+        }.value
+        lastLoadRanOnMainThread = result.1
+        return result.0
+    }
+
+    func save(_ snapshot: CloudKitMirroringState, version: Int) async {
+        guard version > latestScheduledVersion else { return }
+        latestScheduledVersion = version
+        let defaults = defaults
+        let key = key
+        let priorWrite = writeTail
+        let write = Task.detached(priority: .utility) { () -> Bool in
+            _ = await priorWrite?.value
+            return Self.write(snapshot, defaults: defaults, key: key)
+        }
+        writeTail = write
+        lastSaveRanOnMainThread = await write.value
+    }
+}
+
 /// Observes the mirroring events emitted by the persistent CloudKit container.
 /// The reducer stores no customer data and keeps successful routine sync quiet.
 final class GunnAireCloudKitEventMonitor: ObservableObject {
@@ -357,41 +425,35 @@ final class GunnAireCloudKitEventMonitor: ObservableObject {
     /// Published only when an event actually changes the reduced state; a
     /// repeated `.running` for an operation already running is dropped.
     @Published private(set) var state = CloudKitMirroringState()
+    @Published private(set) var hasRestoredPersistedState = false
     /// Published only when the attention operation itself changes.
     let attention = GunnAireCloudKitAttentionMonitor()
 
     private let notificationCenter: NotificationCenter
-    private let userDefaults: UserDefaults
+    private let stateStore: CloudKitMirroringStateStore
     private let persistenceEnabled: Bool
     private var eventObserver: NSObjectProtocol?
-    private var retainedContainer: CKContainer?
+    private var restoreTask: Task<CloudKitMirroringState?, Never>?
+    private var liveEventsBeforeRestore: [CloudKitMirroringEventSnapshot] = []
+    private var liveEventsOverflowed = false
+    private var persistVersion = 0
+    private var pendingPersistence: Task<Void, Never>?
 
-    private static let persistedStateKey = "GunnAireCloudKitMirroringStateV1"
+    nonisolated private static let persistedStateKey = "GunnAireCloudKitMirroringStateV1"
+    private static let maximumLiveEventsBeforeRestore = 128
 
     init(
         notificationCenter: NotificationCenter = .default,
         userDefaults: UserDefaults = .standard,
-        isEnabled: Bool = !GunnAireCloudKit.usesTestDatabase,
-        retainsCloudKitContainer: Bool = true
+        isEnabled: Bool = !GunnAireCloudKit.usesTestDatabase
     ) {
         self.notificationCenter = notificationCenter
-        self.userDefaults = userDefaults
+        self.stateStore = CloudKitMirroringStateStore(defaults: userDefaults, key: Self.persistedStateKey)
         self.persistenceEnabled = isEnabled
+        self.hasRestoredPersistedState = !isEnabled
         attention.eventMonitor = self
         guard isEnabled else { return }
 
-        if let data = userDefaults.data(forKey: Self.persistedStateKey),
-           let restored = try? JSONDecoder().decode(CloudKitMirroringState.self, from: data) {
-            state = restored.durableSnapshot
-            attention.update(state.attentionFailure?.operation)
-        }
-
-        // Retaining the named container ensures CloudKit posts account-change
-        // notifications while SwiftData owns the private-database mirroring.
-        // Unit tests observe the reducer without an entitled container.
-        if retainsCloudKitContainer {
-            retainedContainer = CKContainer(identifier: GunnAireCloudKit.containerIdentifier)
-        }
         eventObserver = notificationCenter.addObserver(
             forName: NSPersistentCloudKitContainer.eventChangedNotification,
             object: nil,
@@ -411,6 +473,41 @@ final class GunnAireCloudKitEventMonitor: ObservableObject {
         }
     }
 
+    /// Load and decode the durable health snapshot off the UI actor. Events
+    /// received while it loads are replayed over that snapshot in arrival
+    /// order, so a live success cannot be replaced by an older saved failure.
+    func restorePersistedState() async {
+        guard persistenceEnabled, !hasRestoredPersistedState else { return }
+        let task: Task<CloudKitMirroringState?, Never>
+        if let restoreTask {
+            task = restoreTask
+        } else {
+            let store = stateStore
+            task = Task { await store.load() }
+            restoreTask = task
+        }
+        let saved = await task.value?.durableSnapshot
+        guard !hasRestoredPersistedState else { return }
+        let liveEvents = liveEventsBeforeRestore
+        var next = saved ?? CloudKitMirroringState()
+        if liveEventsOverflowed {
+            // The bounded replay buffer could not retain every transition;
+            // keep the current live state rather than publishing stale data.
+            next = state
+        } else {
+            for event in liveEvents { next.apply(event) }
+        }
+        if next != state {
+            state = next
+            attention.update(next.attentionFailure?.operation)
+            attention.updateImporting(next.runningOperations.contains(.importRecords))
+        }
+        hasRestoredPersistedState = true
+        restoreTask = nil
+        liveEventsBeforeRestore.removeAll()
+        if !liveEvents.isEmpty { persist(next.durableSnapshot) }
+    }
+
     deinit {
         if let eventObserver {
             notificationCenter.removeObserver(eventObserver)
@@ -425,10 +522,30 @@ final class GunnAireCloudKitEventMonitor: ObservableObject {
         state = next
         attention.update(next.attentionFailure?.operation)
         attention.updateImporting(next.runningOperations.contains(.importRecords))
+        if !hasRestoredPersistedState {
+            if liveEventsBeforeRestore.count < Self.maximumLiveEventsBeforeRestore {
+                liveEventsBeforeRestore.append(event)
+            } else {
+                liveEventsOverflowed = true
+            }
+            return
+        }
         // Running-only transitions never change what must survive relaunch.
-        guard durableChanged, persistenceEnabled,
-              let data = try? JSONEncoder().encode(next.durableSnapshot) else { return }
-        userDefaults.set(data, forKey: Self.persistedStateKey)
+        guard durableChanged, persistenceEnabled else { return }
+        persist(next.durableSnapshot)
+    }
+
+    private func persist(_ snapshot: CloudKitMirroringState) {
+        persistVersion += 1
+        let version = persistVersion
+        let store = stateStore
+        pendingPersistence = Task.detached(priority: .utility) {
+            await store.save(snapshot, version: version)
+        }
+    }
+
+    func waitForPendingPersistence() async {
+        await pendingPersistence?.value
     }
 }
 

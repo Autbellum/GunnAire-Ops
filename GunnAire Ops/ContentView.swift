@@ -533,13 +533,12 @@ struct ContentView: View {
             }
         }
         .task {
-            // Startup work that used to run in `onAppear`, on the main context,
-            // before the first screen could respond. The credential reads stay
-            // on the main actor; the store maintenance runs on a background
-            // context (`ContentStartupMaintenance`).
+            // Restore credentials and maintain the store without blocking the
+            // first interactive screen while secure storage or SQLite responds.
             NetworkConnectivityMonitor.shared.start()
-            QuickBooksDataAPI.shared.loadTokens()
+            await QuickBooksDataAPI.shared.resumeStoredSessionForCurrentBusiness()
             isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+            await GoogleAuthManager.shared.restoreStoredSession()
             isGoogleAuthenticated = GoogleAuthManager.shared.isAuthenticated
             refreshGoogleAccountIdentityIfNeeded()
             await runStartupDataMaintenance()
@@ -555,7 +554,13 @@ struct ContentView: View {
                 authenticateQuickBooks: authenticateQuickBooks,
                 authenticateGoogle: authenticateGoogle,
                 disconnectQuickBooks: {
-                    QuickBooksAuthAPI.shared.signOut()
+                    QuickBooksAuthAPI.shared.disconnect { succeeded in
+                        isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+                        if !succeeded {
+                            presentAuthAlert(title: "QuickBooks Disconnect Failed",
+                                message: "The disconnect was not confirmed. Check QuickBooks connection status before reconnecting.")
+                        }
+                    }
                 },
                 disconnectGoogle: {
                     GoogleAuthManager.shared.signOut()
@@ -610,8 +615,10 @@ struct ContentView: View {
             }
         )
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-            QuickBooksAuthAPI.shared.reloadStoredSession()
-            isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+            Task { @MainActor in
+                await QuickBooksAuthAPI.shared.reloadStoredSession()
+                isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+            }
             retryPendingSharedCompanyDocumentUploadsIfNeeded()
             retryPendingCustomerCommunicationUploadsIfNeeded()
             applyPendingAppRouteIfNeeded()
@@ -623,8 +630,10 @@ struct ContentView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .quickBooksAuthenticationDidChange)) { _ in
-            QuickBooksAuthAPI.shared.reloadStoredSession()
-            isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+            Task { @MainActor in
+                await QuickBooksAuthAPI.shared.reloadStoredSession()
+                isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .CKAccountChanged)) { _ in
             Task {
@@ -786,16 +795,27 @@ struct ContentView: View {
     }
 
     /// The store maintenance that used to run on the main context at first
-    /// appearance. The fetches and the user-duplicate collapse run on
-    /// `ContentStartupMaintenance`; the customer deletion pass, which walks
-    /// every related table, stays on the main context and runs only when the
-    /// actor has found something to delete.
+    /// appearance. The full-table fetches, user-duplicate collapse, and
+    /// relationship cleanup run on a private context on a background queue.
     private func runStartupDataMaintenance() async {
-        let maintenance = ContentStartupMaintenance(modelContainer: modelContext.container)
+        let container = modelContext.container
+        let maintenance = ContentStartupColdMaintenance(modelContainer: container)
+        let generation = CompanyWorkspaceAccessController.shared.generation
         await maintenance.collapseCloudKitUserDuplicates()
-        guard AppAccess.canDeleteCustomerRecords(email: currentUserEmail, users: users),
+        guard !Task.isCancelled,
+              CompanyWorkspaceAccessController.shared.generation == generation,
+              AppAccess.canDeleteCustomerRecords(email: currentUserEmail, users: users),
               await maintenance.hasCalendarCreatedCustomersToClean() else { return }
-        _ = CustomerDataMaintenance.cleanupCalendarNamedCustomers(modelContext: modelContext)
+        guard !Task.isCancelled,
+              CompanyWorkspaceAccessController.shared.generation == generation,
+              AppAccess.canDeleteCustomerRecords(email: currentUserEmail, users: users) else { return }
+        _ = try? await maintenance.cleanupCalendarNamedCustomers {
+            guard AppAccess.canDeleteCustomerRecords(email: currentUserEmail, users: users) else {
+                throw CustomerCalendarCleanupError.accessChanged
+            }
+            return try CompanyWorkspaceAccessController.shared.customerCleanupPermit(
+                generation: generation, container: container)
+        }
     }
 
     private func retryPendingSharedCompanyDocumentUploadsIfNeeded() {
@@ -806,7 +826,8 @@ struct ContentView: View {
         isRetryingSharedCompanyDocumentUploads = true
         let container = modelContext.container
         Task { @MainActor in
-            await ContentStartupMaintenance(modelContainer: container).retryPendingSharedCompanyDocumentUploads()
+            let maintenance = ContentStartupUploadMaintenance(modelContainer: container)
+            await maintenance.retryPendingSharedCompanyDocumentUploads()
             isRetryingSharedCompanyDocumentUploads = false
         }
     }
@@ -817,7 +838,8 @@ struct ContentView: View {
         isRetryingCustomerCommunicationUploads = true
         let container = modelContext.container
         Task { @MainActor in
-            await ContentStartupMaintenance(modelContainer: container).retryPendingCustomerCommunicationUploads()
+            let maintenance = ContentStartupUploadMaintenance(modelContainer: container)
+            await maintenance.retryPendingCustomerCommunicationUploads()
             isRetryingCustomerCommunicationUploads = false
         }
     }
@@ -5993,8 +6015,10 @@ extension ContentView {
                                 failures.append("\(label): \(error.localizedDescription)")
                                 if let qbError = error as? QuickBooksDataAPI.QBError,
                                    qbError.requiresReconnect {
-                                    QuickBooksAuthAPI.shared.reloadStoredSession()
-                                    isQuickBooksAuthenticated = false
+                                    Task { @MainActor in
+                                        await QuickBooksAuthAPI.shared.reloadStoredSession()
+                                        isQuickBooksAuthenticated = false
+                                    }
                                 }
                                 continuation.resume(returning: [])
                             }

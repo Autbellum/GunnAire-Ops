@@ -62,12 +62,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         return calendar.date(byAdding: .day, value: -offsetFromMonday, to: day) ?? day
     }
 
-    /// The default is generous because CI's runner lays SwiftUI toolbar and
-    /// keyboard-accessory controls out well after they appear: the evidence
-    /// from the failing run shows `DoneEditingCatalogItem` still reporting
-    /// `{{inf, inf}, {0, 0}}` three seconds in. A wait returns as soon as the
-    /// control is usable, so only a genuinely missing control costs the time.
-    private func waitForHittable(_ element: XCUIElement, timeout: TimeInterval = 10) -> Bool {
+    private func waitForHittable(_ element: XCUIElement, timeout: TimeInterval = 3) -> Bool {
         let hittable = XCTNSPredicateExpectation(
             // Keyboard accessory windows can briefly report an infinite,
             // zero-sized frame while appearing. Querying isHittable then makes
@@ -78,30 +73,7 @@ final class GunnAire_OpsUITests: XCTestCase {
                 guard frame.origin.x.isFinite, frame.origin.y.isFinite,
                       frame.width.isFinite, frame.height.isFinite,
                       frame.width > 0, frame.height > 0 else { return false }
-                // Right after a rotation (and at the largest accessibility text
-                // sizes) a control can hold a finite frame that is still outside
-                // the window. Asking isHittable then throws "Activation point
-                // invalid" and ends the test instead of waiting. Keep polling
-                // until the centre is inside the window; a control that never
-                // returns still fails this bounded wait.
-                let app = XCUIApplication()
-                guard app.frame.contains(CGPoint(x: frame.midX, y: frame.midY)) else { return false }
-                // While the keyboard animates in, a control that will sit above
-                // it can still overlap its frame; XCTest then finds no hit point.
-                let keyboard = app.keyboards.firstMatch
-                if keyboard.exists, keyboard.frame.intersects(frame) { return false }
-                // Even then XCTest can record "Failed to determine hittability"
-                // for a control whose layout has not settled. During this
-                // bounded wait that is "not yet", not a failure: the assertion
-                // on the returned value still fails if it never becomes hittable.
-                let options = XCTExpectedFailure.Options()
-                options.isStrict = false
-                options.issueMatcher = { $0.compactDescription.contains("Failed to determine hittability") }
-                var hittable = false
-                XCTExpectFailure("Hittability can be undetermined while the layout settles.", options: options) {
-                    hittable = element.isHittable
-                }
-                return hittable
+                return element.isHittable
             },
             object: element
         )
@@ -266,6 +238,21 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(appleSignIn.exists)
         XCTAssertTrue(appleSignIn.isEnabled)
         XCTAssertFalse(app.staticTexts["Sign in with Apple requires the secure GunnAire backend configuration."].exists)
+    }
+
+    @MainActor
+    func testCloudKitStartupBranchWithoutSignInShowsSecureGate() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-hasAuthenticatedUser", "NO",
+            "-uiTestCloudKitEntitlementProbe"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["GunnAire Ops"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Sign in with your approved GunnAire business account."].exists)
+        XCTAssertTrue(app.buttons["Sign In With Google"].exists)
     }
 
     @MainActor
@@ -8362,13 +8349,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         func requireContextualControl(_ evidenceName: String) {
             if !waitForHittable(done) { retainNavigationFailure(app, name: evidenceName) }
             XCTAssertTrue(waitForHittable(done))
-            // Right after a rotation the accessibility tree can briefly hold the
-            // outgoing and incoming copies of the control. Wait for it to settle;
-            // a duplicate that persists still fails here.
-            let doneControls = app.buttons.matching(identifier: "DoneEditingCatalogItem")
-            let single = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 1"), object: doneControls)
-            XCTAssertEqual(XCTWaiter.wait(for: [single], timeout: 3), .completed,
-                           "Exactly one Done Editing control must remain once the layout settles (found \(doneControls.count)).")
+            XCTAssertEqual(app.buttons.matching(identifier: "DoneEditingCatalogItem").count, 1)
             XCTAssertEqual(done.label, "Done Editing Catalog Item")
             // The sheet's navigation bar establishes its horizontal bounds.
             // A global keyboard accessory outside the sheet must not pass.

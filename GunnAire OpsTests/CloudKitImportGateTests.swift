@@ -15,8 +15,7 @@ struct CloudKitImportGateTests {
         let monitor = GunnAireCloudKitEventMonitor(
             notificationCenter: NotificationCenter(),
             userDefaults: defaults,
-            isEnabled: true,
-            retainsCloudKitContainer: false
+            isEnabled: true
         )
         return (monitor, defaults, suite)
     }

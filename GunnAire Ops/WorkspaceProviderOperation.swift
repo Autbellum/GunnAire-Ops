@@ -98,6 +98,18 @@ final class WorkspaceProviderOperation {
         }
     }
 
+    /// Payload encoding may suspend. Keep the initiating identity across that
+    /// work so a replacement login cannot send the previous user's records.
+    func prepareAndPerformExternalMutation<Prepared, T>(
+        prepare: () async throws -> Prepared,
+        perform: (Prepared) async throws -> T
+    ) async throws -> T {
+        try check()
+        let prepared = try await prepare()
+        try check()
+        return try await performExternalMutation { try await perform(prepared) }
+    }
+
     func data(
         for request: URLRequest,
         transport: Transport = { try await URLSession.shared.data(for: $0) }

@@ -5,7 +5,7 @@ import AuthenticationServices
 import Combine
 import CryptoKit
 
-struct GoogleOAuthTokens: Codable {
+nonisolated struct GoogleOAuthTokens: Codable, Sendable {
     let accessToken: String
     let refreshToken: String?
     let idToken: String?
@@ -36,7 +36,7 @@ struct GoogleOAuthTokens: Codable {
     }
 }
 
-struct GunnAireGoogleApplicationSession: Codable, Equatable {
+nonisolated struct GunnAireGoogleApplicationSession: Codable, Equatable, Sendable {
     let token: String
     let expiresAt: String
     let email: String
@@ -364,10 +364,16 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     @Published private(set) var idToken: String?
     @Published private(set) var tokenExpiry: Date?
     @Published private(set) var grantedScopeSignature: String?
-    @Published private(set) var signedInEmail: String?
-    @Published private(set) var applicationSessionToken: String?
+    @Published private(set) var signedInEmail: String? {
+        willSet { if newValue != signedInEmail { invalidateWorkspaceMutations() } }
+    }
+    @Published private(set) var applicationSessionToken: String? {
+        willSet { invalidateWorkspaceMutations() }
+    }
+    private(set) var businessApplicationSessionSnapshot: GunnAireGoogleApplicationSession?
+    private(set) var workspaceSessionProof: CompanyWorkspaceSession?
 
-    private static let signedInEmailStorageKey = "SignedInGoogleEmail"
+    nonisolated private static let signedInEmailStorageKey = "SignedInGoogleEmail"
 
     private var activeAuthSession: ASWebAuthenticationSession?
     private var activePresentationContext: ASWebAuthenticationPresentationContextProviding?
@@ -379,9 +385,13 @@ final class GoogleAuthManager: NSObject, ObservableObject {
             calendarSyncMessage = nil
         }
     }
+    private var restoredGeneration: UUID?
     private let requestTransport: WorkspaceProviderOperation.Transport
     private let persistsCredentials: Bool
     private let businessEmailProvider: () -> String?
+    private var invalidateWorkspaceMutations: () -> Void = {
+        CompanyWorkspaceAccessController.shared.invalidateMutationPermits()
+    }
 
     private let tokenStorageKey = "GoogleOAuthTokens"
     private let keychainAccount = "GoogleOAuthTokens"
@@ -392,19 +402,85 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         persistsCredentials = true
         businessEmailProvider = { AppIdentity.currentEmail }
         super.init()
-        loadTokens()
-        loadApplicationSession()
+    }
+
+    /// Reads and migrates saved credentials away from the UI actor. A sign-out
+    /// or new OAuth connection invalidates an in-flight restore.
+    func restoreStoredSession() async {
+        guard persistsCredentials else { return }
+        let generation = connectionGeneration
+        guard restoredGeneration != generation else { return }
+        let tokenAccount = keychainAccount
+        let sessionAccount = applicationSessionKeychainAccount
+        let legacyKey = tokenStorageKey
+        let backendOrigin = Config.Backend.normalizedBaseURL
+        let snapshot = await Task.detached(priority: .userInitiated) { () -> (
+            tokens: GoogleOAuthTokens?, tokenReadFailed: Bool,
+            restoredEmail: String?,
+            applicationSession: GunnAireGoogleApplicationSession?,
+            workspaceProof: CompanyWorkspaceSession?, sessionReadFailed: Bool
+        ) in
+            var tokens: GoogleOAuthTokens?
+            var tokenReadFailed = false
+            do {
+                if let saved = try KeychainStore.loadCodable(GoogleOAuthTokens.self, account: tokenAccount) {
+                    UserDefaults.standard.removeObject(forKey: legacyKey)
+                    tokens = saved
+                } else if let data = UserDefaults.standard.data(forKey: legacyKey),
+                          let legacy = try? JSONDecoder().decode(GoogleOAuthTokens.self, from: data) {
+                    if (try? KeychainStore.saveCodable(legacy, account: tokenAccount)) != nil {
+                        UserDefaults.standard.removeObject(forKey: legacyKey)
+                    }
+                    tokens = legacy
+                }
+            } catch {
+                tokenReadFailed = true
+            }
+            let restoredEmail = tokens.map { tokens in
+                UserDefaults.standard.string(forKey: Self.signedInEmailStorageKey)
+                    ?? Self.extractEmail(fromIDToken: tokens.idToken)
+            } ?? nil
+            do {
+                let session = try KeychainStore.loadCodable(
+                    GunnAireGoogleApplicationSession.self, account: sessionAccount
+                )
+                let validSession = session.flatMap {
+                    Self.isFutureApplicationSession($0.expiresAt) ? $0 : nil
+                }
+                let proof = validSession.flatMap {
+                    CompanyWorkspaceSession.validated(token: $0.token, email: $0.email,
+                                                      expiry: $0.expiresAt, backendOrigin: backendOrigin)
+                }
+                return (tokens, tokenReadFailed, restoredEmail, validSession, proof, false)
+            } catch {
+                return (tokens, tokenReadFailed, restoredEmail, nil, nil, true)
+            }
+        }.value
+        guard connectionGeneration == generation, restoredGeneration != generation else { return }
+        if !snapshot.tokenReadFailed, let tokens = snapshot.tokens {
+            applyTokens(tokens, restoredEmail: snapshot.restoredEmail)
+        }
+        if !snapshot.sessionReadFailed {
+            applicationSessionToken = snapshot.applicationSession?.token
+            businessApplicationSessionSnapshot = snapshot.applicationSession
+            workspaceSessionProof = snapshot.workspaceProof
+        }
+        if !snapshot.tokenReadFailed && !snapshot.sessionReadFailed {
+            restoredGeneration = connectionGeneration
+        }
     }
 
 #if DEBUG
     /// Isolated request-handler fixtures never load or modify real credentials.
     init(testTokens: GoogleOAuthTokens, email: String,
          businessEmail: @escaping () -> String?,
+         mutationInvalidation: @escaping () -> Void = {},
          transport: @escaping WorkspaceProviderOperation.Transport) {
         precondition(GunnAireCloudKit.usesTestDatabase)
         requestTransport = transport
         persistsCredentials = false
         businessEmailProvider = businessEmail
+        invalidateWorkspaceMutations = mutationInvalidation
         super.init()
         signedInEmail = email
         applyTokens(testTokens)
@@ -441,6 +517,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     }
 
     func signOut() {
+        invalidateWorkspaceMutations()
         connectionGeneration = UUID()
         activeAuthSession?.cancel()
         let tokenToRevoke = applicationSessionToken
@@ -496,6 +573,12 @@ final class GoogleAuthManager: NSObject, ObservableObject {
             email: responseEmail,
             googleUserIdentifier: profile.sub
         )
+        let backendOrigin = Config.Backend.normalizedBaseURL
+        let proof = await Task.detached(priority: .userInitiated) {
+            CompanyWorkspaceSession.validated(token: session.token, email: session.email,
+                                              expiry: session.expiresAt, backendOrigin: backendOrigin)
+        }.value
+        guard connectionGeneration == generation else { throw WorkspaceProviderAccessError.changed(mayHaveReachedProvider: false) }
         do {
             try KeychainStore.saveCodable(session, account: applicationSessionKeychainAccount)
         } catch {
@@ -503,6 +586,8 @@ final class GoogleAuthManager: NSObject, ObservableObject {
             throw GoogleAuthError.sessionStorageFailed
         }
         applicationSessionToken = session.token
+        businessApplicationSessionSnapshot = session
+        workspaceSessionProof = proof
         return response.user
     }
 
@@ -1633,51 +1718,22 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         }
     }
 
-    private func loadTokens() {
-        if let stored = try? KeychainStore.loadCodable(GoogleOAuthTokens.self, account: keychainAccount) {
-            // The Keychain has the tokens, so any copy an earlier version left
-            // in UserDefaults is redundant. This branch is the one most
-            // installs take at every launch, so it is where the purge has to
-            // live: the migration below never runs once the Keychain is
-            // populated.
-            UserDefaults.standard.removeObject(forKey: tokenStorageKey)
-            applyTokens(stored)
-            return
-        }
-
-        // Backward-compat migration from UserDefaults. Move the copy into the
-        // Keychain and only then remove it: if the Keychain write fails, the
-        // legacy copy stays readable rather than silently signing the user out.
-        guard let data = UserDefaults.standard.data(forKey: tokenStorageKey),
-              let stored = try? JSONDecoder().decode(GoogleOAuthTokens.self, from: data) else {
-            return
-        }
-        do {
-            try KeychainStore.saveCodable(stored, account: keychainAccount)
-            UserDefaults.standard.removeObject(forKey: tokenStorageKey)
-        } catch {
-            // Keep the legacy copy until the Keychain accepts it.
-        }
-        applyTokens(stored)
-    }
-
-    private func loadApplicationSession() {
-        guard let stored = try? KeychainStore.loadCodable(
-            GunnAireGoogleApplicationSession.self,
-            account: applicationSessionKeychainAccount
-        ), Self.isFutureApplicationSession(stored.expiresAt) else {
-            clearApplicationSession()
-            return
-        }
-        applicationSessionToken = stored.token
-    }
-
     private func clearApplicationSession() {
         applicationSessionToken = nil
+        businessApplicationSessionSnapshot = nil
+        workspaceSessionProof = nil
         if persistsCredentials { try? KeychainStore.remove(account: applicationSessionKeychainAccount) }
     }
 
-    private static func isFutureApplicationSession(_ value: String) -> Bool {
+    /// A changed secure-storage item invalidates business authority without
+    /// deleting the externally changed item or unrelated Google OAuth tokens.
+    func discardBusinessSessionProof() {
+        applicationSessionToken = nil
+        businessApplicationSessionSnapshot = nil
+        workspaceSessionProof = nil
+    }
+
+    nonisolated private static func isFutureApplicationSession(_ value: String) -> Bool {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let parsed = formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
@@ -1700,14 +1756,18 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     }
 
     private func applyTokens(_ tokens: GoogleOAuthTokens) {
+        let restoredEmail = (persistsCredentials ? UserDefaults.standard.string(forKey: Self.signedInEmailStorageKey) : signedInEmail)
+            ?? Self.extractEmail(fromIDToken: tokens.idToken)
+        applyTokens(tokens, restoredEmail: restoredEmail)
+    }
+
+    private func applyTokens(_ tokens: GoogleOAuthTokens, restoredEmail: String?) {
         accessToken = tokens.accessToken
         refreshToken = tokens.refreshToken
         idToken = tokens.idToken
         tokenExpiry = tokens.expiration
         grantedScopeSignature = tokens.scopeSignature
         isAuthenticated = true
-        let restoredEmail = (persistsCredentials ? UserDefaults.standard.string(forKey: Self.signedInEmailStorageKey) : signedInEmail)
-            ?? Self.extractEmail(fromIDToken: tokens.idToken)
         rememberSignedInEmail(restoredEmail)
     }
 
@@ -1722,7 +1782,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         }
     }
 
-    private static func extractEmail(fromIDToken token: String?) -> String? {
+    nonisolated private static func extractEmail(fromIDToken token: String?) -> String? {
         guard let token else { return nil }
         let segments = token.split(separator: ".")
         guard segments.count >= 2 else { return nil }

@@ -207,3 +207,122 @@ at the start of every turn; append to it rather than rewriting it.
   and the rotation test passed twice at normal size on 0ebcd56. Full unit suite running on
   3120503 as the pre-merge bar: 2576 passed, 7 failed, all seven in the known-flaky
   `FieldCollectionNavigationTests` and none outside it. CI is running on the same commit.
+
+- 2026-09-21 Codex auth review claim: `GunnAire Ops/CompanyWorkspaceHost.swift`, `GunnAire Ops/CompanyWorkspaceAccess.swift`, `GunnAire Ops/GunnAireCloudKit.swift`, `GunnAire OpsTests/CompanyWorkspaceAccessTests.swift`, and `GunnAire OpsTests/CloudKitEventMonitorTests.swift` for bounded account verification, transient-failure preservation and regression tests. Existing uncommitted changes retained; no builds until root coordination.
+
+## Claims
+
+- 2026-09-21 Claude, defect 5 (QuickBooks partial sync), assigned by Codex. Claimed paths:
+  `GunnAire Ops/QuickBooksManagementView.swift`, new `GunnAire Ops/QuickBooksSyncPass.swift`,
+  new `GunnAire OpsTests/QuickBooksSyncPassTests.swift`. Not touching `QuickBooksAPI.swift`,
+  `QuickBooksDataAPI.swift`, `CompanyWorkspaceHost.swift`, `CompanyWorkspaceAccess.swift`,
+  `QuickBooksSyncLifecycle.swift`, or any existing test. No build or test run from this
+  session; Codex coordinates the single native run.
+
+- 2026-09-21 Codex root claim: QuickBooksAPI.swift, QuickBooksDataAPI.swift, SettingsView.swift, GunnAire_OpsApp.swift, new QuickBooksOAuthState.swift and QuickBooksAuthenticationTests.swift for non-revoking app sign-out and durable single-use OAuth state. ContentView disconnect callback is a coordinated one-line integration; no other ContentView edits. Claude owns the QuickBooks sync fix; Codex subagents own workspace recovery and bounded launch. Preserve all pre-existing edits.
+
+- 2026-09-21 Codex OAuth-state subagent claim (delegated by root): new
+  `GunnAire Ops/QuickBooksOAuthState.swift` and new
+  `GunnAire OpsTests/QuickBooksOAuthStateTests.swift` only. Durable single-use,
+  session-bound expiring state and synthetic-storage tests; root integrates
+  `QuickBooksAPI.swift` and coordinates native validation. No model calls.
+
+- 2026-09-21 Codex auth review: implementation ready; claims released for combined validation. StoreKit transport failures retain their type, account-status retry is bounded, temporary iCloud unavailability preserves saved proof while preventing a mirrored-store open, and account/profile resolution runs detached with an invalidation generation fence. The account-change restart fence remains because retirement of every retained SwiftData/staff context is not yet proven. Seven deterministic regression tests added; the timeout regression now checks completion ordering. `git diff --check` passed; native compile/tests are pending root coordination.
+
+- 2026-09-21 Codex OAuth-state subagent: released the two new-file claims above
+  to root for integration. Implemented serial off-main Keychain storage,
+  10-minute expiry, session/configuration binding, consume-before-exchange,
+  read-back removal confirmation and state-scoped cancellation. Eight tests use
+  only synthetic storage, including cold-start restoration and concurrent replay.
+  Source whitespace checks passed; native build/test execution belongs to root.
+
+- 2026-09-21 Codex OAuth-state subagent renewed claim, delegated by root:
+  `GunnAire Ops/QuickBooksAPI.swift`, `GunnAire Ops/GunnAire_OpsApp.swift`, plus
+  its new `QuickBooksOAuthState.swift` and `QuickBooksOAuthStateTests.swift`.
+  Integrating restart callbacks and lifecycle fences; root retains DataAPI and
+  financial test ownership. Preserve root's sign-out/disconnect split. No build.
+
+- 2026-09-21 Codex auth review, coordinated follow-up: updated only CompanyWorkspaceHost.swift and CompanyWorkspaceAccessTests.swift to fence concurrent runtime-account cache resolution. An explicit unavailable/configuration failure retires the matching cache epoch; late sibling successes cannot restore it, and late failures from an older epoch cannot erase a replacement. Added two controlled-concurrency tests. These paths are stable and released for root validation; no native build run by this subagent.
+
+- 2026-09-21 Codex root claim: GunnAireBackendService.swift, WorkspaceProviderOperation.swift and WorkspaceProviderOperationTests.swift. The pre-existing detached payload encoding introduced a suspension before credentials were captured; preserve original workspace authorization across encoding and decoding.
+
+- 2026-09-21 Codex OAuth integration complete; claims released to root for
+  combined compile. `QuickBooksAPI.swift` now saves state before browser launch,
+  binds it to hashed business-session/company/configuration identity, consumes
+  it before exchange, and fences late publication across sign-out/session changes.
+  `GunnAire_OpsApp.swift` receives restart callbacks after business/workspace
+  restoration and presents sanitized errors. Sign-out cancellation matches either
+  the known state or the restarted session's binding, serialized before any new
+  browser flow. Seventeen synthetic-storage/parser/API tests are written; native
+  validation remains pending root's combined run. `git diff --check` is clean.
+
+- 2026-09-21 Codex OAuth-state subagent new delegated claim: invoice/estimate
+  `publicationInputsAsync` helper hunks in `GunnAire Ops/QuickBooksManagementView.swift`,
+  their four callers in `GunnAire Ops/QuickBooksBillingWorkflow.swift`, and focused
+  publication regression tests. Claude released the view; its sync changes remain
+  untouched. Add workspace revalidation before retained-model reads after await.
+
+- 2026-09-21 Codex auth review renewed claim: OperationsSupportViews.swift, new CustomerDataMaintenance.swift and focused CustomerDataMaintenanceTests.swift for an administrator/generation-bound background cleanup commit with rollback. ContentView startup cleanup call is a root-approved narrow integration; ContentStartupMaintenance changes are coordinated with workflow_audit. Existing uncommitted edits preserved; root runs native validation.
+
+- 2026-09-21 Codex publication revalidation fix complete; claims released.
+  Invoice and estimate asynchronous publication helpers require validateCurrent
+  before initial reads and immediately after asynchronous preparation, before
+  touching retained models. All four billing workflow callers supply their full
+  check. New `GunnAire OpsTests/QuickBooksPublicationAccessTests.swift` covers both
+  access-loss paths and unchanged-workspace success (3 tests). Sync hunks were
+  untouched. `git diff --check` passed; native execution remains root-coordinated.
+
+- 2026-09-21 Codex root claim: project.pbxproj build-version update to 2026092101 for the combined candidate. Branch fix/session-recovery-and-complete-sync-20260921 starts at origin/main ef3299d with all prior edits preserved. No production push or upload.
+
+- 2026-09-21 Codex auth review cleanup fix stable; claims released for root validation. Added queue-confined private staging with autosave disabled, MainActor-only administrator permit issuance, candidate revalidation, a one-shot cancellation/expiry/epoch fence immediately before save, and rollback on rejection or save error. CompanyWorkspaceAccess generation changes invalidate the epoch synchronously; already-started saves may finish without blocking MainActor. Root approved this narrow controller hunk and ContentView startup integration; workflow_audit approved ContentStartupMaintenance wrapper. Nine focused regressions added across CustomerDataMaintenanceTests and CompanyWorkspaceAccessTests; existing startup cleanup test adapted to explicit synthetic authorization. No native build run; git diff --check passed.
+
+- 2026-09-21 Codex launch subagent claim: AppRootView.swift, AppleAuthManager.swift, new AppleCredentialValidation.swift and AppleCredentialValidationTests.swift for a bounded credential callback and removal of ancillary push restoration from the root gate. No ContentStartupMaintenance edits; auth review owns its cleanup wrapper.
+
+- 2026-09-21 Codex OAuth-state subagent urgent delegated claim:
+  `GunnAire Ops/QuickBooksDataAPI.swift` credential ownership only and new
+  `GunnAire OpsTests/QuickBooksCredentialOwnershipTests.swift`. Bind saved/live
+  credentials to stable verified company and backend identity, reject legacy
+  unbound credentials without inferring ownership, preserve root's serial
+  persistence/disconnect changes. Root owns audit and native validation.
+
+- 2026-09-21 Codex launch subagent additional narrow claim: StaffPushNotificationManager restoredInstallationID property and StaffReplicaReceiveController.live.currentDeviceFingerprint guard, coordinated by root to avoid a temporary device UUID while ancillary Keychain restore is pending.
+
+- 2026-09-21 Codex launch subagent: launch edits stable and claims released to root for combined validation. Apple callback has a six-second deadline, single-completion and session-generation guards; transient failures retain only unexpired backend sessions, explicit revocation clears. Root no longer waits for push restoration; staff fingerprint fails closed until saved installation identity is restored. Added AppleCredentialValidationTests (five tests). Swift frontend parse and git diff --check pass; native compile/tests pending root. auth_review owns subsequent Apple/Google mutation-permit hooks.
+
+- 2026-09-21 Codex auth review follow-up stable: root-approved synchronous credential hook closes the delay before SwiftUI observes sign-out. CompanyWorkspaceAccess exposes nonblocking mutation-permit invalidation; coordinated with workflow_audit, Apple token and Google business-token/email willSet hooks retire permits before authority changes, and Google signOut also retires before credential removal. Two synthetic no-storage/no-network tests pin immediate clear-path revocation without an actor yield. Native validation remains root-owned.
+
+- 2026-09-21 Codex launch follow-up: pre-restore sign-out now records intent and unregisters local notifications immediately, then disables the restored saved preference without replacing its installation UUID. Added StaffPushNotificationRestorationTests (two synthetic preference tests). All launch-owned edits stable; root may freeze. Frontend parse and whitespace checks pass; combined native validation remains root-owned.
+
+- 2026-09-21 Codex credential ownership fix complete; claims released for build
+  freeze. Saved payloads now carry verified companyID and backendOrigin; legacy
+  unbound payloads and mismatches require reconnect without adopting the current
+  login as their owner. Restore rechecks initiating ownership after suspension;
+  live realm/auth status, refresh, Payments and retry requests reject mismatches.
+  Six synthetic ownership tests cover same-company restore, legacy refusal,
+  changed company/backend and late publication/refresh denial. Root's persistence
+  queue and disconnect behavior preserved. Diff whitespace clean; no native run.
+
+- 2026-09-21 Codex OAuth-state subagent delegated upload-race claim:
+  `ContentStartupMaintenance.swift` upload retry authorization only,
+  `GunnAireBackendService.swift` document/communication upload operation parameters,
+  and focused `ContentStartupUploadAuthorizationTests.swift`. Carry originating
+  workspace operation across actor hops and validate before backend entry; retain
+  auth_review cleanup code and root's encode/decode fences. No native builds.
+
+- 2026-09-21 Codex upload actor-hop fix complete; claims released. Both startup
+  upload loops now capture original workspace authority only for their currently
+  authorized source container and carry that operation into backend entry. The
+  document wrapper and both backend payload uploads validate/retain supplied
+  authority before encoding or sending; direct callers still capture once before
+  preparation. Four network-free authorization regressions added. Cleanup code
+  unchanged; whitespace checks clean; root runs final native validation.
+
+- 2026-09-21 Codex release preparation: added generated/release-2026092101.sh for Eric to upload only the frozen, signature-checked archive after reviewing its manifest. The script never merges or pushes main. App clean build has zero warnings; fresh-iPad full unit suite 2613/2613 and eight selected UI tests passed. Mac checks and archive remain pending at this entry.
+
+- 2026-09-21 Codex validation complete for candidate 2026092101: clean app build
+  has zero compiler warnings; all 2613 fresh-iPad unit tests passed with no skips,
+  all eight selected iPad UI workflows passed, and 154 Mac Catalyst tests across
+  12 changed suites passed. The Mac rerun explicitly selected XcodeDefault and
+  emitted no compiler/linker warnings. App/test source hashes match the tested
+  snapshot. Export options now preserve the exact build number. Claims released;
+  preparing the committed frozen archive and PR. No upload or main push.

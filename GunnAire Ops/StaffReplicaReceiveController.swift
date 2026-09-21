@@ -37,8 +37,10 @@ struct StaffReplicaReceiveDependencies {
                 plan: plan, context: context, invitation: url, selectionID: selection,
                 deviceFingerprint: fingerprint, previous: previous)
         }, currentDeviceFingerprint: {
-            StaffWorkspaceOperationalIdentityStore.deviceFingerprint(
-                installationID: StaffPushNotificationManager.shared.installationID)
+            guard let installationID = StaffPushNotificationManager.shared.restoredInstallationID else {
+                throw StaffReplicaDeliveryError.unavailable
+            }
+            return StaffWorkspaceOperationalIdentityStore.deviceFingerprint(installationID: installationID)
         })
     }
 }

@@ -4,6 +4,37 @@ import Testing
 
 @MainActor
 struct WorkspaceProviderOperationTests {
+    @Test func accountChangeWhileEncodingPreventsUploadUnderReplacementLogin() async {
+        var current = true
+        var sent = 0
+        let operation = WorkspaceProviderOperation { current }
+        do {
+            _ = try await operation.prepareAndPerformExternalMutation(prepare: {
+                await Task.yield()
+                current = false
+                return Data("original-workspace-document".utf8)
+            }, perform: { _ in sent += 1 })
+            Issue.record("A prepared document crossed a business-session change")
+        } catch {
+            #expect(error as? WorkspaceProviderAccessError == .changed(mayHaveReachedProvider: false))
+        }
+        #expect(sent == 0)
+        #expect(!operation.mayHaveReachedProvider)
+    }
+
+    @Test func unchangedWorkspaceSendsThePreparedBytesExactlyOnce() async throws {
+        let bytes = Data("synthetic-document".utf8)
+        var sent: [Data] = []
+        let operation = WorkspaceProviderOperation { true }
+        let result = try await operation.prepareAndPerformExternalMutation(prepare: {
+            await Task.yield()
+            return bytes
+        }, perform: { body in sent.append(body); return "confirmed" })
+        #expect(result == "confirmed")
+        #expect(sent == [bytes])
+        #expect(operation.mayHaveReachedProvider)
+    }
+
     private func request(method: String = "GET") -> URLRequest {
         var request = URLRequest(url: URL(string: "https://provider.example.test/resource?requestid=retained-operation")!)
         request.httpMethod = method

@@ -32,6 +32,8 @@ struct SettingsView: View {
     @State private var splashVideoDetails: SplashVideoLocator.VideoDetails?
     @State private var quickBooksConnectionMessage: String?
     @State private var resettingQuickBooksConnection = false
+    @State private var confirmingQuickBooksDisconnect = false
+    @State private var confirmingQuickBooksReset = false
     @State private var isSyncingSharedUsers = false
     @State private var backendAuditEvents: [BackendAuditEventRecord] = []
     @State private var isLoadingBackendAudit = false
@@ -79,6 +81,19 @@ struct SettingsView: View {
     @AppStorage("enableMarketingCampaigns") private var enableMarketingCampaigns = false
     @AppStorage("customerReviewURL") private var customerReviewURL = ""
     @AppStorage("enableCustomerPortal") private var enableCustomerPortal = false
+
+    private var cloudKitHealthIsReady: Bool {
+        cloudKitReadiness.isReady &&
+            cloudKitEventMonitor.hasRestoredPersistedState &&
+            !cloudKitEventMonitor.state.needsAttention
+    }
+
+    private var cloudKitTransferStatusDetail: String {
+        guard cloudKitEventMonitor.hasRestoredPersistedState else {
+            return "Checking saved CloudKit transfer health."
+        }
+        return cloudKitEventMonitor.state.operatorStatusDetail
+    }
 
     private var currentUserEmail: String? {
         AppIdentity.currentEmail
@@ -174,7 +189,7 @@ struct SettingsView: View {
                             )
                             readinessRow(
                                 title: "CloudKit on this device",
-                                isComplete: cloudKitReadiness.isReady && !cloudKitEventMonitor.state.needsAttention
+                                isComplete: cloudKitHealthIsReady
                             )
                             readinessRow(title: "Pricebook enabled", isComplete: enablePricebook)
                             readinessRow(
@@ -334,10 +349,12 @@ struct SettingsView: View {
                             featureStatus("Offline Field Mode", systemImage: "wifi.slash", detail: OperationalDataContinuity.offlineRecoveryDetail)
                             featureStatus(
                                 "Cross-Device Operations",
-                                systemImage: cloudKitReadiness.isReady && !cloudKitEventMonitor.state.needsAttention
+                                systemImage: cloudKitHealthIsReady
                                     ? "externaldrive.badge.checkmark"
-                                    : "externaldrive.badge.exclamationmark",
-                                detail: "CloudKit account: \(cloudKitReadiness.statusTitle). \(cloudKitReadiness.userFacingDetail) \(cloudKitEventMonitor.state.operatorStatusDetail) \(OperationalDataContinuity.currentStatusDetail)"
+                                    : cloudKitEventMonitor.hasRestoredPersistedState
+                                        ? "externaldrive.badge.exclamationmark"
+                                        : "hourglass",
+                                detail: "CloudKit account: \(cloudKitReadiness.statusTitle). \(cloudKitReadiness.userFacingDetail) \(cloudKitTransferStatusDetail) \(OperationalDataContinuity.currentStatusDetail)"
                             )
                         }
 
@@ -660,8 +677,13 @@ struct SettingsView: View {
             if isAdminUser {
                 if isQuickBooksAuthenticated {
                     Button("Disconnect QuickBooks", role: .destructive) {
-                        disconnectQuickBooks()
-                        isQuickBooksAuthenticated = false
+                        confirmingQuickBooksDisconnect = true
+                    }
+                    .confirmationDialog("Disconnect the company from QuickBooks?", isPresented: $confirmingQuickBooksDisconnect) {
+                        Button("Disconnect QuickBooks", role: .destructive) { disconnectQuickBooks() }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("This revokes the shared QuickBooks connection for your company. Signing out of the app keeps that connection available.")
                     }
                 } else {
                     Button {
@@ -672,11 +694,17 @@ struct SettingsView: View {
                 }
 
                 Button {
-                    resetAndReconnectQuickBooks()
+                    confirmingQuickBooksReset = true
                 } label: {
                     Label(resettingQuickBooksConnection ? "Resetting..." : "Reset and Reconnect QuickBooks", systemImage: "arrow.clockwise.circle")
                 }
                 .disabled(resettingQuickBooksConnection)
+                .confirmationDialog("Reset the company QuickBooks connection?", isPresented: $confirmingQuickBooksReset) {
+                    Button("Reset and Reconnect", role: .destructive) { resetAndReconnectQuickBooks() }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("This disconnects the shared company connection before starting authorization again. Other staff will lose QuickBooks access until it is restored.")
+                }
 
                 Button("Validate QuickBooks Access") {
                     validateQuickBooksAccess()
@@ -1172,13 +1200,15 @@ struct SettingsView: View {
                 splashVideoMessage = "No splash video was selected."
                 return
             }
-            do {
-                let details = try SplashVideoLocator.installVideo(from: url)
-                refreshSplashVideoState(loadDetails: false)
-                splashVideoDetails = details
-                splashVideoMessage = "Splash MP4 loaded successfully: \(details.durationDescription ?? "ready for launch")."
-            } catch {
-                splashVideoMessage = "Failed to load splash MP4: \(error.localizedDescription)"
+            Task { @MainActor in
+                do {
+                    let details = try await SplashVideoLocator.installVideoAsync(from: url)
+                    refreshSplashVideoState(loadDetails: false)
+                    splashVideoDetails = details
+                    splashVideoMessage = "Splash MP4 loaded successfully: \(details.durationDescription ?? "ready for launch")."
+                } catch {
+                    splashVideoMessage = "Failed to load splash MP4: \(error.localizedDescription)"
+                }
             }
         case .failure(let error):
             splashVideoMessage = "Splash video import failed: \(error.localizedDescription)"
@@ -1186,12 +1216,14 @@ struct SettingsView: View {
     }
 
     private func removeSplashVideo() {
-        do {
-            try SplashVideoLocator.removeStoredVideo()
-            refreshSplashVideoState(loadDetails: false)
-            splashVideoMessage = "Custom splash MP4 removed."
-        } catch {
-            splashVideoMessage = "Failed to remove splash MP4: \(error.localizedDescription)"
+        Task { @MainActor in
+            do {
+                try await SplashVideoLocator.removeStoredVideoAsync()
+                refreshSplashVideoState(loadDetails: false)
+                splashVideoMessage = "Custom splash MP4 removed."
+            } catch {
+                splashVideoMessage = "Failed to remove splash MP4: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -1206,9 +1238,13 @@ struct SettingsView: View {
     private func resetAndReconnectQuickBooks() {
         resettingQuickBooksConnection = true
         quickBooksConnectionMessage = "Resetting the saved QuickBooks session..."
-        QuickBooksDataAPI.shared.resetConnectionForReconnect { _ in
+        QuickBooksAuthAPI.shared.disconnect { succeeded in
             DispatchQueue.main.async {
                 resettingQuickBooksConnection = false
+                guard succeeded else {
+                    quickBooksConnectionMessage = "The disconnect was not confirmed. Validate QuickBooks access before reconnecting."
+                    return
+                }
                 isQuickBooksAuthenticated = false
                 quickBooksConnectionMessage = "Saved QuickBooks session cleared. Starting a fresh production connection..."
                 authenticateQuickBooks()
