@@ -111,6 +111,7 @@ struct BillingDocumentsView: View {
     @State private var newItemPurchaseDescription = ""
     @State private var newItemTaxable = false
     @State private var actionMessage = ""
+    @State private var estimateSendIssue: String?
     @State private var isCreatingDocument = false
     @State private var isImportingQuickBooksItems = false
     @State private var billingSyncLifecycles: [String: QuickBooksSyncLifecycle] = [:]
@@ -1708,6 +1709,9 @@ GunnAire
                                 BillingPublicationReviewLink(document: document, context: modelContext)
                                 Button("Sync Saved \(document.label)") { publishBillingDocument(document) }
                                     .disabled(!canAttemptSharedBilling || billingSyncLifecycles["\(document.label)-\(document.id)"] != nil)
+                                if case .estimate(let estimate) = document {
+                                    estimateDeliveryAction(estimate)
+                                }
                             } else {
                                 Button("Retry Saving Original Draft") { retryNewDocumentSave(document) }
                                     .disabled(isCreatingDocument)
@@ -2006,6 +2010,14 @@ GunnAire
             Button("Keep Editing", role: .cancel) {}
         } message: {
             Text("Only this unsaved document will be discarded. Saved customers, pricebook items and existing invoices or estimates are retained.")
+        }
+        .alert("Estimate Email Needs Attention", isPresented: Binding(
+            get: { estimateSendIssue != nil },
+            set: { if !$0 { estimateSendIssue = nil } }
+        )) {
+            Button("OK", role: .cancel) { estimateSendIssue = nil }
+        } message: {
+            Text(estimateSendIssue ?? "Nothing was sent.")
         }
         .onDisappear {
             for owner in billingSyncLifecycles.values { owner.cancel() }
@@ -2874,6 +2886,8 @@ GunnAire
                                 }
                                 .buttonStyle(.bordered)
 
+                                estimateDeliveryAction(estimate)
+
                                 if estimate.status == "accepted", currentJobInvoice == nil {
                                     Button("Create Change Order") {
                                         beginChangeOrder(from: estimate)
@@ -3726,6 +3740,7 @@ GunnAire
                                                 .foregroundColor(.secondary)
                                         }
                                         BillingPublicationReviewLink(document: .estimate(estimate), context: modelContext)
+                                        estimateDeliveryAction(estimate)
                                         Button("Create Invoice") {
                                             createInvoiceFromEstimate(estimate)
                                         }
@@ -8175,6 +8190,86 @@ GunnAire
             }
         } catch {
             actionMessage = "Onsite report generated, but could not save it as a job attachment: \(error.localizedDescription)"
+        }
+    }
+
+    private func estimateDeliveryAction(_ estimate: Estimate) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                prepareEstimateEmail(estimate)
+            } label: {
+                Label("Send Estimate", systemImage: "paperplane")
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("SendEstimate-\(estimate.id.uuidString)")
+            Text("Review the recipient, message, and attached PDF in Mail before sending.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if !googleAuth.canUseCurrentBusinessIdentity {
+                Text("You can prepare a draft now. Sending requires Google connected in Settings for your current business login.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func prepareEstimateEmail(_ estimate: Estimate) {
+        do {
+            try QuickBooksBillingAccessPolicy.validate(context: modelContext, document: .estimate(estimate))
+            guard AppAccess.canAccessSidebarItem(.mail, email: currentUserEmail, users: users) else {
+                throw GmailComposeError.access
+            }
+            guard let customer = estimate.customer else {
+                actionMessage = "This estimate's customer is still syncing or unavailable. Reopen it after customer access recovers. Nothing was sent."
+                estimateSendIssue = actionMessage
+                return
+            }
+            let email = customer.email?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard let recipients = try? GmailAddressList.parse(email),
+                  recipients.count == 1,
+                  recipients.first.map(AppAccess.normalizedEmail) == AppAccess.normalizedEmail(email) else {
+                actionMessage = "Add a valid email address to this customer in Customers, then return to Send Estimate. Nothing was sent."
+                estimateSendIssue = actionMessage
+                return
+            }
+            let linkedCall = serviceCall(for: estimate)
+            let url = try CustomerDocumentExporter.exportEstimate(
+                estimate,
+                serviceCall: linkedCall,
+                attachments: attachments,
+                equipmentProfiles: equipmentProfiles,
+                serviceCalls: serviceCalls
+            )
+            let files = CustomerDocumentExporter.customerEmailAttachmentURLs(
+                primaryDocumentURL: url,
+                serviceCallID: linkedCall?.id,
+                estimateID: estimate.id,
+                attachments: attachments
+            )
+            guard files.contains(url) else {
+                throw GmailComposeError.attachment
+            }
+            GunnAireAppIntentRouter.storeMailDraftRoute(
+                to: email,
+                subject: "GunnAire Estimate - \(customer.name)",
+                body: """
+Hello \(customer.name),
+
+Attached is your GunnAire estimate. Please review it and reply with any questions or to let us know you would like to move forward.
+
+Thank you,
+GunnAire
+""",
+                attachmentPaths: files.map(\.path),
+                customerID: customer.id,
+                serviceCallID: linkedCall?.id,
+                estimateID: estimate.id,
+                workflow: .customerDocument
+            )
+            if showsDismissButton { dismiss() }
+        } catch {
+            actionMessage = "Could not prepare the estimate email: \(error.localizedDescription) Nothing was sent."
+            estimateSendIssue = actionMessage
         }
     }
 

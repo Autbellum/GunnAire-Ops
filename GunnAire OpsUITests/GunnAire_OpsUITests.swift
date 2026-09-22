@@ -4916,14 +4916,18 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
-    private func openManagementBillingComposer(_ kind: String, bundle: Bool = false) -> XCUIApplication {
+    private func openManagementBillingComposer(_ kind: String, bundle: Bool = false, extraArguments: [String] = [], navigateViaSidebar: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-appStoreScreenshotFixtures",
-            "-uiTestSeedCollectibleJob", "-uiTestForceQuickBooksDisconnected", "-GunnAirePendingAppRoute", "quickBooksManagement",
-            "-GunnAirePendingQuickBooksWorkspace", "sales"]
+            "-uiTestSeedCollectibleJob", "-uiTestForceQuickBooksDisconnected",
+            "-GunnAirePendingQuickBooksWorkspace", "sales"] + extraArguments
+        if !navigateViaSidebar {
+            app.launchArguments += ["-GunnAirePendingAppRoute", "quickBooksManagement"]
+        }
         app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
         if bundle { app.launchArguments.append("-uiTestBundleComposer") }
         app.launch()
+        if navigateViaSidebar { revealSidebarDestination("QuickBooks Management", in: app).tap() }
         XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
         let sales = app.segmentedControls["QuickBooksWorkspacePicker"].buttons["Sales"]
         if !sales.isSelected { sales.tap() }
@@ -5008,6 +5012,92 @@ final class GunnAire_OpsUITests: XCTestCase {
             assertReturnedToManagementSales(app)
             app.terminate()
         }
+    }
+
+    @MainActor
+    func testNewEstimateOpensMailDraftWithPDFWithoutQuickBooksConnection() throws {
+        let app = openManagementBillingComposer("Estimate", extraArguments: [
+            "-uiTestSeedMailInbox", "-uiTestMailRejectSend"
+        ], navigateViaSidebar: true)
+        let customer = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Select Customer")).firstMatch
+        XCTAssertTrue(customer.waitForExistence(timeout: 4)); customer.tap()
+        XCTAssertTrue(app.navigationBars["Customer"].waitForExistence(timeout: 4))
+        let choice = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Blue Ridge Dental")).firstMatch
+        XCTAssertTrue(choice.waitForExistence(timeout: 4)); choice.tap()
+        let search = app.textFields["Search items to add"]
+        for _ in 0..<8 where !search.exists || !search.isHittable { app.swipeUp() }
+        XCTAssertTrue(search.waitForExistence(timeout: 4))
+        search.tap(); search.typeText("HVAC Diagnostic Service")
+        let item = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "HVAC Diagnostic Service")).firstMatch
+        for _ in 0..<6 where !item.exists || !item.isHittable { app.swipeUp() }
+        XCTAssertTrue(item.waitForExistence(timeout: 4)); item.tap()
+        let hideKeyboard = app.buttons["Hide keyboard"]
+        if hideKeyboard.exists && hideKeyboard.isHittable { hideKeyboard.tap() }
+        let save = app.buttons["SaveBillingDocument"]
+        XCTAssertTrue(waitForHittable(save)); XCTAssertTrue(save.isEnabled); save.tap()
+        let savedCustomer = app.staticTexts["ManagementBillingSavedCustomer"]
+        XCTAssertTrue(savedCustomer.waitForExistence(timeout: 5))
+        XCTAssertEqual(savedCustomer.label, "Blue Ridge Dental")
+        XCTAssertTrue(app.staticTexts["Estimate Saved"].exists)
+        XCTAssertFalse(app.buttons["SaveBillingDocument"].exists)
+
+        let sendEstimate = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "SendEstimate-")).firstMatch
+        for _ in 0..<6 where !sendEstimate.exists || !sendEstimate.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(sendEstimate))
+        XCTAssertTrue(sendEstimate.isEnabled, "A locally saved estimate must offer a mail draft without QuickBooks.")
+        sendEstimate.tap()
+        assertEstimateMailDraft(app)
+        XCTAssertFalse(app.navigationBars["New Estimate"].exists, "The saved composer must dismiss before Mail opens.")
+        let evidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        evidence.name = "Estimate - saved offline and prepared as an unsent email with PDF"
+        evidence.lifetime = .keepAlways
+        add(evidence)
+    }
+
+    @MainActor
+    func testSavedEstimateListOpensMailDraftWithPDFWithoutQuickBooksConnection() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-appStoreScreenshotFixtures", "-uiTestSeedCollectibleJob", "-uiTestSeedPendingEstimate",
+            "-uiTestForceQuickBooksDisconnected", "-uiTestSeedMailInbox", "-uiTestMailRejectSend"]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+        revealSidebarDestination("Estimates", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Estimates"].waitForExistence(timeout: 8))
+        let sendEstimate = app.buttons["SendEstimate-A1000000-0000-4000-8000-000000000016"]
+        let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Blue Ridge Dental")).firstMatch
+        for _ in 0..<14 where !row.exists || !row.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(row)); row.tap()
+        for _ in 0..<6 where !sendEstimate.exists || !sendEstimate.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(sendEstimate))
+        XCTAssertTrue(sendEstimate.isEnabled)
+        sendEstimate.tap()
+        assertEstimateMailDraft(app)
+    }
+
+    @MainActor
+    private func assertEstimateMailDraft(_ app: XCUIApplication) {
+        let composeAppeared = app.navigationBars["Compose"].waitForExistence(timeout: 8)
+        if !composeAppeared { retainNavigationFailure(app, name: "Estimate email draft did not open") }
+        XCTAssertTrue(composeAppeared)
+        let recipient = app.textFields["MailComposeTo"]
+        XCTAssertTrue(recipient.waitForExistence(timeout: 4))
+        XCTAssertEqual(recipient.value as? String, "office@example.com")
+        let subject = app.textFields["MailComposeSubject"]
+        XCTAssertTrue((subject.value as? String)?.localizedCaseInsensitiveContains("estimate") == true)
+        let body = app.textFields["MailComposeBody"]
+        XCTAssertTrue((body.value as? String)?.contains("Blue Ridge Dental") == true)
+        XCTAssertTrue(body.isEnabled)
+        let estimatePDFs = app.staticTexts.matching(NSPredicate(
+            format: "label BEGINSWITH %@ AND label ENDSWITH %@", "GunnAire-Estimate-Blue-Ridge-Dental-", ".pdf"
+        ))
+        XCTAssertTrue(estimatePDFs.firstMatch.waitForExistence(timeout: 4))
+        XCTAssertEqual(estimatePDFs.count, 1, "Attach the saved estimate PDF exactly once.")
+        let draftStatus = app.staticTexts["MailDraftSaveStatus"]
+        XCTAssertTrue(draftStatus.waitForExistence(timeout: 4))
+        XCTAssertTrue(app.buttons["MailSendButton"].isEnabled)
+        XCTAssertFalse(app.staticTexts["MailComposeStatus"].exists, "Opening a draft must not attempt transmission.")
+        XCTAssertFalse(app.staticTexts["Message sent."].exists)
     }
 
     @MainActor
