@@ -502,3 +502,53 @@ at the start of every turn; append to it rather than rewriting it.
   Connect key, the archive and the export options are all in place. The only
   remaining gate is CI. Claude will verify the run's test counts, not merely its
   green status, before uploading.
+
+- 2026-09-21 21:55 Claude: **CI GATE MET on head 59a97ac** (run 35672021569).
+  All six checks pass: Mac native, iPad 1, iPad 2, Python 3.13, Python 3.14,
+  routing audit. Verified by counts rather than green status, because a job can
+  pass while a step is skipped: each iPad shard executed 454 XCTest plus 2,159
+  Swift Testing unit tests (2,613) and 34 UI tests, zero failures and zero skips,
+  and **shard 2 completed "Verify largest-text catalog editing"** — the step that
+  was skipped in the failed run. Shard 2 ran 1h19m57s, shard 1 51m05s, Mac 50m10s,
+  all inside budget. The 31 readiness assertions held: no UI test failed on either
+  shard, against 1-2 failures per run in each of the three previous cycles.
+  Upload preflight passes offline (build 2026092101, bundle
+  `com.gunnaire.businesssuite`, archive-binary and export-options SHA-256 both
+  matching the manifest, strict codesign OK, source dd5d56d).
+  **Upload is BLOCKED and not attempted:** running `generated/release-2026092101.sh`
+  was refused by this session's permission classifier as a production deploy.
+  Claude did not reconstruct the `xcodebuild -exportArchive` call by hand to get
+  around that. Eric runs the script, or grants the permission. Nothing else is
+  outstanding; the archive and the frozen source are untouched.
+  This entry is deliberately NOT committed or pushed: a push would move the PR
+  head and discard the green result on 59a97ac. Commit it with the next real change.
+
+- 2026-09-22 00:25 Claude: **last preflight failure cleared; RELEASE PREFLIGHT PASSED**
+  (45 passed, 5 warnings, 0 failures, was 46/4/1). Captured fresh App Store
+  screenshots from frozen source on the two prepared simulators:
+  `testCaptureAppStoreScreenshots` passed on iPad13 (102.9 s) and iPhone69 (78.1 s),
+  six attachments each. All twelve verified at the contract dimensions before
+  install — iPad 2064x2752, iPhone 1320x2868 — then written to
+  `AppStoreAssets/Screenshots/`, with `ScreenshotManifest.json` updated to
+  sourceBuild 2026092101, reviewedAt 2026-09-22 and fresh SHA-256 rows, and the
+  two result bundles retained under `screenshot-evidence/` with the build in their
+  names. First attempt failed (exit 64, `invalid option '-enableSplashVideo'`):
+  `capture-context.json`'s fixtureArguments document what the test's own helper
+  sets on `app.launchArguments`, they are not xcodebuild options. Cost ~4 minutes.
+  Remaining warnings are all known and none block TestFlight: the development-signed
+  archive (the exported IPA passed separate Apple Distribution verification and the
+  release script's strict codesign passes), two Mac Catalyst artifacts not supplied
+  (not required for an iOS upload), CloudKit exports not supplied, and online probes
+  not requested. Note the Mac Catalyst *build result* moved PASS->WARN versus the
+  earlier log purely because none was discovered this run; nothing regressed.
+  **CloudKit delta checked independently and is clear:** the six `@Model` files
+  touched since the 2026-09-17 Production deploy add only `nonisolated` markers,
+  comments and one logic line in `Invoice.swift` — no stored properties, no new
+  `@Model` types, no `@Attribute`/`@Relationship` — so Production schema still
+  covers 2026092101 and no seed-and-deploy is needed before installing.
+  **Committed locally, deliberately NOT pushed.** A push moves the PR head and
+  discards the verified-green CI on 59a97ac that the upload is gated on. Nobody
+  should push until build 2026092101 is uploaded. Upload itself remains blocked:
+  this session's permission classifier refuses `generated/release-2026092101.sh`
+  as a production deploy, and Claude did not reconstruct the `xcodebuild
+  -exportArchive` call to evade that. Eric runs it, or grants the permission.
