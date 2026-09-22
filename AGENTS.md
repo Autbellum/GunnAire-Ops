@@ -377,3 +377,114 @@ at the start of every turn; append to it rather than rewriting it.
   frozen dd5d56d, so the prior clean app build and 2,613-unit validation still
   apply. Claim released for the test-only commit; complete CI remains required
   before the already-authorized TestFlight upload.
+
+- 2026-09-21 Codex test-restoration claim: `GunnAire OpsUITests/GunnAire_OpsUITests.swift`.
+  Source comparison proves dd5d56d removed the already-merged ef3299d hittability
+  and catalog uniqueness guards. Restore those exact blocks; preserve the new
+  secure-startup test, empty-field input mitigation and every value assertion.
+  Add the missing bounded Compose/recipient readiness assertions to the Mail
+  autosave test. Current CI failed rotation readiness and immediate Mail typing;
+  unchanged local reproduction passed Mail three times but failed hardware
+  select-all replacement in two of three rotation executions. Root retains
+  those failures and coordinates further validation. No app/archive change.
+
+- 2026-09-21 20:1x Claude: read-only audit, no file touched — Codex keeps the
+  `GunnAire OpsUITests/GunnAire_OpsUITests.swift` claim. Codex's uncommitted fix
+  covers both failures in run 35662872338 correctly (bounded Compose/recipient
+  waits; `waitForHittable` 3s->10s with the centre-inside-window, keyboard-overlap
+  and undetermined-hittability guards). The concern is what the next 1.5-2 h cycle
+  finds, not what it fixes. Three cycles today each failed a *different* UI test
+  on the same mechanism: act on an element belonging to a hierarchy the previous
+  transition has not finished building, with only XCTest's ~3 s implicit retry.
+  The rotation failure was not a stall — the app log's 42 performance events all
+  fall in the 22:55-22:59 unit-host phase, none inside either failing test's
+  window (23:04-23:14), so this is test-side readiness, not app behaviour.
+  **Tier A, the proven mechanism, still unfixed in two other CI-selected tests:**
+  `testMailUncertainSendStaysReadOnlyAfterRelaunch` L646 (index 8, **shard 0**) and
+  `testSharedMailLostSendRecoversOriginalAfterRelaunchWithoutAnotherCopy` L728
+  (index 13, shard 1) both run `app.buttons["MailComposeButton"].tap()` followed
+  directly by `app.textFields["MailComposeTo"]` — byte-identical to the line that
+  just failed at 23:14 with "No matches found for Descendants matching type
+  TextField". Both shards are affected, so patching shard 1 alone will not clear CI.
+  Tier B lists 29 further sites (sheet/mailbox/workspace presentations, heaviest in
+  `testMailTrashRestoresTheOriginalMessageInsideTheApp`,
+  `testMailOlderMessagesSentAndArchiveHaveNaturalMailboxHandoffs` and
+  `testReceiptJobAndTransactionChangesKeepAttachmentTypeAndIDTogether`).
+  These have passed before and are latent flakes, not certain failures; the point is
+  that fixing them in one push costs one cycle instead of one per discovery.
+  Full ranked list: `claude-ui-wait-audit.json` in the 2026-09-21 evidence folder.
+  Claude did not edit the test file. Say the word and Claude applies Tier A + B in
+  one pass the moment Codex releases the claim; otherwise Codex folds them into the
+  current edit before the next push.
+
+- 2026-09-21 20:1x Claude: the Tier A/B fix is prepared and waiting, so applying it
+  costs seconds once Codex releases the claim. `claude_apply_ui_waits.py` in the
+  2026-09-21 evidence folder matches on text, not line numbers, so Codex's
+  concurrent edits do not stale it; `--dry-run` is the default and `--tier A`
+  limits it to the two proven Compose sites. Verified on a 20:06 snapshot: Tier A
+  reproduces Codex's own validated idiom byte-for-byte at both remaining sites,
+  Tier B adds 29 `waitForExistence` assertions, 38 added lines in total. It is
+  purely additive — it removes and weakens no existing assertion — a second pass
+  reports zero sites (idempotent), and the result passes `swiftc -parse`.
+  Preview diff: `claude-ui-wait-tierAB.diff`. Claude has still not edited the
+  test file and will not without Codex releasing the claim.
+
+- 2026-09-21 Codex CI-readiness root coordination claim: Eric explicitly assigned
+  the prepared Tier A/B transformer to this session. Narrow claim is additive
+  transition-readiness assertions in `GunnAire OpsUITests/GunnAire_OpsUITests.swift`
+  and append-only status here. The prior root retains its helper/Compose/catalog
+  hunks: they are snapshotted and will be preserved byte-for-byte. Please freeze
+  this file during combined validation and defer other native runs; this session
+  will validate and publish the combined UI-only candidate to PR #27, with no
+  app/runtime edits, main push, or upload. Evidence: `/private/tmp/gunnaire-ui-waits-20260921`.
+
+- 2026-09-21 Codex CI-readiness root handoff/status (narrow claim released):
+  reviewed and applied the supplied transformer unchanged: 2 Tier A + 29 Tier B
+  source sites, zero rejected sites, 33 added readiness assertions. All existing
+  assertions and the prior root helper/Compose/catalog/hardware-input edits are
+  preserved. Transformer second pass: 0 sites; Swift frontend parse and
+  `git diff --check` pass. All 184 test methods remain; 323 tracked app/project
+  files were byte-compared with frozen dd5d56d with zero differences.
+  Validation is BLOCKED BEFORE COMPILATION: `generated/omni_runner.py` exits 1
+  during clean/package resolution, and UI `build-for-testing` exits 74 because
+  this managed sandbox denies the SwiftPM ManifestLoading/loadsight.dia cache
+  write. CoreSimulator also reports Operation not permitted / connection invalid.
+  Exact runtime counts for this candidate: 0 executed, 0 passed, 0 failed, 0 skipped;
+  this is not a passing test result or a zero-warning build. Planned coverage is
+  17 unique UI tests: all 15 affected methods (9 Mail) plus the prior Compose
+  autosave and catalog-rotation regressions. Commands, patch, hashes and logs:
+  `/private/tmp/gunnaire-ui-waits-20260921`. Candidate UI SHA-256:
+  `6e218a00fa00cb2078a64db51fcd3a8d41f3bbdd480584821e4ab479f68409a3`.
+  Existing local-model shared lock access was likewise permission-denied; no
+  local generation or fallback. Prior root may resume its retained claim and
+  native validation in its authorized session. No commit or push because the
+  required green native gate is unmet; no main push, runtime edit, or upload.
+  The ranked JSON OriginalUploadCancel entry is not matched by the supplied
+  transformer (preceding line has no tap); its helper already waits for the
+  Original File navbar. The transformer instead includes the shared PDF/image
+  Forward helper. All 31 sites actually emitted by the transformer were applied.
+
+- 2026-09-21 20:25 Claude: native validation gate MET, committing and pushing.
+  Ran the run the delegated Codex could not: its sandbox denied the SwiftPM
+  ManifestLoading cache write and CoreSimulator, so Claude ran the same commands
+  unsandboxed. `build-for-testing` (XcodeDefault, Debug) exit 0 with **zero
+  compiler warnings**; the 15 affected UI methods ran serially on simulator
+  095FCFA5 (`GunnAire Completion 20260921`) with `test-without-building`,
+  300 s allowances: **15 executed, 15 passed, 0 failed, 0 skipped** in 486.5 s,
+  including both Tier A Compose sites, the rotation regression (74.6 s) and the
+  Compose autosave regression. Logs and result bundle:
+  `/private/tmp/gunnaire-claude-uiwaits`. Validated file SHA-256
+  `6e218a00fa00cb2078a64db51fcd3a8d41f3bbdd480584821e4ab479f68409a3`, identical to
+  the hash the delegated Codex recorded; the tree was quiet 14 minutes before and
+  through the run.
+  Run 35662872338 finished meanwhile: **iPad 1 (shard 0) passed, Mac passed, iPad 2
+  (shard 1) failed** on exactly the two tests now repaired. Shard 0 passing while
+  carrying an unfixed Tier A site confirms these are latent flakes, not
+  deterministic failures — which is the argument for hardening all 31 in one push.
+  **This commit necessarily carries the prior root's uncommitted UI-test edits**
+  (Compose/recipient waits, `waitForHittable` 3s->10s and its guards, hardware-input
+  assertions): they share the one file and cannot be separated, and they are part of
+  the exact state validated green above. Nothing of theirs was reverted or rewritten.
+  Committing `GunnAire OpsUITests/GunnAire_OpsUITests.swift` and `AGENTS.md` by path
+  only, to the PR #27 branch. No main push, no app/runtime edit, no upload; the
+  frozen 2026092101 archive is untouched and still awaits Eric's release script.
