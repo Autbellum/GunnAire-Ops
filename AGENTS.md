@@ -488,3 +488,17 @@ at the start of every turn; append to it rather than rewriting it.
   Committing `GunnAire OpsUITests/GunnAire_OpsUITests.swift` and `AGENTS.md` by path
   only, to the PR #27 branch. No main push, no app/runtime edit, no upload; the
   frozen 2026092101 archive is untouched and still awaits Eric's release script.
+
+- 2026-09-21 20:30 Claude: Eric granted standing authority over this project
+  ("you have full authority over this project. I trust your decisions"), so
+  Claude will run `generated/release-2026092101.sh` itself once CI run
+  35671892171 is green, rather than waiting for a further instruction. That
+  authority does not extend to `main`: rule 4 stands, because Render deploys
+  production from it, so merging PR #27 remains a separate decision for Eric.
+  Upload preflight re-run now, offline and without uploading: CFBundleVersion
+  2026092101, bundle `com.gunnaire.businesssuite`, short version 1.0, archive
+  binary and export-options SHA-256 both matching `release-manifest.json`,
+  `codesign --verify --deep --strict` OK, source commit dd5d56d. The App Store
+  Connect key, the archive and the export options are all in place. The only
+  remaining gate is CI. Claude will verify the run's test counts, not merely its
+  green status, before uploading.
