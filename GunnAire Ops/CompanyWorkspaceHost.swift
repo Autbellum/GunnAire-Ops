@@ -22,7 +22,26 @@ nonisolated struct CompanyCloudKitAccountTemporarilyUnavailable: Error, Sendable
 
 /// A concurrent account result retired this lookup. It is neither proof of
 /// revocation nor permission to reuse an earlier account without rechecking.
-nonisolated struct CompanyCloudKitAccountVerificationSuperseded: Error, Sendable {}
+///
+/// When the retired lookup had already failed, that failure is the only
+/// evidence of *why* verification is not succeeding, and replacing it with a
+/// bare "superseded" left the device showing a race instead of its cause. The
+/// cause is carried here for display only: it is deliberately not rethrown,
+/// because a result from a retired epoch must never be treated as current.
+nonisolated struct CompanyCloudKitAccountVerificationSuperseded: Error, Sendable, LocalizedError {
+    let retiredCause: String?
+
+    init(retiredCause: String? = nil) {
+        self.retiredCause = retiredCause
+    }
+
+    var errorDescription: String? {
+        guard let retiredCause else {
+            return "Another account check replaced this one before it finished."
+        }
+        return "Another account check replaced this one before it finished. The replaced check reported: \(retiredCause)"
+    }
+}
 
 nonisolated private final class CompanyCloudKitTimeoutRace<Value: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
@@ -161,7 +180,14 @@ final class CompanyCloudKitAccountCache {
                 try await work.value
             } onCancel: { work.cancel() }
         } catch {
-            guard generation == operation else { throw CompanyCloudKitAccountVerificationSuperseded() }
+            // Carry the retired failure's cause. Without it, a real
+            // configuration failure racing a sibling lookup reaches the gate
+            // as a bare "superseded", so the screen that names the actual
+            // problem and the screen that names the race disagree.
+            guard generation == operation else {
+                throw CompanyCloudKitAccountVerificationSuperseded(
+                    retiredCause: CompanyWorkspaceAccessController.describeRawError(error))
+            }
             if error is CompanyCloudKitAccountTemporarilyUnavailable ||
                 (error as? CompanyWorkspaceFailure) == .accountUnavailable ||
                 (error as? CompanyWorkspaceFailure) == .configuration {

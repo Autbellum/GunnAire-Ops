@@ -577,7 +577,14 @@ struct CompanyWorkspaceAccessTests {
         } catch { #expect(error is CompanyCloudKitAccountVerificationSuperseded) }
         await probe.finish(1, result: .failure(CompanyCloudKitAccountTemporarilyUnavailable()))
         do { _ = try await lateFailure.value }
-        catch { #expect(error is CompanyCloudKitAccountVerificationSuperseded) }
+        catch {
+            let superseded = try #require(error as? CompanyCloudKitAccountVerificationSuperseded)
+            // The retired failure is the only evidence of why verification is
+            // not succeeding. A bare "superseded" hid it, so the gate and the
+            // staff sheet showed two different errors for one cause.
+            #expect(superseded.retiredCause?.contains("CompanyCloudKitAccountTemporarilyUnavailable") == true)
+            #expect(superseded.errorDescription?.contains("CompanyCloudKitAccountTemporarilyUnavailable") == true)
+        }
 
         // A failure from the old epoch must not erase the replacement's cache.
         let retained = try await cache.current { throw CompanyWorkspaceFailure.configuration }
