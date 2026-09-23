@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import math
 import os
 import re
 import threading
@@ -167,11 +168,17 @@ def _prohibited(text: str) -> str | None:
     return None
 
 
+def _valid_unicode(value: str) -> bool:
+    return not any(0xD800 <= ord(char) <= 0xDFFF for char in value)
+
+
 def _string(value: Any, name: str, limit: int, required: bool = False) -> str:
     if value is None and not required:
         return ""
     if not isinstance(value, str):
         raise InvalidRequest("invalid_request", f"{name} must be text")
+    if not _valid_unicode(value):
+        raise InvalidRequest("invalid_unicode", f"{name} must contain valid Unicode scalar values")
     value = value.strip()
     if required and not value:
         raise InvalidRequest("invalid_request", f"{name} is required")
@@ -185,9 +192,13 @@ def _string(value: Any, name: str, limit: int, required: bool = False) -> str:
 def _clean(value: Any, depth: int = 0) -> Any:
     if depth > 5:
         raise InvalidRequest("context_too_deep", "AI context nesting is too deep")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise InvalidRequest("invalid_context_value", "AI context numbers must be finite")
     if value is None or isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, str):
+        if not _valid_unicode(value):
+            raise InvalidRequest("invalid_unicode", "AI context must contain valid Unicode scalar values")
         if found := _prohibited(value):
             raise InvalidRequest("prohibited_sensitive_data", f"AI context contains prohibited {found} data")
         return value
@@ -197,6 +208,8 @@ def _clean(value: Any, depth: int = 0) -> Any:
         result: dict[str, Any] = {}
         for raw_key, item in value.items():
             key = str(raw_key).strip()
+            if not _valid_unicode(key):
+                raise InvalidRequest("invalid_unicode", "AI context keys must contain valid Unicode scalar values")
             if not key or len(key) > 100 or SECRET_KEYS.search(key):
                 raise InvalidRequest("prohibited_context_key", f"AI context field {key!r} is prohibited")
             result[key] = _clean(item, depth + 1)
@@ -210,6 +223,11 @@ def _clean(value: Any, depth: int = 0) -> Any:
 
 def _result(task: Task, raw: Mapping[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {}
+    for key in task.strings | task.lists:
+        raw_value = raw.get(key)
+        values = [raw_value] if isinstance(raw_value, str) else raw_value if isinstance(raw_value, Sequence) else []
+        if any(isinstance(item, str) and not _valid_unicode(item) for item in values):
+            raise Unavailable("invalid_model_response", "Local model text must contain valid Unicode scalar values")
     string_limit = max(500, task.limit // max(1, len(task.strings)))
     for key in task.strings:
         value = raw.get(key)
@@ -221,8 +239,12 @@ def _result(task: Task, raw: Mapping[str, Any]) -> dict[str, Any]:
     for key in task.numbers:
         try:
             value = float(raw.get(key))
+        except OverflowError:
+            raise Unavailable("invalid_model_response", "Local model numbers exceed the permitted range") from None
         except (TypeError, ValueError):
             value = 0.0
+        if not math.isfinite(value):
+            raise Unavailable("invalid_model_response", "Local model numbers must be finite")
         result[key] = min(max(value, 0.0), 1.0)
     missing = sorted(key for key in task.required if result.get(key) is None or result.get(key) == "" or result.get(key) == [])
     if missing:
@@ -230,6 +252,28 @@ def _result(task: Task, raw: Mapping[str, Any]) -> dict[str, Any]:
     if len(json.dumps(result, ensure_ascii=False)) > task.limit:
         raise Unavailable("model_response_too_large", "Local model response exceeded the task limit")
     return result
+
+
+def validated_request_prompt(payload: Mapping[str, Any], actor_role: str, settings: Settings) -> tuple[dict[str, Any], Task, str]:
+    """One trust-boundary validator shared by loopback and outbound transports."""
+    if not isinstance(payload, Mapping):
+        raise InvalidRequest("invalid_request", "AI request body must be an object")
+    name = _string(payload.get("task"), "task", 80, True)
+    task = TASKS.get(name)
+    if task is None:
+        raise InvalidRequest("unsupported_task", f"Unsupported local AI task: {name}")
+    if actor_role not in task.roles:
+        raise Forbidden("role_not_allowed", "This business role may not use the requested AI task")
+    text = _string(payload.get("input"), "input", settings.max_input, True)
+    context, baseline = _clean(payload.get("context", {})), _clean(payload.get("baseline", {}))
+    if not isinstance(context, Mapping) or not isinstance(baseline, Mapping):
+        raise InvalidRequest("invalid_request", "context and baseline must be objects")
+    context_json = json.dumps(context, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    baseline_json = json.dumps(baseline, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    if len(context_json) + len(baseline_json) > settings.max_context:
+        raise InvalidRequest("context_too_large", "AI context exceeds the configured limit")
+    prompt = f"TASK: {name}\nVERIFIED INPUT:\n{text}\n\nSTRUCTURED CONTEXT:\n{context_json}\n\nOPTIONAL DETERMINISTIC BASELINE:\n{baseline_json}\n"
+    return {"task": name, "input": text, "context": context, "baseline": baseline}, task, prompt
 
 
 @dataclasses.dataclass
@@ -338,23 +382,8 @@ class LocalAIGateway:
     def assist(self, payload: Mapping[str, Any], actor_role: str) -> dict[str, Any]:
         if not self.settings.enabled:
             raise Unavailable("local_ai_disabled", "Local AI is disabled on this backend")
-        if not isinstance(payload, Mapping):
-            raise InvalidRequest("invalid_request", "AI request body must be an object")
-        name = _string(payload.get("task"), "task", 80, True)
-        task = TASKS.get(name)
-        if task is None:
-            raise InvalidRequest("unsupported_task", f"Unsupported local AI task: {name}")
-        if actor_role not in task.roles:
-            raise Forbidden("role_not_allowed", "This business role may not use the requested AI task")
-        text = _string(payload.get("input"), "input", self.settings.max_input, True)
-        context, baseline = _clean(payload.get("context", {})), _clean(payload.get("baseline", {}))
-        if not isinstance(context, Mapping) or not isinstance(baseline, Mapping):
-            raise InvalidRequest("invalid_request", "context and baseline must be objects")
-        context_json = json.dumps(context, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        baseline_json = json.dumps(baseline, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        if len(context_json) + len(baseline_json) > self.settings.max_context:
-            raise InvalidRequest("context_too_large", "AI context exceeds the configured limit")
-        prompt = f"TASK: {name}\nVERIFIED INPUT:\n{text}\n\nSTRUCTURED CONTEXT:\n{context_json}\n\nOPTIONAL DETERMINISTIC BASELINE:\n{baseline_json}\n"
+        request, task, prompt = validated_request_prompt(payload, actor_role, self.settings)
+        name = request["task"]
         redacted = redact_text(prompt)
         prompt = truncate_middle(redacted.text, self.policy.max_prompt_characters)
         status = self.status()

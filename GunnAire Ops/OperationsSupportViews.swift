@@ -1872,6 +1872,83 @@ struct SyncIntegrationsView: View {
     }
 }
 
+@MainActor
+final class OnsiteDocumentExportLifetime {
+    private var isVisible = false
+    private var activeRequest: UUID?
+
+    func appear() { isVisible = true }
+    func disappear() { isVisible = false; activeRequest = nil }
+    func invalidateRequest() { activeRequest = nil }
+
+    func begin() -> UUID? {
+        guard isVisible, activeRequest == nil else { return nil }
+        let request = UUID()
+        activeRequest = request
+        return request
+    }
+
+    func finish(_ request: UUID) {
+        if activeRequest == request { activeRequest = nil }
+    }
+
+    func check(_ request: UUID) throws {
+        try Task.checkCancellation()
+        guard isVisible, activeRequest == request else { throw CancellationError() }
+    }
+
+    struct Result {
+        let url: URL
+        let validation: @MainActor () throws -> Void
+
+        func validateCurrent() throws {
+            do { try validation() }
+            catch {
+                // The exporter gives each request a new immutable URL. Only
+                // this rejected output is removed; prior attachments survive.
+                try? FileManager.default.removeItem(at: url)
+                throw error
+            }
+        }
+
+        func readData(load: (@MainActor (URL) async throws -> Data)? = nil) async throws -> Data {
+            try validateCurrent()
+            let data: Data
+            do {
+                if let load { data = try await load(url) }
+                else {
+                    let source = url
+                    data = try await Task.detached(priority: .utility) {
+                        try Data(contentsOf: source)
+                    }.value
+                }
+            } catch {
+                try validateCurrent()
+                try? FileManager.default.removeItem(at: url)
+                throw error
+            }
+            try validateCurrent()
+            return data
+        }
+    }
+
+    func export(
+        request: UUID,
+        validateCurrent: @escaping @MainActor () throws -> Void,
+        render: (@escaping @MainActor () throws -> Void) async throws -> URL
+    ) async throws -> Result {
+        let validate = { @MainActor in
+            try self.check(request)
+            try validateCurrent()
+        }
+        try validate()
+        let url = try await render(validate)
+        let result = Result(url: url, validation: validate)
+        try result.validateCurrent()
+        return result
+    }
+}
+
 struct OnsiteDocumentationView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \ServiceCall.scheduledDate, order: .forward) private var serviceCalls: [ServiceCall]
@@ -1893,6 +1970,7 @@ struct OnsiteDocumentationView: View {
     @State private var selectedServiceCallID: UUID?
     @State private var didLoadPendingRoute = false
     @State private var generatedCustomerDocumentURL: URL?
+    @State private var documentExportLifetime = OnsiteDocumentExportLifetime()
     @State private var documentExportMessage = ""
 
     private var quickBooksConnected: Bool {
@@ -2171,7 +2249,7 @@ struct OnsiteDocumentationView: View {
 
                                             Menu {
                                                 Button("Generate Invoice PDF") {
-                                                    generateInvoiceDocument(invoice)
+                                                    Task { await generateInvoiceDocument(invoice) }
                                                 }
                                             } label: {
                                                 Label("Documents", systemImage: "doc.on.doc")
@@ -2214,7 +2292,14 @@ struct OnsiteDocumentationView: View {
                     .tint(Color.brandGold)
                 }
             }
-            .onAppear(perform: applyPendingDocumentationRouteIfNeeded)
+            .onAppear {
+                documentExportLifetime.appear()
+                applyPendingDocumentationRouteIfNeeded()
+            }
+            .onDisappear { documentExportLifetime.disappear() }
+            .onChange(of: selectedServiceCallID) { _, _ in
+                documentExportLifetime.invalidateRequest()
+            }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
                 applyPendingDocumentationRouteIfNeeded()
             }
@@ -2282,18 +2367,18 @@ struct OnsiteDocumentationView: View {
 
                             Menu {
                                 Button("Generate Onsite Report") {
-                                    generateOnsiteReport(for: call)
+                                    Task { await generateOnsiteReport(for: call) }
                                 }
 
                                 if estimate(for: call) != nil {
                                     Button("Generate Estimate PDF") {
-                                        generateEstimateDocument(for: call)
+                                        Task { await generateEstimateDocument(for: call) }
                                     }
                                 }
 
                                 if let invoice = invoice(for: call) {
                                     Button("Generate Invoice PDF") {
-                                        generateInvoiceDocument(invoice)
+                                        Task { await generateInvoiceDocument(invoice) }
                                     }
                                 }
                             } label: {
@@ -2351,52 +2436,142 @@ struct OnsiteDocumentationView: View {
         selectedServiceCallID = pendingID
     }
 
-    private func generateOnsiteReport(for call: ServiceCall) {
-        let linkedInvoice = invoice(for: call)
-        do {
-            let url = try CustomerDocumentExporter.exportOnsiteReport(
-                serviceCall: call,
-                estimate: estimate(for: call),
-                invoice: linkedInvoice,
-                payments: payments(for: linkedInvoice),
-                attachments: reportEvidenceAttachments(for: call),
-                equipmentProfiles: equipmentProfiles,
-                serviceCalls: serviceCalls,
-                fieldFormTemplates: fieldFormTemplates,
-                fieldFormResponses: fieldFormResponses.filter { $0.serviceCallID == call.id },
-                timeEntries: timeEntries,
-                materialReadiness: JobMaterialCloseoutPolicy.summary(
-                    for: call,
-                    invoice: linkedInvoice,
-                    estimates: estimates,
-                    projectMilestones: projectMilestones,
-                    items: items,
-                    movements: inventoryMovements
-                ),
-                serviceCallActivities: serviceCallActivities,
-                requireWorkPerformedLog: requireWorkPerformedLogForCloseout,
-                includeFinancials: canIncludeFinancialsInOnsiteReports
-            )
-            generatedCustomerDocumentURL = url
-            if !call.markDocumentationCompleteIfReady() {
-                call.documentationChecklist = false
+    private func validateDocumentWorkspace(request: UUID) throws {
+        try documentExportLifetime.check(request)
+        guard GunnAireCloudKit.usesTestDatabase ||
+                CompanyWorkspaceAccessController.shared.authorizedContainer === modelContext.container else {
+            throw WorkspaceProviderAccessError.unavailable
+        }
+        let currentUsers = try modelContext.fetch(FetchDescriptor<AppUser>())
+        guard AppAccess.canAccessSidebarItem(.onsiteDocumentation,
+            email: currentUserEmail, users: currentUsers) else { throw GmailComposeError.access }
+    }
+
+    private func validateDocumentAccess(
+        call: ServiceCall?, document: QuickBooksBillingDocument?, includesFinancials: Bool
+    ) throws {
+        let currentUsers = try modelContext.fetch(FetchDescriptor<AppUser>())
+        guard !includesFinancials ||
+            AppAccess.canViewBillingFinancialDetails(email: currentUserEmail, users: currentUsers) ||
+            AppAccess.canCollectFieldPayments(email: currentUserEmail, users: currentUsers) else {
+            throw GmailComposeError.access
+        }
+        if let document {
+            try QuickBooksBillingAccessPolicy.validate(context: modelContext, document: document)
+        }
+        if let call {
+            guard isCurrentRecord(call), isCurrentRecord(call.customer) else { throw GmailDraftError.businessChanged }
+            let currentTechnicians = try modelContext.fetch(FetchDescriptor<Technician>())
+            guard AppAccess.visibleServiceCallIDs(email: currentUserEmail, users: currentUsers,
+                serviceCalls: [call], technicians: currentTechnicians).contains(call.id) else {
+                throw GmailComposeError.access
             }
-            persistGeneratedOnsiteReport(url, for: call, invoice: linkedInvoice, estimate: estimate(for: call))
+        }
+    }
+
+    /// The original source and request remain bound through rendering and the
+    /// caller's final continuation, before it reads models or persists a link.
+    private func exportingCustomerDocument(
+        request: UUID,
+        customerID: UUID,
+        serviceCallID: UUID?,
+        invoiceID: UUID?,
+        estimateID: UUID?,
+        membershipIsIntact: @escaping @MainActor () -> Bool,
+        validateAccess: @escaping @MainActor () throws -> Void,
+        export: (@escaping @MainActor () throws -> Void) async throws -> URL
+    ) async throws -> OnsiteDocumentExportLifetime.Result {
+        try validateDocumentWorkspace(request: request)
+        let context = modelContext
+        let email = AppAccess.normalizedEmail(currentUserEmail)
+        let selection = selectedServiceCallID
+        let operation = try WorkspaceProviderOperation.capture { true }
+        guard membershipIsIntact() else { throw GmailDraftError.businessChanged }
+        try validateAccess()
+        let business = GmailBusinessContext(customerID: customerID, serviceCallID: serviceCallID,
+            invoiceID: invoiceID, estimateID: estimateID, workflow: .customerDocument)
+        let origin = try GmailDraftBusinessSnapshot.capture(business, context: context)
+        return try await documentExportLifetime.export(request: request, validateCurrent: {
+            try operation.check()
+            try validateDocumentWorkspace(request: request)
+            guard modelContext === context, selectedServiceCallID == selection,
+                  AppAccess.normalizedEmail(currentUserEmail) == email,
+                  membershipIsIntact() else { throw GmailDraftError.businessChanged }
+            try validateAccess()
+            try GmailDraftBusinessSnapshot.validate(origin, business: business, context: context)
+        }, render: export)
+    }
+
+    private func isCurrentRecord<T: PersistentModel>(_ model: T?) -> Bool {
+        guard let model, model.modelContext === modelContext, !model.isDeleted,
+              let registered: T = modelContext.registeredModel(for: model.persistentModelID)
+        else { return false }
+        return registered === model
+    }
+
+    private func generateOnsiteReport(for call: ServiceCall) async {
+        guard let request = documentExportLifetime.begin() else { return }
+        defer { documentExportLifetime.finish(request) }
+        do {
+            try validateDocumentWorkspace(request: request)
+            guard isCurrentRecord(call), let customer = call.customer, isCurrentRecord(customer) else {
+                throw GmailDraftError.businessChanged
+            }
+            let linkedInvoice = invoice(for: call)
+            let linkedEstimate = estimate(for: call)
+            let originalInvoiceLink = call.linkedInvoiceID
+            let originalEstimateLink = call.linkedEstimateID
+            let includesFinancials = canIncludeFinancialsInOnsiteReports
+            let result = try await exportingCustomerDocument(
+                request: request, customerID: customer.id, serviceCallID: call.id,
+                invoiceID: linkedInvoice?.id ?? call.linkedInvoiceID,
+                estimateID: linkedEstimate?.id ?? call.linkedEstimateID,
+                membershipIsIntact: {
+                    isCurrentRecord(call) && isCurrentRecord(customer) &&
+                    call.linkedInvoiceID == originalInvoiceLink && call.linkedEstimateID == originalEstimateLink &&
+                    (linkedInvoice.map { isCurrentRecord($0) } ?? true) &&
+                    (linkedEstimate.map { isCurrentRecord($0) } ?? true)
+                },
+                validateAccess: {
+                    try validateDocumentAccess(call: call, document: nil, includesFinancials: includesFinancials)
+                }
+            ) { authorize in
+                try await CustomerDocumentExporter.exportOnsiteReportOffMainActor(
+                    serviceCall: call, estimate: linkedEstimate, invoice: linkedInvoice,
+                    payments: payments(for: linkedInvoice), attachments: reportEvidenceAttachments(for: call),
+                    equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls,
+                    fieldFormTemplates: fieldFormTemplates,
+                    fieldFormResponses: fieldFormResponses.filter { $0.serviceCallID == call.id },
+                    timeEntries: timeEntries,
+                    materialReadiness: JobMaterialCloseoutPolicy.summary(
+                        for: call, invoice: linkedInvoice, estimates: estimates,
+                        projectMilestones: projectMilestones, items: items, movements: inventoryMovements),
+                    serviceCallActivities: serviceCallActivities,
+                    requireWorkPerformedLog: requireWorkPerformedLogForCloseout,
+                    includeFinancials: includesFinancials, authorize: authorize)
+            }
+            try result.validateCurrent()
+            let data = try await result.readData()
+            try result.validateCurrent()
+            generatedCustomerDocumentURL = result.url
+            if !call.markDocumentationCompleteIfReady() { call.documentationChecklist = false }
+            persistGeneratedOnsiteReport(result.url, data: data, for: call, invoice: linkedInvoice,
+                estimate: linkedEstimate, includesFinancials: includesFinancials)
         } catch {
+            guard (try? documentExportLifetime.check(request)) != nil else { return }
             documentExportMessage = "Could not generate onsite report: \(error.localizedDescription)"
         }
     }
 
-    private func persistGeneratedOnsiteReport(_ url: URL, for call: ServiceCall, invoice: Invoice?, estimate: Estimate?) {
+    private func persistGeneratedOnsiteReport(_ url: URL, data: Data, for call: ServiceCall, invoice: Invoice?, estimate: Estimate?, includesFinancials: Bool) {
         do {
-            let data = try Data(contentsOf: url)
             let invoiceID = invoice?.id ?? call.linkedInvoiceID
             let estimateID = estimate?.id ?? call.linkedEstimateID
             let caption = CustomerDocumentExporter.onsiteReportAttachmentCaption(
                 serviceCall: call,
                 estimate: estimate,
                 invoice: invoice,
-                includeFinancials: canIncludeFinancialsInOnsiteReports
+                includeFinancials: includesFinancials
             )
             let attachment: ServiceDocumentAttachment
             if let reusable = ServiceDocumentAttachment.reusableGeneratedServiceReport(
@@ -2433,7 +2608,9 @@ struct OnsiteDocumentationView: View {
             }
 
             try modelContext.save()
-            syncGeneratedOnsiteReportToCompanyStorage(attachment, data: data)
+            syncGeneratedOnsiteReportToCompanyStorage(attachment, data: data) {
+                try validateDocumentAccess(call: call, document: nil, includesFinancials: includesFinancials)
+            }
             try QuickBooksInvoiceAttachmentSync.syncPendingServiceReports(
                 estimates: estimates,
                 invoices: invoices,
@@ -2455,30 +2632,12 @@ struct OnsiteDocumentationView: View {
         }
     }
 
-    private func syncGeneratedOnsiteReportToCompanyStorage(_ attachment: ServiceDocumentAttachment, data: Data) {
-        guard GunnAireBackendService.isConfigured else { return }
-        Task {
-            do {
-                let response = try await GunnAireBackendService.uploadDocument(
-                    data: data,
-                    filename: attachment.displayName,
-                    contentType: attachment.contentType,
-                    kind: attachment.kindRaw,
-                    serviceCallID: attachment.serviceCallID,
-                    invoiceID: attachment.invoiceID,
-                    estimateID: attachment.estimateID,
-                    customerEquipmentID: attachment.customerEquipmentID,
-                    equipmentName: attachment.linkedEquipment(in: equipmentProfiles, serviceCalls: serviceCalls)?.displayName,
-                    customerName: attachment.customer?.name
-                )
-                attachment.markSharedCompanyStored(id: response.id)
-                try? modelContext.save()
-            } catch {
-                attachment.markSharedCompanyUploadFailed(error.localizedDescription)
-                try? modelContext.save()
-                documentExportMessage = "Onsite report saved locally, but company storage upload failed: \(error.localizedDescription)"
-            }
-        }
+    private func syncGeneratedOnsiteReportToCompanyStorage(
+        _ attachment: ServiceDocumentAttachment, data: Data,
+        validateAccess: @escaping @MainActor () throws -> Void
+    ) {
+        syncGeneratedDocumentToCompanyStorage(attachment, data: data,
+            failurePrefix: "Onsite report saved locally, but company storage upload failed", validateAccess: validateAccess)
     }
 
     private func attachments(for call: ServiceCall) -> [ServiceDocumentAttachment] {
@@ -2489,76 +2648,106 @@ struct OnsiteDocumentationView: View {
         CustomerDocumentExporter.reportEvidenceAttachments(for: documentAttachments, serviceCall: call)
     }
 
-    private func generateEstimateDocument(for call: ServiceCall) {
-        guard let estimate = estimate(for: call) else {
-            documentExportMessage = "No estimate is linked to this job yet."
-            return
-        }
+    private func generateEstimateDocument(for call: ServiceCall) async {
+        guard let request = documentExportLifetime.begin() else { return }
+        defer { documentExportLifetime.finish(request) }
         do {
-            let url = try CustomerDocumentExporter.exportEstimate(
-                estimate,
-                serviceCall: call,
-                attachments: documentAttachments,
-                equipmentProfiles: equipmentProfiles,
-                serviceCalls: serviceCalls
-            )
-            generatedCustomerDocumentURL = url
+            try validateDocumentWorkspace(request: request)
+            guard isCurrentRecord(call), let customer = call.customer, isCurrentRecord(customer),
+                  let estimate = estimate(for: call), isCurrentRecord(estimate), estimate.customer === customer else {
+                throw GmailDraftError.businessChanged
+            }
+            let originalEstimateLink = call.linkedEstimateID
+            let result = try await exportingCustomerDocument(
+                request: request, customerID: customer.id, serviceCallID: call.id,
+                invoiceID: nil, estimateID: estimate.id,
+                membershipIsIntact: {
+                    isCurrentRecord(call) && isCurrentRecord(estimate) && isCurrentRecord(customer) &&
+                    call.linkedEstimateID == originalEstimateLink
+                },
+                validateAccess: {
+                    try validateDocumentAccess(call: call, document: .estimate(estimate), includesFinancials: false)
+                }
+            ) { authorize in
+                try await CustomerDocumentExporter.exportEstimateOffMainActor(
+                    estimate, serviceCall: call, attachments: documentAttachments,
+                    equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls, authorize: authorize)
+            }
+            try result.validateCurrent()
+            let data = try await result.readData()
+            try result.validateCurrent()
+            generatedCustomerDocumentURL = result.url
             persistGeneratedBillingDocument(
-                url,
-                customer: estimate.customer,
-                serviceCallID: call.id,
-                invoiceID: nil,
-                estimateID: estimate.id,
-                kind: .estimateSupport,
-                caption: "Generated estimate PDF",
-                successMessage: "Estimate PDF generated and saved to this job."
-            )
+                result.url, data: data, customer: customer, serviceCallID: call.id, invoiceID: nil,
+                estimateID: estimate.id, kind: .estimateSupport, caption: "Generated estimate PDF",
+                successMessage: "Estimate PDF generated and saved to this job.",
+                validateUploadAccess: {
+                    try validateDocumentAccess(call: call, document: .estimate(estimate), includesFinancials: false)
+                })
         } catch {
+            guard (try? documentExportLifetime.check(request)) != nil else { return }
             documentExportMessage = "Could not generate estimate PDF: \(error.localizedDescription)"
         }
     }
 
-    private func generateInvoiceDocument(_ invoice: Invoice) {
+    private func generateInvoiceDocument(_ invoice: Invoice) async {
+        guard let request = documentExportLifetime.begin() else { return }
+        defer { documentExportLifetime.finish(request) }
         do {
+            try validateDocumentWorkspace(request: request)
+            guard isCurrentRecord(invoice), let customer = invoice.customer, isCurrentRecord(customer) else {
+                throw GmailDraftError.businessChanged
+            }
             let linkedCall = serviceCall(for: invoice)
             let invoicePayments = payments(for: invoice)
-            let url = try CustomerDocumentExporter.exportInvoice(
-                invoice,
-                serviceCall: linkedCall,
-                payments: invoicePayments,
-                attachments: documentAttachments,
-                equipmentProfiles: equipmentProfiles,
-                serviceCalls: serviceCalls
-            )
-            generatedCustomerDocumentURL = url
             let documentLabel = CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments)
+            let documentCaption = CustomerDocumentExporter.invoiceDocumentCaption(for: invoice, payments: invoicePayments)
+            let result = try await exportingCustomerDocument(
+                request: request, customerID: customer.id, serviceCallID: linkedCall?.id,
+                invoiceID: invoice.id, estimateID: nil,
+                membershipIsIntact: {
+                    isCurrentRecord(invoice) && isCurrentRecord(customer) &&
+                    (linkedCall.map { isCurrentRecord($0) } ?? true)
+                },
+                validateAccess: {
+                    try validateDocumentAccess(call: linkedCall, document: .invoice(invoice), includesFinancials: true)
+                }
+            ) { authorize in
+                try await CustomerDocumentExporter.exportInvoiceOffMainActor(
+                    invoice, serviceCall: linkedCall, payments: invoicePayments, attachments: documentAttachments,
+                    equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls, authorize: authorize)
+            }
+            try result.validateCurrent()
+            let data = try await result.readData()
+            try result.validateCurrent()
+            generatedCustomerDocumentURL = result.url
             persistGeneratedBillingDocument(
-                url,
-                customer: invoice.customer,
-                serviceCallID: linkedCall?.id,
-                invoiceID: invoice.id,
-                estimateID: nil,
-                kind: .invoiceSupport,
-                caption: CustomerDocumentExporter.invoiceDocumentCaption(for: invoice, payments: invoicePayments),
-                successMessage: "\(documentLabel) PDF generated and saved to this job."
-            )
+                result.url, data: data, customer: customer, serviceCallID: linkedCall?.id, invoiceID: invoice.id,
+                estimateID: nil, kind: .invoiceSupport,
+                caption: documentCaption,
+                successMessage: "\(documentLabel) PDF generated and saved to this job.",
+                validateUploadAccess: {
+                    try validateDocumentAccess(call: linkedCall, document: .invoice(invoice), includesFinancials: true)
+                })
         } catch {
+            guard (try? documentExportLifetime.check(request)) != nil else { return }
             documentExportMessage = "Could not generate invoice PDF: \(error.localizedDescription)"
         }
     }
 
     private func persistGeneratedBillingDocument(
         _ url: URL,
+        data: Data,
         customer: Customer,
         serviceCallID: UUID?,
         invoiceID: UUID?,
         estimateID: UUID?,
         kind: ServiceDocumentAttachmentKind,
         caption: String,
-        successMessage: String
+        successMessage: String,
+        validateUploadAccess: @escaping @MainActor () throws -> Void
     ) {
         do {
-            let data = try Data(contentsOf: url)
             let equipmentID = serviceCallID.flatMap { id in serviceCalls.first { $0.id == id }?.customerEquipmentID }
             let attachment: ServiceDocumentAttachment
             if let reusable = ServiceDocumentAttachment.reusableGeneratedBillingDocument(
@@ -2595,7 +2784,7 @@ struct OnsiteDocumentationView: View {
                 attachment = generated
             }
             try modelContext.save()
-            syncGeneratedBillingDocumentToCompanyStorage(attachment, data: data)
+            syncGeneratedBillingDocumentToCompanyStorage(attachment, data: data, validateAccess: validateUploadAccess)
             try QuickBooksInvoiceAttachmentSync.syncPendingServiceReports(
                 estimates: estimates,
                 invoices: invoices,
@@ -2610,28 +2799,85 @@ struct OnsiteDocumentationView: View {
         }
     }
 
-    private func syncGeneratedBillingDocumentToCompanyStorage(_ attachment: ServiceDocumentAttachment, data: Data) {
-        guard GunnAireBackendService.isConfigured else { return }
-        Task {
+    private func syncGeneratedBillingDocumentToCompanyStorage(
+        _ attachment: ServiceDocumentAttachment, data: Data,
+        validateAccess: @escaping @MainActor () throws -> Void
+    ) {
+        syncGeneratedDocumentToCompanyStorage(attachment, data: data,
+            failurePrefix: "Billing PDF saved locally, but company storage upload failed", validateAccess: validateAccess)
+    }
+
+    /// Own document/history saves have finished. This upload binds only their
+    /// resulting attachment and current authority, never the pre-save source
+    /// fingerprint or a provider session captured later inside the Task.
+    private func syncGeneratedDocumentToCompanyStorage(
+        _ attachment: ServiceDocumentAttachment, data: Data, failurePrefix: String,
+        validateAccess: @escaping @MainActor () throws -> Void
+    ) {
+        guard GunnAireBackendService.isConfigured,
+              GunnAireCloudKit.usesTestDatabase ||
+                CompanyWorkspaceAccessController.shared.authorizedContainer === modelContext.container,
+              isCurrentRecord(attachment), let customer = attachment.customer,
+              isCurrentRecord(customer) else { return }
+        let context = modelContext
+        let email = AppAccess.normalizedEmail(currentUserEmail)
+        let identifier = attachment.id, persistentID = attachment.persistentModelID
+        let filename = attachment.displayName, path = attachment.localFilePath
+        let contentType = attachment.contentType, kind = attachment.kindRaw
+        let caption = attachment.caption, byteCount = attachment.fileSizeBytes
+        let createdAt = attachment.createdAt
+        let serviceCallID = attachment.serviceCallID, invoiceID = attachment.invoiceID
+        let estimateID = attachment.estimateID, maintenanceContractID = attachment.maintenanceContractID
+        let equipmentID = attachment.customerEquipmentID
+        let equipmentName = attachment.linkedEquipment(in: equipmentProfiles, serviceCalls: serviceCalls)?.displayName
+        let customerName = customer.name
+        let check = { @MainActor in
+            try Task.checkCancellation()
+            guard modelContext === context,
+                  GunnAireCloudKit.usesTestDatabase ||
+                    CompanyWorkspaceAccessController.shared.authorizedContainer === context.container,
+                  AppAccess.normalizedEmail(currentUserEmail) == email,
+                  isCurrentRecord(attachment), isCurrentRecord(customer), attachment.customer === customer,
+                  attachment.persistentModelID == persistentID, attachment.id == identifier,
+                  attachment.displayName == filename, attachment.localFilePath == path,
+                  attachment.contentType == contentType, attachment.kindRaw == kind,
+                  attachment.caption == caption, attachment.fileSizeBytes == byteCount,
+                  attachment.createdAt == createdAt, attachment.serviceCallID == serviceCallID,
+                  attachment.invoiceID == invoiceID, attachment.estimateID == estimateID,
+                  attachment.maintenanceContractID == maintenanceContractID,
+                  attachment.customerEquipmentID == equipmentID, customer.name == customerName else {
+                throw GmailDraftError.businessChanged
+            }
+            let currentUsers = try context.fetch(FetchDescriptor<AppUser>())
+            guard AppAccess.canAccessSidebarItem(.onsiteDocumentation, email: currentUserEmail, users: currentUsers) else {
+                throw GmailComposeError.access
+            }
+            try validateAccess()
+        }
+        let operation: WorkspaceProviderOperation
+        do {
+            try check()
+            operation = try WorkspaceProviderOperation.capture {
+                do { try check(); return true } catch { return false }
+            }
+        } catch { return }
+        Task { @MainActor in
             do {
+                try operation.check()
                 let response = try await GunnAireBackendService.uploadDocument(
-                    data: data,
-                    filename: attachment.displayName,
-                    contentType: attachment.contentType,
-                    kind: attachment.kindRaw,
-                    serviceCallID: attachment.serviceCallID,
-                    invoiceID: attachment.invoiceID,
-                    estimateID: attachment.estimateID,
-                    customerEquipmentID: attachment.customerEquipmentID,
-                    equipmentName: attachment.linkedEquipment(in: equipmentProfiles, serviceCalls: serviceCalls)?.displayName,
-                    customerName: attachment.customer?.name
-                )
+                    data: data, filename: filename, contentType: contentType, kind: kind,
+                    serviceCallID: serviceCallID, invoiceID: invoiceID, estimateID: estimateID,
+                    maintenanceContractID: maintenanceContractID, customerEquipmentID: equipmentID,
+                    equipmentName: equipmentName, customerName: customerName, originatingOperation: operation)
+                try operation.check()
+                try check()
                 attachment.markSharedCompanyStored(id: response.id)
-                try? modelContext.save()
+                try context.save()
             } catch {
+                guard (try? operation.check()) != nil, (try? check()) != nil else { return }
                 attachment.markSharedCompanyUploadFailed(error.localizedDescription)
-                try? modelContext.save()
-                documentExportMessage = "Billing PDF saved locally, but company storage upload failed: \(error.localizedDescription)"
+                try? context.save()
+                documentExportMessage = "\(failurePrefix): \(error.localizedDescription)"
             }
         }
     }
