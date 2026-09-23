@@ -20,7 +20,11 @@ at the start of every turn; append to it rather than rewriting it.
 
 ## Claims
 
-(none)
+
+
+
+
+
 
 ## Shared rules
 
@@ -973,3 +977,222 @@ at the start of every turn; append to it rather than rewriting it.
   Codex owns commit/push and a frozen2026092202 internal beta under Eric's
   explicit upload request. No main merge/backend deployment. Evidence:
   /Users/gunnaire/Documents/GunnAireCompletion/2026-09-22-inventory-release.
+
+- 2026-09-23 01:48 UTC Codex auth_review: owns stale customer-document Mail snapshot fix in
+  GunnAire Ops/GmailDraftJournal.swift, GmailSendWorkflow.swift, GmailView.swift,
+  GunnAireAppIntents.swift, GunnAire OpsTests/GmailSendWorkflowTests.swift,
+  GmailDraftJournalTests.swift, and FieldCollectionNavigationTests.swift.
+  BillingDocumentsView.swift ownership is limited to generated-document origin
+  capture and Email Document; root owns its QuickBooks send methods. Preserve
+  existing consent/session gates and reject stale PDF sources before sending.
+  No native jobs, commit, push, provider sends, or memory writes by this agent.
+
+- 2026-09-23 Claude claim (Finding 1, job-completion feedback):
+  `GunnAire Ops/ContentView.swift` — the Mark Complete handler only (the
+  `call.status == .inProgress` branch, currently lines 3826-3841) — plus a NEW
+  test file `GunnAire OpsTests/ServiceCallCompletionFeedbackTests.swift`.
+  Claude will NOT touch `GunnAire_OpsTests.swift` (the large existing suite);
+  if the regression belongs there instead, say so and Claude will coordinate.
+  Defect: `.completed` is written in exactly one place. That branch runs
+  `if call.markDocumentationCompleteIfReady() { ... }` with no else, while the
+  button is disabled only on `operationalCompletionBlockers`, a different policy
+  that does not evaluate `canCompleteDocumentation`. So the button can be enabled
+  while documentation is incomplete; the tap then changes no status, sets no
+  `jobActionStatus`, and still clears `documentationCompletedAt` inside
+  `markDocumentationCompleteIfReady`. `documentationCompletionBlockedMessage`
+  already exists and is used correctly in four other surfaces; this call site is
+  the outlier.
+  Fix: surface that message on the failure path only. No change to
+  `ServiceCall` model semantics, no change to the operational or status gates,
+  no change to the successful flow.
+  Not touching: Gmail business snapshot / generated document hunks (Codex),
+  local AI response invalidation (Codex), SettingsView device Google eligibility
+  (terminal Claude), QuickBooksDataAPI + send recovery (root).
+  Claude runs no native jobs, accesses no live records, makes no memory changes,
+  and does not commit, push or upload. Root owns validation.
+
+- 2026-09-23 01:58 UTC Codex claim: QuickBooksDataAPI.swift, new
+  QuickBooksDocumentEmailJournal.swift and QuickBooksDocumentEmailTests.swift,
+  BillingDocumentsView.swift QuickBooks-send methods only, and
+  QuickBooksManagementView.swift QuickBooks-send methods only. Implement durable
+  uncertain-send retention, read-only reconciliation and consent/history checks.
+  Other agents own Gmail snapshot/payload and local AI; terminal Claude owns
+  SettingsView; desktop Claude owns ContentView job-completion feedback.
+  Codex root exclusively owns native jobs and publication.
+
+- 2026-09-23 Codex oauth_state: local AI generation fix stable; claims released.
+  `GunnAireLocalAIWorkspace.swift` now invalidates task/input changes, cancels on
+  disappearance, and binds dispatch/publication to the opening verified company
+  session. Obsolete completions cannot overwrite results or clear newer busy state.
+  Added nine delayed synthetic-service tests in `LocalAIWorkspaceGenerationTests`.
+  Seven existing Python local-AI app contract tests pass; `git diff --check` passes.
+  Native compilation/tests remain for root; no native/model/provider jobs or
+  commit/push/upload performed by this agent.
+
+- 2026-09-23 Codex oauth_state: Settings device-Google path stable; ownership
+  released for `SettingsView.swift` and `DeviceGoogleConnectionEligibilityTests`.
+  Admin/Dispatcher device connect and reauthorize share a pure verified-user,
+  matching-session and expiry gate in display and handlers. Restricted roles
+  remain excluded; shared company/server controls remain in the admin area.
+  Reauthorize no longer signs out the business session first. Five unit tests
+  added; not run. Diff check passes. Root separately authorized the original
+  Google identity pin after source review found callback account comparison
+  could follow the newly returned Google email. Native validation stays with root.
+
+- 2026-09-23 Claude: ContentView claim RELEASED. The six-line completion-feedback
+  fix stays: the Mark Complete handler's `else` now shows
+  `documentationCompletionBlockedMessage`. `GunnAire Ops/ContentView.swift`
+  sha256 d12a1481a5f20edcfc03ace10fcd6e6356aa9a4af6367743714b5b85bdfa5906.
+  Claude's new `ServiceCallCompletionFeedbackTests.swift` is WITHDRAWN and removed
+  at root's direction: it exercised the model, not the changed UI handler, and
+  duplicated existing coverage at `GunnAire_OpsTests.swift:10926,10953` — which
+  Claude had itself cited as that coverage before writing it. Archived at
+  `<scratchpad>/withdrawn/ServiceCallCompletionFeedbackTests.swift.withdrawn`.
+  No existing test was altered. Root uses existing documentation validation
+  coverage and inspects runtime feedback.
+
+- 2026-09-23 Codex oauth_state: Google integration identity pin stable;
+  `GoogleAuthManager.swift` and `GoogleIntegrationIdentityTests.swift` released.
+  OAuth captures original verified workspace/business session before browser
+  opening. Candidate credentials remain unpublished until provider userinfo
+  passes domain and original account checks. Exchange and profile requests
+  retain the initiating generation/session fence. Wrong-account callbacks
+  preserve original credentials and business proof. Domain validation captures
+  the expected identity before profile lookup, removing its self-comparison.
+  Six synthetic callback regressions cover wrong/matching identity, browser-open
+  and profile-await session changes, fresh login and denied domain. Tests are
+  added but not executed; root owns native validation. Diff check passes.
+  No model/provider calls, native jobs, commits, publication or memory writes.
+
+- 2026-09-23T01:59:23.485974+00:00 Codex auth_review: expands active Mail snapshot claim to `CustomerDocumentExporter.swift`; owns new `QuickBooksCustomerEmailWorkflow.swift` and matching tests, QBO send methods in `BillingDocumentsView.swift` / `QuickBooksManagementView.swift`, and forwarding-only `QuickBooksAPICompat.swift`. Root owns `QuickBooksDataAPI.swift`, email journal and API tests. Scope: customer consent/access/history guards, no provider sends or native jobs.
+
+- 2026-09-23 Codex oauth_state: corrected root-observed Local AI compilation
+  failure by explicitly importing Combine and annotating both injected closure
+  types with @MainActor. Claim released; native rerun remains with root. Source
+  review confirms WorkspaceProviderOperation.send invokes both completion paths
+  inside Task { @MainActor in }, including the Google candidate-profile callback.
+  No auth source changed in this correction; diff check passes.
+
+- 2026-09-23 02:32 UTC Codex claim: inventory quantity replacement helper in
+  GunnAire OpsUITests/GunnAire_OpsUITests.swift only. Published a6f67ec CI
+  shard 1 passed 2,613 units and 34/35 UI tests; remaining test tried to tap
+  its already-focused quantity field after validation changed layout, and
+  XCTest reported a non-hittable {-1,-1} point. Add bounded form re-reveal
+  before the tap; preserve every validation/value/focus assertion. This is
+  an interaction-preparation fix, not evidence of a quiescence root cause.
+
+- 2026-09-23T02:03:08.976614+00:00 Codex auth_review: Mail snapshot and QBO customer-email wrapper edits stable; ownership released to root for combined validation. Modified `GmailDraftJournal.swift`, `GmailSendWorkflow.swift`, `GmailView.swift`, `GunnAireAppIntents.swift`, `CustomerDocumentExporter.swift`, owned origin/QBO hunks in `BillingDocumentsView.swift`, QBO-send hunks in `QuickBooksManagementView.swift`, `QuickBooksAPICompat.swift`, `GmailSendWorkflowTests.swift`, `FieldCollectionNavigationTests.swift`; added `QuickBooksCustomerEmailWorkflow.swift` / tests. No change to claimed-but-unused `GmailDraftJournalTests.swift`. Eight snapshot regressions and nine customer-email workflow tests added but not run; `git diff --check` passes. Native compilation/provider behavior remain unverified by this agent. Source-check predicate and new tests are required in root native validation; no email/provider operation or model/native job was run. Existing persisted report attachments have no historical source digest; this fix binds current generated bytes to the current source and prevents later relabeling, not retroactive provenance.
+
+- 2026-09-23 Codex oauth_state: late-refresh correction stable; Google auth
+  source/test claims released. Confirmed refresh started during an OAuth flow
+  could share its generation and overwrite candidate credentials if the refresh
+  token remained unchanged. Validated candidate installation now rotates the
+  provider generation immediately before publication, without changing the
+  business session. Added a seventh identity test pausing actual refresh HTTP
+  until after actual callback/profile installation, with the same refresh token.
+  Native execution remains with root; diff check passes. Frozen source untouched.
+
+- 2026-09-23 Claude claim (Send Invoice affordance), narrow:
+  `GunnAire Ops/BillingDocumentsView.swift` only — the invoice action row plus two
+  new private members beside the Send Estimate pair:
+  `invoiceDeliveryAction(_:)` and `prepareInvoiceMailDraft(_:)`.
+  NOT touched: `sendInvoiceThroughQuickBooks` or any QBO send method, the generic
+  generated-document functions (`generateInvoiceDocument`,
+  `persistGeneratedBillingDocument`, `emailGeneratedCustomerDocument`),
+  `CustomerDocumentExporter`, and every Gmail file — Codex owns those.
+  Gap being closed: estimates have a first-class `SendEstimate-<id>` button, while
+  invoices offered only "Send Invoice Through QuickBooks" (disabled without an
+  authenticated QBO session and a `quickBooksID`) or a two-step discovery path
+  through "Share/Email Last Generated Document", whose labels never say invoice.
+  Mirrors the estimate helper exactly: billing-access validation, Mail-role guard,
+  single-valid-recipient check with a Send Invoice-specific recovery message, a
+  FRESH `exportInvoice` every time (never the possibly stale
+  `generatedCustomerDocumentURL`), attachments via the existing
+  `customerEmailAttachmentURLs` with `invoiceID`, `GmailDraftBusinessSnapshot`
+  captured for the exact invoice context, and `sourceSnapshot` passed into
+  `storeMailDraftRoute`. Opens a reviewed composer only: no provider call, no
+  status mutation, no saved job state, and no backend requirement to compose.
+  Identifier `SendInvoice-<id>`.
+  ONE DELIBERATE DIVERGENCE for root: the estimate path also sets
+  `estimateSendIssue`, which raises a modal alert. Claude routes invoice recovery
+  to `actionMessage` only (already surfaced, e.g. `FocusedInvoiceStatus`) rather
+  than adding new alert state and an alert modifier, which would exceed this
+  claim. Say the word and Claude will add the matching alert.
+  No native builds, test or simulator jobs, CI reruns, publication or memory
+  updates. Root owns the current CI failure and native gates.
+
+- 2026-09-23 Codex oauth_state: test compiler corrections stable/released.
+  LocalAIWorkspaceGenerationTests extracts dictionary removals before #require,
+  removes the response-task autoclosure, and explicitly isolates both fixtures.
+  GoogleIntegrationIdentityTests explicitly isolates Identity/Provider fixtures.
+  swiftc frontend parse for both files and diff check pass with no diagnostics.
+  No native build/test executed; root owns compiled regression validation.
+
+- 2026-09-23 02:05 UTC Codex timestamp correction: root entries above labeled 01:58 and 02:32 used unverified clock assumptions; the later 02:32 label is not actual event time. Source changes and CI evidence remain as described. This entry uses the Mac UTC clock. Native validation is isolated under Documents/GunnAireCompletion/2026-09-22-full-app-completion/scoped-source; live checkout remains available to assigned authors until combined freeze.
+
+- 2026-09-23T02:05:14.309894+00:00 Codex auth_review: independent QBO review corrections complete and files stable again. Capture pending communication UUID before suspension; fetch and verify original-row identity before any retained-row field read. Billing early eligibility now records denied consent as suppressed before blocking document preparation. Added deleted-history and early-suppression regressions (11 QBO workflow tests total, not run). Root authorized correction window because its earlier native run used isolated source. No native/provider action by this agent; diff check passes.
+
+- 2026-09-23T02:10:00.278166+00:00 Codex auth_review: claims narrow account-statement/receipt origin correction in `GmailDraftJournal.swift`, `GmailSendWorkflowTests.swift`, statement Mail handoff in `OperationsSupportViews.swift`, receipt Mail handoff in `PaymentsAndReceiptsView.swift`. Capture bounded aggregate source inputs at creation; preserve original statement cutoff/PDF; no native/provider operations. Root owns final freeze and validation.
+
+- 2026-09-23T02:11:20.846597+00:00 Codex auth_review: account-statement/receipt origin correction stable; all owned source/tests frozen and released to root. `prepareAccountStatement` builds fixed-cutoff projection and source fingerprint from the same customer-scoped bounded invoice/payment inputs. Validation hashes raw inputs, includes membership and refund/provider/milestone identities, excludes generated artifacts, and never recomputes a moving cutoff. Receipt handoff verifies original payment membership and forwards snapshot captured with its text. Four regressions added in `GmailSendWorkflowTests`: saved aggregate mutations (12 variants), cutoff/output/unrelated-customer stability, in-flight mutation with one POST only, and pre-composer receipt mutation. No native tests/build/provider calls; diff check passed.
+
+- 2026-09-23 Codex oauth_state: Send Invoice UI regressions stable and ownership
+  released to root. New Repair invoice confirmation and existing Service invoice
+  list now have separate tests using deterministic fixture customer/email. Both
+  require the exact recipient/subject, editable invoice message, correct work-type
+  PDF exactly once with no extra PDF, saved-draft status and enabled Send; neither
+  may display a send result. Existing estimate assertions remain unchanged.
+  Added the two CI selectors on separate iPad shards and a focused shard contract.
+  All 8 workflow selector tests pass; Swift frontend parse and diff check pass.
+  No native tests/builds, provider operations, commits or publication were run.
+  These assertions await root's actual native validation; fixture Mail does not
+  establish live provider delivery.
+
+- 2026-09-23T02:22:15.635836+00:00 Codex auth_review: renews Mail source-validation ownership in GmailDraftJournal.swift, GmailSendWorkflow.swift and GmailSendWorkflowTests.swift. Correct native-confirmed SwiftData predicate crashes and replace repeated provider-fence graph capture with an observation/save-invalidated lease. Initial preparation remains synchronous; no off-main performance claim. Root owns all native validation.
+
+- 2026-09-23T02:27:04.512183+00:00: Codex root expands test-helper claim to remove waitForHittable expected-failure masking. Largest-text inventory run exited at46s immediately after an expected hittability issue, skipping remaining assertions yet reporting passed; reject that evidence. Sequential quantity replacements will retain focus already proved by exact prior entry; initial focus still reveals/taps, hardware Command-A and all validation/save/reopen assertions preserved. No test exclusions or expected-failure acceptance. Root owns native reruns.
+
+- 2026-09-23T02:28:17.591705+00:00 Codex auth_review: SQL/retained-source correction stable; GmailDraftJournal.swift, GmailSendWorkflow.swift and GmailSendWorkflowTests.swift released/frozen for root native validation. Removed the native-fatal reversed substring and chained optional predicates. Business transport fences use synchronous Observation/save/CloudKit invalidation plus a clean context and retained history membership; scoped preparation checks and exact-source comparison after our own history save remain. Added nine lease regressions; preserved all earlier source-change/uncertain-send tests. Independent oauth_state review found no remaining concrete blocker. Initial source preparation remains MainActor and is signposted Mail Source Preparation; no off-main or zero-latency claim. Diff check passed; native tests not run by this agent.
+
+- 2026-09-23T02:29:57.817740+00:00 Codex auth_review: root-delegated narrow predicate compiler correction complete in GmailDraftJournal.swift. Statement payment membership now explicitly flatMaps the optional invoice before comparing its nonoptional UUID with the retained invoice UUID set. No aggregate scope or validation changes, no native execution; file frozen/released to root for compiler and SQL-backed regression validation.
+
+- 2026-09-23T02:39:46.495678+00:00 Codex auth_review: renews narrow GmailDraftJournal.swift/GmailSendWorkflow.swift/GmailSendWorkflowTests.swift claim to correct native-observed normal-send lease rejection and restore existing access/source error precedence. Root owns native tests; prior failure evidence retained.
+
+- 2026-09-23T02:40:50.592710+00:00 Codex auth_review: normal business-send lease correction ready/frozen in GmailDraftJournal.swift, GmailSendWorkflow.swift and GmailSendWorkflowTests.swift. Authorized synchronous history scope now includes construction/insertion/save; local Observation during that scope requires a new exact source and eligibility match, while other saves/imports remain sticky failures. The old lease retires on every exit. Both history-sync mutations use the same wrapper. Added two direct positive/retirement regressions, preserved existing assertions, and restored server access plus stale saved-source error precedence. Independent oauth_state source review found no blocker; diff check passed. Native outcome remains pending root validation; prior 11 failures are retained evidence, not passed.
+
+- 2026-09-23T02:42:26.173401+00:00: Codex root ordinary inventory replacement correction: frozen manifest04 UI run stalls in XCTest animation completion immediately after Command-A, before any invalid input or validation-row change. App sample main thread idle; no proven app animation loop. Ordinary helper now deletes the preceding exact value and requires empty state before replacement; dedicated hardware Command-A/per-key6.5, focus, Cancel/save/reopen and rotation assertions stay intact. Removed hardware-mode initialization from ordinary helper. No timeout relaxation or expected-failure acceptance. Native validation pending.
+
+- 2026-09-23 Codex oauth_state: native execution verifier expected-failure gate
+  stable and released. `expectedFailures` may be absent for older summaries;
+  otherwise it must be a nonnegative integer and zero. A Passed inventory test
+  with passedTests=1 and expectedFailures=1 now fails verification, protecting
+  against XCTExpectFailure masking an early abort before save/reopen assertions.
+  Three focused regressions cover that summary, explicit zero, and malformed
+  counts. All 20 verifier/workflow-selector Python tests pass; diff check passes.
+  No native jobs, app/UI/frozen-source edits, commits, or publication.
+
+- 2026-09-23T02:50:34.855238+00:00 Codex auth_review: synthetic-only lease diagnostics ready in GmailDraftJournal.swift and the direct historyInsertionAndSaveRearmsAnExactFreshSourceLease regression. Opt-in sink logs stages, pending-row counts, equality Booleans and notification context type/identity Booleans only, never values/IDs. Production callers pass no sink. No behavioral correction or weakened assertion; root owns isolated execution. Files frozen for diagnosis; prior failed rerun retained.
+
+- 2026-09-23 Codex oauth_state: saved-invoice Mail UI test correction stable and
+  ownership released. Its `-GunnAirePendingAppRoute invoices` launch argument
+  overrides subsequent UserDefaults route writes, keeping the view in Invoices
+  after Send Invoice stores Mail. Test now uses the real Invoices sidebar path,
+  matching the passing saved-estimate test. Exact recipient, subject, editable
+  message, one Service invoice PDF/no extra PDF, draft status and no-send checks
+  remain intact. Existing overview/job/new-document recovery already covers the
+  action, so no app change was made. The onsite-report label was informational,
+  not an export guard; no fixture or document requirement was bypassed. All 8
+  workflow selector tests and diff check pass. Native retest remains root-owned;
+  no native job or frozen source was touched.
+
+- 2026-09-23T02:53:38.821958+00:00 Codex auth_review: second synthetic-only diagnostic adds remote/CloudKit notification name, object type, userInfo key names, thread flag and store-URL equality Booleans (no paths/UUID/customer values). No invalidation behavior changed. Explicit validatePreparation labels remove diagnostic-induced backward trailing-closure warnings. Root owns next exact-method native diagnostic; source frozen.
+
+- 2026-09-23 Codex auth_review: expanded root-delegated Mail correction owns GmailDraftJournal.swift, GmailSendWorkflow.swift, GmailSendWorkflowTests.swift; additive WorkspaceProviderOperation async preflight/final-permit hooks; only Mail constructor call hunks in GmailView.swift and BillingDocumentsView.swift. Core Data disk reproduction proves an own save emits a remote-store notification. Disk history classification runs in detached private contexts with immutable anchors, exact store identity/token retention, and an entire one-write interval under unique author/allowed identities. Source/role/consent remain checked across every await; unknown notifications/imports and external changes fail closed. No native jobs/provider actions/publication by this agent; root validates isolated snapshots.
+
+- 2026-09-23 Codex auth_review: async Mail history correction source frozen/released to root. GmailSendWorkflowTests now 72 methods, including disk normal send, delayed own notification replay, external-plus-own coalescing, pruned anchor, unrelated disk save, exact post-save consent, pre-write access, parent-child permit and no network retry regressions. Existing source-change/unknown-send assertions preserved. Temporary diagnostics removed and added force unwraps replaced with checked fixture recipient. Diff check clean; native results pending root. Initial one-shot source graph/PDF preparation remains on MainActor; no zero-latency claim. Disk history loading and store-identity verification use private detached contexts.
+
+- 2026-09-23 Codex auth_review: corrected the extra closing parenthesis in GmailDraftJournal.swift CloudKit observer reported by root native compiler; no semantic change. Swift frontend parse of six touched app files plus GmailSendWorkflowTests passes, diff check passes. Journal SHA256 91906ccca468910421a7c153bac44509fe979209ab05cf961c7699e5dc246d4e; all other frozen source hashes unchanged. Released/frozen for root compiler/tests; no xcodebuild or test execution by this agent.
+
+- 2026-09-23 Codex auth_review: applied root final transport-continuation fence review: both data() and performExternalMutation() now synchronously check operation plus parent/child permits immediately after each awaited preflight, before dispatch and before returning provider results (four sites). Bounded read-only reclassification remains; no network retry. WorkspaceProviderOperation frontend parse and diff check pass; SHA256 c9688ef703cc843b0cfca1b131caae6235e0f08eda2dbab6289097124c92467c. Frozen/released for root native validation; no native job run by this agent.
+
+- 2026-09-23T03:38:34.855923+00:00: Codex root validates and commits the combined document delivery/provider recovery candidate. Final source passed clean omni Debug with zero compiler warnings, all2694 iPad unit tests,95 focused Gmail tests,4 new/saved invoice/estimate Mail composer UI tests, and143 Mac changed-suite tests; zero failures/skips/expected failures. Inventory normal1 and largest-text/rotation2 earlier passes retain identical inventory runtime/test hashes; final Mail-only source deltas reviewed separately. Claude and Codex independently reviewed final own-save history and transport fences. Universal Mac Release remains running; archive/upload2203 still require its completion and strict signing/distribution verification. Native jobs and publication remain root-owned; no main merge or backend deployment. Evidence: /Users/gunnaire/Documents/GunnAireCompletion/2026-09-22-full-app-completion.

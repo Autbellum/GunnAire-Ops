@@ -3832,6 +3832,12 @@ GunnAire
                             call.status = .completed
                             call.completeLinkedMaintenanceAgreementIfNeeded()
                             ServiceCallActivity.record(for: call, action: "Job completed", detail: "Status changed from in progress to completed.", actorEmail: currentActivityActor, in: modelContext)
+                        } else {
+                            // The button is disabled only on operational blockers, which do
+                            // not evaluate the service report's own readiness. Without this
+                            // the tap changed nothing and explained nothing. Name the missing
+                            // items, as the other completion surfaces already do.
+                            jobActionStatus = call.documentationCompletionBlockedMessage
                         }
                     } label: {
                         Label("Mark Complete", systemImage: "checkmark.circle.fill")

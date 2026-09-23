@@ -1849,16 +1849,27 @@ GunnAire
     }
 
     private func openReceiptEmail(for payment: Payment, fallbackURL: URL) {
-        if googleAuth.isAuthenticated, let draft = receiptEmailDraft(for: payment) {
-            GunnAireAppIntentRouter.storeMailDraftRoute(
-                to: draft.to,
-                subject: draft.subject,
-                body: draft.body,
-                customerID: payment.invoice.customer.id,
-                serviceCallID: payment.invoice.serviceCallID,
-                invoiceID: payment.invoice.id,
-                workflow: .receipt
-            )
+        if googleAuth.isAuthenticated {
+            do {
+                let paymentID = payment.id
+                let matches = try modelContext.fetch(FetchDescriptor<Payment>(predicate: #Predicate { $0.id == paymentID }))
+                guard matches.count == 1, matches.first === payment,
+                      let invoice = payment.invoice, let customer = invoice.customer,
+                      let draft = receiptEmailDraft(for: payment) else { throw GmailDraftError.businessChanged }
+                let business = GmailBusinessContext(customerID: customer.id, serviceCallID: invoice.serviceCallID,
+                    invoiceID: invoice.id, workflow: .receipt)
+                let original = try GmailDraftBusinessSnapshot.capture(business, context: modelContext)
+                GunnAireAppIntentRouter.storeMailDraftRoute(
+                    to: draft.to,
+                    subject: draft.subject,
+                    body: draft.body,
+                    customerID: customer.id,
+                    serviceCallID: invoice.serviceCallID,
+                    invoiceID: invoice.id,
+                    workflow: .receipt,
+                    sourceSnapshot: original
+                )
+            } catch { actionMessage = "Could not prepare the receipt email: \(error.localizedDescription)" }
         } else {
             openURL(fallbackURL)
         }

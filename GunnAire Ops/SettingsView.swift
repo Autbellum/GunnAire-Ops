@@ -3,12 +3,29 @@ import SwiftData
 import UniformTypeIdentifiers
 import AVKit
 
+nonisolated enum DeviceGoogleConnectionEligibility {
+    static func allows(role: AppUserRole?, email: String?, verifiedUser: BackendAppUserRecord?,
+                       session: CompanyWorkspaceSession?, backendOrigin: String, now: Date = Date()) -> Bool {
+        let email = AppAccess.normalizedEmail(email)
+        guard role == .admin || role == .dispatcher,
+              !email.isEmpty, let verifiedUser, verifiedUser.isActive,
+              AppUserRole(rawValue: verifiedUser.role) == role,
+              AppAccess.normalizedEmail(verifiedUser.email) == email,
+              let session, session.expiresAt > now,
+              session.backendOrigin == backendOrigin,
+              AppAccess.normalizedEmail(session.email) == email else { return false }
+        return true
+    }
+}
+
 struct SettingsView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var cloudKitEventMonitor: GunnAireCloudKitEventMonitor
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
+    @ObservedObject private var workspaceAccess = CompanyWorkspaceAccessController.shared
+    @ObservedObject private var appleAuth = AppleAuthManager.shared
     @ObservedObject private var staffNotifications = StaffPushNotificationManager.shared
 
     @Binding var isQuickBooksAuthenticated: Bool
@@ -105,6 +122,12 @@ struct SettingsView: View {
 
     private var currentUserRole: AppUserRole? {
         AppAccess.activeRole(email: currentUserEmail, users: users)
+    }
+
+    private var canConnectDeviceGoogle: Bool {
+        DeviceGoogleConnectionEligibility.allows(role: currentUserRole, email: currentUserEmail,
+            verifiedUser: workspaceAccess.verifiedUser, session: workspaceAccess.operationStamp?.session,
+            backendOrigin: Config.Backend.normalizedBaseURL)
     }
 
     private var currentRoleAccessSummary: String {
@@ -503,6 +526,15 @@ struct SettingsView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
+                    if canConnectDeviceGoogle {
+                        Section("Google on This Device") {
+                            googleDeviceConnectionStatus
+                            Text("Connect the same approved business Google account to send estimates and customer mail from this device.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            googleDeviceConnectionControls
+                        }
+                    }
                 }
 
                 Section("Staff Notifications") {
@@ -744,51 +776,14 @@ struct SettingsView: View {
         }
 
         Section("Google") {
-            connectionStatusRow(title: "On this device", isConnected: isGoogleAuthenticated)
-
-            if googleAuth.googleDriveAuthorizationState == .ready {
-                Label("Calendar, Gmail, and per-file Drive archive access confirmed.", systemImage: "checkmark.shield")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            } else {
-                Text(googleAuth.googleDriveAuthorizationState.detail)
-                    .font(.caption)
-                    .foregroundColor(
-                        googleAuth.googleDriveAuthorizationState == .disconnected ? .secondary : .orange
-                    )
-            }
+            googleDeviceConnectionStatus
 
             if let role = currentUserRole, role != .standard {
                 Button("Manage Google Access") { showingGoogleServerAccess = true }
                     .accessibilityIdentifier("ManageGoogleServerAccess")
             }
 
-            if isAdminUser {
-                if isGoogleAuthenticated {
-                    Button("Disconnect Google", role: .destructive) {
-                        disconnectGoogle()
-                        isGoogleAuthenticated = false
-                    }
-
-                    if googleAuth.googleDriveAuthorizationState == .reauthorizationRequired ||
-                        googleAuth.googleDriveAuthorizationState == .businessAccountMismatch {
-                        Button {
-                            disconnectGoogle()
-                            isGoogleAuthenticated = false
-                            authenticateGoogle()
-                        } label: {
-                            Label("Reconnect Google for Drive", systemImage: "arrow.clockwise.circle")
-                        }
-                        .accessibilityIdentifier("ReconnectGoogleForDrive")
-                    }
-                } else {
-                    Button {
-                        authenticateGoogle()
-                    } label: {
-                        Label("Connect Google", systemImage: "link")
-                    }
-                }
-            }
+            googleDeviceConnectionControls
         }
 
         if isAdminUser {
@@ -955,6 +950,54 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private var googleDeviceConnectionStatus: some View {
+        connectionStatusRow(title: "On this device", isConnected: isGoogleAuthenticated)
+        if googleAuth.googleDriveAuthorizationState == .ready {
+            Label("Calendar, Gmail, and per-file Drive archive access confirmed.", systemImage: "checkmark.shield")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        } else {
+            Text(googleAuth.googleDriveAuthorizationState.detail)
+                .font(.caption)
+                .foregroundColor(googleAuth.googleDriveAuthorizationState == .disconnected ? .secondary : .orange)
+        }
+    }
+
+    @ViewBuilder
+    private var googleDeviceConnectionControls: some View {
+        if canConnectDeviceGoogle {
+            if isGoogleAuthenticated {
+                if isAdminUser {
+                    Button("Disconnect Google", role: .destructive) {
+                        guard canConnectDeviceGoogle, isAdminUser else { return }
+                        disconnectGoogle()
+                        isGoogleAuthenticated = false
+                    }
+                }
+                if googleAuth.googleDriveAuthorizationState == .reauthorizationRequired ||
+                    googleAuth.googleDriveAuthorizationState == .businessAccountMismatch {
+                    Button(action: connectDeviceGoogle) {
+                        Label("Reconnect Google for Drive", systemImage: "arrow.clockwise.circle")
+                    }
+                    .accessibilityIdentifier("ReconnectGoogleForDrive")
+                }
+            } else {
+                Button(action: connectDeviceGoogle) {
+                    Label("Connect Google", systemImage: "link")
+                }
+                .accessibilityIdentifier("ConnectDeviceGoogle")
+            }
+        }
+    }
+
+    private func connectDeviceGoogle() {
+        guard canConnectDeviceGoogle else { return }
+        // Reauthorization keeps the verified business session. The existing
+        // OAuth completion still checks the hosted domain and exact account.
+        authenticateGoogle()
     }
 
     @ViewBuilder

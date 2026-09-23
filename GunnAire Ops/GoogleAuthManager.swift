@@ -379,6 +379,12 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     private var activePresentationContext: ASWebAuthenticationPresentationContextProviding?
     private var pendingOAuthState: String?
     private var pendingCodeVerifier: String?
+    private struct AuthorizationOrigin {
+        let workspace: CompanyWorkspaceOperationStamp?
+        let session: CompanyWorkspaceSession?
+        var email: String? { workspace?.session.email ?? session?.email }
+    }
+    private var pendingAuthorizationOrigin: AuthorizationOrigin?
     private var connectionGeneration = UUID() {
         didSet {
             calendarSyncRequestID = UUID()
@@ -389,6 +395,8 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     private let requestTransport: WorkspaceProviderOperation.Transport
     private let persistsCredentials: Bool
     private let businessEmailProvider: () -> String?
+    private let workspaceStampProvider: () -> CompanyWorkspaceOperationStamp?
+    private let businessSessionProvider: () -> CompanyWorkspaceSession?
     private var invalidateWorkspaceMutations: () -> Void = {
         CompanyWorkspaceAccessController.shared.invalidateMutationPermits()
     }
@@ -401,6 +409,8 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         requestTransport = { try await URLSession.shared.data(for: $0) }
         persistsCredentials = true
         businessEmailProvider = { AppIdentity.currentEmail }
+        workspaceStampProvider = { CompanyWorkspaceAccessController.shared.operationStamp }
+        businessSessionProvider = { CompanyWorkspaceSession.current }
         super.init()
     }
 
@@ -475,15 +485,34 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     init(testTokens: GoogleOAuthTokens, email: String,
          businessEmail: @escaping () -> String?,
          mutationInvalidation: @escaping () -> Void = {},
+         workspaceStamp: @escaping () -> CompanyWorkspaceOperationStamp? = { nil },
+         businessSession: @escaping () -> CompanyWorkspaceSession? = { nil },
+         applicationSession: GunnAireGoogleApplicationSession? = nil,
          transport: @escaping WorkspaceProviderOperation.Transport) {
         precondition(GunnAireCloudKit.usesTestDatabase)
         requestTransport = transport
         persistsCredentials = false
         businessEmailProvider = businessEmail
+        workspaceStampProvider = workspaceStamp
+        businessSessionProvider = businessSession
         invalidateWorkspaceMutations = mutationInvalidation
         super.init()
         signedInEmail = email
         applyTokens(testTokens)
+        if let applicationSession {
+            applicationSessionToken = applicationSession.token
+            businessApplicationSessionSnapshot = applicationSession
+            workspaceSessionProof = businessSession()
+        }
+    }
+
+    func beginTestAuthorization() -> URL? {
+        prepareAuthorization()
+        return makeAuthURL()
+    }
+
+    func completeTestAuthorization(url: URL, completion: @escaping (Result<Void, Error>) -> Void) {
+        handleAuthCallback(url: url, completion: completion)
     }
 #endif
 
@@ -529,6 +558,8 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         grantedScopeSignature = nil
         signedInEmail = nil
         pendingOAuthState = nil
+        pendingCodeVerifier = nil
+        pendingAuthorizationOrigin = nil
         activeAuthSession = nil
         activePresentationContext = nil
         if persistsCredentials {
@@ -592,9 +623,8 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     }
 
     func startSignIn(presentationContext: ASWebAuthenticationPresentationContextProviding, completion: @escaping (Result<Void, Error>) -> Void) {
-        connectionGeneration = UUID()
+        prepareAuthorization()
         let generation = connectionGeneration
-        activeAuthSession?.cancel()
         guard !Config.Google.clientID.hasPrefix("YOUR_") else {
             completion(.failure(GoogleAuthError.missingConfiguration))
             return
@@ -627,6 +657,9 @@ final class GoogleAuthManager: NSObject, ObservableObject {
             defer {
                 self.activeAuthSession = nil
                 self.activePresentationContext = nil
+                self.pendingOAuthState = nil
+                self.pendingCodeVerifier = nil
+                self.pendingAuthorizationOrigin = nil
             }
             if let error = error as? ASWebAuthenticationSessionError,
                error.code == .canceledLogin {
@@ -648,6 +681,19 @@ final class GoogleAuthManager: NSObject, ObservableObject {
             activePresentationContext = nil
             completion(.failure(GoogleAuthError.unknown))
         }
+    }
+
+    private func prepareAuthorization() {
+        connectionGeneration = UUID()
+        activeAuthSession?.cancel()
+        pendingOAuthState = nil
+        pendingCodeVerifier = nil
+        pendingAuthorizationOrigin = AuthorizationOrigin(workspace: workspaceStampProvider(), session: businessSessionProvider())
+    }
+
+    private func authorizationIsCurrent(_ origin: AuthorizationOrigin, generation: UUID) -> Bool {
+        connectionGeneration == generation && workspaceStampProvider() == origin.workspace &&
+            businessSessionProvider() == origin.session
     }
 
     private func makeAuthURL() -> URL? {
@@ -697,23 +743,27 @@ final class GoogleAuthManager: NSObject, ObservableObject {
             return
         }
         pendingOAuthState = nil
-        guard let codeVerifier = pendingCodeVerifier else {
+        guard let codeVerifier = pendingCodeVerifier, let origin = pendingAuthorizationOrigin else {
             completion(.failure(GoogleAuthError.invalidState))
             return
         }
         pendingCodeVerifier = nil
+        pendingAuthorizationOrigin = nil
 
         let generation = connectionGeneration
-        exchangeAuthorizationCode(code: code, codeVerifier: codeVerifier) { result in
+        guard authorizationIsCurrent(origin, generation: generation) else {
+            completion(.failure(WorkspaceProviderAccessError.changed(mayHaveReachedProvider: false)))
+            return
+        }
+        exchangeAuthorizationCode(code: code, codeVerifier: codeVerifier, origin: origin, generation: generation) { result in
             DispatchQueue.main.async {
-                guard self.connectionGeneration == generation else {
+                guard self.authorizationIsCurrent(origin, generation: generation) else {
                     completion(.failure(WorkspaceProviderAccessError.changed(mayHaveReachedProvider: false)))
                     return
                 }
                 switch result {
                 case .success(let tokens):
-                    self.storeTokens(tokens)
-                    completion(.success(()))
+                    self.validateAuthorization(tokens: tokens, origin: origin, generation: generation, completion: completion)
                 case .failure(let error):
                     completion(.failure(error))
                 }
@@ -721,7 +771,53 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         }
     }
 
-    private func exchangeAuthorizationCode(code: String, codeVerifier: String, completion: @escaping (Result<GoogleOAuthTokens, Error>) -> Void) {
+    /// Candidate credentials are used only for identity validation until the
+    /// original business session and approved Google account both match.
+    private func validateAuthorization(tokens: GoogleOAuthTokens, origin: AuthorizationOrigin, generation: UUID,
+                                       completion: @escaping (Result<Void, Error>) -> Void) {
+        guard authorizationIsCurrent(origin, generation: generation) else {
+            completion(.failure(WorkspaceProviderAccessError.changed(mayHaveReachedProvider: false)))
+            return
+        }
+        guard let url = URL(string: "https://www.googleapis.com/oauth2/v3/userinfo") else {
+            completion(.failure(GoogleAuthError.invalidEndpoint)); return
+        }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(tokens.accessToken)", forHTTPHeaderField: "Authorization")
+        let operation = WorkspaceProviderOperation { self.authorizationIsCurrent(origin, generation: generation) }
+        operation.send(request, transport: requestTransport) { data, response, error in
+            guard self.authorizationIsCurrent(origin, generation: generation) else {
+                completion(.failure(WorkspaceProviderAccessError.changed(mayHaveReachedProvider: false))); return
+            }
+            if let error { completion(.failure(error)); return }
+            guard let http = response as? HTTPURLResponse, let data else {
+                completion(.failure(GoogleAuthError.noData)); return
+            }
+            guard (200...299).contains(http.statusCode) else {
+                completion(.failure(self.parseProviderError(data: data, fallbackStatus: http.statusCode))); return
+            }
+            guard let profile = try? JSONDecoder().decode(GoogleUserProfile.self, from: data),
+                  !AppAccess.normalizedEmail(profile.email).isEmpty else {
+                completion(.failure(GoogleAuthError.decoding)); return
+            }
+            guard self.isAllowed(profile: profile) else {
+                completion(.failure(GoogleAuthError.domainNotAllowed(Config.Google.allowedHostedDomain))); return
+            }
+            if let email = origin.email,
+               !GoogleAccountLinkPolicy.canUseIntegration(primaryBusinessEmail: email, googleEmail: profile.email) {
+                completion(.failure(GoogleAuthError.businessAccountMismatch)); return
+            }
+            // A refresh begun while the browser was open must not overwrite
+            // these validated credentials, even if Google kept its refresh token.
+            self.connectionGeneration = UUID()
+            self.storeTokens(tokens)
+            self.rememberSignedInEmail(profile.email)
+            completion(.success(()))
+        }
+    }
+
+    private func exchangeAuthorizationCode(code: String, codeVerifier: String, origin: AuthorizationOrigin, generation: UUID,
+                                           completion: @escaping (Result<GoogleOAuthTokens, Error>) -> Void) {
         guard let url = URL(string: Config.Google.tokenEndpoint) else {
             completion(.failure(GoogleAuthError.invalidEndpoint))
             return
@@ -739,7 +835,8 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         ]
         request.httpBody = params.percentEncoded().data(using: .utf8)
 
-        sendOAuthRequest(request) { data, response, error in
+        let operation = WorkspaceProviderOperation { self.authorizationIsCurrent(origin, generation: generation) }
+        operation.send(request, transport: requestTransport) { data, response, error in
             Task { @MainActor in
                 if let error {
                     completion(.failure(error))
@@ -861,7 +958,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         operation.send(request, transport: requestTransport, completion: completion)
     }
 
-    func fetchUserProfile(completion: @escaping (Result<GoogleUserProfile, Error>) -> Void) {
+    func fetchUserProfile(rememberIdentity: Bool = true, completion: @escaping (Result<GoogleUserProfile, Error>) -> Void) {
         let generation = connectionGeneration
         authorizedGET("https://www.googleapis.com/oauth2/v3/userinfo", identityBootstrap: true) { (result: Result<GoogleUserProfile, Error>) in
             switch result {
@@ -871,7 +968,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                         completion(.failure(WorkspaceProviderAccessError.changed(mayHaveReachedProvider: false)))
                         return
                     }
-                    self.rememberSignedInEmail(profile.email)
+                    if rememberIdentity { self.rememberSignedInEmail(profile.email) }
                     completion(.success(profile))
                 }
             case .failure(let error):
@@ -882,9 +979,11 @@ final class GoogleAuthManager: NSObject, ObservableObject {
 
     func validateSignedInDomain(completion: @escaping (Result<GoogleUserProfile, Error>) -> Void) {
         let generation = connectionGeneration
-        fetchUserProfile { result in
+        let origin = AuthorizationOrigin(workspace: workspaceStampProvider(), session: businessSessionProvider())
+        let expectedBusinessEmail = origin.email ?? businessEmailProvider()
+        fetchUserProfile(rememberIdentity: false) { result in
             DispatchQueue.main.async {
-                guard self.connectionGeneration == generation else {
+                guard self.authorizationIsCurrent(origin, generation: generation) else {
                     completion(.failure(WorkspaceProviderAccessError.changed(mayHaveReachedProvider: false)))
                     return
                 }
@@ -895,15 +994,15 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                         completion(.failure(GoogleAuthError.domainNotAllowed(Config.Google.allowedHostedDomain)))
                         return
                     }
-                    self.rememberSignedInEmail(profile.email)
                     guard GoogleAccountLinkPolicy.canUseIntegration(
-                        primaryBusinessEmail: self.businessEmailProvider(),
+                        primaryBusinessEmail: expectedBusinessEmail,
                         googleEmail: profile.email
                     ) else {
                         self.signOut()
                         completion(.failure(GoogleAuthError.businessAccountMismatch))
                         return
                     }
+                    self.rememberSignedInEmail(profile.email)
                     completion(.success(profile))
                 case .failure(let error):
                     completion(.failure(error))

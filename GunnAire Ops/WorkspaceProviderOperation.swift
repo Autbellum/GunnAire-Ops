@@ -32,6 +32,8 @@ final class WorkspaceProviderOperation {
     private let isCurrent: () -> Bool
     private let parent: WorkspaceProviderOperation?
     private let retainedServerMail: GmailServerMail?
+    private let asyncPreflight: (() async throws -> Void)?
+    private let transportFence: (() throws -> Void)?
     var serverMail: GmailServerMail? { retainedServerMail ?? parent?.serverMail }
     private(set) var mayHaveReachedProvider = false
 
@@ -39,6 +41,7 @@ final class WorkspaceProviderOperation {
         self.isCurrent = isCurrent
         parent = nil
         retainedServerMail = serverMail
+        asyncPreflight = nil; transportFence = nil
     }
 
     /// Add a run/role lifetime without losing the initiating provider identity
@@ -47,6 +50,34 @@ final class WorkspaceProviderOperation {
         self.parent = parent
         self.isCurrent = isCurrent
         retainedServerMail = nil
+        asyncPreflight = nil; transportFence = nil
+    }
+
+    init(parent: WorkspaceProviderOperation, beforeTransport: @escaping () async throws -> Void,
+         transportFence: @escaping () throws -> Void, isCurrent: @escaping () -> Bool) {
+        self.parent = parent; self.isCurrent = isCurrent; retainedServerMail = nil
+        asyncPreflight = beforeTransport; self.transportFence = transportFence
+    }
+
+    private func prepareTransport() async throws {
+        try await parent?.prepareTransport()
+        try await asyncPreflight?()
+    }
+
+    private func checkTransportFences() throws {
+        try parent?.checkTransportFences()
+        try transportFence?()
+    }
+
+    /// A delayed store notification may invalidate a read permit after an
+    /// awaited classifier. Retry only those read-only preflights, never a write.
+    private func validateTransport() async throws {
+        for attempt in 0..<2 {
+            try await prepareTransport()
+            try check()
+            do { try checkTransportFences(); return }
+            catch { if attempt == 1 { throw error } }
+        }
     }
 
     static func capture(
@@ -87,10 +118,15 @@ final class WorkspaceProviderOperation {
     /// uncertain-write risk even though its transport owns a separate request.
     func performExternalMutation<T>(_ body: () async throws -> T) async throws -> T {
         try check()
+        try await validateTransport()
+        try check()
+        try checkTransportFences()
         mayHaveReachedProvider = true
         do {
             let result = try await body()
+            try await validateTransport()
             try check()
+            try checkTransportFences()
             return result
         } catch {
             if let failure { throw failure }
@@ -115,12 +151,17 @@ final class WorkspaceProviderOperation {
         transport: Transport = { try await URLSession.shared.data(for: $0) }
     ) async throws -> (Data, URLResponse) {
         try check()
+        try await validateTransport()
+        try check()
+        try checkTransportFences()
         if !["GET", "HEAD", "OPTIONS"].contains((request.httpMethod ?? "GET").uppercased()) {
             mayHaveReachedProvider = true
         }
         do {
             let result = try await transport(request)
+            try await validateTransport()
             try check()
+            try checkTransportFences()
             return result
         } catch {
             // An old authorization failure must not clear a new connection's

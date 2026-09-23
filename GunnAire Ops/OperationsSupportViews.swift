@@ -5085,7 +5085,8 @@ private struct CustomerEditorView: View {
         }
 
         do {
-            let statement = customerAccountStatementSnapshot
+            let origin = try GmailDraftBusinessSnapshot.prepareAccountStatement(customer: customer, context: modelContext)
+            let statement = origin.statement
             let url = try CustomerDocumentExporter.exportAccountStatement(
                 customer: customer,
                 snapshot: statement
@@ -5122,6 +5123,8 @@ private struct CustomerEditorView: View {
                     customerAttachmentPreviewURL = url
                     return
                 }
+                let business = GmailBusinessContext(customerID: customer.id, workflow: .accountStatement)
+                try GmailDraftBusinessSnapshot.validate(origin.sourceSnapshot, business: business, context: modelContext)
                 let balance = statement.totalBalance.formatted(.currency(code: "USD"))
                 GunnAireAppIntentRouter.storeMailDraftRoute(
                     to: recipient,
@@ -5140,7 +5143,8 @@ private struct CustomerEditorView: View {
                     """,
                     attachmentPaths: [url.path],
                     customerID: customer.id,
-                    workflow: .accountStatement
+                    workflow: .accountStatement,
+                    sourceSnapshot: origin.sourceSnapshot
                 )
                 dismiss()
             } else {

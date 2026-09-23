@@ -24,6 +24,26 @@ class NativeTestExecutionTests(unittest.TestCase):
         self.assertEqual(verify(self.summary, self.tree, self.selectors),
                          {"verifiedSelectors": 2, "passedTestCases": 2})
 
+    def test_explicit_zero_expected_failures_passes(self):
+        self.summary["expectedFailures"] = 0
+        self.assertEqual(verify(self.summary, self.tree, self.selectors),
+                         {"verifiedSelectors": 2, "passedTestCases": 2})
+
+    def test_passed_inventory_case_with_expected_failure_is_not_execution_success(self):
+        # XCTest can mark an interrupted case Passed when XCTExpectFailure
+        # captures the issue, even though later save/reopen assertions never ran.
+        identity = "AppUITests/UITests/testAdministratorCreatesInventoryOfflineAndReopensExactSetup"
+        summary = {"passedTests": 1, "failedTests": 0, "skippedTests": 0, "expectedFailures": 1}
+        tree = {"testNodes": [self.case(identity)]}
+        with self.assertRaisesRegex(ValueError, "expected failures"):
+            verify(summary, tree, ["-only-testing:" + identity])
+
+    def test_expected_failure_count_must_be_a_nonnegative_integer(self):
+        for value in (True, False, -1, "0", None, 0.0, [], {}):
+            summary = dict(self.summary, expectedFailures=value)
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "expectedFailures"):
+                verify(summary, self.tree, self.selectors)
+
     def test_green_summary_cannot_hide_an_omitted_ui_test(self):
         self.tree["testNodes"][0]["children"] = [self.logic]
         self.summary["passedTests"] = 1365

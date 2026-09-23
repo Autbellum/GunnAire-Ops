@@ -101,6 +101,64 @@ struct CustomerAccountStatementSnapshot: Equatable {
 }
 
 enum CustomerDocumentExporter {
+    /// Source values only: no PDF rendering, file reads, or provider I/O. The
+    /// same row builders used by the documents keep draft validation aligned
+    /// with customer-visible text. Generated PDFs are outputs, not new inputs.
+    static func mailSourceValues(
+        estimate: Estimate?, invoice: Invoice?, serviceCall: ServiceCall?,
+        payments: [Payment], attachments: [ServiceDocumentAttachment],
+        equipmentProfiles: [CustomerEquipment], serviceCalls: [ServiceCall],
+        fieldFormTemplates: [FieldFormTemplate] = [], fieldFormResponses: [FieldFormResponse] = [],
+        timeEntries: [TimeEntry] = [], materialReadiness: JobMaterialCloseoutSummary = .notApplicable,
+        serviceCallActivities: [ServiceCallActivity] = [], requireWorkPerformedLog: Bool = true
+    ) -> [String] {
+        let sourceAttachments = attachments.filter {
+            ![ServiceDocumentAttachmentKind.estimateSupport, .invoiceSupport, .serviceReport].contains($0.kind)
+        }.sorted { $0.id.uuidString < $1.id.uuidString }
+        let orderedPayments = payments.sorted {
+            $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date < $1.date
+        }
+        var sections: [DocumentSection] = []
+        var values: [String] = []
+        if let estimate {
+            sections += estimateSections(estimate: estimate, serviceCall: serviceCall,
+                attachments: sourceAttachments, equipmentProfiles: equipmentProfiles.sorted { $0.id.uuidString < $1.id.uuidString }, serviceCalls: serviceCalls.sorted { $0.id.uuidString < $1.id.uuidString })
+            values += [estimate.customerApprovalSignatureImageBase64 ?? "", estimate.customerApprovalBlockedMessage ?? ""]
+        }
+        if let invoice {
+            sections += invoiceSections(invoice: invoice, serviceCall: serviceCall, payments: orderedPayments,
+                attachments: sourceAttachments, equipmentProfiles: equipmentProfiles.sorted { $0.id.uuidString < $1.id.uuidString }, serviceCalls: serviceCalls.sorted { $0.id.uuidString < $1.id.uuidString })
+            values += [invoice.customerSignatureImageBase64 ?? "", invoice.paymentCollectionBlockedMessage ?? ""]
+        }
+        if let serviceCall {
+            let scoped = onsiteReportAttachments(for: sourceAttachments, serviceCall: serviceCall,
+                estimate: estimate, invoice: invoice)
+            sections += onsiteReportSections(serviceCall: serviceCall, estimate: estimate, invoice: invoice,
+                payments: orderedPayments, attachments: scoped, equipmentProfiles: equipmentProfiles.sorted { $0.id.uuidString < $1.id.uuidString },
+                serviceCalls: serviceCalls.sorted { $0.id.uuidString < $1.id.uuidString },
+                fieldFormTemplates: fieldFormTemplates.sorted { $0.id.uuidString < $1.id.uuidString },
+                fieldFormResponses: fieldFormResponses.sorted { $0.id.uuidString < $1.id.uuidString },
+                timeEntries: timeEntries.sorted { $0.id.uuidString < $1.id.uuidString },
+                materialReadiness: materialReadiness,
+                serviceCallActivities: serviceCallActivities.sorted { $0.id.uuidString < $1.id.uuidString },
+                requireWorkPerformedLog: requireWorkPerformedLog)
+        }
+        for section in sections {
+            values.append(section.title)
+            for row in section.rows { values += [row.label, row.value] }
+        }
+        for attachment in sourceAttachments where
+            (estimate != nil && attachment.estimateID == estimate?.id) ||
+            (invoice != nil && attachment.invoiceID == invoice?.id) ||
+            (serviceCall != nil && attachment.serviceCallID == serviceCall?.id) {
+            values += [attachment.id.uuidString, attachment.kindRaw, attachment.displayName,
+                attachment.caption ?? "", attachment.localFilePath, attachment.contentType,
+                String(attachment.fileSizeBytes), attachment.createdAt.description,
+                attachment.customerEquipmentID?.uuidString ?? ""]
+        }
+        return values
+    }
+
     static func customerEmailAttachmentURLs(
         primaryDocumentURL: URL,
         serviceCallID: UUID?,

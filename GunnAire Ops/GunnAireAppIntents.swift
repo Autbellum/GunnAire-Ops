@@ -302,6 +302,7 @@ enum GunnAireAppIntentRouter {
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailEstimateID")
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailMaintenanceContractID")
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailWorkflow")
+            UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailSourceSnapshot")
         case .quickBooks:
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingQuickBooksWorkspace")
         case .commandCenter, .timeClock, .estimates, .invoicesEstimates, .reports, .receiptsBills, .sync:
@@ -335,6 +336,7 @@ enum GunnAireAppIntentRouter {
             "GunnAirePendingMailEstimateID",
             "GunnAirePendingMailMaintenanceContractID",
             "GunnAirePendingMailWorkflow",
+            "GunnAirePendingMailSourceSnapshot",
             "GunnAirePendingQuickBooksWorkspace"
         ]
         for key in keys {
@@ -540,7 +542,8 @@ enum GunnAireAppIntentRouter {
         invoiceID: UUID? = nil,
         estimateID: UUID? = nil,
         maintenanceContractID: UUID? = nil,
-        workflow: GunnAireMailWorkflow = .general
+        workflow: GunnAireMailWorkflow = .general,
+        sourceSnapshot: [String]? = nil
     ) {
         UserDefaults.standard.set(to, forKey: "GunnAirePendingMailTo")
         UserDefaults.standard.set(subject, forKey: "GunnAirePendingMailSubject")
@@ -552,10 +555,11 @@ enum GunnAireAppIntentRouter {
         UserDefaults.standard.set(estimateID?.uuidString, forKey: "GunnAirePendingMailEstimateID")
         UserDefaults.standard.set(maintenanceContractID?.uuidString, forKey: "GunnAirePendingMailMaintenanceContractID")
         UserDefaults.standard.set(workflow.rawValue, forKey: "GunnAirePendingMailWorkflow")
+        UserDefaults.standard.set(sourceSnapshot, forKey: "GunnAirePendingMailSourceSnapshot")
         store(.mail)
     }
 
-    nonisolated static func consumePendingMailDraft() -> (to: String, subject: String, body: String, attachmentPaths: [String], customerID: UUID?, serviceCallID: UUID?, invoiceID: UUID?, estimateID: UUID?, maintenanceContractID: UUID?, workflow: GunnAireMailWorkflow)? {
+    nonisolated static func consumePendingMailDraft() -> (to: String, subject: String, body: String, attachmentPaths: [String], customerID: UUID?, serviceCallID: UUID?, invoiceID: UUID?, estimateID: UUID?, maintenanceContractID: UUID?, workflow: GunnAireMailWorkflow, sourceSnapshot: [String]?)? {
         guard let to = UserDefaults.standard.string(forKey: "GunnAirePendingMailTo"),
               let subject = UserDefaults.standard.string(forKey: "GunnAirePendingMailSubject"),
               let body = UserDefaults.standard.string(forKey: "GunnAirePendingMailBody") else {
@@ -567,6 +571,7 @@ enum GunnAireAppIntentRouter {
         let invoiceID = UserDefaults.standard.string(forKey: "GunnAirePendingMailInvoiceID").flatMap(UUID.init(uuidString:))
         let estimateID = UserDefaults.standard.string(forKey: "GunnAirePendingMailEstimateID").flatMap(UUID.init(uuidString:))
         let maintenanceContractID = UserDefaults.standard.string(forKey: "GunnAirePendingMailMaintenanceContractID").flatMap(UUID.init(uuidString:))
+        let sourceSnapshot = UserDefaults.standard.stringArray(forKey: "GunnAirePendingMailSourceSnapshot")
         let workflow = UserDefaults.standard.string(forKey: "GunnAirePendingMailWorkflow")
             .flatMap(GunnAireMailWorkflow.init(rawValue:)) ?? .general
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailTo")
@@ -579,7 +584,8 @@ enum GunnAireAppIntentRouter {
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailEstimateID")
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailMaintenanceContractID")
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailWorkflow")
-        return (to, subject, body, attachmentPaths, customerID, serviceCallID, invoiceID, estimateID, maintenanceContractID, workflow)
+        UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailSourceSnapshot")
+        return (to, subject, body, attachmentPaths, customerID, serviceCallID, invoiceID, estimateID, maintenanceContractID, workflow, sourceSnapshot)
     }
 }
 

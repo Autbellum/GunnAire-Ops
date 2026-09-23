@@ -201,6 +201,7 @@ final class QuickBooksDataAPI: ObservableObject {
     private let credentialStore = QuickBooksCredentialPersistence()
     private var credentialPersistenceTask: Task<Void, Never>?
     private let requestTransport: WorkspaceProviderOperation.Transport
+    private var documentEmailJournal = QuickBooksDocumentEmailJournal.device
     private let persistsCredentials: Bool
     private let revokeConnection: () async -> Bool
     let catalogPublicationTransport: CatalogPublicationBoundary.Transport?
@@ -280,11 +281,13 @@ final class QuickBooksDataAPI: ObservableObject {
          billingPublisher: BillingPublicationClient? = nil,
          catalogRecovery: @escaping (UUID) async throws -> CatalogPublicationResponse = { _ in throw CatalogPublicationError.unavailable },
          revokeConnection: @escaping () async -> Bool = { false },
+         emailJournal: QuickBooksDocumentEmailJournal? = nil,
          credentialOwner: QuickBooksCredentialOwner? = nil,
          currentCredentialOwner: (() -> QuickBooksCredentialOwner?)? = nil,
          transport: @escaping WorkspaceProviderOperation.Transport) {
         precondition(GunnAireCloudKit.usesTestDatabase)
         requestTransport = transport
+        documentEmailJournal = emailJournal ?? QuickBooksDocumentEmailJournal(directory: nil, memoryOnly: true)
         persistsCredentials = false
         requiresCredentialOwnership = currentCredentialOwner != nil
         self.currentCredentialOwner = currentCredentialOwner ?? { nil }
@@ -1480,29 +1483,12 @@ final class QuickBooksDataAPI: ObservableObject {
         }
     }
 
-    func sendEstimate(id: String, to emailAddress: String? = nil, completion: @escaping (Result<QuickBooksEstimate, Error>) -> Void) {
-        let trimmedID = id.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedID.isEmpty,
-              let encodedID = trimmedID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
-            completion(.failure(QBError.noData))
-            return
-        }
-        let trimmedEmail = emailAddress?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let queryItems = trimmedEmail?.isEmpty == false
-            ? [URLQueryItem(name: "sendTo", value: trimmedEmail)]
-            : []
-        performAuthorizedDecodingRequest(
-            { self.authorizedRequest(path: "estimate/\(encodedID)/send", queryItems: queryItems, method: "POST") },
-            decode: QuickBooksEstimateResponse.self
-        ) { result in
-            completion(result.flatMap {
-                QuickBooksProviderResponsePolicy.validated(
-                    $0.Estimate,
-                    identifier: $0.Estimate.Id,
-                    entity: "estimate"
-                )
-            })
-        }
+    func sendEstimate(id: String, to emailAddress: String? = nil, expectedCustomerID: String? = nil, validateSend: @escaping () throws -> Void = {}, completion: @escaping (Result<QuickBooksEstimate, Error>) -> Void) {
+        sendDocumentEmail(kind: "estimate", id: id, to: emailAddress, expectedCustomerID: expectedCustomerID, validateSend: validateSend, decode: QuickBooksEstimateResponse.self,
+            observe: { .init(id: $0.Estimate.Id, recipient: $0.Estimate.BillEmail?.Address,
+                emailStatus: $0.Estimate.EmailStatus, delivery: $0.Estimate.DeliveryInfo, customerID: $0.Estimate.CustomerRef.value) }) {
+                completion($0.map(\.Estimate))
+            }
     }
 
     func fetchInvoices(completion: @escaping (Result<[QuickBooksInvoice], Error>) -> Void) {
@@ -1597,29 +1583,130 @@ final class QuickBooksDataAPI: ObservableObject {
         }
     }
 
-    func sendInvoice(id: String, to emailAddress: String? = nil, completion: @escaping (Result<QuickBooksInvoice, Error>) -> Void) {
+    func sendInvoice(id: String, to emailAddress: String? = nil, expectedCustomerID: String? = nil, validateSend: @escaping () throws -> Void = {}, completion: @escaping (Result<QuickBooksInvoice, Error>) -> Void) {
+        sendDocumentEmail(kind: "invoice", id: id, to: emailAddress, expectedCustomerID: expectedCustomerID, validateSend: validateSend, decode: QuickBooksInvoiceResponse.self,
+            observe: { .init(id: $0.Invoice.Id, recipient: $0.Invoice.BillEmail?.Address,
+                emailStatus: $0.Invoice.EmailStatus, delivery: $0.Invoice.DeliveryInfo, customerID: $0.Invoice.CustomerRef.value) }) {
+                completion($0.map(\.Invoice))
+            }
+    }
+
+    /// A retry first reads the original document. It never issues a second POST
+    /// while a retained attempt has an uncertain outcome, even after relaunch.
+    private func sendDocumentEmail<T: Decodable>(kind: String, id: String, to emailAddress: String?, expectedCustomerID: String?,
+        validateSend: @escaping () throws -> Void, decode: T.Type, observe: @escaping (T) -> QuickBooksDocumentEmailObservation,
+        completion: @escaping (Result<T, Error>) -> Void) {
+        guard sharedBillingOperation == nil else {
+            completion(.failure(BillingPublicationError.savedDocumentRequired)); return
+        }
         let trimmedID = id.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedID.isEmpty,
-              let encodedID = trimmedID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
-            completion(.failure(QBError.noData))
-            return
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        guard !trimmedID.isEmpty, trimmedID.count <= 256,
+              trimmedID.unicodeScalars.allSatisfy({ allowed.contains($0) }) else {
+            completion(.failure(QuickBooksDocumentEmailError.invalidDocument)); return
         }
-        let trimmedEmail = emailAddress?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let queryItems = trimmedEmail?.isEmpty == false
-            ? [URLQueryItem(name: "sendTo", value: trimmedEmail)]
-            : []
-        performAuthorizedDecodingRequest(
-            { self.authorizedRequest(path: "invoice/\(encodedID)/send", queryItems: queryItems, method: "POST") },
-            decode: QuickBooksInvoiceResponse.self
-        ) { result in
-            completion(result.flatMap {
-                QuickBooksProviderResponsePolicy.validated(
-                    $0.Invoice,
-                    identifier: $0.Invoice.Id,
-                    entity: "invoice"
-                )
-            })
+        let operation: WorkspaceProviderOperation
+        do {
+            try validateSend()
+            operation = WorkspaceProviderOperation(parent: try captureProviderOperation()) {
+                (try? validateSend()) != nil
+            }
         }
+        catch { completion(.failure(error)); return }
+        let key = QuickBooksDocumentEmailAttempt.digest([
+            storedCredentialOwner?.companyID.uuidString ?? "fixture",
+            storedCredentialOwner?.backendOrigin ?? Config.Backend.normalizedBaseURL,
+            currentEnvironment, realmID ?? "", kind, trimmedID
+        ].joined(separator: "\n"))
+        let journal = documentEmailJournal
+        Task { @MainActor in
+            var acquired = false
+            var attempt: QuickBooksDocumentEmailAttempt?
+            var accepted = false
+            let result: Result<T, Error>
+            do {
+                try operation.check()
+                let previous = try await journal.acquire(key)
+                acquired = true
+                try operation.check()
+                let document: T = try await withCheckedThrowingContinuation { continuation in
+                    performAuthorizedDecodingRequest({ self.authorizedRequest(path: "\(kind)/\(trimmedID)") },
+                        decode: decode, completion: { continuation.resume(with: $0) }, operation: operation)
+                }
+                try operation.check()
+                let before = observe(document)
+                guard before.id == trimmedID, expectedCustomerID == nil ||
+                    (expectedCustomerID?.isEmpty == false && before.customerID == expectedCustomerID) else {
+                    throw QuickBooksDocumentEmailError.invalidDocument
+                }
+                if let previous, previous.state == .pending {
+                    guard before.confirms(previous) else { throw QuickBooksDocumentEmailError.reviewRequired }
+                    try await journal.finish(previous, state: .accepted)
+                    accepted = true
+                    try operation.check()
+                    throw QuickBooksDocumentEmailError.reconciled
+                }
+                let addresses = try? GmailAddressList.parse(emailAddress ?? before.recipient ?? "")
+                guard let addresses, addresses.count == 1, let recipient = addresses.first?.lowercased() else {
+                    throw QuickBooksDocumentEmailError.recipientRequired
+                }
+                try operation.check()
+                let prepared = try await journal.begin(key: key, recipient: recipient,
+                    previousDeliveryTime: before.delivery?.DeliveryTime)
+                attempt = prepared
+                try operation.check()
+                let response: T = try await withCheckedThrowingContinuation { continuation in
+                    performAuthorizedDecodingRequest({ self.authorizedRequest(path: "\(kind)/\(trimmedID)/send",
+                        queryItems: [URLQueryItem(name: "sendTo", value: recipient),
+                            URLQueryItem(name: "requestid", value: prepared.requestID.uuidString)],
+                        method: "POST", contentType: "application/octet-stream") },
+                        decode: decode, completion: { continuation.resume(with: $0) }, operation: operation)
+                }
+                try operation.check()
+                let sent = observe(response)
+                guard sent.id == trimmedID, sent.emailStatus == "EmailSent",
+                      expectedCustomerID == nil || sent.customerID == expectedCustomerID,
+                      sent.recipient?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == recipient else {
+                    throw QuickBooksDocumentEmailError.reviewRequired
+                }
+                try await journal.finish(prepared, state: .accepted)
+                attempt = nil
+                accepted = true
+                try operation.check()
+                result = .success(response)
+            } catch {
+                if let attempt {
+                    if !operation.mayHaveReachedProvider || Self.documentEmailWasRejected(error) {
+                        do {
+                            try await journal.finish(attempt, state: .rejected)
+                            result = .failure(error)
+                        } catch { result = .failure(QuickBooksDocumentEmailError.storage) }
+                    } else { result = .failure(QuickBooksDocumentEmailError.reviewRequired) }
+                } else {
+                    let lostContext = operation.failure != nil || error is CancellationError
+                    result = .failure(accepted && lostContext ? QuickBooksDocumentEmailError.acceptedInOriginalWorkspace : error)
+                }
+            }
+            if acquired { await journal.release(key) }
+            do {
+                try operation.check()
+                completion(result)
+            } catch {
+                completion(.failure(accepted ? QuickBooksDocumentEmailError.acceptedInOriginalWorkspace :
+                    (operation.mayHaveReachedProvider ? QuickBooksDocumentEmailError.reviewRequired : error)))
+            }
+        }
+    }
+
+    private static func documentEmailWasRejected(_ error: Error) -> Bool {
+        guard let error = error as? QBError else { return false }
+        let status: Int
+        switch error {
+        case .http(let code), .api(let code, _), .httpDetail(let code, _), .authorizationFailed(let code, _): status = code
+        case .rateLimited: status = 429
+        default: return false
+        }
+        return [400, 401, 403, 404, 405, 415, 422, 429].contains(status)
     }
 
     func fetchBills(completion: @escaping (Result<[QuickBooksBill], Error>) -> Void) {
@@ -3539,6 +3626,7 @@ struct QuickBooksEstimate: Codable, Identifiable {
     let TxnDate: String?
     let BillEmail: QuickBooksEmailAddress?
     let EmailStatus: String?
+    let DeliveryInfo: QuickBooksDocumentDeliveryInfo?
     let ShipAddr: QuickBooksAddress?
     let PrivateNote: String?
     let TxnTaxDetail: QuickBooksTxnTaxDetail?
@@ -3554,6 +3642,7 @@ struct QuickBooksEstimate: Codable, Identifiable {
         TxnDate: String? = nil,
         BillEmail: QuickBooksEmailAddress? = nil,
         EmailStatus: String? = nil,
+        DeliveryInfo: QuickBooksDocumentDeliveryInfo? = nil,
         ShipAddr: QuickBooksAddress? = nil,
         PrivateNote: String? = nil,
         TxnTaxDetail: QuickBooksTxnTaxDetail? = nil,
@@ -3566,6 +3655,7 @@ struct QuickBooksEstimate: Codable, Identifiable {
         self.TxnDate = TxnDate
         self.BillEmail = BillEmail
         self.EmailStatus = EmailStatus
+        self.DeliveryInfo = DeliveryInfo
         self.ShipAddr = ShipAddr
         self.PrivateNote = PrivateNote
         self.TxnTaxDetail = TxnTaxDetail
@@ -3773,6 +3863,7 @@ struct QuickBooksInvoice: Codable, Identifiable {
     let PrivateNote: String?
     let BillEmail: QuickBooksEmailAddress?
     let EmailStatus: String?
+    let DeliveryInfo: QuickBooksDocumentDeliveryInfo?
     let ShipAddr: QuickBooksAddress?
     let TxnTaxDetail: QuickBooksTxnTaxDetail?
     let Line: [QuickBooksLineItem]?
@@ -3784,7 +3875,7 @@ struct QuickBooksInvoice: Codable, Identifiable {
     var isVoided: Bool { status == "Voided" }
 
     private enum CodingKeys: String, CodingKey {
-        case Id, SyncToken, DocNumber, CustomerRef, TotalAmt, Balance, TxnDate, DueDate, PrivateNote, BillEmail, EmailStatus, ShipAddr, TxnTaxDetail, Line, status
+        case Id, SyncToken, DocNumber, CustomerRef, TotalAmt, Balance, TxnDate, DueDate, PrivateNote, BillEmail, EmailStatus, DeliveryInfo, ShipAddr, TxnTaxDetail, Line, status
     }
 
     init(from decoder: Decoder) throws {
@@ -3806,6 +3897,7 @@ struct QuickBooksInvoice: Codable, Identifiable {
         PrivateNote = try container.decodeIfPresent(String.self, forKey: .PrivateNote)
         BillEmail = try container.decodeIfPresent(QuickBooksEmailAddress.self, forKey: .BillEmail)
         EmailStatus = try container.decodeIfPresent(String.self, forKey: .EmailStatus)
+        DeliveryInfo = try container.decodeIfPresent(QuickBooksDocumentDeliveryInfo.self, forKey: .DeliveryInfo)
         ShipAddr = try container.decodeIfPresent(QuickBooksAddress.self, forKey: .ShipAddr)
         TxnTaxDetail = try container.decodeIfPresent(QuickBooksTxnTaxDetail.self, forKey: .TxnTaxDetail)
         Line = try container.decodeIfPresent([QuickBooksLineItem].self, forKey: .Line)

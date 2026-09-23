@@ -137,6 +137,7 @@ struct BillingDocumentsView: View {
     @State private var agreementBillingSetupPending: RecurringMaintenanceContract?
     @State private var didResolveInitialCloseoutRequest = false
     @State private var generatedCustomerDocumentURL: URL?
+    @State private var generatedDocumentOrigins: [URL: [String]] = [:]
     @State private var generatedCustomerDocumentRecipientID: UUID?
     @State private var generatedCustomerDocumentServiceCallID: UUID?
     @State private var generatedCustomerDocumentInvoiceID: UUID?
@@ -1217,15 +1218,18 @@ GunnAire
 
     private func openEstimateFollowUpEmail(for estimate: Estimate, fallbackURL: URL) {
         if googleAuth.isAuthenticated, let draft = followUpEmailDraft(for: estimate) {
+            let paths = estimateEmailAttachmentPaths(for: estimate)
+            guard let primary = paths.first, let original = generatedDocumentOrigins[URL(fileURLWithPath: primary)] else { return }
             GunnAireAppIntentRouter.storeMailDraftRoute(
                 to: draft.to,
                 subject: draft.subject,
                 body: draft.body,
-                attachmentPaths: estimateEmailAttachmentPaths(for: estimate),
+                attachmentPaths: paths,
                 customerID: estimate.customer.id,
                 serviceCallID: estimate.serviceCallID,
                 estimateID: estimate.id,
-                workflow: .estimateFollowUp
+                workflow: .estimateFollowUp,
+                sourceSnapshot: original
             )
         } else {
             openURL(fallbackURL)
@@ -1234,57 +1238,18 @@ GunnAire
 
     private func estimateEmailAttachmentPaths(for estimate: Estimate) -> [String] {
         do {
-            let serviceCall = serviceCall(for: estimate)
-            if let serviceCall {
-                saveCurrentEquipmentProfile(for: serviceCall, announce: false)
-                linkExistingEstimateAttachments(to: estimate, serviceCallID: serviceCall.id)
-            }
-            let url = try CustomerDocumentExporter.exportEstimate(
-                estimate,
-                serviceCall: serviceCall,
-                attachments: attachments,
-                equipmentProfiles: equipmentProfiles,
-                serviceCalls: serviceCalls
-            )
+            let linkedCall = serviceCall(for: estimate)
+            let url = try CustomerDocumentExporter.exportEstimate(estimate, serviceCall: linkedCall,
+                attachments: attachments, equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls)
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = estimate.customer.id
-            generatedCustomerDocumentServiceCallID = serviceCall?.id
+            generatedCustomerDocumentServiceCallID = linkedCall?.id
             generatedCustomerDocumentInvoiceID = nil
             generatedCustomerDocumentEstimateID = estimate.id
             generatedCustomerDocumentKind = "estimate"
-            var emailAttachments = attachments
-            if let estimateAttachment = persistGeneratedBillingDocument(
-                url,
-                customer: estimate.customer,
-                serviceCallID: serviceCall?.id,
-                invoiceID: nil,
-                estimateID: estimate.id,
-                kind: .estimateSupport,
-                caption: "Generated estimate PDF",
-                successMessage: "Estimate PDF generated for email."
-            ) {
-                emailAttachments.append(estimateAttachment)
-            }
-            if let serviceCall {
-                let report = try generateAndPersistOnsiteReportAttachment(
-                    for: serviceCall,
-                    estimate: estimate,
-                    invoice: nil,
-                    payments: [],
-                    attachments: reportEvidenceAttachments(for: serviceCall, in: emailAttachments),
-                    equipmentProfiles: equipmentProfiles,
-                    serviceCalls: serviceCalls
-                )
-                report.attachment.linkToEstimateIfNeeded(estimate)
-                syncAttachmentIfPossible(report.attachment, data: report.data)
-                emailAttachments.append(report.attachment)
-            }
-            return CustomerDocumentExporter.customerEmailAttachmentURLs(
-                primaryDocumentURL: url,
-                serviceCallID: serviceCall?.id,
-                estimateID: estimate.id,
-                attachments: emailAttachments
-            ).map(\.path)
+            try captureGeneratedDocumentOrigin(url)
+            return CustomerDocumentExporter.customerEmailAttachmentURLs(primaryDocumentURL: url,
+                serviceCallID: linkedCall?.id, estimateID: estimate.id, attachments: attachments).map(\.path)
         } catch {
             actionMessage = "Could not prepare estimate attachment for email: \(error.localizedDescription)"
             return []
@@ -1325,15 +1290,19 @@ GunnAire
 
     private func openPaymentReminderEmail(for invoice: Invoice, fallbackURL: URL) {
         if googleAuth.isAuthenticated, let draft = paymentReminderEmailDraft(for: invoice) {
+            let paths = invoiceEmailAttachmentPaths(for: invoice)
+            guard let primary = paths.first, let original = generatedDocumentOrigins[URL(fileURLWithPath: primary)] else { return }
             GunnAireAppIntentRouter.storeMailDraftRoute(
                 to: draft.to,
                 subject: draft.subject,
                 body: draft.body,
-                attachmentPaths: invoiceEmailAttachmentPaths(for: invoice),
+                attachmentPaths: paths,
                 customerID: invoice.customer.id,
                 serviceCallID: invoice.serviceCallID,
                 invoiceID: invoice.id,
-                workflow: .paymentReminder
+                estimateID: generatedCustomerDocumentEstimateID,
+                workflow: .paymentReminder,
+                sourceSnapshot: original
             )
         } else {
             openURL(fallbackURL)
@@ -1342,67 +1311,35 @@ GunnAire
 
     private func invoiceEmailAttachmentPaths(for invoice: Invoice) -> [String] {
         do {
-            let invoicePayments = payments.filter { $0.invoice.id == invoice.id }
-            let serviceCall = serviceCall(for: invoice)
-            if let serviceCall {
-                saveCurrentEquipmentProfile(for: serviceCall, announce: false)
-            }
-            let url = try CustomerDocumentExporter.exportInvoice(
-                invoice,
-                serviceCall: serviceCall,
-                payments: invoicePayments,
-                attachments: attachments,
-                equipmentProfiles: equipmentProfiles,
-                serviceCalls: serviceCalls
-            )
+            let invoicePayments = payments.filter { $0.invoice?.id == invoice.id }
+            let linkedCall = serviceCall(for: invoice)
+            let url = try CustomerDocumentExporter.exportInvoice(invoice, serviceCall: linkedCall,
+                payments: invoicePayments, attachments: attachments,
+                equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls)
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = invoice.customer.id
-            generatedCustomerDocumentServiceCallID = serviceCall?.id
+            generatedCustomerDocumentServiceCallID = linkedCall?.id
             generatedCustomerDocumentInvoiceID = invoice.id
-            generatedCustomerDocumentEstimateID = linkedEstimate(for: serviceCall)?.id
-            let documentLabel = CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments).lowercased()
-            generatedCustomerDocumentKind = documentLabel
-            var emailAttachments = attachments
-            if let invoiceAttachment = persistGeneratedBillingDocument(
-                url,
-                customer: invoice.customer,
-                serviceCallID: serviceCall?.id,
-                invoiceID: invoice.id,
-                estimateID: nil,
-                kind: .invoiceSupport,
-                caption: CustomerDocumentExporter.invoiceDocumentCaption(for: invoice, payments: invoicePayments),
-                successMessage: "\(CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments)) PDF generated for email."
-            ) {
-                emailAttachments.append(invoiceAttachment)
-            }
-            if let serviceCall {
-                let linkedEstimate = currentJobEstimate ?? estimates.first { estimate in
-                    estimate.id == serviceCall.linkedEstimateID || estimate.serviceCallID == serviceCall.id
-                }
-                let report = try generateAndPersistOnsiteReportAttachment(
-                    for: serviceCall,
-                    estimate: linkedEstimate,
-                    invoice: invoice,
-                    payments: invoicePayments,
-                    attachments: reportEvidenceAttachments(for: serviceCall, in: emailAttachments),
-                    equipmentProfiles: equipmentProfiles,
-                    serviceCalls: serviceCalls
-                )
-                report.attachment.linkToInvoiceIfNeeded(invoice)
-                syncAttachmentIfPossible(report.attachment, data: report.data)
-                emailAttachments.append(report.attachment)
-            }
-            return CustomerDocumentExporter.customerEmailAttachmentURLs(
-                primaryDocumentURL: url,
-                serviceCallID: serviceCall?.id,
-                invoiceID: invoice.id,
-                estimateID: linkedEstimate(for: serviceCall)?.id,
-                attachments: emailAttachments
-            ).map(\.path)
+            generatedCustomerDocumentEstimateID = linkedEstimate(for: linkedCall)?.id
+            generatedCustomerDocumentKind = CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments).lowercased()
+            try captureGeneratedDocumentOrigin(url)
+            return CustomerDocumentExporter.customerEmailAttachmentURLs(primaryDocumentURL: url,
+                serviceCallID: linkedCall?.id, invoiceID: invoice.id,
+                estimateID: generatedCustomerDocumentEstimateID, attachments: attachments).map(\.path)
         } catch {
             actionMessage = "Could not prepare invoice attachment for email: \(error.localizedDescription)"
             return []
         }
+    }
+
+    private func captureGeneratedDocumentOrigin(_ url: URL) throws {
+        generatedDocumentOrigins.removeValue(forKey: url)
+        guard let customerID = generatedCustomerDocumentRecipientID else { throw GmailDraftError.businessChanged }
+        let business = GmailBusinessContext(customerID: customerID,
+            serviceCallID: generatedCustomerDocumentServiceCallID,
+            invoiceID: generatedCustomerDocumentInvoiceID, estimateID: generatedCustomerDocumentEstimateID,
+            workflow: .customerDocument)
+        generatedDocumentOrigins[url] = try GmailDraftBusinessSnapshot.capture(business, context: modelContext)
     }
 
     private var canEmailGeneratedCustomerDocument: Bool {
@@ -1461,22 +1398,27 @@ GunnAire
             return
         }
         do {
-            if generatedEmailAttempts[url] == nil {
-                let outgoing = try GmailOutgoingMessage(to: email, subject: subject, body: body, attachments: gmailAttachments)
-                generatedEmailAttempts[url] = try GmailSendWorkflow(auth: googleAuth, context: modelContext,
-                    message: outgoing, business: GmailBusinessContext(customerID: recipient.id,
-                        serviceCallID: generatedCustomerDocumentServiceCallID,
-                        invoiceID: generatedCustomerDocumentInvoiceID,
-                        estimateID: generatedCustomerDocumentEstimateID, workflow: .customerDocument))
-            }
-            guard let attempt = generatedEmailAttempts[url] else { throw GmailComposeError.changed }
+            let business = GmailBusinessContext(customerID: recipient.id,
+                serviceCallID: generatedCustomerDocumentServiceCallID,
+                invoiceID: generatedCustomerDocumentInvoiceID,
+                estimateID: generatedCustomerDocumentEstimateID, workflow: .customerDocument)
+            guard let original = generatedDocumentOrigins[url] else { throw GmailDraftError.businessChanged }
+            try GmailDraftBusinessSnapshot.validate(original, business: business, context: modelContext)
+            let outgoing = try GmailOutgoingMessage(to: email, subject: subject, body: body, attachments: gmailAttachments)
             isEmailingGeneratedDocument = true
-            actionMessage = "Sending document..."
+            actionMessage = "Preparing document email..."
             Task { @MainActor in
-                let result = await attempt.send()
-                isEmailingGeneratedDocument = false
-                actionMessage = result.message
-                if result.canRetry { generatedEmailAttempts.removeValue(forKey: url) }
+                defer { isEmailingGeneratedDocument = false }
+                do {
+                    if generatedEmailAttempts[url] == nil {
+                        generatedEmailAttempts[url] = try await GmailSendWorkflow.prepare(auth: googleAuth, context: modelContext,
+                            message: outgoing, business: business, sourceSnapshot: original)
+                    }
+                    guard let attempt = generatedEmailAttempts[url] else { throw GmailComposeError.changed }
+                    let result = await attempt.send()
+                    actionMessage = result.message
+                    if result.canRetry { generatedEmailAttempts.removeValue(forKey: url) }
+                } catch { actionMessage = GmailSendOutcome.notSent(error).message }
             }
         } catch { actionMessage = GmailSendOutcome.notSent(error).message }
     }
@@ -1660,7 +1602,10 @@ GunnAire
                         AnyView(StaffOwnerInvoiceReviewLink())
                     }
                     AnyView(stackSafeGeneratedInvoiceDocumentSection)
-                    if focusedInvoiceID != nil, !actionMessage.isEmpty {
+                    // Invoice row actions (including Send Invoice) can report a
+                    // recovery message while no invoice is focused, so this must not
+                    // be gated on focusedInvoiceID.
+                    if !actionMessage.isEmpty {
                         Section { Text(actionMessage).accessibilityIdentifier("FocusedInvoiceStatus") }
                     }
                     AnyView(invoicesWorkspaceSection)
@@ -1711,6 +1656,9 @@ GunnAire
                                     .disabled(!canAttemptSharedBilling || billingSyncLifecycles["\(document.label)-\(document.id)"] != nil)
                                 if case .estimate(let estimate) = document {
                                     estimateDeliveryAction(estimate)
+                                }
+                                if case .invoice(let invoice) = document {
+                                    invoiceDeliveryAction(invoice)
                                 }
                             } else {
                                 Button("Retry Saving Original Draft") { retryNewDocumentSave(document) }
@@ -2154,6 +2102,12 @@ GunnAire
                 })
 
                 AnyView(currentJobDocumentsSection)
+
+                AnyView(Group {
+                    if !actionMessage.isEmpty {
+                        Section { Text(actionMessage).accessibilityIdentifier("JobDocumentsStatus") }
+                    }
+                })
 
                 AnyView(Group {
                     if let customer = contextCustomer,
@@ -3063,6 +3017,8 @@ GunnAire
                                 .tint(.blue)
                                 .disabled(!QuickBooksDataAPI.shared.isAuthenticated || invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false)
 
+                                invoiceDeliveryAction(invoice)
+
                                 Button("Generate Invoice PDF") {
                                     generateInvoiceDocument(invoice)
                                 }
@@ -3903,6 +3859,8 @@ GunnAire
                                             .foregroundStyle(Color.primaryBlack)
                                             .disabled(isInvoicePaid(invoice) || !invoice.isReadyForPaymentCollection)
                                         }
+
+                                        invoiceDeliveryAction(invoice)
 
                                         Button("Generate Invoice PDF") {
                                             generateInvoiceDocument(invoice)
@@ -7381,6 +7339,7 @@ GunnAire
             generatedCustomerDocumentInvoiceID = nil
             generatedCustomerDocumentEstimateID = estimate.id
             generatedCustomerDocumentKind = "estimate"
+            try captureGeneratedDocumentOrigin(url)
 
             let attachment: ServiceDocumentAttachment
             if let reusable = ServiceDocumentAttachment.reusableGeneratedBillingDocument(
@@ -7597,6 +7556,7 @@ GunnAire
             generatedCustomerDocumentEstimateID = linkedEstimate(for: serviceCall)?.id
             let documentLabel = CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments)
             generatedCustomerDocumentKind = documentLabel.lowercased()
+            try captureGeneratedDocumentOrigin(url)
             guard persistGeneratedBillingDocument(
                 url,
                 customer: invoice.customer,
@@ -8084,6 +8044,10 @@ GunnAire
     private func generateOnsiteReport(for serviceCall: ServiceCall) {
         do {
             saveCurrentEquipmentProfile(for: serviceCall, announce: false)
+            if !serviceCall.markDocumentationCompleteIfReady() {
+                serviceCall.documentationChecklist = false
+            }
+            try modelContext.save()
             let url = try CustomerDocumentExporter.exportOnsiteReport(
                 serviceCall: serviceCall,
                 estimate: currentJobEstimate,
@@ -8113,9 +8077,7 @@ GunnAire
             generatedCustomerDocumentInvoiceID = currentJobInvoice?.id ?? serviceCall.linkedInvoiceID
             generatedCustomerDocumentEstimateID = currentJobEstimate?.id ?? serviceCall.linkedEstimateID
             generatedCustomerDocumentKind = "\(serviceCall.type.displayName.lowercased()) report"
-            if !serviceCall.markDocumentationCompleteIfReady() {
-                serviceCall.documentationChecklist = false
-            }
+            try captureGeneratedDocumentOrigin(url)
             persistGeneratedOnsiteReport(url, for: serviceCall)
         } catch {
             actionMessage = "Could not generate onsite report: \(error.localizedDescription)"
@@ -8233,6 +8195,9 @@ GunnAire
                 return
             }
             let linkedCall = serviceCall(for: estimate)
+            if let linkedCall, linkedCall.customer !== customer {
+                throw GmailDraftError.businessChanged
+            }
             let url = try CustomerDocumentExporter.exportEstimate(
                 estimate,
                 serviceCall: linkedCall,
@@ -8249,6 +8214,9 @@ GunnAire
             guard files.contains(url) else {
                 throw GmailComposeError.attachment
             }
+            let sourceSnapshot = try GmailDraftBusinessSnapshot.capture(
+                GmailBusinessContext(customerID: customer.id, serviceCallID: linkedCall?.id,
+                    estimateID: estimate.id, workflow: .customerDocument), context: modelContext)
             GunnAireAppIntentRouter.storeMailDraftRoute(
                 to: email,
                 subject: "GunnAire Estimate - \(customer.name)",
@@ -8264,12 +8232,109 @@ GunnAire
                 customerID: customer.id,
                 serviceCallID: linkedCall?.id,
                 estimateID: estimate.id,
-                workflow: .customerDocument
+                workflow: .customerDocument,
+                sourceSnapshot: sourceSnapshot
             )
             if showsDismissButton { dismiss() }
         } catch {
             actionMessage = "Could not prepare the estimate email: \(error.localizedDescription) Nothing was sent."
             estimateSendIssue = actionMessage
+        }
+    }
+
+    private func invoiceDeliveryAction(_ invoice: Invoice) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                prepareInvoiceMailDraft(invoice)
+            } label: {
+                Label("Send Invoice", systemImage: "paperplane")
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("SendInvoice-\(invoice.id.uuidString)")
+            Text("Review the recipient, message, and attached PDF in Mail before sending.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if !googleAuth.canUseCurrentBusinessIdentity {
+                Text("You can prepare a draft now. Sending requires Google connected in Settings for your current business login.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// The invoice counterpart of `prepareEstimateEmail`. A fresh PDF is exported
+    /// from saved data on every use: `generatedCustomerDocumentURL` can belong to
+    /// another document or an earlier revision, so reusing it could attach the
+    /// wrong bill. This only opens a reviewed draft — no provider request, no
+    /// status change, and no saved document or job state.
+    private func prepareInvoiceMailDraft(_ invoice: Invoice) {
+        do {
+            try QuickBooksBillingAccessPolicy.validate(context: modelContext, document: .invoice(invoice))
+            guard AppAccess.canAccessSidebarItem(.mail, email: currentUserEmail, users: users) else {
+                throw GmailComposeError.access
+            }
+            // `Invoice.customer` is declared `Customer!`, so this relationship can
+            // be absent while CloudKit is still resolving it. Guard rather than
+            // implicitly unwrap, matching the estimate path.
+            guard let customer = invoice.customer else {
+                actionMessage = "This invoice's customer is still syncing or unavailable. Reopen it after customer access recovers. Nothing was sent."
+                return
+            }
+            let email = customer.email?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard let recipients = try? GmailAddressList.parse(email),
+                  recipients.count == 1,
+                  recipients.first.map(AppAccess.normalizedEmail) == AppAccess.normalizedEmail(email) else {
+                actionMessage = "Add a valid email address to this customer in Customers, then return to Send Invoice. Nothing was sent."
+                return
+            }
+            let linkedCall = serviceCall(for: invoice)
+            if let linkedCall, linkedCall.customer !== customer {
+                throw GmailDraftError.businessChanged
+            }
+            // `Payment.invoice` is an implicitly unwrapped relationship, so compare
+            // optionally rather than forcing it while CloudKit may still be resolving.
+            let invoicePayments = payments.filter { $0.invoice?.id == invoice.id }
+            let url = try CustomerDocumentExporter.exportInvoice(
+                invoice,
+                serviceCall: linkedCall,
+                payments: invoicePayments,
+                attachments: attachments,
+                equipmentProfiles: equipmentProfiles,
+                serviceCalls: serviceCalls
+            )
+            let files = CustomerDocumentExporter.customerEmailAttachmentURLs(
+                primaryDocumentURL: url,
+                serviceCallID: linkedCall?.id,
+                invoiceID: invoice.id,
+                attachments: attachments
+            )
+            guard files.contains(url) else {
+                throw GmailComposeError.attachment
+            }
+            let sourceSnapshot = try GmailDraftBusinessSnapshot.capture(
+                GmailBusinessContext(customerID: customer.id, serviceCallID: linkedCall?.id,
+                    invoiceID: invoice.id, workflow: .customerDocument), context: modelContext)
+            GunnAireAppIntentRouter.storeMailDraftRoute(
+                to: email,
+                subject: "GunnAire Invoice - \(customer.name)",
+                body: """
+Hello \(customer.name),
+
+Attached is your GunnAire invoice. Please review it and reply with any questions.
+
+Thank you,
+GunnAire
+""",
+                attachmentPaths: files.map(\.path),
+                customerID: customer.id,
+                serviceCallID: linkedCall?.id,
+                invoiceID: invoice.id,
+                workflow: .customerDocument,
+                sourceSnapshot: sourceSnapshot
+            )
+            if showsDismissButton { dismiss() }
+        } catch {
+            actionMessage = "Could not prepare the invoice email: \(error.localizedDescription) Nothing was sent."
         }
     }
 
@@ -8292,6 +8357,7 @@ GunnAire
             generatedCustomerDocumentInvoiceID = nil
             generatedCustomerDocumentEstimateID = estimate.id
             generatedCustomerDocumentKind = "estimate"
+            try captureGeneratedDocumentOrigin(url)
             persistGeneratedBillingDocument(
                 url,
                 customer: estimate.customer,
@@ -8329,6 +8395,7 @@ GunnAire
             generatedCustomerDocumentEstimateID = linkedEstimate(for: serviceCall)?.id
             let documentLabel = CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments).lowercased()
             generatedCustomerDocumentKind = documentLabel
+            try captureGeneratedDocumentOrigin(url)
             persistGeneratedBillingDocument(
                 url,
                 customer: invoice.customer,
@@ -8418,32 +8485,20 @@ GunnAire
             actionMessage = "Create or sync this estimate to QuickBooks before sending it."
             return
         }
-        guard prepareEstimateDocumentationForQuickBooksSend(estimate) else {
-            return
-        }
-        let trimmedEmail = estimate.customer.email?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let email = trimmedEmail.flatMap { $0.isEmpty ? nil : $0 }
-        actionMessage = "Prepared estimate PDF and attachments. Sending estimate through QuickBooks..."
-        QuickBooksDataAPI.shared.sendEstimate(id: quickBooksID, to: email) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success:
-                    if estimate.status.caseInsensitiveCompare("accepted") != .orderedSame &&
-                        estimate.status.caseInsensitiveCompare("rejected") != .orderedSame {
-                        estimate.status = "sent"
-                    }
-                    try? modelContext.save()
-                    if let email {
-                        actionMessage = "Estimate sent through QuickBooks to \(email)."
-                    } else {
-                        actionMessage = "Estimate sent through QuickBooks."
-                    }
-                case .failure(let error):
-                    actionMessage = "QuickBooks estimate send failed: \(error.localizedDescription)"
-                }
+        do {
+            let eligibility = try QuickBooksCustomerEmailWorkflow(context: modelContext,
+                document: .estimate(estimate), recipient: estimate.customer?.email)
+            try eligibility.checkEligibilityAndRecordSuppression()
+            guard prepareEstimateDocumentationForQuickBooksSend(estimate) else { return }
+            let workflow = try QuickBooksCustomerEmailWorkflow(context: modelContext,
+                document: .estimate(estimate), recipient: estimate.customer?.email)
+            try workflow.prepare()
+            actionMessage = "Checking the estimate email status in QuickBooks…"
+            QuickBooksDataAPI.shared.sendEstimate(id: quickBooksID, to: workflow.recipient,
+                expectedCustomerID: workflow.quickBooksCustomerID, validateSend: { try workflow.validateSend() }) { result in
+                actionMessage = workflow.finish(result.map { _ in () })
             }
-        }
+        } catch { actionMessage = error.localizedDescription }
     }
 
     private func sendInvoiceThroughQuickBooks(_ invoice: Invoice) {
@@ -8456,32 +8511,20 @@ GunnAire
             actionMessage = "Create or sync this invoice to QuickBooks before sending it."
             return
         }
-        guard prepareInvoiceDocumentationForQuickBooksSend(invoice) else {
-            return
-        }
-        let trimmedEmail = invoice.customer.email?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let email = trimmedEmail.flatMap { $0.isEmpty ? nil : $0 }
-        actionMessage = "Prepared service report and invoice attachments. Sending invoice through QuickBooks..."
-        QuickBooksDataAPI.shared.sendInvoice(id: quickBooksID, to: email) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success:
-                    if !isInvoicePaid(invoice) &&
-                        invoice.status.caseInsensitiveCompare("partial") != .orderedSame {
-                        invoice.status = "sent"
-                    }
-                    try? modelContext.save()
-                    if let email {
-                        actionMessage = "Invoice sent through QuickBooks to \(email)."
-                    } else {
-                        actionMessage = "Invoice sent through QuickBooks."
-                    }
-                case .failure(let error):
-                    actionMessage = "QuickBooks invoice send failed: \(error.localizedDescription)"
-                }
+        do {
+            let eligibility = try QuickBooksCustomerEmailWorkflow(context: modelContext,
+                document: .invoice(invoice), recipient: invoice.customer?.email)
+            try eligibility.checkEligibilityAndRecordSuppression()
+            guard prepareInvoiceDocumentationForQuickBooksSend(invoice) else { return }
+            let workflow = try QuickBooksCustomerEmailWorkflow(context: modelContext,
+                document: .invoice(invoice), recipient: invoice.customer?.email)
+            try workflow.prepare()
+            actionMessage = "Checking the invoice email status in QuickBooks…"
+            QuickBooksDataAPI.shared.sendInvoice(id: quickBooksID, to: workflow.recipient,
+                expectedCustomerID: workflow.quickBooksCustomerID, validateSend: { try workflow.validateSend() }) { result in
+                actionMessage = workflow.finish(result.map { _ in () })
             }
-        }
+        } catch { actionMessage = error.localizedDescription }
     }
 
     private func serviceCall(for estimate: Estimate) -> ServiceCall? {

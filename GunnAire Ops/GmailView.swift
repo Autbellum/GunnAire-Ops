@@ -473,7 +473,7 @@ struct GmailView: View {
                 #else
                 let fixtureAccess: (() throws -> Void)? = nil
                 #endif
-                activeMailSend = try GmailSendWorkflow(auth: googleAuth, context: modelContext,
+                activeMailSend = try await GmailSendWorkflow.prepare(auth: googleAuth, context: modelContext,
                     message: message, business: draft.businessContext, provider: provider, validateAccess: fixtureAccess, journal: journal)
             }
             guard let workflow = activeMailSend else { throw GmailComposeError.changed }
@@ -526,9 +526,14 @@ struct GmailView: View {
 
     private func makeDraftSession(_ draft: GmailDraft, content: GmailDraftContent) throws -> GmailDraftSession {
         let scope = try draftScope()
+        try validateDraftAccess(scope, business: content.business)
         var content = content
         if draft.savedRecord == nil {
-            content.businessSnapshot = try GmailDraftBusinessSnapshot.capture(content.business, context: modelContext)
+            if let original = content.businessSnapshot {
+                try GmailDraftBusinessSnapshot.validate(original, business: content.business, context: modelContext)
+            } else {
+                content.businessSnapshot = try GmailDraftBusinessSnapshot.capture(content.business, context: modelContext)
+            }
         }
         let record = draft.savedRecord ?? GmailDraftRecord(id: draft.id, scope: scope, content: content)
         guard record.scope == scope else { throw GmailDraftError.access }
@@ -580,7 +585,8 @@ struct GmailView: View {
             invoiceID: draft.invoiceID,
             estimateID: draft.estimateID,
             maintenanceContractID: draft.maintenanceContractID,
-            workflow: draft.workflow
+            workflow: draft.workflow,
+            sourceSnapshot: draft.sourceSnapshot
         )
     }
 
@@ -1387,6 +1393,7 @@ private struct GmailDraft: Identifiable {
     let estimateID: UUID?
     let maintenanceContractID: UUID?
     let workflow: GunnAireMailWorkflow
+    let sourceSnapshot: [String]?
 
     var requiresBusinessContext: Bool {
         customerID != nil || workflow != .general || serviceCallID != nil || invoiceID != nil ||
@@ -1399,7 +1406,7 @@ private struct GmailDraft: Identifiable {
     var content: GmailDraftContent {
         .init(to: to, subject: subject, body: body, files: attachments.map { GmailDraftFile($0) },
             reply: reply, business: businessContext, requiresBusinessContext: savedRecord?.content.requiresBusinessContext ?? requiresBusinessContext,
-            attachmentError: attachmentError, businessSnapshot: savedRecord?.content.businessSnapshot)
+            attachmentError: attachmentError, businessSnapshot: savedRecord == nil ? sourceSnapshot : savedRecord?.content.businessSnapshot)
     }
 
     init(record: GmailDraftRecord) {
@@ -1408,7 +1415,8 @@ private struct GmailDraft: Identifiable {
             attachments: value.files.map(\.attachment), attachmentError: value.attachmentError,
             reply: value.reply, customerID: value.business?.customerID, serviceCallID: value.business?.serviceCallID,
             invoiceID: value.business?.invoiceID, estimateID: value.business?.estimateID,
-            maintenanceContractID: value.business?.maintenanceContractID, workflow: value.business?.workflow ?? .general)
+            maintenanceContractID: value.business?.maintenanceContractID, workflow: value.business?.workflow ?? .general,
+            sourceSnapshot: value.businessSnapshot)
         savedRecord = record
     }
 
@@ -1427,7 +1435,8 @@ private struct GmailDraft: Identifiable {
         invoiceID: UUID? = nil,
         estimateID: UUID? = nil,
         maintenanceContractID: UUID? = nil,
-        workflow: GunnAireMailWorkflow = .general
+        workflow: GunnAireMailWorkflow = .general,
+        sourceSnapshot: [String]? = nil
     ) {
         self.id = id
         self.to = to
@@ -1444,6 +1453,7 @@ private struct GmailDraft: Identifiable {
         self.estimateID = estimateID
         self.maintenanceContractID = maintenanceContractID
         self.workflow = workflow
+        self.sourceSnapshot = sourceSnapshot
     }
 }
 

@@ -90,18 +90,10 @@ final class GunnAire_OpsUITests: XCTestCase {
                 // it can still overlap its frame; XCTest then finds no hit point.
                 let keyboard = app.keyboards.firstMatch
                 if keyboard.exists, keyboard.frame.intersects(frame) { return false }
-                // Even then XCTest can record "Failed to determine hittability"
-                // for a control whose layout has not settled. During this
-                // bounded wait that is "not yet", not a failure: the assertion
-                // on the returned value still fails if it never becomes hittable.
-                let options = XCTExpectedFailure.Options()
-                options.isStrict = false
-                options.issueMatcher = { $0.compactDescription.contains("Failed to determine hittability") }
-                var hittable = false
-                XCTExpectFailure("Hittability can be undetermined while the layout settles.", options: options) {
-                    hittable = element.isHittable
-                }
-                return hittable
+                // A failed XCTest query must remain a real failure. Expected-
+                // failure masking can terminate a test with continueAfterFailure
+                // disabled while reporting a pass before later assertions run.
+                return element.isHittable
             },
             object: element
         )
@@ -134,17 +126,45 @@ final class GunnAire_OpsUITests: XCTestCase {
     private func replaceInventoryQuantityText(
         _ app: XCUIApplication,
         _ field: XCUIElement,
+        in form: XCUIElement,
         with replacement: String,
+        alreadyFocused: Bool = false,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        // Initialize synthesized hardware input before focusing, matching
-        // exerciseBundleComposer(hardwareKeys:).
-        app.typeKey(XCUIKeyboardKey.shift.rawValue, modifierFlags: [])
-        field.tap()
+        guard field.exists, field.isEnabled else {
+            retainNavigationFailure(app, name: "Inventory quantity input is unavailable")
+            XCTFail("Inventory quantity must exist and accept input.", file: file, line: line)
+            return
+        }
+        if !alreadyFocused {
+            // Sequential replacements retain the insertion point proved by
+            // exact text entry, including when validation changes row layout.
+            if !waitForHittable(field, timeout: 1) {
+                for _ in 0..<4 where !field.isHittable { form.swipeUp() }
+            }
+            guard waitForHittable(field) else {
+                retainNavigationFailure(app, name: "Inventory quantity could not be revealed")
+                XCTFail("Inventory quantity must remain reachable after validation.", file: file, line: line)
+                return
+            }
+            field.tap()
+        }
         let priorValue = field.value as? String ?? ""
         if !priorValue.isEmpty, priorValue != field.placeholderValue {
-            field.typeKey("a", modifierFlags: .command)
+            // Ordinary replacement uses ordinary deletion. The dedicated
+            // hardware-keyboard journey below still exercises Command-A and
+            // per-key entry, Cancel, and saving the exact fractional value.
+            if !alreadyFocused {
+                field.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)).tap()
+            }
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: priorValue.count))
+            let cleared = field.value as? String ?? ""
+            guard cleared.isEmpty || cleared == field.placeholderValue else {
+                retainNavigationFailure(app, name: "Inventory quantity was not completely cleared")
+                XCTFail("Ordinary deletion must clear the prior quantity before replacement.", file: file, line: line)
+                return
+            }
         }
         field.typeText(replacement)
         if field.value as? String != replacement {
@@ -5128,6 +5148,100 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testNewInvoiceOpensMailDraftWithPDFWithoutQuickBooksConnection() throws {
+        let app = openManagementBillingComposer("Invoice", extraArguments: [
+            "-uiTestSeedMailInbox", "-uiTestMailRejectSend"
+        ], navigateViaSidebar: true)
+        app.segmentedControls["BillingInvoiceWorkType"].buttons["Repair"].tap()
+        let customer = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Select Customer")).firstMatch
+        XCTAssertTrue(waitForHittable(customer)); customer.tap()
+        XCTAssertTrue(app.navigationBars["Customer"].waitForExistence(timeout: 4))
+        let choice = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Blue Ridge Dental")).firstMatch
+        XCTAssertTrue(waitForHittable(choice)); choice.tap()
+        let search = app.textFields["Search items to add"]
+        for _ in 0..<8 where !search.exists || !search.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(search))
+        search.tap(); search.typeText("HVAC Diagnostic Service")
+        let item = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "HVAC Diagnostic Service")).firstMatch
+        for _ in 0..<6 where !item.exists || !item.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(item)); item.tap()
+        let hideKeyboard = app.buttons["Hide keyboard"]
+        if hideKeyboard.exists && hideKeyboard.isHittable { hideKeyboard.tap() }
+        let save = app.buttons["SaveBillingDocument"]
+        XCTAssertTrue(waitForHittable(save)); XCTAssertTrue(save.isEnabled); save.tap()
+        let savedCustomer = app.staticTexts["ManagementBillingSavedCustomer"]
+        XCTAssertTrue(savedCustomer.waitForExistence(timeout: 5))
+        XCTAssertEqual(savedCustomer.label, "Blue Ridge Dental")
+        let workType = app.descendants(matching: .any)["ManagementBillingSavedWorkType"]
+        XCTAssertTrue(workType.exists)
+        XCTAssertEqual(workType.value as? String, "Repair")
+        XCTAssertTrue(app.staticTexts["Invoice Saved"].exists)
+        XCTAssertFalse(app.buttons["SaveBillingDocument"].exists)
+
+        let sendInvoice = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "SendInvoice-")).firstMatch
+        for _ in 0..<6 where !sendInvoice.exists || !sendInvoice.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(sendInvoice))
+        XCTAssertTrue(sendInvoice.isEnabled, "A locally saved invoice must offer a reviewed mail draft without QuickBooks.")
+        sendInvoice.tap()
+        assertInvoiceMailDraft(app, workType: "Repair")
+        XCTAssertFalse(app.navigationBars["New Invoice"].exists, "The saved composer must dismiss before Mail opens.")
+    }
+
+    @MainActor
+    func testSavedInvoiceListOpensMailDraftWithPDFWithoutQuickBooksConnection() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin", "-appStoreScreenshotFixtures", "-uiTestSeedCollectibleJob",
+            "-uiTestForceQuickBooksDisconnected", "-uiTestSeedMailInbox", "-uiTestMailRejectSend"]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+        // A launch-argument defaults override would keep forcing "invoices"
+        // after Send Invoice stores the real route to Mail.
+        revealSidebarDestination("Invoices", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 8))
+        let row = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Blue Ridge Dental")).firstMatch
+        for _ in 0..<8 where !row.exists || !row.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(row)); row.tap()
+        let sendInvoice = app.buttons["SendInvoice-\(screenshotInvoiceID)"]
+        for _ in 0..<6 where !sendInvoice.exists || !sendInvoice.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(sendInvoice))
+        XCTAssertTrue(sendInvoice.isEnabled)
+        sendInvoice.tap()
+        assertInvoiceMailDraft(app, workType: "Service")
+    }
+
+    @MainActor
+    private func assertInvoiceMailDraft(_ app: XCUIApplication, workType: String) {
+        let composeAppeared = app.navigationBars["Compose"].waitForExistence(timeout: 8)
+        if !composeAppeared { retainNavigationFailure(app, name: "Invoice email draft did not open") }
+        XCTAssertTrue(composeAppeared)
+        let recipient = app.textFields["MailComposeTo"]
+        XCTAssertTrue(recipient.waitForExistence(timeout: 4))
+        XCTAssertEqual(recipient.value as? String, "office@example.com")
+        XCTAssertEqual(app.textFields["MailComposeSubject"].value as? String, "GunnAire Invoice - Blue Ridge Dental")
+        let body = app.textFields["MailComposeBody"]
+        XCTAssertTrue((body.value as? String)?.contains("Hello Blue Ridge Dental,") == true)
+        XCTAssertTrue((body.value as? String)?.contains("Attached is your GunnAire invoice.") == true)
+        XCTAssertTrue(body.isEnabled)
+        let invoicePDFs = app.staticTexts.matching(NSPredicate(
+            format: "label BEGINSWITH %@ AND label ENDSWITH %@", "GunnAire-\(workType)-Invoice-Blue-Ridge-Dental-", ".pdf"
+        ))
+        XCTAssertTrue(invoicePDFs.firstMatch.waitForExistence(timeout: 4))
+        XCTAssertEqual(invoicePDFs.count, 1, "Attach the selected saved invoice PDF exactly once.")
+        let allPDFs = app.staticTexts.matching(NSPredicate(format: "label ENDSWITH %@", ".pdf"))
+        XCTAssertEqual(allPDFs.count, 1, "This fixture has no supporting files; no stale estimate or other invoice may be attached.")
+        let draftStatus = app.staticTexts["MailDraftSaveStatus"]
+        XCTAssertTrue(draftStatus.waitForExistence(timeout: 4))
+        XCTAssertTrue(app.buttons["MailSendButton"].isEnabled)
+        XCTAssertFalse(app.staticTexts["MailComposeStatus"].exists, "Opening a draft must not attempt transmission, including a rejected fixture send.")
+        XCTAssertFalse(app.staticTexts["Message sent."].exists)
+        let evidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        evidence.name = "Invoice - \(workType.lowercased()) prepared as an unsent draft with one original PDF"
+        evidence.lifetime = .keepAlways
+        add(evidence)
+    }
+
+    @MainActor
     func testInvoiceComposerBrowsesCategoriesEditsRepeatedBundleMembersAndSavesOriginal() throws {
         try exerciseBundleComposer(kind: "Invoice", submitKeyboard: true)
     }
@@ -8425,12 +8539,12 @@ final class GunnAire_OpsUITests: XCTestCase {
         let quantity = app.textFields["InventoryOpeningQuantity"]
         for _ in 0..<8 where !quantity.isHittable { composeForm.swipeUp() }
         if !waitForHittable(quantity) { retainNavigationFailure(app, name: "Inventory opening quantity is not reachable") }
-        XCTAssertTrue(waitForHittable(quantity)); replaceInventoryQuantityText(app, quantity, with: "4.25")
+        XCTAssertTrue(waitForHittable(quantity)); replaceInventoryQuantityText(app, quantity, in: composeForm, with: "4.25")
         let createInventory = app.buttons["CreateQuickBooksCatalogItem"]
-        replaceInventoryQuantityText(app, quantity, with: "invalid")
+        replaceInventoryQuantityText(app, quantity, in: composeForm, with: "invalid", alreadyFocused: true)
         XCTAssertFalse(createInventory.isEnabled, "Invalid quantity must not create an item with an old or empty value.")
         XCTAssertTrue(app.staticTexts["InventoryOpeningQuantityValidation"].exists)
-        replaceInventoryQuantityText(app, quantity, with: "4.25")
+        replaceInventoryQuantityText(app, quantity, in: composeForm, with: "4.25", alreadyFocused: true)
         XCTAssertTrue(createInventory.isEnabled)
         let done = app.buttons["DoneEditingCatalogItem"]
         XCTAssertTrue(waitForHittable(done)); done.tap()
@@ -8557,10 +8671,10 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertEqual(savedQuantity.value as? String, "4.25", "Cancel must discard only this unsaved edit.")
         XCTAssertEqual(app.textFields["InventoryOpeningDate"].value as? String, "2026-09-08")
         let stage = app.buttons["StageCatalogChanges"]
-        replaceInventoryQuantityText(app, savedQuantity, with: ".")
+        replaceInventoryQuantityText(app, savedQuantity, in: editForm, with: ".")
         XCTAssertFalse(stage.isEnabled, "Invalid quantity must not stage the prior saved setup.")
         XCTAssertTrue(app.staticTexts["InventoryOpeningQuantityValidation"].exists)
-        replaceInventoryQuantityText(app, savedQuantity, with: "6.5")
+        replaceInventoryQuantityText(app, savedQuantity, in: editForm, with: "6.5", alreadyFocused: true)
         XCTAssertTrue(stage.isEnabled)
         XCTAssertTrue(waitForHittable(stage)); stage.tap()
         XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 3))
