@@ -71,6 +71,14 @@ import UIKit
         try pageText(try Data(contentsOf: url))
     }
 
+    private func expectImmutablePDFName(_ url: URL) {
+        #expect(url.pathExtension == "pdf")
+        let stem = url.deletingPathExtension().lastPathComponent
+        #expect(!stem.hasSuffix(".pdf"))
+        // Each retained path needs its own identity even across a minute rollover.
+        #expect(UUID(uuidString: String(stem.suffix(36))) != nil)
+    }
+
     // MARK: - Projection is a detached copy
 
     /// The plan is the whole contract: if it still referenced its models, a
@@ -228,6 +236,121 @@ import UIKit
         #expect(try pageText(contentsOf: first).joined().contains("Original approved work"))
         #expect(try pageText(contentsOf: second).joined().contains("Revised approved work"))
         #expect(try filesProducedForFixture(records.customer.name).count == 2)
+    }
+
+    @Test func rapidAgreementLifecycleExportsPreserveEveryEarlierPDF() throws {
+        let customer = Customer(name: uniqueName("Agreement History QA"))
+        let agreement = RecurringMaintenanceContract(
+            customer: customer, planName: "Comfort Plan", schedulePattern: "Annual",
+            nextDate: Date(timeIntervalSinceReferenceDate: 810_123_456), active: false)
+        agreement.configureDraft(
+            agreementPrice: 299, billingInterval: .annual, memberDiscountPercent: nil,
+            autoRenews: false, termsSummary: "Original agreement terms",
+            createdByEmail: "dispatch@example.com", sourceServiceCallID: nil)
+
+        let draft = try CustomerDocumentExporter.exportMaintenanceAgreement(agreement)
+        defer { try? FileManager.default.removeItem(at: draft) }
+        let draftBytes = try Data(contentsOf: draft)
+        agreement.markPendingApproval(offeredByEmail: "dispatch@example.com")
+        let offered = try CustomerDocumentExporter.exportMaintenanceAgreement(agreement)
+        defer { try? FileManager.default.removeItem(at: offered) }
+        let offeredBytes = try Data(contentsOf: offered)
+        try agreement.recordCustomerApproval(
+            customerName: customer.name, method: .email, reference: "History-Approval-Confirmed",
+            signatureImageBase64: nil, recordedByEmail: "dispatch@example.com")
+        let approved = try CustomerDocumentExporter.exportMaintenanceAgreement(agreement)
+        defer { try? FileManager.default.removeItem(at: approved) }
+        #expect(agreement.lifecycleStatus == .active)
+        let approvedBytes = try Data(contentsOf: approved)
+        agreement.cancel(byEmail: "dispatch@example.com", reason: "Customer requested cancellation")
+        let cancelled = try CustomerDocumentExporter.exportMaintenanceAgreement(agreement)
+        defer { try? FileManager.default.removeItem(at: cancelled) }
+
+        #expect(agreement.lifecycleStatus == .cancelled)
+        #expect(Set([draft, offered, approved, cancelled]).count == 4)
+        #expect(try Data(contentsOf: draft) == draftBytes)
+        #expect(try Data(contentsOf: offered) == offeredBytes)
+        #expect(try Data(contentsOf: approved) == approvedBytes)
+        let draftText = try pageText(contentsOf: draft).joined(separator: "\n")
+        let offeredText = try pageText(contentsOf: offered).joined(separator: "\n")
+        let approvedText = try pageText(contentsOf: approved).joined(separator: "\n")
+        let cancelledText = try pageText(contentsOf: cancelled).joined(separator: "\n")
+        #expect(draftText.contains("Draft"))
+        #expect(offeredText.contains("Pending Approval"))
+        #expect(approvedText.contains("Active"))
+        #expect(approvedText.contains("History-Approval-Confirmed"))
+        #expect(!draftText.contains("History-Approval-Confirmed"))
+        #expect(!offeredText.contains("History-Approval-Confirmed"))
+        #expect(cancelledText.contains("Cancelled"))
+        #expect(!approvedText.contains("Cancelled"))
+        for url in [draft, offered, approved, cancelled] { expectImmutablePDFName(url) }
+        #expect(try filesProducedForFixture(customer.name).count == 4)
+    }
+
+    @Test func repeatedFieldFormExportsPreserveTheOriginalJobDocument() throws {
+        let customer = Customer(name: uniqueName("Field Form History QA"))
+        let job = ServiceCall(type: .repair, scheduledDate: Date(), customer: customer)
+        job.siteAddress = "101 Original Service Road"
+        let question = FieldFormQuestion(label: "Drain test", kind: .text, required: true)
+        let template = FieldFormTemplate(title: "Completion v1.2.pdf", questions: [question])
+        let response = FieldFormResponse(
+            serviceCallID: job.id, template: template,
+            answers: [question.id: "Drain-Test-Confirmed"])
+        let originalAnswers = response.answersJSON
+        #expect(response.completionReviewIssue(resolving: template) == nil)
+
+        let first = try CustomerDocumentExporter.exportFieldFormResponse(
+            response, serviceCall: job, template: template)
+        defer { try? FileManager.default.removeItem(at: first) }
+        let firstBytes = try Data(contentsOf: first)
+        job.siteAddress = "202 Revised Service Road"
+        let revised = try CustomerDocumentExporter.exportFieldFormResponse(
+            response, serviceCall: job, template: template)
+        defer { try? FileManager.default.removeItem(at: revised) }
+        let revisedBytes = try Data(contentsOf: revised)
+        let repeated = try CustomerDocumentExporter.exportFieldFormResponse(
+            response, serviceCall: job, template: template)
+        defer { try? FileManager.default.removeItem(at: repeated) }
+
+        #expect(Set([first, revised, repeated]).count == 3)
+        #expect(try Data(contentsOf: first) == firstBytes)
+        #expect(try Data(contentsOf: revised) == revisedBytes)
+        #expect(try pageText(contentsOf: first).joined().contains("101 Original Service Road"))
+        #expect(try pageText(contentsOf: revised).joined().contains("202 Revised Service Road"))
+        #expect(response.answersJSON == originalAnswers)
+        for url in [first, revised, repeated] {
+            expectImmutablePDFName(url)
+            #expect(try pageText(contentsOf: url).joined().contains("Drain-Test-Confirmed"))
+        }
+        #expect(try filesProducedForFixture(customer.name).count == 3)
+    }
+
+    @Test func repeatedAccountStatementsPreservePriorBalanceEvidence() throws {
+        let customer = Customer(name: uniqueName("Statement History QA"))
+        let now = Date(timeIntervalSinceReferenceDate: 810_123_456)
+        let invoice = Invoice(
+            customer: customer, amount: 500,
+            dueDate: now.addingTimeInterval(-86_400), createdAt: now.addingTimeInterval(-172_800))
+        let first = try CustomerDocumentExporter.exportAccountStatement(
+            customer: customer, invoices: [invoice], payments: [], now: now)
+        defer { try? FileManager.default.removeItem(at: first) }
+        let firstBytes = try Data(contentsOf: first)
+        let payment = Payment(invoice: invoice, amount: 150,
+            date: now.addingTimeInterval(-60), method: "check")
+        let revised = try CustomerDocumentExporter.exportAccountStatement(
+            customer: customer, invoices: [invoice], payments: [payment], now: now)
+        defer { try? FileManager.default.removeItem(at: revised) }
+
+        #expect(first != revised)
+        #expect(try Data(contentsOf: first) == firstBytes)
+        let firstText = try pageText(contentsOf: first).joined(separator: "\n")
+        let revisedText = try pageText(contentsOf: revised).joined(separator: "\n")
+        #expect(firstText.contains("$500.00"))
+        #expect(!firstText.contains("$350.00"))
+        #expect(revisedText.contains("$350.00"))
+        #expect(revisedText.contains("$150.00 via Check"))
+        for url in [first, revised] { expectImmutablePDFName(url) }
+        #expect(try filesProducedForFixture(customer.name).count == 2)
     }
 
     /// The tax fence belongs to projection, so it must stop an off-main-actor

@@ -972,7 +972,20 @@ struct CompanyWorkspaceAccessTests {
         }
         #expect(CompanyCloudKitRuntimeAccount.environment(profileData: nil, hasVerifiedStoreDistribution: false) == nil)
         #expect(CompanyCloudKitRuntimeAccount.environment(profileData: nil, hasVerifiedStoreDistribution: true) == "production")
+        #expect(CompanyCloudKitRuntimeAccount.environment(profileData: nil, hasVerifiedStoreDistribution: false, hasStoreReceipt: true) == "production")
         #expect(CompanyCloudKitRuntimeAccount.environment(profileData: Data("invalid profile".utf8), hasVerifiedStoreDistribution: true) == nil)
+    }
+
+    @Test func storeReceiptFallbackAcceptsOnlyStoreKitConfigurationErrorWithBytes() {
+        struct ConfigurationFailure: Error, CustomStringConvertible {
+            var description: String { "configuration" }
+        }
+        #expect(CompanyCloudKitRuntimeAccount.permitsStoreReceiptFallback(
+            error: ConfigurationFailure(), receiptData: Data("synthetic receipt".utf8)))
+        #expect(!CompanyCloudKitRuntimeAccount.permitsStoreReceiptFallback(
+            error: ConfigurationFailure(), receiptData: Data()))
+        #expect(!CompanyCloudKitRuntimeAccount.permitsStoreReceiptFallback(
+            error: URLError(.notConnectedToInternet), receiptData: Data("synthetic receipt".utf8)))
     }
 
     /// Real device provisioning profiles (confirmed on-device) encode this

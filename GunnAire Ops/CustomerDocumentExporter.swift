@@ -2264,7 +2264,7 @@ enum CustomerDocumentExporter {
             imageEquipmentProfiles: imageEquipmentProfiles,
             approvalSignatureImageBase64: approvalSignatureImageBase64
         )
-        return try writeDocument(renderDocumentData(plan), fileName: fileName)
+        return try writeDocument(renderDocumentData(plan), fileName: uniqueExportFileName(fileName))
     }
 
     /// Reads nothing but the plan: no SwiftData, no main-actor state. The

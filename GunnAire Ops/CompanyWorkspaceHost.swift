@@ -181,7 +181,11 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
     /// present. A missing profile alone is not signing evidence: simulator
     /// and custom builds can also omit it. Such builds require a verified
     /// AppTransaction before selecting the production CloudKit environment.
-    static func environment(profileData: Data?, hasVerifiedStoreDistribution: Bool) -> String? {
+    static func environment(
+        profileData: Data?,
+        hasVerifiedStoreDistribution: Bool,
+        hasStoreReceipt: Bool = false
+    ) -> String? {
         if let data = profileData {
             guard let start = data.range(of: Data("<?xml".utf8)),
                   let end = data.range(of: Data("</plist>".utf8), in: start.lowerBound..<data.endIndex),
@@ -220,7 +224,7 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
             let debuggable = (entitlements["get-task-allow"] as? Bool) ?? false
             return debuggable ? "development" : "production"
         }
-        return hasVerifiedStoreDistribution ? "production" : nil
+        return hasVerifiedStoreDistribution || hasStoreReceipt ? "production" : nil
     }
 
     /// Resolving the account costs a StoreKit transaction lookup (with
@@ -271,6 +275,24 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
         }
     }
 
+    /// TestFlight can omit the embedded profile and, on some iOS releases,
+    /// StoreKit can surface its configuration failure as a private error
+    /// string rather than a public StoreKitError case. A nonempty App Store
+    /// receipt is the signed distribution marker available in that state. It
+    /// is accepted only for that exact diagnostic; unverified transactions,
+    /// bundle mismatches and transport failures still fail closed.
+    static func permitsStoreReceiptFallback(error: Error, receiptData: Data?) -> Bool {
+        guard receiptData?.isEmpty == false else { return false }
+        if let storeError = error as? StoreKitError {
+            if case .networkError = storeError { return false }
+            if case .userCancelled = storeError { return false }
+            if case .notAvailableInStorefront = storeError { return false }
+            if case .notEntitled = storeError { return false }
+        }
+        let description = String(describing: error).trimmingCharacters(in: .whitespacesAndNewlines)
+        return description == "configuration" || description.localizedCaseInsensitiveContains("configuration")
+    }
+
     static func requireAvailableAccount(
         status: @escaping @Sendable () async throws -> CKAccountStatus,
         pause: @escaping @Sendable () async throws -> Void = {
@@ -307,11 +329,14 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
         let profileURL = profileURLs.first { FileManager.default.fileExists(atPath: $0.path) }
         let profileData = try profileURL.map { try Data(contentsOf: $0) }
         var hasVerifiedDistribution = false
+        var hasStoreReceipt = false
         if profileData == nil {
             // App Store and TestFlight may strip the embedded profile. In
             // that case require StoreKit's verified transaction before using
             // the production CloudKit container. Retry transient failures,
             // then fail closed with a configuration diagnostic.
+            let receiptURL = Bundle.main.bundleURL.appendingPathComponent("StoreKit/receipt", isDirectory: false)
+            let receiptData = try? Data(contentsOf: receiptURL)
             do {
                 try await verifyStoreDistribution {
                     let result = try await AppTransaction.shared
@@ -327,14 +352,24 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
                 let detail = "profileData=nil, AppTransaction verified"
                 await MainActor.run { CompanyWorkspaceDiagnostics.lastConfigurationDetail = detail }
             } catch {
+                if Self.permitsStoreReceiptFallback(error: error, receiptData: receiptData) {
+                    hasStoreReceipt = true
+                    let detail = "profileData=nil, AppTransaction configuration; nonempty store receipt present"
+                    await MainActor.run { CompanyWorkspaceDiagnostics.lastConfigurationDetail = detail }
+                } else {
                 let detail = "profileData=nil, AppTransaction: \(String(describing: error))"
                 await MainActor.run { CompanyWorkspaceDiagnostics.lastConfigurationDetail = detail }
                 throw error
+                }
             }
         } else {
             await MainActor.run { CompanyWorkspaceDiagnostics.lastConfigurationDetail = "profileData present, \(profileData?.count ?? -1) bytes" }
         }
-        guard let environment = environment(profileData: profileData, hasVerifiedStoreDistribution: hasVerifiedDistribution) else {
+        guard let environment = environment(
+            profileData: profileData,
+            hasVerifiedStoreDistribution: hasVerifiedDistribution,
+            hasStoreReceipt: hasStoreReceipt
+        ) else {
             throw CompanyWorkspaceFailure.configuration
         }
         // The resolved environment namespaces accountHash, the workspace

@@ -2275,27 +2275,38 @@ GunnAire
         _ attachment: ServiceDocumentAttachment,
         data: Data
     ) {
-        guard GunnAireBackendService.isConfigured else { return }
-        Task {
-            do {
-                let response = try await GunnAireBackendService.uploadDocument(
-                    data: data,
-                    filename: attachment.displayName,
-                    contentType: attachment.contentType,
-                    kind: attachment.kindRaw,
-                    serviceCallID: call.id,
-                    maintenanceContractID: attachment.maintenanceContractID,
-                    customerEquipmentID: nil,
-                    customerName: call.customer.name
-                )
-                attachment.markSharedCompanyStored(id: response.id)
-                try? modelContext.save()
-            } catch {
-                attachment.markSharedCompanyUploadFailed(error.localizedDescription)
-                try? modelContext.save()
-                maintenanceAgreementMessage = "Agreement saved locally. Company storage upload failed: \(error.localizedDescription)"
+        guard GunnAireBackendService.isConfigured,
+              GunnAireCloudKit.usesTestDatabase ||
+                CompanyWorkspaceAccessController.shared.authorizedContainer === modelContext.container,
+              CustomerDocumentUpload.isCurrentRecord(call, in: modelContext),
+              let customer = call.customer,
+              CustomerDocumentUpload.isCurrentRecord(customer, in: modelContext) else { return }
+        let context = modelContext
+        let originalCall = call
+        let callID = call.id, callPersistentID = call.persistentModelID
+        let email = AppAccess.normalizedEmail(currentActivityActor)
+        do {
+            let upload = try CustomerDocumentUpload(attachment: attachment, customer: customer,
+                context: context, data: data) {
+                guard modelContext === context,
+                      GunnAireCloudKit.usesTestDatabase ||
+                        CompanyWorkspaceAccessController.shared.authorizedContainer === context.container,
+                      AppAccess.normalizedEmail(currentActivityActor) == email,
+                      call === originalCall, CustomerDocumentUpload.isCurrentRecord(originalCall, in: context),
+                      originalCall.persistentModelID == callPersistentID, originalCall.id == callID,
+                      originalCall.customer === customer else { throw GmailDraftError.businessChanged }
+                let currentUsers = try context.fetch(FetchDescriptor<AppUser>())
+                let currentTechnicians = try context.fetch(FetchDescriptor<Technician>())
+                guard AppAccess.canOfferMaintenanceAgreements(email: currentActivityActor, users: currentUsers),
+                      AppAccess.canAccessServiceCall(originalCall, email: currentActivityActor, users: currentUsers,
+                          serviceCalls: [originalCall], technicians: currentTechnicians) else { throw GmailComposeError.access }
             }
-        }
+            Task { @MainActor in
+                await upload.perform { detail in
+                    maintenanceAgreementMessage = "Agreement saved locally. Company storage: \(detail)"
+                }
+            }
+        } catch { return }
     }
 
     private func scheduledApprovedWork(for estimate: Estimate) -> ServiceCall? {

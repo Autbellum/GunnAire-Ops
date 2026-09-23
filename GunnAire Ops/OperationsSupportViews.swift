@@ -2890,6 +2890,154 @@ private extension String {
     }
 }
 
+/// One upload retains the authority and exact saved output that initiated it.
+/// Construct this before scheduling a Task; later work never captures a new login.
+@MainActor
+final class CustomerDocumentUpload {
+    nonisolated struct Payload: Sendable {
+        let data: Data
+        let filename: String
+        let contentType: String
+        let kind: String
+        let serviceCallID: UUID?
+        let invoiceID: UUID?
+        let estimateID: UUID?
+        let maintenanceContractID: UUID?
+        let customerEquipmentID: UUID?
+        let equipmentName: String?
+        let customerName: String
+    }
+
+    nonisolated private struct Metadata: Equatable, Sendable {
+        let id: UUID
+        let filename: String
+        let path: String
+        let contentType: String
+        let kind: String
+        let caption: String?
+        let byteCount: Int
+        let createdAt: Date
+        let serviceCallID: UUID?
+        let invoiceID: UUID?
+        let estimateID: UUID?
+        let maintenanceContractID: UUID?
+        let equipmentID: UUID?
+        let backendID: String?
+        let syncStatus: String?
+        let syncDetail: String?
+
+        @MainActor init(_ attachment: ServiceDocumentAttachment) {
+            id = attachment.id
+            filename = attachment.displayName
+            path = attachment.localFilePath
+            contentType = attachment.contentType
+            kind = attachment.kindRaw
+            caption = attachment.caption
+            byteCount = attachment.fileSizeBytes
+            createdAt = attachment.createdAt
+            serviceCallID = attachment.serviceCallID
+            invoiceID = attachment.invoiceID
+            estimateID = attachment.estimateID
+            maintenanceContractID = attachment.maintenanceContractID
+            equipmentID = attachment.customerEquipmentID
+            backendID = attachment.backendDocumentID
+            syncStatus = attachment.sharedCompanySyncStatus
+            syncDetail = attachment.sharedCompanySyncDetail
+        }
+    }
+
+    typealias Upload = @MainActor (Payload, WorkspaceProviderOperation) async throws -> String
+    private let payload: Payload
+    private let attachment: ServiceDocumentAttachment
+    private let context: ModelContext
+    private let operation: WorkspaceProviderOperation
+    private let validateCurrent: @MainActor () throws -> Void
+    private let validateAuthority: @MainActor () throws -> Void
+
+    init(attachment: ServiceDocumentAttachment, customer: Customer, context: ModelContext,
+         data: Data, equipmentName: String? = nil, operation originalOperation: WorkspaceProviderOperation? = nil,
+         validateAccess: @escaping @MainActor () throws -> Void) throws {
+        try Task.checkCancellation()
+        try validateAccess()
+        let original = try originalOperation ?? WorkspaceProviderOperation.capture { true }
+        try original.check()
+        guard Self.isCurrentRecord(attachment, in: context), Self.isCurrentRecord(customer, in: context),
+              attachment.customer === customer else { throw GmailDraftError.businessChanged }
+        let metadata = Metadata(attachment)
+        let attachmentID = attachment.persistentModelID
+        let customerID = customer.id, customerPersistentID = customer.persistentModelID
+        let customerName = customer.name
+        guard metadata.byteCount == data.count else { throw GmailDraftError.businessChanged }
+        let check = { @MainActor in
+            try Task.checkCancellation()
+            try original.check()
+            try validateAccess()
+            guard Self.isCurrentRecord(attachment, in: context), Self.isCurrentRecord(customer, in: context),
+                  attachment.persistentModelID == attachmentID,
+                  customer.persistentModelID == customerPersistentID, customer.id == customerID,
+                  attachment.customer === customer, customer.name == customerName,
+                  Metadata(attachment) == metadata else { throw GmailDraftError.businessChanged }
+        }
+        try check()
+        self.attachment = attachment
+        self.context = context
+        payload = Payload(data: data, filename: metadata.filename, contentType: metadata.contentType,
+            kind: metadata.kind, serviceCallID: metadata.serviceCallID, invoiceID: metadata.invoiceID,
+            estimateID: metadata.estimateID, maintenanceContractID: metadata.maintenanceContractID,
+            customerEquipmentID: metadata.equipmentID, equipmentName: equipmentName, customerName: customerName)
+        validateCurrent = check
+        validateAuthority = {
+            try Task.checkCancellation()
+            try original.check()
+            try validateAccess()
+        }
+        operation = WorkspaceProviderOperation(parent: original) {
+            do { try check(); return true } catch { return false }
+        }
+    }
+
+    static func isCurrentRecord<T: PersistentModel>(_ model: T?, in context: ModelContext) -> Bool {
+        guard let model, model.modelContext === context, !model.isDeleted,
+              let registered: T = context.registeredModel(for: model.persistentModelID) else { return false }
+        return registered === model
+    }
+
+    func perform(upload: Upload? = nil, onFailure: @escaping @MainActor (String) -> Void) async {
+        let identifier: String
+        do {
+            try validateCurrent()
+            try operation.check()
+            identifier = try await (upload ?? Self.upload)(payload, operation)
+            try validateCurrent()
+            try operation.check()
+        } catch {
+            guard (try? validateCurrent()) != nil, (try? operation.check()) != nil else { return }
+            attachment.markSharedCompanyUploadFailed(error.localizedDescription)
+            try? context.save()
+            guard (try? validateAuthority()) != nil else { return }
+            onFailure("Upload failed: \(error.localizedDescription)")
+            return
+        }
+        // Do not recheck the old metadata after this intentional state change or
+        // turn a failed local save into a false claim that the upload failed.
+        attachment.markSharedCompanyStored(id: identifier)
+        do { try context.save() }
+        catch {
+            guard (try? validateAuthority()) != nil else { return }
+            onFailure("Upload completed, but its local confirmation could not be saved: \(error.localizedDescription)")
+        }
+    }
+
+    private static func upload(_ payload: Payload, operation: WorkspaceProviderOperation) async throws -> String {
+        let response = try await GunnAireBackendService.uploadDocument(
+            data: payload.data, filename: payload.filename, contentType: payload.contentType, kind: payload.kind,
+            serviceCallID: payload.serviceCallID, invoiceID: payload.invoiceID, estimateID: payload.estimateID,
+            maintenanceContractID: payload.maintenanceContractID, customerEquipmentID: payload.customerEquipmentID,
+            equipmentName: payload.equipmentName, customerName: payload.customerName, originatingOperation: operation)
+        return response.id
+    }
+}
+
 enum CustomerProfileWorkspace: String, CaseIterable, Identifiable {
     case overview
     case systems
@@ -5057,26 +5205,26 @@ private struct CustomerEditorView: View {
         data: Data
     ) {
         guard GunnAireBackendService.isConfigured else { return }
-        Task {
-            do {
-                let response = try await GunnAireBackendService.uploadDocument(
-                    data: data,
-                    filename: attachment.displayName,
-                    contentType: attachment.contentType,
-                    kind: attachment.kindRaw,
-                    serviceCallID: attachment.serviceCallID,
-                    maintenanceContractID: attachment.maintenanceContractID,
-                    customerEquipmentID: nil,
-                    customerName: customer.name
-                )
-                attachment.markSharedCompanyStored(id: response.id)
-                try? modelContext.save()
-            } catch {
-                attachment.markSharedCompanyUploadFailed(error.localizedDescription)
-                try? modelContext.save()
-                customerActionMessage = "Agreement saved locally. Company storage upload failed: \(error.localizedDescription)"
+        let context = modelContext
+        let email = AppAccess.normalizedEmail(currentEmail)
+        do {
+            let upload = try CustomerDocumentUpload(attachment: attachment, customer: customer,
+                context: context, data: data) {
+                guard modelContext === context,
+                      GunnAireCloudKit.usesTestDatabase ||
+                        CompanyWorkspaceAccessController.shared.authorizedContainer === context.container,
+                      AppAccess.normalizedEmail(currentEmail) == email else { throw GmailDraftError.businessChanged }
+                let currentUsers = try context.fetch(FetchDescriptor<AppUser>())
+                guard AppAccess.canManageCustomerRecords(email: currentEmail, users: currentUsers) else {
+                    throw GmailComposeError.access
+                }
             }
-        }
+            Task { @MainActor in
+                await upload.perform { detail in
+                    customerActionMessage = "Agreement saved locally. Company storage: \(detail)"
+                }
+            }
+        } catch { return }
     }
 
     private func recentCustomerJobRow(for call: ServiceCall) -> some View {
@@ -5355,7 +5503,7 @@ private struct CustomerEditorView: View {
             )
             modelContext.insert(attachment)
             try modelContext.save()
-            syncCustomerAttachmentIfPossible(attachment, data: data)
+            syncCustomerAttachmentIfPossible(attachment, data: data, isAccountStatement: true)
 
             if emailAfterGeneration {
                 guard let recipient = customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -5435,30 +5583,72 @@ private struct CustomerEditorView: View {
         return value.isEmpty ? "customer-attachment" : value
     }
 
-    private func syncCustomerAttachmentIfPossible(_ attachment: ServiceDocumentAttachment, data: Data) {
-        guard GunnAireBackendService.isConfigured else { return }
-        Task {
-            do {
-                let response = try await GunnAireBackendService.uploadDocument(
-                    data: data,
-                    filename: attachment.displayName,
-                    contentType: attachment.contentType,
-                    kind: attachment.kindRaw,
-                    serviceCallID: nil,
-                    invoiceID: nil,
-                    estimateID: nil,
-                    customerEquipmentID: attachment.customerEquipmentID,
-                    equipmentName: attachment.linkedEquipment(in: equipmentProfiles, serviceCalls: serviceCalls)?.displayName,
-                    customerName: customer.name
-                )
-                attachment.markSharedCompanyStored(id: response.id)
-                try? modelContext.save()
-            } catch {
-                attachment.markSharedCompanyUploadFailed(error.localizedDescription)
-                try? modelContext.save()
-                customerAttachmentMessage = "Attachment saved locally. Company storage upload failed: \(error.localizedDescription)"
+    private func syncCustomerAttachmentIfPossible(
+        _ attachment: ServiceDocumentAttachment, data: Data, isAccountStatement: Bool = false
+    ) {
+        let context = modelContext
+        guard GunnAireBackendService.isConfigured,
+              GunnAireCloudKit.usesTestDatabase ||
+                CompanyWorkspaceAccessController.shared.authorizedContainer === context.container,
+              CustomerDocumentUpload.isCurrentRecord(attachment, in: context),
+              CustomerDocumentUpload.isCurrentRecord(customer, in: context) else { return }
+        let email = AppAccess.normalizedEmail(currentEmail)
+        let requiresFinancialAccess = isAccountStatement || attachment.kind.isFinancialCustomerProfileAttachment
+        do {
+            let validateAccess = { @MainActor in
+                guard modelContext === context,
+                      GunnAireCloudKit.usesTestDatabase ||
+                        CompanyWorkspaceAccessController.shared.authorizedContainer === context.container,
+                      AppAccess.normalizedEmail(currentEmail) == email else { throw GmailDraftError.businessChanged }
+                let currentUsers = try context.fetch(FetchDescriptor<AppUser>())
+                guard (isAccountStatement || AppAccess.canManageCustomerRecords(email: currentEmail, users: currentUsers)),
+                      (!requiresFinancialAccess || AppAccess.canViewBillingFinancialDetails(email: currentEmail, users: currentUsers)) else {
+                    throw GmailComposeError.access
+                }
             }
-        }
+            try validateAccess()
+            let linkedCallID = attachment.serviceCallID
+            let matchingCalls = linkedCallID.map { id in
+                serviceCalls.filter { CustomerDocumentUpload.isCurrentRecord($0, in: context) && $0.id == id }
+            } ?? []
+            guard linkedCallID == nil || matchingCalls.count == 1 else { return }
+            let linkedCall = matchingCalls.first
+            guard linkedCall == nil || linkedCall?.customer === customer else { return }
+            let linkedCallPersistentID = linkedCall?.persistentModelID
+            let linkedCallEquipmentID = linkedCall?.customerEquipmentID
+            let equipmentID = attachment.customerEquipmentID ?? linkedCallEquipmentID
+            let matchingEquipment = equipmentID.map { id in
+                equipmentProfiles.filter { CustomerDocumentUpload.isCurrentRecord($0, in: context) && $0.id == id }
+            } ?? []
+            guard equipmentID == nil || matchingEquipment.count == 1 else { return }
+            let equipment = matchingEquipment.first
+            guard equipment == nil || equipment?.customer === customer else { return }
+            let equipmentPersistentID = equipment?.persistentModelID
+            let equipmentName = equipment?.displayName
+            let upload = try CustomerDocumentUpload(attachment: attachment, customer: customer,
+                context: context, data: data, equipmentName: equipmentName) {
+                try validateAccess()
+                if let linkedCall {
+                    guard CustomerDocumentUpload.isCurrentRecord(linkedCall, in: context),
+                          linkedCall.persistentModelID == linkedCallPersistentID, linkedCall.id == linkedCallID,
+                          linkedCall.customer === customer, linkedCall.customerEquipmentID == linkedCallEquipmentID else {
+                        throw GmailDraftError.businessChanged
+                    }
+                }
+                if let equipment {
+                    guard CustomerDocumentUpload.isCurrentRecord(equipment, in: context),
+                          equipment.persistentModelID == equipmentPersistentID, equipment.id == equipmentID,
+                          equipment.customer === customer, equipment.displayName == equipmentName else {
+                        throw GmailDraftError.businessChanged
+                    }
+                }
+            }
+            Task { @MainActor in
+                await upload.perform { detail in
+                    customerAttachmentMessage = "Attachment saved locally. Company storage: \(detail)"
+                }
+            }
+        } catch { return }
     }
 
     private func refreshSharedCustomerDocuments() async {
