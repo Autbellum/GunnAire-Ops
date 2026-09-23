@@ -128,6 +128,33 @@ final class GunnAire_OpsUITests: XCTestCase {
         commandCenterFind.tap()
     }
 
+    /// Replace an inventory quantity with ordinary text entry, making the
+    /// input setup explicit. Hardware shortcuts are exercised separately.
+    @MainActor
+    private func replaceInventoryQuantityText(
+        _ app: XCUIApplication,
+        _ field: XCUIElement,
+        with replacement: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        // Initialize synthesized hardware input before focusing, matching
+        // exerciseBundleComposer(hardwareKeys:).
+        app.typeKey(XCUIKeyboardKey.shift.rawValue, modifierFlags: [])
+        field.tap()
+        let priorValue = field.value as? String ?? ""
+        if !priorValue.isEmpty, priorValue != field.placeholderValue {
+            field.typeKey("a", modifierFlags: .command)
+        }
+        field.typeText(replacement)
+        if field.value as? String != replacement {
+            retainNavigationFailure(app, name: "Quantity replacement mismatch for \(field.identifier)")
+        }
+        XCTAssertEqual(field.value as? String, replacement,
+                       "Quantity replacement must produce the requested value exactly.",
+                       file: file, line: line)
+    }
+
     @MainActor
     private func retainNavigationFailure(_ app: XCUIApplication, name: String) {
         let screenshot = XCTAttachment(screenshot: app.screenshot())
@@ -8084,7 +8111,18 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Review Pricebook Item"].waitForExistence(timeout: 3))
         let itemType = app.segmentedControls["PricebookReviewItemType"]
         XCTAssertTrue(itemType.exists)
+        // Exercise a type switch while the name field owns keyboard focus.
+        let editName = app.textFields["CatalogEditName"]
+        XCTAssertTrue(editName.waitForExistence(timeout: 3))
+        let nameBeforeTypeChange = editName.value as? String
+        editName.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         itemType.buttons["Non-inventory"].tap()
+        // The keyboard must dismiss within the bound while preserving the name.
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5),
+                      "Keyboard must dismiss within 5 seconds of changing item type.")
+        XCTAssertEqual(editName.value as? String, nameBeforeTypeChange,
+                       "Switching item type with the name focused must not alter the name.")
         XCTAssertTrue(app.buttons["SavePricebookReviewChanges"].waitForExistence(timeout: 5))
         app.buttons["SavePricebookReviewChanges"].tap()
 
@@ -8387,12 +8425,12 @@ final class GunnAire_OpsUITests: XCTestCase {
         let quantity = app.textFields["InventoryOpeningQuantity"]
         for _ in 0..<8 where !quantity.isHittable { composeForm.swipeUp() }
         if !waitForHittable(quantity) { retainNavigationFailure(app, name: "Inventory opening quantity is not reachable") }
-        XCTAssertTrue(waitForHittable(quantity)); replaceText(in: quantity, with: "4.25")
+        XCTAssertTrue(waitForHittable(quantity)); replaceInventoryQuantityText(app, quantity, with: "4.25")
         let createInventory = app.buttons["CreateQuickBooksCatalogItem"]
-        replaceText(in: quantity, with: "invalid")
+        replaceInventoryQuantityText(app, quantity, with: "invalid")
         XCTAssertFalse(createInventory.isEnabled, "Invalid quantity must not create an item with an old or empty value.")
         XCTAssertTrue(app.staticTexts["InventoryOpeningQuantityValidation"].exists)
-        replaceText(in: quantity, with: "4.25")
+        replaceInventoryQuantityText(app, quantity, with: "4.25")
         XCTAssertTrue(createInventory.isEnabled)
         let done = app.buttons["DoneEditingCatalogItem"]
         XCTAssertTrue(waitForHittable(done)); done.tap()
@@ -8441,6 +8479,53 @@ final class GunnAire_OpsUITests: XCTestCase {
         savedQuantity.tap()
         XCTAssertTrue(waitForHittable(done)); done.tap()
         requireKeyboardDismissed()
+
+        // Empty space in the labeled row must focus its input too. Derive a
+        // visible gap so this cannot pass by accidentally tapping the field.
+        guard done.waitForNonExistence(timeout: 5) else {
+            XCTFail("Done Editing must close the prior editing session before testing row activation.")
+            return
+        }
+        let quantityLabel = editForm.staticTexts["Opening quantity"]
+        guard waitForHittable(quantityLabel), waitForHittable(savedQuantity) else {
+            XCTFail("The quantity label and input must be reachable before testing row activation.")
+            return
+        }
+        let labelFrame = quantityLabel.frame
+        let fieldFrame = savedQuantity.frame
+        let visibleForm = app.frame.intersection(editForm.frame)
+        guard !labelFrame.isEmpty, !fieldFrame.isEmpty,
+              visibleForm.contains(labelFrame), visibleForm.contains(fieldFrame) else {
+            XCTFail("The complete label and input must be visible before testing their gap.")
+            return
+        }
+        let gapPoint: CGPoint
+        if labelFrame.maxY < fieldFrame.minY {
+            gapPoint = CGPoint(x: fieldFrame.midX, y: (labelFrame.maxY + fieldFrame.minY) / 2)
+        } else if labelFrame.maxX < fieldFrame.minX {
+            let top = max(labelFrame.minY, fieldFrame.minY)
+            let bottom = min(labelFrame.maxY, fieldFrame.maxY)
+            guard top < bottom else {
+                XCTFail("The horizontal row must share a vertical interval to locate its gap.")
+                return
+            }
+            gapPoint = CGPoint(x: (labelFrame.maxX + fieldFrame.minX) / 2, y: (top + bottom) / 2)
+        } else {
+            XCTFail("No distinct row gap is exposed; re-derive this activation check for the new layout.")
+            return
+        }
+        guard visibleForm.contains(gapPoint), !labelFrame.contains(gapPoint),
+              !fieldFrame.contains(gapPoint) else {
+            XCTFail("The row activation point must be visible and outside both child elements.")
+            return
+        }
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: gapPoint.x - app.frame.minX, dy: gapPoint.y - app.frame.minY))
+            .tap()
+        XCTAssertTrue(waitForHittable(done), "Tapping the row's empty area must begin editing.")
+        done.tap()
+        requireKeyboardDismissed()
+        XCTAssertEqual(app.textFields["InventoryOpeningDate"].value as? String, "2026-09-08")
         XCTAssertEqual(savedQuantity.value as? String, "4.25", "Done must not reset the saved opening quantity.")
         XCTAssertTrue(app.staticTexts["Opening quantity"].exists)
         XCTAssertTrue(app.staticTexts["Opening date"].exists)
@@ -8448,6 +8533,10 @@ final class GunnAire_OpsUITests: XCTestCase {
         saved.name = "Saved inventory setup and original price"; saved.lifetime = .keepAlways; add(saved)
         // Physical-keyboard editing and Cancel must preserve the saved item,
         // including its original precision and opening-stock evidence.
+        // Initialize synthesized hardware input before focusing, matching
+        // exerciseBundleComposer(hardwareKeys:). Preserve Command-A and per-key
+        // entry so the exact-value assertions still detect selection failures.
+        app.typeKey(XCUIKeyboardKey.shift.rawValue, modifierFlags: [])
         savedQuantity.tap()
         savedQuantity.typeKey("a", modifierFlags: .command)
         for key in "6.5" { savedQuantity.typeKey(String(key), modifierFlags: []) }
@@ -8468,10 +8557,10 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertEqual(savedQuantity.value as? String, "4.25", "Cancel must discard only this unsaved edit.")
         XCTAssertEqual(app.textFields["InventoryOpeningDate"].value as? String, "2026-09-08")
         let stage = app.buttons["StageCatalogChanges"]
-        replaceText(in: savedQuantity, with: ".")
+        replaceInventoryQuantityText(app, savedQuantity, with: ".")
         XCTAssertFalse(stage.isEnabled, "Invalid quantity must not stage the prior saved setup.")
         XCTAssertTrue(app.staticTexts["InventoryOpeningQuantityValidation"].exists)
-        replaceText(in: savedQuantity, with: "6.5")
+        replaceInventoryQuantityText(app, savedQuantity, with: "6.5")
         XCTAssertTrue(stage.isEnabled)
         XCTAssertTrue(waitForHittable(stage)); stage.tap()
         XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 3))
