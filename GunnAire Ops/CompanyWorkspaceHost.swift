@@ -384,7 +384,17 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
             let verdict = StoreDistributionVerdict()
             do {
                 try await verifyStoreDistribution {
-                    let result = try await AppTransaction.shared
+                    let result: VerificationResult<AppTransaction>
+                    do {
+                        result = try await AppTransaction.shared
+                    } catch {
+                        // verifyStoreDistribution converts a non-transport
+                        // throw into a bare .configuration, discarding this.
+                        // It is the only description of what StoreKit actually
+                        // refused, so capture it before that happens.
+                        await verdict.record("threw \(type(of: error)): \(String(describing: error))")
+                        throw error
+                    }
                     switch result {
                     case .verified(let transaction):
                         let bundleMatches = transaction.bundleID == Bundle.main.bundleIdentifier
