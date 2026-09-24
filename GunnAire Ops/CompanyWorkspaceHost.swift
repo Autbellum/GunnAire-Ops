@@ -361,8 +361,13 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
             // that case require StoreKit's verified transaction before using
             // the production CloudKit container. Retry transient failures,
             // then fail closed with a configuration diagnostic.
-            let receiptURL = Bundle.main.bundleURL.appendingPathComponent("StoreKit/receipt", isDirectory: false)
-            let receiptData = try? Data(contentsOf: receiptURL)
+            // The App Store receipt's file name depends on the environment:
+            // "receipt" for an App Store build but "sandboxReceipt" under
+            // TestFlight and sandbox. Hardcoding the production name read
+            // nothing on TestFlight, so the fallback below could never engage
+            // and the gate failed with the same message a build without the
+            // fallback produced. Always ask Bundle for the resolved URL.
+            let receiptData = Bundle.main.appStoreReceiptURL.flatMap { try? Data(contentsOf: $0) }
             do {
                 try await verifyStoreDistribution {
                     let result = try await AppTransaction.shared
@@ -383,9 +388,13 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
                     let detail = "profileData=nil, AppTransaction configuration; nonempty store receipt present"
                     await MainActor.run { CompanyWorkspaceDiagnostics.lastConfigurationDetail = detail }
                 } else {
-                let detail = "profileData=nil, AppTransaction: \(String(describing: error))"
-                await MainActor.run { CompanyWorkspaceDiagnostics.lastConfigurationDetail = detail }
-                throw error
+                    // Name the receipt as well as the transaction. Without it a
+                    // missing receipt and a rejected transaction are the same
+                    // sentence on the device, which is what hid this.
+                    let receipt = receiptData.map { "\($0.count) bytes" } ?? "absent"
+                    let detail = "profileData=nil, AppTransaction: \(String(describing: error)), receipt: \(receipt)"
+                    await MainActor.run { CompanyWorkspaceDiagnostics.lastConfigurationDetail = detail }
+                    throw error
                 }
             }
         } else {
