@@ -20,6 +20,14 @@ nonisolated struct CompanyCloudKitTimeout: Error, CustomStringConvertible, Senda
 /// until it becomes available. Retain durable proof without opening a store.
 nonisolated struct CompanyCloudKitAccountTemporarilyUnavailable: Error, Sendable {}
 
+/// Carries what the store transaction check actually saw across the retrying,
+/// concurrency-crossing closure that performs it, so a rejection can name its
+/// own reason instead of collapsing into a generic configuration failure.
+private actor StoreDistributionVerdict {
+    private(set) var summary: String?
+    func record(_ value: String) { summary = value }
+}
+
 /// A concurrent account result retired this lookup. It is neither proof of
 /// revocation nor permission to reuse an earlier account without rechecking.
 ///
@@ -368,14 +376,26 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
             // and the gate failed with the same message a build without the
             // fallback produced. Always ask Bundle for the resolved URL.
             let receiptData = Bundle.main.appStoreReceiptURL.flatMap { try? Data(contentsOf: $0) }
+            // Three different conditions make this check fail, and all three
+            // previously surfaced as the single word "configuration". Record
+            // which one actually failed; without it the device cannot say
+            // whether StoreKit rejected the signature, returned another app's
+            // bundle, or reported an environment this build must not trust.
+            let verdict = StoreDistributionVerdict()
             do {
                 try await verifyStoreDistribution {
                     let result = try await AppTransaction.shared
                     switch result {
                     case .verified(let transaction):
-                        return transaction.bundleID == Bundle.main.bundleIdentifier &&
-                            (transaction.environment == .production || transaction.environment == .sandbox)
-                    case .unverified:
+                        let bundleMatches = transaction.bundleID == Bundle.main.bundleIdentifier
+                        let environmentAllowed = transaction.environment == .production ||
+                            transaction.environment == .sandbox
+                        await verdict.record(
+                            "verified bundleID=\(transaction.bundleID) expected=\(Bundle.main.bundleIdentifier ?? "nil") " +
+                            "environment=\(transaction.environment.rawValue)")
+                        return bundleMatches && environmentAllowed
+                    case .unverified(_, let verificationError):
+                        await verdict.record("unverified: \(String(describing: verificationError))")
                         return false
                     }
                 }
@@ -392,7 +412,9 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
                     // missing receipt and a rejected transaction are the same
                     // sentence on the device, which is what hid this.
                     let receipt = receiptData.map { "\($0.count) bytes" } ?? "absent"
-                    let detail = "profileData=nil, AppTransaction: \(String(describing: error)), receipt: \(receipt)"
+                    let transaction = await verdict.summary ?? "no transaction result"
+                    let detail = "profileData=nil, AppTransaction: \(String(describing: error)), " +
+                        "receipt: \(receipt), transaction: \(transaction)"
                     await MainActor.run { CompanyWorkspaceDiagnostics.lastConfigurationDetail = detail }
                     throw error
                 }
