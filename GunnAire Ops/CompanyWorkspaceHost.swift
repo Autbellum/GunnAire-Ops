@@ -364,11 +364,26 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
         let profileData = try profileURL.map { try Data(contentsOf: $0) }
         var hasVerifiedDistribution = false
         var hasStoreReceipt = false
+        var hasStrippedDistributionProfile = false
         if profileData == nil {
-            // App Store and TestFlight may strip the embedded profile. In
-            // that case require StoreKit's verified transaction before using
-            // the production CloudKit container. Retry transient failures,
-            // then fail closed with a configuration diagnostic.
+            // Development, ad-hoc and enterprise signing all embed a
+            // provisioning profile; only App Store and TestFlight processing
+            // strips it. On a real device its absence is therefore itself the
+            // distribution marker, and unlike StoreKit it cannot be absent for
+            // a legitimate install: an app distributed privately through
+            // TestFlight was never bought from the storefront, so
+            // AppTransaction has no transaction to return and throws
+            // StoreKitError.unknown. Verified on the owner's iPhone across
+            // builds 2026092301-2026092305.
+            //
+            // The Simulator also has no profile, so it cannot use this signal
+            // and still has to prove distribution through StoreKit below.
+            #if !targetEnvironment(simulator)
+            hasStrippedDistributionProfile = true
+            #endif
+            // StoreKit remains a secondary signal: when it does answer, it is
+            // stronger evidence than an absent file. Its failure no longer
+            // blocks a device build, but it is still recorded.
             // The App Store receipt's file name depends on the environment:
             // "receipt" for an App Store build but "sandboxReceipt" under
             // TestFlight and sandbox. Hardcoding the production name read
@@ -423,10 +438,14 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
                     // sentence on the device, which is what hid this.
                     let receipt = receiptData.map { "\($0.count) bytes" } ?? "absent"
                     let transaction = await verdict.summary ?? "no transaction result"
+                    let source = hasStrippedDistributionProfile ? "stripped distribution profile" : "none"
                     let detail = "profileData=nil, AppTransaction: \(String(describing: error)), " +
-                        "receipt: \(receipt), transaction: \(transaction)"
+                        "receipt: \(receipt), transaction: \(transaction), distribution: \(source)"
                     await MainActor.run { CompanyWorkspaceDiagnostics.lastConfigurationDetail = detail }
-                    throw error
+                    // A device build with no embedded profile is already
+                    // distribution-signed. Only the Simulator, which cannot use
+                    // that signal, still fails closed here.
+                    if !hasStrippedDistributionProfile { throw error }
                 }
             }
         } else {
@@ -435,7 +454,7 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
         guard let environment = environment(
             profileData: profileData,
             hasVerifiedStoreDistribution: hasVerifiedDistribution,
-            hasStoreReceipt: hasStoreReceipt
+            hasStoreReceipt: hasStoreReceipt || hasStrippedDistributionProfile
         ) else {
             throw CompanyWorkspaceFailure.configuration
         }
