@@ -7,17 +7,20 @@ let package = Package(
     products: [.library(name: "LoadSightKit", targets: ["LoadSightKit"]),
                .library(name: "LoadSightUI", targets: ["LoadSightUI"]),
                .executable(name: "loadsight", targets: ["LoadSightCLI"]),
+               .executable(name: "loadsight-weather", targets: ["LoadSightWeatherCLI"]),
                .executable(name: "LoadSightDesktop", targets: ["LoadSightApp"])],
     targets: [
         .target(name: "LoadSightCore"),
         .target(name: "LoadSightCalc", dependencies: ["LoadSightCore"]),
         .target(name: "LoadSightTakeoff", dependencies: ["LoadSightCore"]),
         .target(name: "LoadSightIngest", dependencies: ["LoadSightCore"]),
-        .target(name: "LoadSightKit", dependencies: ["LoadSightCore", "LoadSightCalc", "LoadSightTakeoff", "LoadSightIngest"]),
+        .target(name: "LoadSightWeather", dependencies: ["LoadSightCore", "LoadSightCalc"]),
+        .target(name: "LoadSightKit", dependencies: ["LoadSightCore", "LoadSightCalc", "LoadSightTakeoff", "LoadSightIngest", "LoadSightWeather"]),
         .executableTarget(name: "LoadSightCLI", dependencies: ["LoadSightKit"]),
+        .executableTarget(name: "LoadSightWeatherCLI", dependencies: ["LoadSightWeather"]),
         .target(name: "LoadSightUI", dependencies: ["LoadSightKit"]),
         .executableTarget(name: "LoadSightApp", dependencies: ["LoadSightUI"]),
         .target(name: "LoadSightSDKExample", dependencies: ["LoadSightKit"], path: "Examples/SDKClient", exclude: ["README.md"]),
-        .testTarget(name: "LoadSightKitTests", dependencies: ["LoadSightKit", "LoadSightUI"], resources: [.copy("Fixtures")])
+        .testTarget(name: "LoadSightKitTests", dependencies: ["LoadSightKit", "LoadSightUI", "LoadSightWeather"], resources: [.copy("Fixtures")])
     ]
 )
