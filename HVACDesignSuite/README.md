@@ -30,13 +30,25 @@ To use it from Xcode, open the package directly (`File ▸ Open` on the folder),
 values (saturation pressure at 32/70/212 °F; 1.08, 4840 and 4.5 recovered at sea level),
 and the duct physics was cross-checked against an independent calculation outside Swift.
 
-## Known approximations
+## Reference data — nothing is hand-loaded
 
-- **Fenestration solar gain** uses provisional peak irradiance by orientation. It is not
-  latitude-specific and not hour-specific. This is the largest single approximation in the
-  build; it is replaced by NSRDB clear-sky irradiance when the radiant-time-series engine
-  lands.
-- **Manual S percentage bounds** are held as data in `SizingLimits`, not verified against
-  the current edition of the manual. Confirm before any permit submittal.
-- **Fitting equivalent lengths** are entered by the user from their own copy of Manual D.
-- Design weather defaults are derived from NOAA observations, not ASHRAE published tables.
+| Data | Source |
+|---|---|
+| Design weather | Derived from NOAA ISD hourly observations |
+| Solar irradiance | Computed: solar geometry + Bird & Hulstrom clear-sky model (NREL, public domain) |
+| Envelope U-values | Computed from layers by the parallel-path method |
+| Material resistances | Standard published properties |
+| Glazing U / SHGC | Typical values by construction; NFRC label overrides |
+| Fitting equivalent lengths | Computed as Lₑ = C·D/f, so they scale with the duct |
+| Manual S limits | Verified against the published selection table |
+
+## Remaining approximations
+
+- **Thermal mass and lag are not modelled.** The sol-air equivalent difference is a
+  steady-state upper bound: correct for a light frame assembly, overstated for masonry.
+  This is what the radiant time series replaces.
+- **Glazing values are typical, not certified.** Enter the NFRC label when the model is known.
+- **Manufacturer expanded performance data is entered by hand**, because Manual S selects
+  against the real coil at the design condition and no public database holds it.
+- Design weather is derived from NOAA observations, not ASHRAE published tables, and is
+  labelled as such on output.

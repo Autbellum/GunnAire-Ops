@@ -75,9 +75,27 @@ public struct ProjectLoad: Sendable, Equatable {
 /// Pure functions throughout, so a recalculation can run anywhere without isolation.
 public enum LoadCalculator {
 
+    /// Peak clear-sky irradiance for every orientation at this site, Btu/h·ft².
+    ///
+    /// Computed once per calculation and shared across zones: the sun does not change
+    /// between rooms, and scanning the design day for nine orientations is the only part
+    /// of this engine with any real cost.
+    public static func solarTable(for conditions: DesignConditions) -> [Orientation: Double] {
+        var table: [Orientation: Double] = [:]
+        for orientation in Orientation.allCases {
+            table[orientation] = Solar.peakIrradiance(
+                surfaceAzimuth: orientation.azimuth, tilt: orientation.tilt,
+                latitude: conditions.latitude, month: conditions.coolingDesignMonth,
+                altitudeFeet: conditions.altitudeFeet).irradiance
+        }
+        return table
+    }
+
     public static func calculate(project: Project) throws -> ProjectLoad {
+        let solar = solarTable(for: project.designConditions)
         let loads = try project.zones.map {
-            try calculate(zone: $0, conditions: project.designConditions, procedure: project.procedure)
+            try calculate(zone: $0, conditions: project.designConditions,
+                          procedure: project.procedure, solar: solar)
         }
         return ProjectLoad(zoneLoads: loads,
                            designConditions: project.designConditions,
@@ -86,8 +104,10 @@ public enum LoadCalculator {
 
     public static func calculate(zone: Zone,
                                  conditions: DesignConditions,
-                                 procedure: LoadProcedure) throws -> ZoneLoad {
+                                 procedure: LoadProcedure,
+                                 solar: [Orientation: Double]? = nil) throws -> ZoneLoad {
         var warnings: [String] = []
+        let solarTable = solar ?? Self.solarTable(for: conditions)
         let altitude = conditions.altitudeFeet
 
         // Altitude-corrected airflow coefficients. At sea level these reduce to the
@@ -139,7 +159,7 @@ public enum LoadCalculator {
 
             // Solar gain through glazing.
             if surface.category.admitsSolarGain {
-                let irradiance = surface.orientation.provisionalPeakIrradiance
+                let irradiance = solarTable[surface.orientation] ?? 0
                 let solar = surface.areaSquareFeet * surface.solarHeatGainCoefficient * irradiance
                 coolingComponents.append(LoadComponent(
                     name: "\(surface.name) — solar gain",
@@ -148,7 +168,9 @@ public enum LoadCalculator {
                     substitution: String(format: "q = %.1f ft² · %.2f · %.0f Btu/h·ft² = %.0f Btu/h",
                                          surface.areaSquareFeet, surface.solarHeatGainCoefficient,
                                          irradiance, solar),
-                    reference: "Provisional peak irradiance, \(surface.orientation.rawValue) — replace with NSRDB clear-sky data"))
+                    reference: String(format: "Bird clear-sky peak on %@ at %.1f°N, month %d",
+                                      surface.orientation.rawValue, conditions.latitude,
+                                      conditions.coolingDesignMonth)))
             }
 
             // Heating. No solar credit is taken: design heating is a night-time condition.

@@ -188,12 +188,13 @@ struct EquipmentEditor: View {
             }
 
             Section("Manual S Sizing Limits") {
-                Text("These bounds are held as data. Confirm them against your current edition of Manual S before submitting output for permit.")
+                Text("Verified against the published Manual S selection table. A heat pump's heating output has no percentage cap — it is selected on cooling, with supplemental heat covering the balance point.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 LabeledNumberField("Cooling Minimum", value: $engine.project.sizingLimits.coolingMinimumFraction, unit: "×")
-                LabeledNumberField("Cooling Maximum", value: $engine.project.sizingLimits.coolingMaximumFraction, unit: "×")
-                LabeledNumberField("Heat Pump Heating Max", value: $engine.project.sizingLimits.heatPumpHeatingMaximumFraction, unit: "×")
+                LabeledNumberField("A/C Cooling Max", value: $engine.project.sizingLimits.airConditionerCoolingMaximum, unit: "×")
+                LabeledNumberField("Heat Pump Max (cooling-dominant)", value: $engine.project.sizingLimits.heatPumpCoolingMaximumCoolingDominant, unit: "×")
+                LabeledNumberField("Heat Pump Max (heating-dominant)", value: $engine.project.sizingLimits.heatPumpCoolingMaximumHeatingDominant, unit: "×")
                 LabeledNumberField("Furnace Heating Max", value: $engine.project.sizingLimits.furnaceHeatingMaximumFraction, unit: "×")
             }
         }

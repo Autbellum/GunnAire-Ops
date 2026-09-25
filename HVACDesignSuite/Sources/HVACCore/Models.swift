@@ -25,6 +25,12 @@ public enum LoadProcedure: String, Codable, Sendable, CaseIterable, Identifiable
 public struct DesignConditions: Codable, Sendable, Equatable {
     public var siteName: String
     public var altitudeFeet: Double
+    /// Site latitude, degrees north. Drives the solar geometry, so it is a real input
+    /// rather than a label — a west wall at 36° N and one at 44° N see different peaks.
+    public var latitude: Double
+    public var longitude: Double
+    /// Month the cooling design day is taken from. July in most of the United States.
+    public var coolingDesignMonth: Int
 
     /// Dry bulb exceeded 99.6% of annual hours, °F.
     public var winterOutdoorDryBulbF: Double
@@ -46,6 +52,9 @@ public struct DesignConditions: Codable, Sendable, Equatable {
     public static let piedmontTriad = DesignConditions(
         siteName: "Piedmont Triad, NC",
         altitudeFeet: 902,
+        latitude: 36.1,
+        longitude: -79.94,
+        coolingDesignMonth: 7,
         winterOutdoorDryBulbF: 18.0,
         summerOutdoorDryBulbF: 91.9,
         summerOutdoorWetBulbF: 74.1,
@@ -95,22 +104,6 @@ public enum Orientation: String, Codable, Sendable, CaseIterable, Identifiable {
     case horizontal = "Horizontal"
     public var id: String { rawValue }
 
-    /// Provisional peak clear-sky irradiance on a vertical surface, Btu/h·ft².
-    ///
-    /// These stand in until the radiant-time-series engine supplies clear-sky irradiance
-    /// derived from NREL NSRDB for the actual site, date and hour. They are the single
-    /// largest approximation in this build, they are not latitude-specific, and a cooling
-    /// load that leans on them should be treated as provisional.
-    public var provisionalPeakIrradiance: Double {
-        switch self {
-        case .north: 35
-        case .northEast, .northWest: 90
-        case .east, .west: 165
-        case .southEast, .southWest: 140
-        case .south: 105
-        case .horizontal: 235
-        }
-    }
 }
 
 /// One envelope element.
@@ -285,23 +278,46 @@ public struct EquipmentSpec: Identifiable, Codable, Sendable, Equatable {
     }
 }
 
-/// The Manual S acceptance window, held as data rather than hard-coded.
+/// The Manual S acceptance limits.
 ///
-/// The bounds below are the ones specified for this build. Manual S states its limits by
-/// equipment type and climate, and the exact percentages should be confirmed against the
-/// current edition before any output is submitted for permit. They are exposed here so
-/// that confirmation is a data change rather than a code change.
+/// Verified against the published Manual S equipment-selection sizing table:
+///
+///   Furnaces and boilers   100–140% of total heating load      (§2-2)
+///   Air conditioners       up to 115% of total cooling load    (§3-4)
+///   Heat pumps             up to 115% in a cooling-dominant climate,
+///                          up to 125% in a heating-dominant climate   (§4-4)
+///   Supplemental heat      sized from the equipment balance point     (§4-8)
+///
+/// Two things this corrects. The lower cooling bound is 100%, not 95%: equipment that
+/// cannot meet the load is not a near miss, it is undersized. And a heat pump's *heating*
+/// output carries no percentage cap at all — it is sized by its balance point with
+/// supplemental heat covering the shortfall, because sizing the compressor to the heating
+/// load would oversize cooling badly. The 125% is a *cooling* allowance granted to heat
+/// pumps in heating-dominant climates, which is what the Piedmont Triad is.
 public struct SizingLimits: Codable, Sendable, Equatable {
     public var coolingMinimumFraction: Double
-    public var coolingMaximumFraction: Double
-    public var heatPumpHeatingMaximumFraction: Double
+    public var airConditionerCoolingMaximum: Double
+    public var heatPumpCoolingMaximumCoolingDominant: Double
+    public var heatPumpCoolingMaximumHeatingDominant: Double
+    public var heatingMinimumFraction: Double
     public var furnaceHeatingMaximumFraction: Double
 
     public static let standard = SizingLimits(
-        coolingMinimumFraction: 0.95,
-        coolingMaximumFraction: 1.15,
-        heatPumpHeatingMaximumFraction: 1.25,
+        coolingMinimumFraction: 1.00,
+        airConditionerCoolingMaximum: 1.15,
+        heatPumpCoolingMaximumCoolingDominant: 1.15,
+        heatPumpCoolingMaximumHeatingDominant: 1.25,
+        heatingMinimumFraction: 1.00,
         furnaceHeatingMaximumFraction: 1.40)
+
+    /// The cooling ceiling that applies to this equipment in this climate.
+    public func coolingMaximum(for type: EquipmentType, heatingDominant: Bool) -> Double {
+        switch type {
+        case .airConditioner, .furnace: airConditionerCoolingMaximum
+        case .heatPump: heatingDominant ? heatPumpCoolingMaximumHeatingDominant
+                                        : heatPumpCoolingMaximumCoolingDominant
+        }
+    }
 }
 
 // MARK: - Duct

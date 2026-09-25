@@ -162,9 +162,8 @@ public struct Assembly: Identifiable, Codable, Sendable, Equatable {
     /// modelled — that is the radiant time series — so this is an upper bound for a light
     /// assembly and overstates a masonry one.
     public func equivalentTemperatureDifference(designDeltaT: Double,
-                                                orientation: Orientation) -> Double {
+                                                irradiance: Double) -> Double {
         let outsideFilmCoefficient = 4.0
-        let irradiance = orientation.provisionalPeakIrradiance
         return designDeltaT + solarAbsorptance * irradiance / outsideFilmCoefficient
     }
 }

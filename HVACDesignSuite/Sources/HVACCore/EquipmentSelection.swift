@@ -72,9 +72,16 @@ public enum EquipmentSelector {
         }
 
         // MARK: Total cooling capacity window.
+        //
+        // The ceiling depends on equipment type and on which season dominates: Manual S
+        // grants a heat pump 125% of the cooling load in a heating-dominant climate,
+        // against 115% elsewhere, so that the compressor can reach further into the
+        // heating season without oversizing cooling outright.
+        let heatingDominant = load.heatingBtuh > load.coolingTotalBtuh
+        let coolingMaximum = limits.coolingMaximum(for: equipment.type, heatingDominant: heatingDominant)
         let totalRatio = equipment.totalCoolingCapacityBtuh / load.coolingTotalBtuh
         let lowerPercent = limits.coolingMinimumFraction * 100
-        let upperPercent = limits.coolingMaximumFraction * 100
+        let upperPercent = coolingMaximum * 100
         if equipment.totalCoolingCapacityBtuh <= 0 {
             checks.append(SelectionCheck(
                 name: "Total cooling capacity",
@@ -89,7 +96,7 @@ public enum EquipmentSelector {
                                equipment.totalCoolingCapacityBtuh, totalRatio * 100,
                                load.coolingTotalBtuh, lowerPercent),
                 reference: "Manual S — total capacity window"))
-        } else if totalRatio > limits.coolingMaximumFraction {
+        } else if totalRatio > coolingMaximum {
             checks.append(SelectionCheck(
                 name: "Total cooling capacity",
                 status: .fail,
@@ -101,10 +108,12 @@ public enum EquipmentSelector {
             checks.append(SelectionCheck(
                 name: "Total cooling capacity",
                 status: .pass,
-                detail: String(format: "%.0f Btu/h is %.0f%% of the %.0f Btu/h total load, inside the %.0f–%.0f%% window.",
+                detail: String(format: "%.0f Btu/h is %.0f%% of the %.0f Btu/h total load, inside the %.0f–%.0f%% window for a %@ in a %@ climate.",
                                equipment.totalCoolingCapacityBtuh, totalRatio * 100,
-                               load.coolingTotalBtuh, lowerPercent, upperPercent),
-                reference: "Manual S — total capacity window"))
+                               load.coolingTotalBtuh, lowerPercent, upperPercent,
+                               equipment.type.rawValue.lowercased(),
+                               heatingDominant ? "heating-dominant" : "cooling-dominant"),
+                reference: "Manual S §3-4 / §4-4 — total capacity window"))
         }
 
         // MARK: Sensible capacity, checked independently.
@@ -170,42 +179,67 @@ public enum EquipmentSelector {
         }
 
         // MARK: Heating capacity.
+        //
+        // Manual S sizes a furnace or boiler at 100–140% of the heating load (§2-2). A
+        // heat pump carries no percentage cap on heating at all: it is selected on
+        // cooling, and whatever it cannot deliver below the balance point is made up by
+        // supplemental heat (§4-8). Capping a heat pump's heating output against the
+        // heating load would oversize its cooling badly, which is the mistake the 125%
+        // cooling allowance exists to avoid.
         var heatingRatio: Double?
-        if load.heatingBtuh > 0 && equipment.type != .airConditioner {
-            let ratio = equipment.heatingCapacityBtuh / load.heatingBtuh
-            heatingRatio = ratio
-            let maximum = equipment.type == .heatPump
-                ? limits.heatPumpHeatingMaximumFraction
-                : limits.furnaceHeatingMaximumFraction
-            if ratio < 1 {
-                // A heat pump short of the heating load is normal design practice; the
-                // balance point is covered by supplemental heat rather than by a larger
-                // compressor, which would oversize cooling.
-                let status: SelectionStatus = equipment.type == .heatPump ? .caution : .fail
-                checks.append(SelectionCheck(
-                    name: "Heating capacity",
-                    status: status,
-                    detail: String(format: "%.0f Btu/h meets %.0f%% of the %.0f Btu/h heating load. %@",
-                                   equipment.heatingCapacityBtuh, ratio * 100, load.heatingBtuh,
-                                   equipment.type == .heatPump
-                                     ? "Size supplemental heat for the shortfall below the balance point."
-                                     : "A furnace must meet the full heating load."),
-                    reference: "Manual S — heating capacity"))
-            } else if ratio > maximum {
-                checks.append(SelectionCheck(
-                    name: "Heating capacity",
-                    status: .fail,
-                    detail: String(format: "%.0f Btu/h is %.0f%% of the %.0f Btu/h heating load, above the %.0f%% maximum for a %@.",
-                                   equipment.heatingCapacityBtuh, ratio * 100, load.heatingBtuh,
-                                   maximum * 100, equipment.type.rawValue.lowercased()),
-                    reference: "Manual S — heating capacity"))
-            } else {
-                checks.append(SelectionCheck(
-                    name: "Heating capacity",
-                    status: .pass,
-                    detail: String(format: "%.0f Btu/h is %.0f%% of the %.0f Btu/h heating load.",
-                                   equipment.heatingCapacityBtuh, ratio * 100, load.heatingBtuh),
-                    reference: "Manual S — heating capacity"))
+        if load.heatingBtuh > 0 {
+            switch equipment.type {
+            case .furnace:
+                let ratio = equipment.heatingCapacityBtuh / load.heatingBtuh
+                heatingRatio = ratio
+                if ratio < limits.heatingMinimumFraction {
+                    checks.append(SelectionCheck(
+                        name: "Heating capacity",
+                        status: .fail,
+                        detail: String(format: "%.0f Btu/h output meets only %.0f%% of the %.0f Btu/h heating load. A furnace must meet the full load.",
+                                       equipment.heatingCapacityBtuh, ratio * 100, load.heatingBtuh),
+                        reference: "Manual S §2-2 — 100–140% of the heating load"))
+                } else if ratio > limits.furnaceHeatingMaximumFraction {
+                    checks.append(SelectionCheck(
+                        name: "Heating capacity",
+                        status: .fail,
+                        detail: String(format: "%.0f Btu/h output is %.0f%% of the %.0f Btu/h heating load, above the 140%% ceiling.",
+                                       equipment.heatingCapacityBtuh, ratio * 100, load.heatingBtuh),
+                        reference: "Manual S §2-2 — 100–140% of the heating load"))
+                } else {
+                    checks.append(SelectionCheck(
+                        name: "Heating capacity",
+                        status: .pass,
+                        detail: String(format: "%.0f Btu/h output is %.0f%% of the %.0f Btu/h heating load.",
+                                       equipment.heatingCapacityBtuh, ratio * 100, load.heatingBtuh),
+                        reference: "Manual S §2-2 — 100–140% of the heating load"))
+                }
+
+            case .heatPump:
+                let ratio = equipment.heatingCapacityBtuh / load.heatingBtuh
+                heatingRatio = ratio
+                let shortfall = max(0, load.heatingBtuh - equipment.heatingCapacityBtuh)
+                if shortfall > 0 {
+                    // Not a failure. This is how a heat pump is meant to be selected.
+                    let stripKW = shortfall / 3412.142
+                    checks.append(SelectionCheck(
+                        name: "Heating capacity",
+                        status: .caution,
+                        detail: String(format: "%.0f Btu/h covers %.0f%% of the %.0f Btu/h heating load at design. Size supplemental heat for the %.0f Btu/h shortfall — about %.1f kW of strip heat. This is expected: a heat pump is selected on cooling.",
+                                       equipment.heatingCapacityBtuh, ratio * 100, load.heatingBtuh,
+                                       shortfall, stripKW),
+                        reference: "Manual S §4-8 — supplemental heat from the balance point"))
+                } else {
+                    checks.append(SelectionCheck(
+                        name: "Heating capacity",
+                        status: .pass,
+                        detail: String(format: "%.0f Btu/h meets the full %.0f Btu/h heating load at design; no supplemental heat is required.",
+                                       equipment.heatingCapacityBtuh, load.heatingBtuh),
+                        reference: "Manual S §4-8"))
+                }
+
+            case .airConditioner:
+                break
             }
         }
 

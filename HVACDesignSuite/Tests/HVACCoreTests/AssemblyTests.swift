@@ -70,9 +70,11 @@ final class AssemblyTests: XCTestCase {
     func testSolAirEquivalentDifferenceExceedsPlainDeltaT() {
         let ceiling = AssemblyLibrary.atticCeiling(name: "c", insulation: .blownCellulose,
                                                    thicknessInches: 10.9)
-        let etd = ceiling.equivalentTemperatureDifference(designDeltaT: 17, orientation: .horizontal)
+        let irradiance = Solar.peakIrradiance(surfaceAzimuth: 180, tilt: 0, latitude: 36.1,
+                                              month: 7, altitudeFeet: 902).irradiance
+        let etd = ceiling.equivalentTemperatureDifference(designDeltaT: 17, irradiance: irradiance)
         XCTAssertGreaterThan(etd, 17)
-        XCTAssertEqual(etd, 17 + 0.85 * 235 / 4.0, accuracy: 0.01)
+        XCTAssertEqual(etd, 17 + 0.85 * irradiance / 4.0, accuracy: 0.01)
     }
 
     func testEveryLibraryAssemblyProducesAPlausibleU() {

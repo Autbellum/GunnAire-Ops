@@ -219,12 +219,15 @@ final class LoadCalculationTests: XCTestCase {
                  internalGains: .residentialDefault,
                  airExchange: AirExchange(airChangesPerHour: 0, ventilationCFM: 0))
         }
+        let solar = LoadCalculator.solarTable(for: conditions)
         let glazedLoad = try LoadCalculator.calculate(zone: makeZone(glazed), conditions: conditions,
-                                                      procedure: .residentialManualJ)
+                                                      procedure: .residentialManualJ, solar: solar)
         let opaqueLoad = try LoadCalculator.calculate(zone: makeZone(opaque), conditions: conditions,
-                                                      procedure: .residentialManualJ)
-        // 40 ft² · 0.5 · 165 Btu/h·ft² = 3300 Btu/h of solar.
-        XCTAssertEqual(glazedLoad.coolingSensibleBtuh - opaqueLoad.coolingSensibleBtuh, 3300, accuracy: 1)
+                                                      procedure: .residentialManualJ, solar: solar)
+        // 40 ft² · 0.5 · E, where E is the computed west-wall peak for this site.
+        let expected = 40 * 0.5 * (solar[.west] ?? 0)
+        XCTAssertGreaterThan(expected, 100)
+        XCTAssertEqual(glazedLoad.coolingSensibleBtuh - opaqueLoad.coolingSensibleBtuh, expected, accuracy: 1)
     }
 
     func testEquivalentTemperatureDifferenceOverridesPlainDeltaTForCoolingOnly() throws {
@@ -333,14 +336,17 @@ final class EquipmentSelectionTests: XCTestCase {
 
     /// A heat pump short of the heating load is normal practice — supplemental heat covers
     /// the balance point — so it cautions rather than fails. A furnace must meet it.
-    func testHeatPumpHeatingShortfallCautionsButFurnaceFails() throws {
+    func testHeatPumpHeatingShortfallCautionsAndSizesStripHeat() throws {
         let load = load(sensible: 18_000, latent: 6_000, heating: 40_000)
         let heatPump = EquipmentSpec(type: .heatPump, totalCoolingCapacityBtuh: 25_000,
                                      sensibleCoolingCapacityBtuh: 18_500,
                                      heatingCapacityBtuh: 28_000, maximumAirflowCFM: 1_000,
                                      blowerExternalStaticPressure: 0.5)
-        XCTAssertEqual(try evaluate(heatPump, against: load)
-                        .checks.first { $0.name == "Heating capacity" }?.status, .caution)
+        let heatPumpCheck = try XCTUnwrap(try evaluate(heatPump, against: load)
+                                            .checks.first { $0.name == "Heating capacity" })
+        XCTAssertEqual(heatPumpCheck.status, .caution)
+        // 40,000 − 28,000 = 12,000 Btu/h short, which is 3.5 kW of strip heat.
+        XCTAssertTrue(heatPumpCheck.detail.contains("3.5 kW"), heatPumpCheck.detail)
 
         var furnace = heatPump
         furnace.type = .furnace
