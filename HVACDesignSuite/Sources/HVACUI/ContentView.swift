@@ -74,10 +74,7 @@ public struct ContentView: View {
                             load: engine.load ?? ProjectLoad(zoneLoads: [],
                                                              designConditions: engine.project.designConditions,
                                                              procedure: engine.project.procedure),
-                            selection: engine.selection,
-                            airflows: engine.zoneAirflows,
-                            friction: engine.frictionRate,
-                            ducts: engine.ductSizing,
+                            systems: engine.systems,
                             profile: engine.coolingProfile)
     }
 
@@ -110,8 +107,8 @@ public struct ContentView: View {
 
 public enum CentrePanel: String, CaseIterable, Identifiable {
     case spaces = "Spaces"
-    case equipment = "Equipment"
-    case ducts = "Ducts"
+    case systems = "Systems"
+    case materials = "Materials"
     case detail = "Load Detail"
     case library = "Library"
     public var id: String { rawValue }
@@ -119,8 +116,8 @@ public enum CentrePanel: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .spaces: "square.split.bottomrightquarter"
-        case .equipment: "wind.snow"
-        case .ducts: "pipe.and.drop"
+        case .systems: "square.stack.3d.up"
+        case .materials: "cube.box"
         case .detail: "list.bullet.rectangle"
         case .library: "books.vertical"
         }
@@ -134,6 +131,32 @@ struct DesignConditionsSidebar: View {
 
     var body: some View {
         Form {
+            Section("Customer") {
+                TextField("Customer name", text: $engine.project.customer.customerName)
+                TextField("Job number", text: $engine.project.customer.jobNumber)
+                TextField("Street address", text: $engine.project.customer.streetAddress)
+                TextField("City", text: $engine.project.customer.city)
+                // Laid out as rows rather than a cramped HStack: a Form renders each
+                // field's placeholder as its label, and "State" wrapped to "Sta te" in
+                // a 56-point column.
+                HStack(spacing: 8) {
+                    LabeledContent("State") {
+                        TextField("", text: $engine.project.customer.state)
+                            .labelsHidden().frame(width: 60)
+                    }
+                    LabeledContent("ZIP") {
+                        TextField("", text: $engine.project.customer.postalCode)
+                            .labelsHidden().frame(width: 90)
+                    }
+                }
+                TextField("Phone", text: $engine.project.customer.phone)
+                TextField("Email", text: $engine.project.customer.email)
+                TextField("Prepared by", text: $engine.project.customer.preparedBy)
+                TextField("Licence", text: $engine.project.customer.contractorLicense)
+                TextField("Notes", text: $engine.project.customer.notes, axis: .vertical)
+                    .lineLimit(2...5)
+            }
+
             Section("Project") {
                 TextField("Name", text: $engine.project.name)
                 Picker("Procedure", selection: $engine.project.procedure) {
@@ -169,23 +192,6 @@ struct DesignConditionsSidebar: View {
                 Divider()
                 LabeledContent("Heating ΔT", value: String(format: "%.1f °F", engine.project.designConditions.heatingDeltaT))
                 LabeledContent("Cooling ΔT", value: String(format: "%.1f °F", engine.project.designConditions.coolingDeltaT))
-            }
-
-            Section("Air Distribution") {
-                LabeledNumberField("Supply ΔT", value: $engine.project.supplyAirDeltaTF, unit: "°F")
-                Text("Converts sensible load to airflow: CFM = q\u{209B} / (1.08 · ΔT).")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("Static Pressure Budget") {
-                LabeledNumberField("Cooling Coil", value: $engine.project.staticPressureBudget.coolingCoil, unit: "in")
-                LabeledNumberField("Filter", value: $engine.project.staticPressureBudget.filter, unit: "in")
-                LabeledNumberField("Supply Registers", value: $engine.project.staticPressureBudget.supplyRegisters, unit: "in")
-                LabeledNumberField("Return Grilles", value: $engine.project.staticPressureBudget.returnGrilles, unit: "in")
-                LabeledNumberField("Balancing Dampers", value: $engine.project.staticPressureBudget.balancingDampers, unit: "in")
-                LabeledContent("Total Losses", value: String(format: "%.2f in. w.g.", engine.project.staticPressureBudget.total))
-                    .fontWeight(.medium)
             }
 
             Section("Weather Provenance") {

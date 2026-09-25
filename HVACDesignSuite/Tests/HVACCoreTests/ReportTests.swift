@@ -9,10 +9,8 @@ final class ReportTests: XCTestCase {
         let engine = DesignEngine()
         return ReportBuilder.build(project: engine.project,
                                    load: engine.load!,
-                                   selection: engine.selection,
-                                   airflows: engine.zoneAirflows,
-                                   friction: engine.frictionRate,
-                                   ducts: engine.ductSizing)
+                                   systems: engine.systems,
+                                   profile: engine.coolingProfile)
     }
 
     func testReportCoversEveryStageOfTheCascade() {
@@ -20,9 +18,13 @@ final class ReportTests: XCTestCase {
         XCTAssertTrue(titles.contains { $0.contains("Design Conditions") })
         XCTAssertTrue(titles.contains { $0.contains("Load Summary") })
         XCTAssertTrue(titles.contains { $0.contains("Envelope") })
-        XCTAssertTrue(titles.contains { $0.contains("Manual S") })
-        XCTAssertTrue(titles.contains { $0.contains("Manual T") })
-        XCTAssertTrue(titles.contains { $0.contains("Manual D") })
+        // Manual S, T and D now live inside each system's own section.
+        XCTAssertTrue(titles.contains { $0.uppercased().contains("SYSTEM") })
+        let systemSection = report().sections.first { $0.title.uppercased().contains("SYSTEM") }
+        let tableTitles = systemSection?.tables.map(\.title) ?? []
+        XCTAssertTrue(tableTitles.contains { $0.contains("Manual S") })
+        XCTAssertTrue(tableTitles.contains { $0.contains("Manual T") })
+        XCTAssertTrue(tableTitles.contains { $0.contains("Manual D") })
     }
 
     /// A reviewer must be able to see every room, not a total that cannot be checked.
@@ -48,8 +50,8 @@ final class ReportTests: XCTestCase {
     }
 
     func testDuctScheduleCarriesVelocityAndEquivalentLength() throws {
-        let schedule = try XCTUnwrap(report().sections.first { $0.title.contains("Manual D") }?
-                                        .tables.first { $0.title == "Duct Schedule" })
+        let schedule = try XCTUnwrap(report().sections
+            .flatMap(\.tables).first { $0.title.contains("Duct Schedule") })
         XCTAssertTrue(schedule.columns.contains("Velocity FPM"))
         XCTAssertTrue(schedule.columns.contains("TEL ft"))
         XCTAssertFalse(schedule.rows.isEmpty)
@@ -93,16 +95,15 @@ final class ReportTests: XCTestCase {
 
     func testEmptyProjectStillProducesAValidPDF() throws {
         var empty = Project.sample
-        empty.zones = []; empty.ductRuns = []
+        empty.zones = []
+        for index in empty.systems.indices { empty.systems[index].ductRuns = [] }
         let engine = DesignEngine(project: empty)
         let built = ReportBuilder.build(project: empty,
                                         load: engine.load ?? ProjectLoad(zoneLoads: [],
                                                                          designConditions: empty.designConditions,
                                                                          procedure: empty.procedure),
-                                        selection: engine.selection,
-                                        airflows: engine.zoneAirflows,
-                                        friction: engine.frictionRate,
-                                        ducts: engine.ductSizing)
+                                        systems: engine.systems,
+                                        profile: engine.coolingProfile)
         XCTAssertGreaterThan(ReportPDF.data(for: built).count, 1_000)
     }
 }

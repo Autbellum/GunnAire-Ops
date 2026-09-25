@@ -51,17 +51,51 @@ public struct DesignReport: Sendable, Equatable {
 
 public enum ReportBuilder {
 
+    /// Room-by-room table. Airflow is looked up across every system, so a room finds its
+    /// CFM whichever piece of equipment serves it.
+    static func roomByRoom(project: Project, load: ProjectLoad,
+                           systems: [SystemResult]) -> DesignReport.Table {
+        let airflows = systems.flatMap(\.airflows)
+        var rows: [[String]] = []
+        for zone in load.zoneLoads {
+            let area = project.zones.first { $0.id == zone.zoneID }?.floorAreaSquareFeet ?? 0
+            let cfm = airflows.first { $0.zoneID == zone.zoneID }?.designCFM ?? 0
+            let system = project.system(serving: zone.zoneID)?.name ?? "—"
+            rows.append([zone.zoneName, system,
+                         String(format: "%.0f", area),
+                         btuh(zone.coolingSensibleBtuh),
+                         btuh(zone.coolingLatentBtuh),
+                         btuh(zone.heatingBtuh),
+                         String(format: "%.0f", cfm)])
+        }
+        return .init(title: "Room by Room",
+                     columns: ["Room", "System", "Area ft²", "Cooling Sens.", "Cooling Lat.", "Heating", "Design CFM"],
+                     rows: rows)
+    }
+
     public static func build(project: Project,
                              load: ProjectLoad,
-                             selection: SelectionResult?,
-                             airflows: [ZoneAirflow],
-                             friction: FrictionRateResult?,
-                             ducts: [DuctSizingResult],
+                             systems: [SystemResult] = [],
                              profile: CoolingProfile? = nil,
                              preparedOn: Date = Date()) -> DesignReport {
 
         var sections: [DesignReport.Section] = []
         let conditions = project.designConditions
+
+        // MARK: Customer
+        if project.customer.hasAnyDetail {
+            let customer = project.customer
+            var rows: [DesignReport.Row] = []
+            if !customer.customerName.isEmpty { rows.append(.init("Customer", customer.customerName, emphasis: true)) }
+            if !customer.addressLine.isEmpty { rows.append(.init("Address", customer.addressLine, emphasis: true)) }
+            if !customer.jobNumber.isEmpty { rows.append(.init("Job number", customer.jobNumber)) }
+            if !customer.phone.isEmpty { rows.append(.init("Phone", customer.phone)) }
+            if !customer.email.isEmpty { rows.append(.init("Email", customer.email)) }
+            if !customer.preparedBy.isEmpty { rows.append(.init("Prepared by", customer.preparedBy)) }
+            if !customer.contractorLicense.isEmpty { rows.append(.init("Licence", customer.contractorLicense)) }
+            sections.append(.init(title: "Job", rows: rows,
+                                  notes: customer.notes.isEmpty ? [] : [customer.notes]))
+        }
 
         // MARK: Design conditions
         sections.append(.init(title: "Design Conditions", rows: [
@@ -87,20 +121,7 @@ public enum ReportBuilder {
             .init("Cooling total", String(format: "%.2f tons", load.coolingTons)),
             .init("Load sensible heat ratio", load.sensibleHeatRatio.map { String(format: "%.2f", $0) } ?? "—"),
             .init("Heating total", btuh(load.heatingBtuh), emphasis: true)
-        ], tables: [
-            .init(title: "Room by Room",
-                  columns: ["Room", "Area ft²", "Cooling Sens.", "Cooling Lat.", "Heating", "Design CFM"],
-                  rows: load.zoneLoads.map { zone in
-                      let area = project.zones.first { $0.id == zone.zoneID }?.floorAreaSquareFeet ?? 0
-                      let cfm = airflows.first { $0.zoneID == zone.zoneID }?.designCFM ?? 0
-                      return [zone.zoneName,
-                              String(format: "%.0f", area),
-                              btuh(zone.coolingSensibleBtuh),
-                              btuh(zone.coolingLatentBtuh),
-                              btuh(zone.heatingBtuh),
-                              String(format: "%.0f", cfm)]
-                  })
-        ]))
+        ], tables: [roomByRoom(project: project, load: load, systems: systems)]))
 
         // MARK: Design day
         if let profile, profile.peakSensible > 0 {
@@ -140,73 +161,99 @@ public enum ReportBuilder {
                   note: "U-values are computed from assembly layers by the parallel-path method, not read from a table.")
         ]))
 
-        // MARK: Equipment
-        if let selection {
+        // MARK: Systems
+        //
+        // Each system is reported on its own. A design with two pieces of equipment has
+        // two load rollups, two Manual S verdicts and two duct trees, and flattening them
+        // into one set of numbers describes a system that was never specified.
+        for system in systems {
             var rows: [DesignReport.Row] = [
-                .init("Manufacturer / model",
-                      [project.equipment.manufacturer, project.equipment.modelNumber]
-                        .filter { !$0.isEmpty }.joined(separator: " ")),
-                .init("Type", project.equipment.type.rawValue),
-                .init("Total cooling capacity", btuh(project.equipment.totalCoolingCapacityBtuh)),
-                .init("Sensible cooling capacity", btuh(project.equipment.sensibleCoolingCapacityBtuh)),
-                .init("Latent cooling capacity", btuh(project.equipment.latentCoolingCapacityBtuh)),
-                .init("Heating capacity", btuh(project.equipment.heatingCapacityBtuh)),
-                .init("Required airflow", String(format: "%.0f CFM", selection.requiredAirflowCFM), emphasis: true)
+                .init("Serves", system.zoneNames.isEmpty ? "— no zones assigned —"
+                                                         : system.zoneNames.joined(separator: ", "),
+                      emphasis: true),
+                .init("Cooling sensible", btuh(system.load.coolingSensibleBtuh)),
+                .init("Cooling latent", btuh(system.load.coolingLatentBtuh)),
+                .init("Cooling total", btuh(system.load.coolingTotalBtuh), emphasis: true),
+                .init("Heating total", btuh(system.load.heatingBtuh), emphasis: true)
             ]
-            if let ratio = selection.totalCapacityRatio {
-                rows.append(.init("Capacity as % of load", String(format: "%.0f%%", ratio * 100), emphasis: true))
+            if let profile = system.profile, profile.peakSensible > 0 {
+                rows.append(.init("Coincident peak", String(format: "%@ at %02d:00",
+                                                            btuh(profile.peakSensible), profile.peakHour)))
             }
-            sections.append(.init(title: "Equipment Selection — Manual S", rows: rows, tables: [
-                .init(title: "Acceptance Checks",
-                      columns: ["Check", "Result", "Basis"],
-                      rows: selection.checks.map { [$0.name, $0.status.rawValue, $0.detail] })
-            ]))
+
+            let equipment = project.systems.first { $0.id == system.id }?.equipment
+            if let equipment {
+                rows.append(contentsOf: [
+                    .init("Equipment", [equipment.manufacturer, equipment.modelNumber]
+                        .filter { !$0.isEmpty }.joined(separator: " ")),
+                    .init("Type", equipment.type.rawValue),
+                    .init("Total / sensible capacity",
+                          "\(btuh(equipment.totalCoolingCapacityBtuh)) / \(btuh(equipment.sensibleCoolingCapacityBtuh))"),
+                    .init("Heating capacity", btuh(equipment.heatingCapacityBtuh))
+                ])
+            }
+            if let selection = system.selection {
+                rows.append(.init("Required airflow",
+                                  String(format: "%.0f CFM", selection.requiredAirflowCFM), emphasis: true))
+                if let ratio = selection.totalCapacityRatio {
+                    rows.append(.init("Capacity as % of load", String(format: "%.0f%%", ratio * 100), emphasis: true))
+                }
+            }
+
+            var tables: [DesignReport.Table] = []
+            if let selection = system.selection {
+                tables.append(.init(title: "Manual S Acceptance Checks",
+                                    columns: ["Check", "Result", "Basis"],
+                                    rows: selection.checks.map { [$0.name, $0.status.rawValue, $0.detail] }))
+            }
+            if !system.airflows.isEmpty {
+                tables.append(.init(title: "Manual T — Room Airflow",
+                                    columns: ["Room", "Cooling CFM", "Heating CFM", "Design CFM", "Share"],
+                                    rows: system.airflows.map {
+                                        [$0.zoneName, String(format: "%.0f", $0.coolingCFM),
+                                         String(format: "%.0f", $0.heatingCFM),
+                                         String(format: "%.0f", $0.designCFM),
+                                         String(format: "%.0f%%", $0.sensibleLoadFraction * 100)]
+                                    },
+                                    note: "Room CFM = System CFM × (Room Sensible ÷ Total Sensible)."))
+            }
+            if let friction = system.friction {
+                rows.append(contentsOf: [
+                    .init("Available static pressure",
+                          String(format: "%.3f in. w.g.", friction.availableStaticPressure)),
+                    .init("Friction rate",
+                          String(format: "%.3f in. w.g. per 100 ft", friction.frictionRatePer100Feet))
+                ])
+                let sized = system.ducts.filter { $0.nominalDiameterInches > 0 }
+                if !sized.isEmpty {
+                    tables.append(.init(title: "Manual D — Duct Schedule",
+                                        columns: ["Run", "Role", "CFM", "TEL ft", "Round in", "Velocity FPM", "Rectangular"],
+                                        rows: sized.map { run in
+                                            [run.name, run.role.rawValue,
+                                             String(format: "%.0f", run.designCFM),
+                                             String(format: "%.0f", run.totalEquivalentLengthFeet),
+                                             String(format: "%.0f", run.nominalDiameterInches),
+                                             String(format: "%.0f", run.velocityFPM),
+                                             run.rectangularOptions.first.map { String(format: "%.0f × %.0f", $0.height, $0.width) } ?? "—"]
+                                        },
+                                        note: "FR = ASP × 100 ÷ TEL. Diameters solve Colebrook–White, then step up where the velocity limit governs."))
+                }
+            }
+            sections.append(.init(title: system.name.uppercased(), rows: rows, tables: tables))
         }
 
-        // MARK: Air distribution
-        if !airflows.isEmpty {
-            sections.append(.init(title: "Air Distribution — Manual T", tables: [
-                .init(title: "Room Airflow",
-                      columns: ["Room", "Cooling CFM", "Heating CFM", "Design CFM", "Share"],
-                      rows: airflows.map {
-                          [$0.zoneName,
-                           String(format: "%.0f", $0.coolingCFM),
-                           String(format: "%.0f", $0.heatingCFM),
-                           String(format: "%.0f", $0.designCFM),
-                           String(format: "%.0f%%", $0.sensibleLoadFraction * 100)]
-                      },
-                      note: "Room CFM = System CFM × (Room Sensible ÷ Total Sensible). The duct is sized on the governing season.")
-            ]))
-        }
-
-        // MARK: Ducts
-        if let friction {
-            let sized = ducts.filter { $0.nominalDiameterInches > 0 }
-            sections.append(.init(title: "Duct Design — Manual D", rows: [
-                .init("Blower external static", String(format: "%.2f in. w.g.", friction.blowerExternalStaticPressure)),
-                .init("Component losses", String(format: "− %.2f in. w.g.", friction.componentLosses)),
-                .init("Available static pressure", String(format: "%.3f in. w.g.", friction.availableStaticPressure), emphasis: true),
-                .init("Governing total equivalent length", String(format: "%.0f ft", friction.governingTotalEquivalentLength)),
-                .init("Friction rate", String(format: "%.3f in. w.g. per 100 ft", friction.frictionRatePer100Feet), emphasis: true)
-            ], tables: [
-                .init(title: "Duct Schedule",
-                      columns: ["Run", "Role", "CFM", "TEL ft", "Round in", "Velocity FPM", "Rectangular"],
-                      rows: sized.map { run in
-                          [run.name, run.role.rawValue,
-                           String(format: "%.0f", run.designCFM),
-                           String(format: "%.0f", run.totalEquivalentLengthFeet),
-                           String(format: "%.0f", run.nominalDiameterInches),
-                           String(format: "%.0f", run.velocityFPM),
-                           run.rectangularOptions.first.map { String(format: "%.0f × %.0f", $0.height, $0.width) } ?? "—"]
-                      },
-                      note: "FR = ASP × 100 ÷ TEL. Diameters solve Colebrook–White at that friction rate, then step up where the velocity limit governs.")
-            ]))
+        if !project.unassignedZones.isEmpty {
+            sections.append(.init(title: "Unassigned Zones", notes:
+                project.unassignedZones.map { "“\($0.name)” is not served by any system." }))
         }
 
         // MARK: Anything the engineer should look at
-        var review = load.warnings + (friction?.warnings ?? []) + ducts.flatMap(\.warnings)
-        if let selection {
-            review += selection.checks.filter { $0.status != .pass }.map { "\($0.name): \($0.detail)" }
+        var review = load.warnings
+        for system in systems {
+            review += system.warnings
+            review += (system.selection?.checks ?? [])
+                .filter { $0.status != .pass }
+                .map { "\(system.name) — \($0.name): \($0.detail)" }
         }
         if !review.isEmpty {
             sections.append(.init(title: "Review", notes: review))

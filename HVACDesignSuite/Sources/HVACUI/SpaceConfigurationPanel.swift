@@ -21,8 +21,8 @@ struct SpaceConfigurationPanel: View {
 
             switch selection {
             case .spaces: ZoneEditor(engine: engine)
-            case .equipment: EquipmentEditor(engine: engine)
-            case .ducts: DuctEditor(engine: engine)
+            case .systems: SystemsEditor(engine: engine)
+            case .materials: MaterialsEditor(engine: engine)
             case .detail: LoadDetailList(engine: engine)
             case .library: LibraryBrowser()
             }
@@ -39,6 +39,14 @@ struct ZoneEditor: View {
         List {
             ForEach($engine.project.zones) { $zone in
                 Section {
+                    Picker("Served by", selection: Binding(
+                        get: { engine.project.system(serving: zone.id)?.id },
+                        set: { engine.assign(zoneID: zone.id, toSystem: $0) })) {
+                        Text("— unassigned —").tag(UUID?.none)
+                        ForEach(engine.project.systems) { system in
+                            Text(system.name).tag(UUID?.some(system.id))
+                        }
+                    }
                     LabeledNumberField("Floor Area", value: $zone.floorAreaSquareFeet, unit: "ft²")
                     LabeledNumberField("Ceiling Height", value: $zone.ceilingHeightFeet, unit: "ft")
                     LabeledContent("Volume", value: String(format: "%.0f ft³", zone.volumeCubicFeet))
@@ -59,7 +67,7 @@ struct ZoneEditor: View {
                     .padding(.top, 4)
 
                     ForEach($zone.surfaces) { $surface in
-                        SurfaceRow(surface: $surface)
+                        SurfaceRow(surface: $surface, library: engine.project.customLibrary)
                     }
                     .onDelete { zone.surfaces.remove(atOffsets: $0) }
 
@@ -120,6 +128,7 @@ struct ZoneEditor: View {
 /// never an input. Typing an R-value from a book is what this replaces.
 struct SurfaceRow: View {
     @Binding var surface: Surface
+    var library: CustomLibrary = CustomLibrary()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -134,7 +143,7 @@ struct SurfaceRow: View {
                 .onChange(of: surface.category) { _, category in
                     // The old construction is meaningless on a new category — a wall
                     // assembly on a window would silently keep a wall's U-value.
-                    surface.construction = Self.defaultConstruction(for: category)
+                    surface.construction = Self.defaultConstruction(for: category, library: library)
                 }
             }
 
@@ -172,7 +181,7 @@ struct SurfaceRow: View {
     // MARK: Pickers
 
     private var assemblyPicker: some View {
-        let options = AssemblyLibrary.assemblies(for: surface.category)
+        let options = library.assemblies(for: surface.category)
         return HStack {
             Text("Construction").frame(width: 90, alignment: .leading)
             Menu {
@@ -253,9 +262,10 @@ struct SurfaceRow: View {
         return .none
     }
 
-    static func defaultConstruction(for category: SurfaceCategory) -> Construction {
+    static func defaultConstruction(for category: SurfaceCategory,
+                                    library: CustomLibrary = CustomLibrary()) -> Construction {
         if category == .window { return .glazing(.doublePaneLowEArgon, .none) }
-        if let first = AssemblyLibrary.assemblies(for: category).first { return .assembly(first) }
+        if let first = library.assemblies(for: category).first { return .assembly(first) }
         return .manual(rValue: 13, shgc: 0)
     }
 }
@@ -346,8 +356,8 @@ struct LibraryBrowser: View {
 
     private var materials: some View {
         List {
-            ForEach(Material.Category.allCases, id: \.rawValue) { category in
-                let entries = Material.library.filter { $0.category == category }
+            ForEach(HVACCore.Material.Category.allCases, id: \.rawValue) { category in
+                let entries = HVACCore.Material.library.filter { $0.category == category }
                 if !entries.isEmpty {
                     SwiftUI.Section(category.rawValue) {
                         ForEach(entries) { material in
@@ -384,163 +394,6 @@ struct LibraryBrowser: View {
                     .font(.callout)
                 }
             }
-        }
-    }
-}
-
-// MARK: - Equipment
-
-struct EquipmentEditor: View {
-    @Bindable var engine: DesignEngine
-
-    var body: some View {
-        Form {
-            Section("Expanded Performance Data") {
-                Text("Manual S selects against performance at the design condition, not against nameplate tonnage. Enter the values from the manufacturer's expanded data table at your outdoor design temperature.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                TextField("Manufacturer", text: $engine.project.equipment.manufacturer)
-                TextField("Model", text: $engine.project.equipment.modelNumber)
-                Picker("Type", selection: $engine.project.equipment.type) {
-                    ForEach(EquipmentType.allCases) { Text($0.rawValue).tag($0) }
-                }
-            }
-
-            Section("Capacity at Design Condition") {
-                LabeledNumberField("Total Cooling", value: $engine.project.equipment.totalCoolingCapacityBtuh, unit: "Btu")
-                LabeledNumberField("Sensible Cooling", value: $engine.project.equipment.sensibleCoolingCapacityBtuh, unit: "Btu")
-                LabeledContent("Latent Cooling",
-                               value: String(format: "%.0f Btu/h", engine.project.equipment.latentCoolingCapacityBtuh))
-                if let shr = engine.project.equipment.sensibleHeatRatio {
-                    LabeledContent("Equipment SHR", value: String(format: "%.2f", shr))
-                }
-                LabeledNumberField("Heating", value: $engine.project.equipment.heatingCapacityBtuh, unit: "Btu")
-            }
-
-            Section("Blower") {
-                LabeledNumberField("Maximum Airflow", value: $engine.project.equipment.maximumAirflowCFM, unit: "CFM")
-                LabeledNumberField("External Static", value: $engine.project.equipment.blowerExternalStaticPressure, unit: "in")
-            }
-
-            Section("Manual S Sizing Limits") {
-                Text("Verified against the published Manual S selection table. A heat pump's heating output has no percentage cap — it is selected on cooling, with supplemental heat covering the balance point.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                LabeledNumberField("Cooling Minimum", value: $engine.project.sizingLimits.coolingMinimumFraction, unit: "×")
-                LabeledNumberField("A/C Cooling Max", value: $engine.project.sizingLimits.airConditionerCoolingMaximum, unit: "×")
-                LabeledNumberField("Heat Pump Max (cooling-dominant)", value: $engine.project.sizingLimits.heatPumpCoolingMaximumCoolingDominant, unit: "×")
-                LabeledNumberField("Heat Pump Max (heating-dominant)", value: $engine.project.sizingLimits.heatPumpCoolingMaximumHeatingDominant, unit: "×")
-                LabeledNumberField("Furnace Heating Max", value: $engine.project.sizingLimits.furnaceHeatingMaximumFraction, unit: "×")
-            }
-        }
-        .formStyle(.grouped)
-    }
-}
-
-// MARK: - Ducts
-
-struct DuctEditor: View {
-    @Bindable var engine: DesignEngine
-
-    var body: some View {
-        List {
-            if let friction = engine.frictionRate {
-                Section("Friction Rate") {
-                    MetricRow(label: "Blower External Static",
-                              value: String(format: "%.2f in", friction.blowerExternalStaticPressure))
-                    MetricRow(label: "Component Losses",
-                              value: String(format: "− %.2f in", friction.componentLosses))
-                    MetricRow(label: "Available Static Pressure",
-                              value: String(format: "%.3f in", friction.availableStaticPressure),
-                              emphasis: true,
-                              tint: friction.availableStaticPressure <= 0 ? .red : nil)
-                    MetricRow(label: "Governing TEL",
-                              value: String(format: "%.0f ft", friction.governingTotalEquivalentLength))
-                    MetricRow(label: "Friction Rate",
-                              value: String(format: "%.3f in/100 ft", friction.frictionRatePer100Feet),
-                              emphasis: true)
-                    Text("FR = ASP × 100 / TEL")
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            ForEach($engine.project.ductRuns) { $run in
-                Section {
-                    Picker("Role", selection: $run.role) {
-                        ForEach(DuctRole.allCases) { Text($0.rawValue).tag($0) }
-                    }
-                    LabeledNumberField("Physical Length", value: $run.physicalLengthFeet, unit: "ft")
-
-                    Picker("Serves", selection: $run.servingZoneID) {
-                        Text("— trunk —").tag(UUID?.none)
-                        ForEach(engine.project.zones) { zone in
-                            Text(zone.name).tag(UUID?.some(zone.id))
-                        }
-                    }
-
-                    Picker("Material", selection: Binding(
-                        get: {
-                            DuctMaterial.allCases.first { $0.roughnessFeet == run.roughnessFeet }
-                                ?? .galvanizedSteel
-                        },
-                        set: { run.roughnessFeet = $0.roughnessFeet })) {
-                        ForEach(DuctMaterial.allCases) { Text($0.rawValue).tag($0) }
-                    }
-
-                    DisclosureGroup("Fittings (\(run.fittings.count)) — \(Int(run.totalEquivalentLengthFeet)) ft TEL") {
-                        ForEach($run.fittings) { $fitting in
-                            HStack {
-                                TextField("Fitting", text: $fitting.name)
-                                    .textFieldStyle(.roundedBorder)
-                                LabeledNumberField("EL", value: $fitting.equivalentLengthFeet, unit: "ft")
-                                Stepper("×\(fitting.count)", value: $fitting.count, in: 1...20)
-                                    .frame(width: 100)
-                            }
-                        }
-                        .onDelete { run.fittings.remove(atOffsets: $0) }
-                        Button("Add Fitting", systemImage: "plus") {
-                            run.fittings.append(Fitting(name: "90° elbow", equivalentLengthFeet: 15))
-                        }
-                        .buttonStyle(.borderless)
-                    }
-
-                    if let sized = engine.ductSizing.first(where: { $0.runID == run.id }), sized.nominalDiameterInches > 0 {
-                        Divider()
-                        MetricRow(label: "Design Airflow", value: String(format: "%.0f CFM", sized.designCFM))
-                        MetricRow(label: "Required Round",
-                                  value: String(format: "%.1f in", sized.roundDiameterInches))
-                        MetricRow(label: "Nominal Size",
-                                  value: String(format: "%.0f in", sized.nominalDiameterInches),
-                                  emphasis: true)
-                        MetricRow(label: "Velocity",
-                                  value: String(format: "%.0f FPM", sized.velocityFPM),
-                                  tint: sized.velocityFPM > run.role.maximumVelocityFPM ? .orange : nil)
-                        if let option = sized.rectangularOptions.first {
-                            MetricRow(label: "Rectangular",
-                                      value: String(format: "%.0f × %.0f in", option.height, option.width))
-                        }
-                        ForEach(sized.warnings, id: \.self) { warning in
-                            Label(warning, systemImage: "exclamationmark.triangle")
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                        }
-                    }
-                } header: {
-                    TextField("Run Name", text: $run.name)
-                        .textFieldStyle(.plain)
-                        .font(.headline)
-                }
-            }
-            .onDelete { engine.removeDuctRuns(at: $0) }
-        }
-        .safeAreaInset(edge: .bottom) {
-            HStack {
-                Button("Add Duct Run", systemImage: "plus.circle.fill") { engine.addDuctRun() }
-                Spacer()
-            }
-            .padding(10)
-            .background(.bar)
         }
     }
 }

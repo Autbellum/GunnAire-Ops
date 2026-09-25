@@ -632,9 +632,11 @@ final class DesignEngineTests: XCTestCase {
     func testRemovingAZoneDetachesItsDuctRun() {
         let engine = DesignEngine()
         let zoneID = engine.project.zones[0].id
-        XCTAssertTrue(engine.project.ductRuns.contains { $0.servingZoneID == zoneID })
+        XCTAssertTrue(engine.project.systems.flatMap(\.ductRuns).contains { $0.servingZoneID == zoneID })
         engine.removeZones(at: IndexSet(integer: 0))
-        XCTAssertFalse(engine.project.ductRuns.contains { $0.servingZoneID == zoneID })
+        XCTAssertFalse(engine.project.systems.flatMap(\.ductRuns).contains { $0.servingZoneID == zoneID })
+        XCTAssertFalse(engine.project.systems.contains { $0.zoneIDs.contains(zoneID) },
+                       "a removed zone must also leave its system")
     }
 
     func testAltitudeChangesTheCalculatedLoad() {

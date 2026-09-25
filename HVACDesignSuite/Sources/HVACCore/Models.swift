@@ -509,27 +509,105 @@ public struct StaticPressureBudget: Codable, Sendable, Equatable {
 public struct Project: Identifiable, Codable, Sendable, Equatable {
     public var id: UUID
     public var name: String
+    public var customer: CustomerInformation
     public var procedure: LoadProcedure
     public var designConditions: DesignConditions
     public var zones: [Zone]
-    public var equipment: EquipmentSpec
+    /// One or more pieces of equipment, each with the zones it serves.
+    public var systems: [HVACSystem]
+    /// Materials and assemblies added for this job.
+    public var customLibrary: CustomLibrary
     public var sizingLimits: SizingLimits
-    public var staticPressureBudget: StaticPressureBudget
-    public var ductRuns: [DuctRun]
-    /// Supply-air temperature difference used to convert sensible load to airflow, °F.
-    public var supplyAirDeltaTF: Double
 
     public init(id: UUID = UUID(), name: String = "Untitled Project",
+                customer: CustomerInformation = CustomerInformation(),
                 procedure: LoadProcedure = .residentialManualJ,
                 designConditions: DesignConditions = .piedmontTriad,
-                zones: [Zone] = [], equipment: EquipmentSpec = EquipmentSpec(),
-                sizingLimits: SizingLimits = .standard,
-                staticPressureBudget: StaticPressureBudget = .typical,
-                ductRuns: [DuctRun] = [], supplyAirDeltaTF: Double = 20) {
-        self.id = id; self.name = name; self.procedure = procedure
-        self.designConditions = designConditions; self.zones = zones
-        self.equipment = equipment; self.sizingLimits = sizingLimits
-        self.staticPressureBudget = staticPressureBudget
-        self.ductRuns = ductRuns; self.supplyAirDeltaTF = supplyAirDeltaTF
+                zones: [Zone] = [],
+                systems: [HVACSystem] = [HVACSystem()],
+                customLibrary: CustomLibrary = CustomLibrary(),
+                sizingLimits: SizingLimits = .standard) {
+        self.id = id; self.name = name; self.customer = customer
+        self.procedure = procedure; self.designConditions = designConditions
+        self.zones = zones; self.systems = systems
+        self.customLibrary = customLibrary; self.sizingLimits = sizingLimits
+    }
+
+    // MARK: Zone assignment
+
+    /// Zones served by a system, in project order.
+    public func zones(servedBy system: HVACSystem) -> [Zone] {
+        zones.filter { system.zoneIDs.contains($0.id) }
+    }
+
+    /// Zones no system conditions. Reported rather than silently dropped: an unassigned
+    /// zone still has a load, and leaving it out of every rollup is how a room ends up
+    /// with no register.
+    public var unassignedZones: [Zone] {
+        let assigned = Set(systems.flatMap(\.zoneIDs))
+        return zones.filter { !assigned.contains($0.id) }
+    }
+
+    public func system(serving zoneID: UUID) -> HVACSystem? {
+        systems.first { $0.zoneIDs.contains(zoneID) }
+    }
+
+    // MARK: Legacy decoding
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, customer, procedure, designConditions, zones, systems
+        case customLibrary, sizingLimits
+        // Single-system files written before systems existed.
+        case equipment, staticPressureBudget, ductRuns, supplyAirDeltaTF
+    }
+
+    /// Writes the current shape only. The legacy keys are read, never written, so a file
+    /// opened and saved is migrated forward rather than left in two minds.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(customer, forKey: .customer)
+        try container.encode(procedure, forKey: .procedure)
+        try container.encode(designConditions, forKey: .designConditions)
+        try container.encode(zones, forKey: .zones)
+        try container.encode(systems, forKey: .systems)
+        try container.encode(customLibrary, forKey: .customLibrary)
+        try container.encode(sizingLimits, forKey: .sizingLimits)
+    }
+
+    /// Decodes both the current shape and the single-system shape that preceded it.
+    ///
+    /// A saved job is a record of work. Breaking files that already exist to tidy a model
+    /// is not a trade worth making, so the old keys are read and folded into one system.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? "Untitled Project"
+        customer = try container.decodeIfPresent(CustomerInformation.self, forKey: .customer)
+            ?? CustomerInformation()
+        procedure = try container.decodeIfPresent(LoadProcedure.self, forKey: .procedure)
+            ?? .residentialManualJ
+        designConditions = try container.decode(DesignConditions.self, forKey: .designConditions)
+        zones = try container.decodeIfPresent([Zone].self, forKey: .zones) ?? []
+        customLibrary = try container.decodeIfPresent(CustomLibrary.self, forKey: .customLibrary)
+            ?? CustomLibrary()
+        sizingLimits = try container.decodeIfPresent(SizingLimits.self, forKey: .sizingLimits)
+            ?? .standard
+
+        if let systems = try container.decodeIfPresent([HVACSystem].self, forKey: .systems) {
+            self.systems = systems
+        } else {
+            // Legacy: one system, serving every zone in the file.
+            let equipment = try container.decodeIfPresent(EquipmentSpec.self, forKey: .equipment)
+                ?? EquipmentSpec()
+            let budget = try container.decodeIfPresent(StaticPressureBudget.self,
+                                                       forKey: .staticPressureBudget) ?? .typical
+            let runs = try container.decodeIfPresent([DuctRun].self, forKey: .ductRuns) ?? []
+            let deltaT = try container.decodeIfPresent(Double.self, forKey: .supplyAirDeltaTF) ?? 20
+            self.systems = [HVACSystem(name: "System 1", equipment: equipment,
+                                       staticPressureBudget: budget, supplyAirDeltaTF: deltaT,
+                                       ductRuns: runs, zoneIDs: zones.map(\.id))]
+        }
     }
 }

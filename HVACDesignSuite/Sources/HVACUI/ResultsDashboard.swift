@@ -16,9 +16,9 @@ struct ResultsDashboard: View {
 
                 if let load = engine.load {
                     loadSection(load)
-                    if let selection = engine.selection { equipmentSection(selection) }
-                    airflowSection
-                    ductSection
+                    ForEach(engine.systems) { system in
+                        systemCard(system)
+                    }
                 } else {
                     ContentUnavailableView("Nothing to calculate",
                                            systemImage: "square.dashed",
@@ -37,9 +37,16 @@ struct ResultsDashboard: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Design Summary").font(.title3.weight(.semibold))
-            Text(engine.project.procedure.rawValue)
+            Text(engine.project.procedure.rawValue
+                 + (engine.systems.count > 1 ? " · \(engine.systems.count) systems" : ""))
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            if !engine.project.customer.customerName.isEmpty {
+                Text(engine.project.customer.customerName).font(.caption).foregroundStyle(.secondary)
+            }
+            if !engine.project.customer.addressLine.isEmpty {
+                Text(engine.project.customer.addressLine).font(.caption2).foregroundStyle(.tertiary)
+            }
         }
     }
 
@@ -79,85 +86,78 @@ struct ResultsDashboard: View {
         }
     }
 
-    // MARK: Equipment
+    // MARK: One system
 
-    private func equipmentSection(_ selection: SelectionResult) -> some View {
-        DashboardCard(title: "Manual S — Equipment Match",
-                      symbol: selection.isAcceptable ? "checkmark.seal" : "xmark.seal",
-                      tint: selection.isAcceptable ? (selection.hasCautions ? .orange : .green) : .red) {
-            if let ratio = selection.totalCapacityRatio {
-                MetricRow(label: "Total Capacity",
-                          value: String(format: "%.0f%% of load", ratio * 100),
-                          emphasis: true)
+    private func systemCard(_ system: SystemResult) -> some View {
+        let failures = system.selection?.checks.filter { $0.status == .fail } ?? []
+        let cautions = system.selection?.checks.filter { $0.status == .caution } ?? []
+        let tint: Color = failures.isEmpty ? (cautions.isEmpty ? .green : .orange) : .red
+
+        return DashboardCard(title: system.name,
+                             symbol: failures.isEmpty ? "checkmark.seal" : "xmark.seal",
+                             tint: tint) {
+            Text(system.zoneNames.isEmpty ? "No zones assigned"
+                                          : system.zoneNames.joined(separator: " · "))
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            MetricRow(label: "Cooling total", value: btuh(system.load.coolingTotalBtuh), emphasis: true)
+            MetricRow(label: "", value: String(format: "%.2f tons", system.load.coolingTons))
+            MetricRow(label: "Heating total", value: btuh(system.load.heatingBtuh), emphasis: true)
+            if let profile = system.profile, profile.peakSensible > 0 {
+                MetricRow(label: "Coincident peak",
+                          value: String(format: "%@ at %02d:00", btuh(profile.peakSensible), profile.peakHour))
             }
-            ForEach(selection.checks) { check in
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Image(systemName: check.status.symbol)
-                            .foregroundStyle(check.status.tint)
-                            .font(.caption)
-                        Text(check.name).font(.callout.weight(.medium))
-                        Spacer()
-                        Text(check.status.rawValue)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(check.status.tint)
-                    }
-                    Text(check.detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(check.reference)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(.vertical, 3)
-            }
-        }
-    }
 
-    // MARK: Airflow
-
-    private var airflowSection: some View {
-        DashboardCard(title: "Manual T — Air Distribution", symbol: "wind") {
-            MetricRow(label: "System Cooling",
-                      value: String(format: "%.0f CFM", engine.systemCoolingCFM), emphasis: true)
-            MetricRow(label: "System Heating",
-                      value: String(format: "%.0f CFM", engine.systemHeatingCFM))
-            Divider()
-            ForEach(engine.zoneAirflows) { airflow in
-                MetricRow(label: airflow.zoneName,
-                          value: String(format: "%.0f CFM  (%.0f%%)",
-                                        airflow.designCFM, airflow.sensibleLoadFraction * 100))
-            }
-            Text("Room CFM = System CFM × (Room Sensible / Total Sensible)")
-                .font(.caption2.monospaced())
-                .foregroundStyle(.tertiary)
-        }
-    }
-
-    // MARK: Ducts
-
-    private var ductSection: some View {
-        DashboardCard(title: "Manual D — Duct Sizing", symbol: "pipe.and.drop") {
-            if let friction = engine.frictionRate {
-                MetricRow(label: "Available Static",
-                          value: String(format: "%.3f in. w.g.", friction.availableStaticPressure),
-                          emphasis: true,
-                          tint: friction.availableStaticPressure <= 0 ? .red : nil)
-                MetricRow(label: "Governing TEL",
-                          value: String(format: "%.0f ft", friction.governingTotalEquivalentLength))
-                MetricRow(label: "Friction Rate",
-                          value: String(format: "%.3f in/100 ft", friction.frictionRatePer100Feet),
-                          emphasis: true)
+            if let selection = system.selection {
                 Divider()
+                if let ratio = selection.totalCapacityRatio {
+                    MetricRow(label: "Capacity", value: String(format: "%.0f%% of load", ratio * 100), emphasis: true)
+                }
+                ForEach(selection.checks) { check in
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Image(systemName: check.status.symbol)
+                                .foregroundStyle(check.status.tint).font(.caption2)
+                            Text(check.name).font(.caption.weight(.medium))
+                            Spacer()
+                            Text(check.status.rawValue)
+                                .font(.caption2.weight(.semibold)).foregroundStyle(check.status.tint)
+                        }
+                        if check.status != .pass {
+                            Text(check.detail).font(.caption2).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(.vertical, 1)
+                }
             }
-            ForEach(engine.ductSizing) { run in
-                if run.nominalDiameterInches > 0 {
-                    MetricRow(label: run.name,
-                              value: String(format: "%.0f in  @ %.0f CFM",
-                                            run.nominalDiameterInches, run.designCFM),
-                              emphasis: run.role == .supplyTrunk || run.role == .returnTrunk,
-                              tint: run.velocityFPM > run.role.maximumVelocityFPM ? .orange : nil)
+
+            if !system.airflows.isEmpty {
+                Divider()
+                MetricRow(label: "System airflow",
+                          value: String(format: "%.0f CFM cooling · %.0f heating",
+                                        system.coolingCFM, system.heatingCFM), emphasis: true)
+                ForEach(system.airflows) { airflow in
+                    MetricRow(label: airflow.zoneName,
+                              value: String(format: "%.0f CFM (%.0f%%)",
+                                            airflow.designCFM, airflow.sensibleLoadFraction * 100))
+                }
+            }
+
+            if let friction = system.friction, friction.frictionRatePer100Feet > 0 {
+                Divider()
+                MetricRow(label: "Available static",
+                          value: String(format: "%.3f in. w.g.", friction.availableStaticPressure),
+                          tint: friction.availableStaticPressure <= 0 ? .red : nil)
+                MetricRow(label: "Friction rate",
+                          value: String(format: "%.3f in/100 ft", friction.frictionRatePer100Feet), emphasis: true)
+                ForEach(system.ducts) { run in
+                    if run.nominalDiameterInches > 0 {
+                        MetricRow(label: run.name,
+                                  value: String(format: "%.0f in @ %.0f CFM", run.nominalDiameterInches, run.designCFM),
+                                  tint: run.velocityFPM > run.role.maximumVelocityFPM ? .orange : nil)
+                    }
                 }
             }
         }

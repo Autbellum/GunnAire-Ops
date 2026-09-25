@@ -21,6 +21,25 @@ import Observation
 /// hundreds of zones, or the radiant-time-series engine once it lands with its 8,760-hour
 /// convolution — should move `recalculate()` into a background task and publish the
 /// result back, which is why the results are `private(set)` behind a single assignment.
+/// Everything one system produces.
+public struct SystemResult: Sendable, Identifiable {
+    public let id: UUID
+    public let name: String
+    public let load: ProjectLoad
+    public let profile: CoolingProfile?
+    public let selection: SelectionResult?
+    public let airflows: [ZoneAirflow]
+    public let friction: FrictionRateResult?
+    public let ducts: [DuctSizingResult]
+    public let coolingCFM: Double
+    public let heatingCFM: Double
+    public let zoneNames: [String]
+
+    public var warnings: [String] {
+        load.warnings + (friction?.warnings ?? []) + ducts.flatMap(\.warnings)
+    }
+}
+
 @Observable
 @MainActor
 public final class DesignEngine {
@@ -32,15 +51,12 @@ public final class DesignEngine {
 
     // MARK: Derived state
 
+    /// One result per system, in project order.
+    public private(set) var systems: [SystemResult] = []
+    /// Whole-building load across every zone, whether assigned to a system or not.
     public private(set) var load: ProjectLoad?
-    public private(set) var selection: SelectionResult?
-    public private(set) var zoneAirflows: [ZoneAirflow] = []
-    public private(set) var frictionRate: FrictionRateResult?
-    public private(set) var ductSizing: [DuctSizingResult] = []
-    /// The design-day hourly profile, which carries the coincident peak and its hour.
     public private(set) var coolingProfile: CoolingProfile?
 
-    /// Set when a stage threw rather than merely disagreeing with the design.
     public private(set) var calculationError: String?
     public private(set) var lastCalculated: Date?
 
@@ -54,110 +70,160 @@ public final class DesignEngine {
     public func recalculate() {
         calculationError = nil
         do {
-            // Stage 1 — Manual J / Manual N.
-            let load = try LoadCalculator.calculate(project: project)
-            self.load = load
+            // Whole building first, for the summary and for any zone no system claims.
+            let whole = try LoadCalculator.calculate(project: project)
+            load = whole
             coolingProfile = try LoadCalculator.coolingProfile(project: project)
 
-            // Stage 2 — Manual S.
-            let selection = try EquipmentSelector.evaluate(
-                load: load,
-                equipment: project.equipment,
-                limits: project.sizingLimits,
-                supplyAirDeltaTF: project.supplyAirDeltaTF,
-                altitudeFeet: project.designConditions.altitudeFeet)
-            self.selection = selection
+            // Then each system independently. A system is sized on the coincident peak of
+            // the zones it serves, which is not the building's peak: an upstairs system
+            // and a downstairs one peak at different hours and carry different
+            // sensible/latent splits, and averaging them selects the wrong coil for both.
+            var results: [SystemResult] = []
+            for system in project.systems {
+                let served = project.zones(servedBy: system)
+                var subProject = project
+                subProject.zones = served
+                subProject.systems = [system]
 
-            // System airflow. The sensible load sets what the air must carry; the blower
-            // caps what it can. Sizing ducts for more air than the blower moves produces
-            // a drawing that cannot be built to.
-            let coefficient = try Psychrometrics.sensibleCoefficient(
-                altitudeFeet: project.designConditions.altitudeFeet)
-            var coolingCFM = selection.requiredAirflowCFM
-            if project.equipment.maximumAirflowCFM > 0 {
-                coolingCFM = min(coolingCFM, project.equipment.maximumAirflowCFM)
+                let systemLoad = try LoadCalculator.calculate(project: subProject)
+                let profile = served.isEmpty ? nil : try LoadCalculator.coolingProfile(project: subProject)
+
+                let selection = try EquipmentSelector.evaluate(
+                    load: systemLoad, equipment: system.equipment,
+                    limits: project.sizingLimits,
+                    supplyAirDeltaTF: system.supplyAirDeltaTF,
+                    altitudeFeet: project.designConditions.altitudeFeet)
+
+                let coefficient = try Psychrometrics.sensibleCoefficient(
+                    altitudeFeet: project.designConditions.altitudeFeet)
+                var coolingCFM = selection.requiredAirflowCFM
+                if system.equipment.maximumAirflowCFM > 0 {
+                    coolingCFM = min(coolingCFM, system.equipment.maximumAirflowCFM)
+                }
+                let heatingCFM = system.supplyAirDeltaTF > 0
+                    ? systemLoad.heatingBtuh / (coefficient * system.supplyAirDeltaTF) : 0
+
+                let airflows = AirDistributionCalculator.allocate(
+                    load: systemLoad, systemCoolingCFM: coolingCFM, systemHeatingCFM: heatingCFM)
+
+                let friction = DuctDesigner.frictionRate(
+                    equipment: system.equipment, budget: system.staticPressureBudget,
+                    runs: system.ductRuns)
+                let ducts = DuctDesigner.size(
+                    runs: system.ductRuns, airflows: airflows,
+                    systemCFM: max(coolingCFM, heatingCFM),
+                    frictionRate: friction.frictionRatePer100Feet)
+
+                results.append(SystemResult(
+                    id: system.id, name: system.name, load: systemLoad, profile: profile,
+                    selection: selection, airflows: airflows, friction: friction, ducts: ducts,
+                    coolingCFM: coolingCFM, heatingCFM: heatingCFM,
+                    zoneNames: served.map(\.name)))
             }
-            let heatingCFM = project.supplyAirDeltaTF > 0
-                ? load.heatingBtuh / (coefficient * project.supplyAirDeltaTF)
-                : 0
-
-            // Stage 3 — Manual T.
-            zoneAirflows = AirDistributionCalculator.allocate(
-                load: load, systemCoolingCFM: coolingCFM, systemHeatingCFM: heatingCFM)
-
-            // Stage 4 — Manual D.
-            let friction = DuctDesigner.frictionRate(
-                equipment: project.equipment,
-                budget: project.staticPressureBudget,
-                runs: project.ductRuns)
-            frictionRate = friction
-
-            ductSizing = DuctDesigner.size(
-                runs: project.ductRuns,
-                airflows: zoneAirflows,
-                systemCFM: max(coolingCFM, heatingCFM),
-                frictionRate: friction.frictionRatePer100Feet)
-
+            systems = results
             lastCalculated = Date()
         } catch {
             calculationError = error.localizedDescription
-            load = nil; selection = nil; coolingProfile = nil
-            zoneAirflows = []; frictionRate = nil; ductSizing = []
+            load = nil; coolingProfile = nil; systems = []
         }
     }
 
-    // MARK: Convenience for the dashboard
+    // MARK: Convenience
 
-    public var systemCoolingCFM: Double { zoneAirflows.reduce(0) { $0 + $1.coolingCFM } }
-    public var systemHeatingCFM: Double { zoneAirflows.reduce(0) { $0 + $1.heatingCFM } }
+    public var systemCoolingCFM: Double { systems.reduce(0) { $0 + $1.coolingCFM } }
+    public var systemHeatingCFM: Double { systems.reduce(0) { $0 + $1.heatingCFM } }
+    public var zoneAirflows: [ZoneAirflow] { systems.flatMap(\.airflows) }
+    public var ductSizing: [DuctSizingResult] { systems.flatMap(\.ducts) }
+    /// Present only when the design has exactly one system, where "the" equipment match
+    /// is a meaningful idea.
+    public var selection: SelectionResult? {
+        systems.count == 1 ? systems[0].selection : nil
+    }
+    public var frictionRate: FrictionRateResult? {
+        systems.count == 1 ? systems[0].friction : nil
+    }
 
-    /// Everything the design wants the engineer to look at, in one list.
+    /// Everything the design wants the engineer to look at.
     public var allWarnings: [String] {
         var warnings = load?.warnings ?? []
-        warnings += frictionRate?.warnings ?? []
-        warnings += ductSizing.flatMap(\.warnings)
+        warnings += systems.flatMap(\.warnings)
+        for zone in project.unassignedZones {
+            warnings.append("Zone “\(zone.name)” is not assigned to any system, so it has no equipment, no airflow and no ducts.")
+        }
+        for system in project.systems where system.zoneIDs.isEmpty {
+            warnings.append("System “\(system.name)” serves no zones.")
+        }
         if let error = calculationError { warnings.insert(error, at: 0) }
-        return warnings
+        return Array(NSOrderedSet(array: warnings).compactMap { $0 as? String })
     }
 
     // MARK: Mutations
 
     public func addZone() {
-        project.zones.append(Zone(name: "Zone \(project.zones.count + 1)", floorAreaSquareFeet: 200))
+        let zone = Zone(name: "Zone \(project.zones.count + 1)", floorAreaSquareFeet: 200)
+        project.zones.append(zone)
+        // A new zone joins the first system rather than falling through the cracks.
+        if !project.systems.isEmpty { project.systems[0].zoneIDs.append(zone.id) }
     }
 
     public func removeZones(at offsets: IndexSet) {
         let removed = offsets.compactMap { project.zones.indices.contains($0) ? project.zones[$0].id : nil }
-        // Removing high indices first keeps the lower ones valid. The core deliberately
-        // does not import SwiftUI, so `remove(atOffsets:)` is not available here.
         for index in offsets.sorted(by: >) where project.zones.indices.contains(index) {
             project.zones.remove(at: index)
         }
-        // A duct run pointing at a deleted zone would silently size itself to nothing.
-        for index in project.ductRuns.indices {
-            if let serving = project.ductRuns[index].servingZoneID, removed.contains(serving) {
-                project.ductRuns[index].servingZoneID = nil
+        for index in project.systems.indices {
+            project.systems[index].zoneIDs.removeAll { removed.contains($0) }
+            for runIndex in project.systems[index].ductRuns.indices {
+                if let serving = project.systems[index].ductRuns[runIndex].servingZoneID,
+                   removed.contains(serving) {
+                    project.systems[index].ductRuns[runIndex].servingZoneID = nil
+                }
             }
         }
     }
 
     public func addSurface(to zoneID: UUID) {
         guard let index = project.zones.firstIndex(where: { $0.id == zoneID }) else { return }
-        let wall = AssemblyLibrary.assemblies(for: .wall).first
+        let wall = project.customLibrary.assemblies(for: .wall).first
         project.zones[index].surfaces.append(
             Surface(name: "New Surface", category: .wall, areaSquareFeet: 100,
                     construction: wall.map { .assembly($0) } ?? .manual(rValue: 13, shgc: 0)))
     }
 
-    public func addDuctRun() {
-        project.ductRuns.append(
-            DuctRun(name: "Run \(project.ductRuns.count + 1)", role: .supplyBranch,
-                    physicalLengthFeet: 25))
+    public func addSystem() {
+        project.systems.append(HVACSystem(name: "System \(project.systems.count + 1)"))
     }
 
-    public func removeDuctRuns(at offsets: IndexSet) {
-        for index in offsets.sorted(by: >) where project.ductRuns.indices.contains(index) {
-            project.ductRuns.remove(at: index)
+    public func removeSystems(at offsets: IndexSet) {
+        for index in offsets.sorted(by: >) where project.systems.indices.contains(index) {
+            project.systems.remove(at: index)
+        }
+        if project.systems.isEmpty { project.systems = [HVACSystem()] }
+    }
+
+    /// Moves a zone to a system, removing it from any other. A zone served by two systems
+    /// would be counted twice in the building rollup.
+    public func assign(zoneID: UUID, toSystem systemID: UUID?) {
+        for index in project.systems.indices {
+            project.systems[index].zoneIDs.removeAll { $0 == zoneID }
+        }
+        guard let systemID,
+              let index = project.systems.firstIndex(where: { $0.id == systemID }) else { return }
+        project.systems[index].zoneIDs.append(zoneID)
+    }
+
+    public func addDuctRun(toSystem systemID: UUID) {
+        guard let index = project.systems.firstIndex(where: { $0.id == systemID }) else { return }
+        project.systems[index].ductRuns.append(
+            DuctRun(name: "Run \(project.systems[index].ductRuns.count + 1)",
+                    role: .supplyBranch, physicalLengthFeet: 25))
+    }
+
+    public func removeDuctRuns(at offsets: IndexSet, fromSystem systemID: UUID) {
+        guard let index = project.systems.firstIndex(where: { $0.id == systemID }) else { return }
+        for offset in offsets.sorted(by: >) where project.systems[index].ductRuns.indices.contains(offset) {
+            project.systems[index].ductRuns.remove(at: offset)
         }
     }
 }
@@ -243,15 +309,27 @@ public extension Project {
             name: "Return Trunk", role: .returnTrunk, physicalLengthFeet: 20,
             fittings: [Fitting(name: "Return grille", equivalentLengthFeet: 35)])
 
+        let system = HVACSystem(
+            name: "System 1 — whole house",
+            equipment: equipment,
+            staticPressureBudget: .typical,
+            supplyAirDeltaTF: 20,
+            ductRuns: [supplyTrunk, livingBranch, bedroomBranch, returnTrunk],
+            zoneIDs: [living.id, bedroom.id])
+
         return Project(
             name: "Sample Residence — Piedmont Triad",
+            customer: CustomerInformation(
+                customerName: "Sample Customer", jobNumber: "1042",
+                streetAddress: "100 Reynolda Road", city: "Winston-Salem",
+                state: "NC", postalCode: "27106",
+                phone: "(336) 555-0100", email: "",
+                preparedBy: "GunnAire, LLC", contractorLicense: "NC #35052"),
             procedure: .residentialManualJ,
             designConditions: .piedmontTriad,
             zones: [living, bedroom],
-            equipment: equipment,
-            sizingLimits: .standard,
-            staticPressureBudget: .typical,
-            ductRuns: [supplyTrunk, livingBranch, bedroomBranch, returnTrunk],
-            supplyAirDeltaTF: 20)
+            systems: [system],
+            customLibrary: CustomLibrary(),
+            sizingLimits: .standard)
     }
 }

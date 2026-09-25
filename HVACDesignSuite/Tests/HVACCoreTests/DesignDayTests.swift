@@ -109,7 +109,7 @@ final class DesignDayIntegrationTests: XCTestCase {
         let coefficient = try Psychrometrics.sensibleCoefficient(
             altitudeFeet: engine.project.designConditions.altitudeFeet)
         XCTAssertEqual(selection.requiredAirflowCFM,
-                       profile.peakSensible / (coefficient * engine.project.supplyAirDeltaTF),
+                       profile.peakSensible / (coefficient * engine.project.systems[0].supplyAirDeltaTF),
                        accuracy: 1.0, "airflow must follow the coincident peak")
         XCTAssertFalse(engine.ductSizing.isEmpty)
     }
