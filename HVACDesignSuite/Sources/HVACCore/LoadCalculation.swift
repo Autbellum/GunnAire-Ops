@@ -97,17 +97,51 @@ public enum LoadCalculator {
         return table
     }
 
+    /// The project load, built on the design day.
+    ///
+    /// Cooling is taken at the building's coincident peak hour: opaque assemblies are
+    /// solved transiently so each carries the lag its mass produces, and every zone is
+    /// reported at the one hour the building total is largest. Summing each surface's own
+    /// maximum would size for a building that never exists.
+    ///
+    /// Heating is not swept hourly. Design heating is a night-time condition with no sun,
+    /// no occupancy and no internal gain, so it has no shape to find a peak in — the
+    /// steady-state calculation is the answer, not an approximation of it.
+    ///
+    /// Latent load likewise follows the design moisture difference, which is a property of
+    /// the design condition rather than of the hour.
     public static func calculate(project: Project) throws -> ProjectLoad {
+        let designDay = try DesignDay.solve(project: project)
         let solar = solarTable(for: project.designConditions)
-        let loads = try project.zones.map {
-            try calculate(zone: $0, conditions: project.designConditions,
-                          procedure: project.procedure, solar: solar)
+
+        var loads: [ZoneLoad] = []
+        for zone in project.zones {
+            // Steady-state pass supplies heating, latent and the input warnings.
+            let steady = try calculate(zone: zone, conditions: project.designConditions,
+                                       procedure: project.procedure, solar: solar)
+            let hourly = designDay.zones.first { $0.zoneID == zone.id }
+
+            loads.append(ZoneLoad(
+                id: UUID(), zoneID: zone.id, zoneName: zone.name,
+                coolingSensibleBtuh: hourly?.sensibleAtPeak ?? steady.coolingSensibleBtuh,
+                coolingLatentBtuh: steady.coolingLatentBtuh,
+                heatingBtuh: steady.heatingBtuh,
+                coolingComponents: (hourly?.componentsAtPeak ?? steady.coolingComponents)
+                    + steady.coolingComponents.filter { $0.name.hasSuffix("latent") },
+                heatingComponents: steady.heatingComponents,
+                warnings: steady.warnings))
         }
         return ProjectLoad(zoneLoads: loads,
                            designConditions: project.designConditions,
                            procedure: project.procedure)
     }
 
+    /// Single-condition zone load.
+    ///
+    /// Evaluates one zone at the design condition with no time dimension. This supplies
+    /// heating and latent, which have no hourly shape to sweep, and remains available as
+    /// an independent check on the design-day result. `calculate(project:)` is what a
+    /// design is sized from.
     public static func calculate(zone: Zone,
                                  conditions: DesignConditions,
                                  procedure: LoadProcedure,

@@ -220,9 +220,9 @@ public extension Project {
         let equipment = EquipmentSpec(
             manufacturer: "—", modelNumber: "Entered from expanded performance data",
             type: .heatPump,
-            totalCoolingCapacityBtuh: 9_600,
-            sensibleCoolingCapacityBtuh: 7_200,
-            heatingCapacityBtuh: 7_000,
+            totalCoolingCapacityBtuh: 8_400,
+            sensibleCoolingCapacityBtuh: 6_300,
+            heatingCapacityBtuh: 6_500,
             maximumAirflowCFM: 450,
             blowerExternalStaticPressure: 0.60)
 

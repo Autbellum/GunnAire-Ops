@@ -105,7 +105,7 @@ public enum ReportBuilder {
         // MARK: Design day
         if let profile, profile.peakSensible > 0 {
             sections.append(.init(title: "Design Day — Coincident Peak", rows: [
-                .init("Peak sensible load", btuh(profile.peakSensible), emphasis: true),
+                .init("Design sensible load", btuh(profile.peakSensible), emphasis: true),
                 .init("Occurs at", String(format: "%02d:00 solar", profile.peakHour), emphasis: true),
                 .init("Sum of individual surface peaks", btuh(profile.sumOfIndividualPeaks)),
                 .init("Diversity", String(format: "%.0f%%", profile.diversityFactor * 100))
@@ -116,7 +116,7 @@ public enum ReportBuilder {
                           [String(format: "%02d:00", hour), integer(profile.hourlySensible[hour]),
                            String(format: "%02d:00", hour + 12), integer(profile.hourlySensible[hour + 12])]
                       },
-                      note: "Opaque assemblies are solved transiently across the design day, so each carries the lag and damping its own mass produces. Surfaces do not peak together; the coincident figure is the largest the sum ever reaches.")
+                      note: "The sensible load is taken at the hour the building total peaks. Opaque assemblies are solved transiently across the design day, so each carries the lag and damping its own mass produces; surfaces do not peak together, and sizing on the sum of individual peaks would describe a building that never exists.")
             ]))
         }
 
@@ -220,7 +220,7 @@ public enum ReportBuilder {
             footnotes: [
                 "Design conditions derived from NOAA Integrated Surface Database observations; not ASHRAE published design conditions.",
                 "Envelope U-values computed from assembly layers by the parallel-path method. Glazing values are typical for the construction unless an NFRC label was entered.",
-                "Solar gain uses computed solar position and the Bird & Hulstrom clear-sky model. Thermal mass and lag are not modelled, so sunlit opaque assemblies are a steady-state upper bound.",
+                "Solar gain uses computed solar position and the Bird & Hulstrom clear-sky model. Opaque assemblies are solved transiently across the design day, so thermal mass, lag and damping are modelled from the layer properties rather than read from a table.",
                 "This report is not ACCA-approved software output. Confirm against the current editions of Manual J, S, T and D before submittal."
             ])
     }

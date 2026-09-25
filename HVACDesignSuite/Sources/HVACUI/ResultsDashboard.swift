@@ -47,7 +47,11 @@ struct ResultsDashboard: View {
 
     private func loadSection(_ load: ProjectLoad) -> some View {
         DashboardCard(title: "Load — \(load.procedure.rawValue)", symbol: "thermometer.variable") {
-            MetricRow(label: "Cooling Sensible", value: btuh(load.coolingSensibleBtuh))
+            MetricRow(label: "Cooling Sensible", value: btuh(load.coolingSensibleBtuh),
+                      emphasis: true)
+            if let profile = engine.coolingProfile, profile.peakSensible > 0 {
+                MetricRow(label: "", value: String(format: "coincident peak at %02d:00", profile.peakHour))
+            }
             MetricRow(label: "Cooling Latent", value: btuh(load.coolingLatentBtuh))
             Divider()
             MetricRow(label: "Cooling Total", value: btuh(load.coolingTotalBtuh), emphasis: true)
@@ -60,16 +64,14 @@ struct ResultsDashboard: View {
 
             if let profile = engine.coolingProfile, profile.peakSensible > 0 {
                 Divider()
-                MetricRow(label: "Coincident peak",
-                          value: String(format: "%.0f Btu/h at %02d:00",
-                                        profile.peakSensible, profile.peakHour),
-                          emphasis: true)
                 MetricRow(label: "Sum of surface peaks",
                           value: btuh(profile.sumOfIndividualPeaks))
-                MetricRow(label: "Diversity",
-                          value: String(format: "%.0f%%", profile.diversityFactor * 100),
+                MetricRow(label: "Diversity saving",
+                          value: String(format: "%.0f%%  (%@ avoided)",
+                                        (1 - profile.diversityFactor) * 100,
+                                        btuh(profile.sumOfIndividualPeaks - profile.peakSensible)),
                           tint: .green)
-                Text("Surfaces peak at different hours, so the coincident figure is the largest the sum ever reaches. Opaque assemblies are solved transiently, carrying the lag their mass produces. Equipment above is still sized on the steady-state sensible load, which is the more conservative of the two.")
+                Text("The sensible load above is the coincident peak — the largest the building total ever reaches. Opaque assemblies are solved transiently, so each carries the lag its mass produces. Sizing on the sum of individual surface peaks would describe a building that never exists.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)

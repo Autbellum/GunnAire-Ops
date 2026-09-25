@@ -60,7 +60,11 @@ final class ReportTests: XCTestCase {
         let joined = report().footnotes.joined(separator: " ")
         XCTAssertTrue(joined.contains("NOAA"))
         XCTAssertTrue(joined.contains("not ASHRAE published design conditions"))
-        XCTAssertTrue(joined.contains("Thermal mass and lag are not modelled"))
+        // Thermal mass IS modelled now, so the footnote states the method rather than
+        // disclaiming its absence. The disclaimers that remain must still be present.
+        XCTAssertTrue(joined.contains("solved transiently"))
+        XCTAssertFalse(joined.contains("not modelled"),
+                       "a caveat that no longer applies must not linger in the report")
         XCTAssertTrue(joined.contains("not ACCA-approved"))
     }
 
