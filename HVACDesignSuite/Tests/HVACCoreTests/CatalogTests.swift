@@ -104,9 +104,9 @@ final class EquipmentCatalogTests: XCTestCase {
 
         let components = try XCTUnwrap(first["components"] as? [String: Any])
         XCTAssertNotNil(components["outdoor_unit"] as? String)
-        // Unverified part numbers are null, never invented.
+        // A heat pump takes an air handler and carries no separate coil.
         XCTAssertTrue(components["indoor_coil"] is NSNull)
-        XCTAssertTrue(components["furnace_or_air_handler"] is NSNull)
+        XCTAssertNotNil(components["furnace_or_air_handler"] as? String)
 
         let performance = try XCTUnwrap(first["estimated_performance"] as? [String: Any])
         XCTAssertNotNil(performance["total_cooling_btu"] as? Int)
@@ -141,5 +141,73 @@ extension EquipmentCatalogTests {
         let json = try EquipmentCatalog.json(matched)
         XCTAssertFalse(json.contains("9999999"), "float tail leaked into the payload")
         XCTAssertFalse(json.contains("0000000"), "float tail leaked into the payload")
+    }
+}
+
+extension EquipmentCatalogTests {
+
+    /// Indoor components are tabulated from manufacturer literature, so the capacity each
+    /// one carries must match the system it is matched into.
+    func testHeatPumpGetsAnAirHandlerCarryingTheRightCapacity() {
+        let result = EquipmentCatalog.recommend(
+            load: load(total: 34_000, sensible: 25_000, heating: 50_000))
+        XCTAssertFalse(result.candidates.isEmpty)
+        for candidate in result.candidates {
+            XCTAssertNil(candidate.indoorCoil, "a heat pump air handler carries its own coil")
+            let handler = try? XCTUnwrap(candidate.furnaceOrAirHandler)
+            XCTAssertNotNil(handler)
+            let code = String(format: "%03d", Int(candidate.nominalTons * 12))
+            switch candidate.brand {
+            case .lennox:
+                XCTAssertEqual(handler, "CBA38MV-\(code)-230")
+            case .americanStandard:
+                // GAM5 carries its capacity in thousands of Btu/h.
+                XCTAssertTrue(handler?.contains(String(code.dropFirst())) ?? false,
+                              "\(handler ?? "nil") should carry \(code)")
+            }
+        }
+    }
+
+    /// A cooling-only split pairs with a cased coil for the furnace already on site.
+    ///
+    /// The load is chosen to sit comfortably inside the window: at a nominal SHR of 0.75
+    /// a 2-ton unit offers 18,000 Btu/h sensible and 6,000 latent, and both must cover
+    /// the load independently.
+    func testAirConditionerGetsACoilNotAnAirHandler() {
+        let result = EquipmentCatalog.recommend(
+            load: load(total: 22_000, sensible: 16_500, heating: 30_000), heatPump: false)
+        XCTAssertFalse(result.candidates.isEmpty)
+        for candidate in result.candidates {
+            XCTAssertNotNil(candidate.indoorCoil, "a split AC needs a cased coil")
+            XCTAssertNil(candidate.furnaceOrAirHandler,
+                         "no furnace is selected here; a furnace is sized on the heating load")
+        }
+    }
+
+    /// Lennox coils carry two capacity digits while its outdoor units and air handlers
+    /// carry three. Getting that backwards produces a part number that does not exist.
+    func testLennoxCoilUsesTwoDigitsAndAirHandlerThree() {
+        XCTAssertEqual(EquipmentCatalog.Indoor.lennoxCoil(code: "036"), "CX35-36B-6F")
+        XCTAssertEqual(EquipmentCatalog.Indoor.lennoxAirHandler(code: "036"), "CBA38MV-036-230")
+        XCTAssertEqual(EquipmentCatalog.Indoor.lennoxCoil(code: "060"), "CX35-60D-6F")
+        XCTAssertNil(EquipmentCatalog.Indoor.lennoxCoil(code: "099"))
+    }
+
+    /// American Standard coil numbers are sequence numbers, not capacities, so they are
+    /// matched against the tonnage ranges the product guide publishes.
+    func testAmericanStandardCoilMatchesByPublishedRange() {
+        XCTAssertEqual(EquipmentCatalog.Indoor.americanStandardCoil(tons: 2.0), "4MXCB004AC6HCA1")
+        XCTAssertEqual(EquipmentCatalog.Indoor.americanStandardCoil(tons: 3.0), "4MXCC005AC6HCA1")
+        XCTAssertEqual(EquipmentCatalog.Indoor.americanStandardCoil(tons: 4.0), "4MXCC007AC6HCA1")
+        XCTAssertEqual(EquipmentCatalog.Indoor.americanStandardCoil(tons: 5.0), "4MXCC009AC6HCA1")
+    }
+
+    func testEveryNominalSizeHasIndoorComponentsForBothBrands() {
+        for (code, tons) in EquipmentCatalog.nominalCodes {
+            XCTAssertNotNil(EquipmentCatalog.Indoor.lennoxCoil(code: code), code)
+            XCTAssertNotNil(EquipmentCatalog.Indoor.lennoxAirHandler(code: code), code)
+            XCTAssertNotNil(EquipmentCatalog.Indoor.americanStandardAirHandler(code: code), code)
+            XCTAssertNotNil(EquipmentCatalog.Indoor.americanStandardCoil(tons: tons), code)
+        }
     }
 }

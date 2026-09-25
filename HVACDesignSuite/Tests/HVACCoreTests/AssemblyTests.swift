@@ -3,18 +3,20 @@ import XCTest
 
 final class AssemblyTests: XCTestCase {
 
-    /// Hand-check of the parallel-path method on the most common wall there is.
+    /// Hand-check of the parallel-path method on the most common wall there is, using the
+    /// ASHRAE Chapter 26 design values the library now carries.
     ///
-    /// Cavity path: 0.17 + 0.61 + 0.625 + 10.99 + 0.45 + 0.68 = 13.525
-    /// Framing path: stud replaces the batt — 3.5 × 1.25 = 4.375 — giving 6.91
-    /// U = 0.25·(1/6.91) + 0.75·(1/13.525) = 0.0916
-    func test2x4R13WallMatchesHandCalculation() {
+    /// Cavity path: 0.17 film + 0.61 vinyl + 0.705 OSB (0.5 in. at R-1.41/in.)
+    ///            + 11.655 batt (3.5 in. at R-3.33/in.) + 0.45 gypsum + 0.68 film = 14.27
+    /// Framing path: the stud replaces the batt — 3.5 × 1.25 = 4.375 — giving 6.99
+    /// U = 0.25·(1/6.99) + 0.75·(1/14.27) = 0.0883
+    func test2x4WallMatchesHandCalculation() {
         let wall = AssemblyLibrary.framedWall(
             name: "test", cladding: .vinylSiding, sheathing: .osb, sheathingThickness: 0.5,
             framing: .woodStud2x4at16, cavityInsulation: .fiberglassBatt)
-        XCTAssertEqual(wall.cavityPathResistance, 13.525, accuracy: 0.02)
-        XCTAssertEqual(wall.framingPathResistance, 6.91, accuracy: 0.02)
-        XCTAssertEqual(wall.uValue, 0.0916, accuracy: 0.001)
+        XCTAssertEqual(wall.cavityPathResistance, 14.27, accuracy: 0.02)
+        XCTAssertEqual(wall.framingPathResistance, 6.99, accuracy: 0.02)
+        XCTAssertEqual(wall.uValue, 0.0883, accuracy: 0.001)
     }
 
     /// Conductances add in parallel, resistances do not. Averaging R overstates the wall,
@@ -156,5 +158,43 @@ enum SurfaceRowDefaults {
         if category == .window { return .glazing(.doublePaneLowEArgon, .none) }
         if let first = AssemblyLibrary.assemblies(for: category).first { return .assembly(first) }
         return .manual(rValue: 13, shgc: 0)
+    }
+}
+
+extension AssemblyTests {
+    /// An empty cavity is worse than the wood beside it, so the framing helps rather than
+    /// hurts. Reporting that as "lost to framing" states the opposite of what happened.
+    func testFramingWordingFollowsTheSign() throws {
+        let insulated = try XCTUnwrap(AssemblyLibrary.named("2×6 wall, R-21 batt, vinyl siding"))
+        XCTAssertGreaterThan(insulated.framingPenalty, 0)
+        XCTAssertTrue(try XCTUnwrap(insulated.framingDescription).contains("lost to framing"))
+
+        let empty = try XCTUnwrap(AssemblyLibrary.named("2×4 wall, no insulation (pre-1960)"))
+        XCTAssertLessThan(empty.framingPenalty, 0)
+        XCTAssertTrue(try XCTUnwrap(empty.framingDescription).contains("gained from framing"))
+        XCTAssertFalse(try XCTUnwrap(empty.framingDescription).contains("lost"))
+    }
+
+    /// Batts are bought by rated R. An assembly named for one must deliver it.
+    func testRatedBattAssembliesDeliverTheirNamedRValue() throws {
+        let wall = try XCTUnwrap(AssemblyLibrary.named("2×4 wall, R-13 batt, vinyl siding"))
+        // Cavity path is the batt plus the films, sheathing, cladding and board around it.
+        XCTAssertGreaterThan(wall.nominalR, 13)
+        XCTAssertLessThan(wall.nominalR, 17)
+        // Whole-wall effective R for a 2×4 R-13 wall lands near R-12 in practice.
+        XCTAssertEqual(wall.effectiveR, 11.9, accuracy: 1.0)
+
+        let deep = try XCTUnwrap(AssemblyLibrary.named("2×6 wall, R-21 batt, vinyl siding"))
+        XCTAssertEqual(deep.effectiveR, 17.2, accuracy: 1.2)
+
+        let attic = try XCTUnwrap(AssemblyLibrary.named("Vented attic, R-38 blown cellulose"))
+        XCTAssertEqual(attic.nominalR, 39.9, accuracy: 1.0)
+    }
+
+    /// Cross-check against the values in Eric's own MJ8 workbook, which were taken from
+    /// the printed Manual J tables.
+    func testAgreesWithTheWorkbookValues() throws {
+        let attic = try XCTUnwrap(AssemblyLibrary.named("Vented attic, R-30 blown cellulose"))
+        XCTAssertEqual(attic.uValue, 0.032, accuracy: 0.002, "workbook 16B-30 gives U 0.032")
     }
 }

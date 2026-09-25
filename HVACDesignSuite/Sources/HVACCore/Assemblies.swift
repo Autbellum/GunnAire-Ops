@@ -11,8 +11,11 @@ import Foundation
 /// reproducing a copyrighted table of pre-computed construction numbers. That is also why
 /// it is not limited to the constructions that happen to appear in the table.
 ///
-/// **Verify before relying on a submittal.** These are standard published figures, but
-/// they have not been checked against a current edition in this codebase.
+/// **Verified against ASHRAE Handbook—Fundamentals Chapter 26, Table 4** ("Typical Thermal
+/// Properties of Common Building and Insulating Materials: Design Values"), as published
+/// by ASHRAE. Where the table gives a range, the design value used here sits inside it and
+/// the choice is noted. Where the table gives a conductivity rather than a resistance, the
+/// resistance per inch is its reciprocal.
 public struct Material: Identifiable, Codable, Sendable, Equatable, Hashable {
     public var id: String { name }
     public let name: String
@@ -200,8 +203,22 @@ public struct Assembly: Identifiable, Codable, Sendable, Equatable {
 
     /// How much of the labelled R-value the framing takes away, as a fraction.
     /// Worth showing: on a 2×4 wall it is routinely a fifth of the insulation.
+    ///
+    /// Negative where the framing *outperforms* the cavity, which is the case whenever
+    /// the cavity is empty — a wood stud beats an air gap. That is a real result, not an
+    /// error, so it is reported rather than clamped, and the wording below changes with
+    /// the sign.
     public var framingPenalty: Double {
         nominalR > 0 ? 1 - (effectiveR / nominalR) : 0
+    }
+
+    /// One phrase describing what the framing does to this assembly.
+    public var framingDescription: String? {
+        let magnitude = abs(framingPenalty)
+        guard magnitude >= 0.01 else { return nil }
+        return framingPenalty > 0
+            ? String(format: "%.0f%% lost to framing", magnitude * 100)
+            : String(format: "%.0f%% gained from framing (the studs beat the empty cavity)", magnitude * 100)
     }
 
     /// Cooling equivalent temperature difference for an opaque assembly, °F.
@@ -229,40 +246,40 @@ public extension Material {
     static let atticAirSpace = Material(name: "Vented attic air space", fixedResistance: 0.80, category: .airFilm)
 
     // Framing.
-    static let softwoodFraming = Material(name: "Softwood framing", resistancePerInch: 1.25, category: .framing, density: 32, specificHeat: 0.33)
+    static let softwoodFraming = Material(name: "Softwood framing", resistancePerInch: 1.25, category: .framing, density: 28, specificHeat: 0.39)
 
     // Cladding.
     static let vinylSiding = Material(name: "Vinyl siding", fixedResistance: 0.61, category: .cladding, density: 0, specificHeat: 0.2, nominalThicknessInches: 0.05)
     static let woodBevelSiding = Material(name: "Wood bevel siding", fixedResistance: 0.80, category: .cladding, density: 32, specificHeat: 0.33, nominalThicknessInches: 0.75)
-    static let fiberCementSiding = Material(name: "Fibre cement siding", fixedResistance: 0.21, category: .cladding, density: 90, specificHeat: 0.24, nominalThicknessInches: 0.31)
-    static let brickVeneer = Material(name: "Brick veneer (4\")", fixedResistance: 0.44, category: .masonry, density: 120, specificHeat: 0.19, nominalThicknessInches: 3.5)
-    static let stucco = Material(name: "Stucco", resistancePerInch: 0.20, category: .cladding, density: 116, specificHeat: 0.2)
+    static let fiberCementSiding = Material(name: "Fibre cement siding", fixedResistance: 0.18, category: .cladding, density: 88, specificHeat: 0.2, nominalThicknessInches: 0.31)
+    static let brickVeneer = Material(name: "Brick veneer (4\")", fixedResistance: 0.43, category: .masonry, density: 150, specificHeat: 0.19, nominalThicknessInches: 4.0)
+    static let stucco = Material(name: "Stucco", resistancePerInch: 0.103, category: .cladding, density: 120, specificHeat: 0.2)
 
     // Sheathing.
-    static let osb = Material(name: "OSB / plywood", resistancePerInch: 1.25, category: .sheathing, density: 41, specificHeat: 0.45)
-    static let expandedPolystyrene = Material(name: "EPS rigid foam", resistancePerInch: 3.85, category: .sheathing, density: 1.8, specificHeat: 0.29)
-    static let extrudedPolystyrene = Material(name: "XPS rigid foam", resistancePerInch: 5.0, category: .sheathing, density: 2.2, specificHeat: 0.29)
+    static let osb = Material(name: "OSB / plywood", resistancePerInch: 1.41, category: .sheathing, density: 41, specificHeat: 0.45)
+    static let expandedPolystyrene = Material(name: "EPS rigid foam", resistancePerInch: 3.85, category: .sheathing, density: 1.25, specificHeat: 0.35)
+    static let extrudedPolystyrene = Material(name: "XPS rigid foam", resistancePerInch: 5.0, category: .sheathing, density: 2.0, specificHeat: 0.35)
     static let polyisocyanurate = Material(name: "Polyisocyanurate", resistancePerInch: 6.0, category: .sheathing, density: 2.0, specificHeat: 0.22)
     static let fiberboardSheathing = Material(name: "Fibreboard sheathing", resistancePerInch: 2.64, category: .sheathing, density: 18, specificHeat: 0.31)
 
     // Insulation.
-    static let fiberglassBatt = Material(name: "Fibreglass batt", resistancePerInch: 3.14, category: .insulation, density: 0.8, specificHeat: 0.2)
+    static let fiberglassBatt = Material(name: "Fibreglass batt", resistancePerInch: 3.33, category: .insulation, density: 0.75, specificHeat: 0.2)
     static let mineralWoolBatt = Material(name: "Mineral wool batt", resistancePerInch: 3.70, category: .insulation, density: 2.5, specificHeat: 0.2)
-    static let blownCellulose = Material(name: "Blown cellulose", resistancePerInch: 3.50, category: .insulation, density: 2.2, specificHeat: 0.33)
-    static let blownFiberglass = Material(name: "Blown fibreglass", resistancePerInch: 2.80, category: .insulation, density: 0.6, specificHeat: 0.2)
-    static let openCellSprayFoam = Material(name: "Open-cell spray foam", resistancePerInch: 3.70, category: .insulation, density: 0.5, specificHeat: 0.35)
+    static let blownCellulose = Material(name: "Blown cellulose", resistancePerInch: 3.5, category: .insulation, density: 2.5, specificHeat: 0.45)
+    static let blownFiberglass = Material(name: "Blown fibreglass", resistancePerInch: 2.5, category: .insulation, density: 0.6, specificHeat: 0.2)
+    static let openCellSprayFoam = Material(name: "Open-cell spray foam", resistancePerInch: 3.45, category: .insulation, density: 0.45, specificHeat: 0.35)
     static let closedCellSprayFoam = Material(name: "Closed-cell spray foam", resistancePerInch: 6.50, category: .insulation, density: 2.0, specificHeat: 0.35)
 
     // Interior finish.
-    static let gypsumBoardHalf = Material(name: "Gypsum board ½\"", fixedResistance: 0.45, category: .interiorFinish, density: 50, specificHeat: 0.26, nominalThicknessInches: 0.5)
-    static let gypsumBoardFiveEighths = Material(name: "Gypsum board ⅝\"", fixedResistance: 0.56, category: .interiorFinish, density: 50, specificHeat: 0.26, nominalThicknessInches: 0.625)
+    static let gypsumBoardHalf = Material(name: "Gypsum board ½\"", fixedResistance: 0.45, category: .interiorFinish, density: 40, specificHeat: 0.27, nominalThicknessInches: 0.5)
+    static let gypsumBoardFiveEighths = Material(name: "Gypsum board ⅝\"", fixedResistance: 0.57, category: .interiorFinish, density: 40, specificHeat: 0.27, nominalThicknessInches: 0.625)
 
     // Masonry and floors.
-    static let concreteBlock8 = Material(name: "Concrete block 8\"", fixedResistance: 1.11, category: .masonry, density: 85, specificHeat: 0.21, nominalThicknessInches: 7.625)
+    static let concreteBlock8 = Material(name: "Concrete block 8\"", fixedResistance: 1.11, category: .masonry, density: 138, specificHeat: 0.22, nominalThicknessInches: 7.625)
     static let pouredConcrete = Material(name: "Poured concrete", resistancePerInch: 0.08, category: .masonry, density: 140, specificHeat: 0.2)
-    static let plywoodSubfloor = Material(name: "Plywood subfloor ¾\"", fixedResistance: 0.94, category: .flooring, density: 34, specificHeat: 0.45, nominalThicknessInches: 0.75)
-    static let carpetAndPad = Material(name: "Carpet and pad", fixedResistance: 2.08, category: .flooring, density: 10, specificHeat: 0.34, nominalThicknessInches: 0.5)
-    static let hardwoodFlooring = Material(name: "Hardwood ¾\"", fixedResistance: 0.68, category: .flooring, density: 45, specificHeat: 0.39, nominalThicknessInches: 0.75)
+    static let plywoodSubfloor = Material(name: "Plywood subfloor ¾\"", fixedResistance: 1.08, category: .flooring, density: 28, specificHeat: 0.45, nominalThicknessInches: 0.75)
+    static let carpetAndPad = Material(name: "Carpet and pad", fixedResistance: 2.38, category: .flooring, density: 7, specificHeat: 0.34, nominalThicknessInches: 0.5)
+    static let hardwoodFlooring = Material(name: "Hardwood ¾\"", fixedResistance: 0.64, category: .flooring, density: 44, specificHeat: 0.39, nominalThicknessInches: 0.75)
 
     // Roofing.
     static let asphaltShingles = Material(name: "Asphalt shingles", fixedResistance: 0.44, category: .roofing, density: 70, specificHeat: 0.3, nominalThicknessInches: 0.25)
@@ -285,18 +302,36 @@ public extension Material {
 
 public enum AssemblyLibrary {
 
+    /// A cavity insulation sold by its rated R rather than by thickness.
+    ///
+    /// Batts are specified and bought as "R-13", not as so many inches of a material with
+    /// a conductivity. An R-13 batt and an R-11 batt both fill a 3.5 in. cavity; they
+    /// differ in density, not in depth. Deriving cavity R from a single conductivity
+    /// times the stud depth therefore gets the product wrong — it turned an assembly
+    /// named "R-13 batt" into R-11.7 — so the rated value is the input.
+    public static func ratedBatt(_ ratedR: Double, density: Double = 0.9) -> Material {
+        Material(name: String(format: "R-%.0f batt", ratedR), fixedResistance: ratedR,
+                 category: .insulation, density: density, specificHeat: 0.20)
+    }
+
     /// Builds a standard framed wall from its parts, so a new assembly is a choice of
     /// components rather than a table lookup.
+    ///
+    /// `cavityRatedR` fills the stud cavity with insulation of that rated value. Pass
+    /// `cavityInsulation` instead where the cavity is filled with a material specified by
+    /// thickness, such as spray foam.
     public static func framedWall(name: String, cladding: Material, sheathing: Material,
                                   sheathingThickness: Double, framing: Framing,
-                                  cavityInsulation: Material,
+                                  cavityInsulation: Material? = nil,
+                                  cavityRatedR: Double? = nil,
                                   interior: Material = .gypsumBoardHalf,
                                   solarAbsorptance: Double = 0.70) -> Assembly {
-        Assembly(name: name, category: .wall, layers: [
+        let cavity = cavityRatedR.map { ratedBatt($0) } ?? cavityInsulation ?? .fiberglassBatt
+        return Assembly(name: name, category: .wall, layers: [
             Layer(material: .outsideAirFilmWinter, thicknessInches: 0),
             Layer(material: cladding, thicknessInches: 1),
             Layer(material: sheathing, thicknessInches: sheathingThickness),
-            Layer(material: cavityInsulation, thicknessInches: framing.depthInches, isCavity: true),
+            Layer(material: cavity, thicknessInches: framing.depthInches, isCavity: true),
             Layer(material: interior, thicknessInches: 0.5),
             Layer(material: .insideAirFilmVertical, thicknessInches: 0)
         ], framing: framing, solarAbsorptance: solarAbsorptance)
@@ -304,23 +339,27 @@ public enum AssemblyLibrary {
 
     /// A vented attic ceiling: blown insulation on the flat, no framing penalty worth
     /// modelling because the insulation is continuous over the joists.
-    public static func atticCeiling(name: String, insulation: Material,
-                                    thicknessInches: Double) -> Assembly {
-        Assembly(name: name, category: .roof, layers: [
+    public static func atticCeiling(name: String, insulation: Material? = nil,
+                                    thicknessInches: Double = 0,
+                                    ratedR: Double? = nil) -> Assembly {
+        let blanket = ratedR.map { ratedBatt($0, density: 1.6) } ?? insulation ?? .blownCellulose
+        return Assembly(name: name, category: .roof, layers: [
             Layer(material: .atticAirSpace, thicknessInches: 0),
-            Layer(material: insulation, thicknessInches: thicknessInches),
+            Layer(material: blanket, thicknessInches: thicknessInches),
             Layer(material: .gypsumBoardHalf, thicknessInches: 0.5),
             Layer(material: .insideAirFilmHorizontal, thicknessInches: 0)
         ], framing: .none, solarAbsorptance: 0.85)
     }
 
     /// A floor over an unconditioned crawl space or basement — the Piedmont default.
-    public static func framedFloor(name: String, insulation: Material,
-                                   thicknessInches: Double,
+    public static func framedFloor(name: String, insulation: Material? = nil,
+                                   thicknessInches: Double = 0,
+                                   ratedR: Double? = nil,
                                    finish: Material = .carpetAndPad) -> Assembly {
-        Assembly(name: name, category: .floor, layers: [
+        let cavity = ratedR.map { ratedBatt($0) } ?? insulation ?? .fiberglassBatt
+        return Assembly(name: name, category: .floor, layers: [
             Layer(material: .atticAirSpace, thicknessInches: 0),
-            Layer(material: insulation, thicknessInches: thicknessInches, isCavity: true),
+            Layer(material: cavity, thicknessInches: thicknessInches, isCavity: true),
             Layer(material: .plywoodSubfloor, thicknessInches: 0.75),
             Layer(material: finish, thicknessInches: 0),
             Layer(material: .insideAirFilmHorizontal, thicknessInches: 0)
@@ -358,28 +397,24 @@ public enum AssemblyLibrary {
     public static let standard: [Assembly] = [
         framedWall(name: "2×4 wall, R-13 batt, vinyl siding",
                    cladding: .vinylSiding, sheathing: .osb, sheathingThickness: 0.5,
-                   framing: .woodStud2x4at16, cavityInsulation: .fiberglassBatt),
+                   framing: .woodStud2x4at16, cavityRatedR: 13),
         framedWall(name: "2×4 wall, R-13 batt, brick veneer",
                    cladding: .brickVeneer, sheathing: .osb, sheathingThickness: 0.5,
-                   framing: .woodStud2x4at16, cavityInsulation: .fiberglassBatt,
+                   framing: .woodStud2x4at16, cavityRatedR: 13,
                    solarAbsorptance: 0.60),
         framedWall(name: "2×6 wall, R-21 batt, vinyl siding",
                    cladding: .vinylSiding, sheathing: .osb, sheathingThickness: 0.5,
-                   framing: .woodStud2x6at16, cavityInsulation: .fiberglassBatt),
+                   framing: .woodStud2x6at16, cavityRatedR: 21),
         framedWall(name: "2×6 wall, R-21 batt, 1\" XPS, fibre cement",
                    cladding: .fiberCementSiding, sheathing: .extrudedPolystyrene, sheathingThickness: 1.0,
-                   framing: .woodStud2x6at16, cavityInsulation: .fiberglassBatt),
+                   framing: .woodStud2x6at16, cavityRatedR: 21),
         framedWall(name: "2×4 wall, closed-cell foam, vinyl siding",
                    cladding: .vinylSiding, sheathing: .osb, sheathingThickness: 0.5,
                    framing: .woodStud2x4at16, cavityInsulation: .closedCellSprayFoam),
-        atticCeiling(name: "Vented attic, R-30 blown cellulose",
-                     insulation: .blownCellulose, thicknessInches: 8.6),
-        atticCeiling(name: "Vented attic, R-38 blown cellulose",
-                     insulation: .blownCellulose, thicknessInches: 10.9),
-        atticCeiling(name: "Vented attic, R-49 blown cellulose",
-                     insulation: .blownCellulose, thicknessInches: 14.0),
-        atticCeiling(name: "Vented attic, R-19 blown fibreglass (older home)",
-                     insulation: .blownFiberglass, thicknessInches: 6.8),
+        atticCeiling(name: "Vented attic, R-30 blown cellulose", ratedR: 30),
+        atticCeiling(name: "Vented attic, R-38 blown cellulose", ratedR: 38),
+        atticCeiling(name: "Vented attic, R-49 blown cellulose", ratedR: 49),
+        atticCeiling(name: "Vented attic, R-19 blown fibreglass (older home)", ratedR: 19),
         framedWall(name: "2×4 wall, no insulation (pre-1960)",
                    cladding: .woodBevelSiding, sheathing: .fiberboardSheathing,
                    sheathingThickness: 0.5, framing: .woodStud2x4at16,
@@ -390,10 +425,8 @@ public enum AssemblyLibrary {
                    framing: Framing(name: "1×2 furring @ 16\" o.c.", depthInches: 1.5,
                                     framingFactor: 0.10, material: .softwoodFraming),
                    cavityInsulation: .extrudedPolystyrene),
-        framedFloor(name: "Floor over crawl space, R-19 batt",
-                    insulation: .fiberglassBatt, thicknessInches: 6.0),
-        framedFloor(name: "Floor over crawl space, R-30 batt",
-                    insulation: .fiberglassBatt, thicknessInches: 9.25),
+        framedFloor(name: "Floor over crawl space, R-19 batt", thicknessInches: 9.25, ratedR: 19),
+        framedFloor(name: "Floor over crawl space, R-30 batt", thicknessInches: 9.25, ratedR: 30),
         framedFloor(name: "Floor over crawl space, uninsulated",
                     insulation: Material(name: "Empty joist bay", resistancePerInch: 0.28,
                                          category: .insulation),

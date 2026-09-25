@@ -39,6 +39,58 @@ public enum EquipmentCatalog {
         }
     }
 
+    /// Indoor components, verified against manufacturer literature.
+    ///
+    /// The encodings differ within a single brand, which is why these are tabulated from
+    /// the bulletins rather than inferred from the outdoor unit. Lennox outdoor units and
+    /// air handlers carry a three-digit capacity (`ML14XP1-036-230`, `CBA38MV-036-230`)
+    /// while its coils carry two (`CX35-36B-6F`). American Standard coils carry no
+    /// capacity at all — `4MXCB006AC6HCA1` is a sequence number — so they are matched by
+    /// the tonnage range the product guide publishes for each.
+    enum Indoor {
+        /// Lennox CX35 cased upflow coil. Cabinet letter must match the furnace width;
+        /// the wider option is offered, which is the safer default for airflow.
+        static func lennoxCoil(code: String) -> String? {
+            switch code {
+            case "018", "024": "CX35-24B-6F"
+            case "030": "CX35-30B-6F"
+            case "036": "CX35-36B-6F"
+            case "042", "048": "CX35-48C-6F"
+            case "060": "CX35-60D-6F"
+            default: nil
+            }
+        }
+
+        static func lennoxAirHandler(code: String) -> String? {
+            ["018", "024", "030", "036", "042", "048", "060"].contains(code)
+                ? "CBA38MV-\(code)-230" : nil
+        }
+
+        /// American Standard 4MXC, matched by published tonnage range.
+        static func americanStandardCoil(tons: Double) -> String? {
+            switch tons {
+            case ..<2.5: "4MXCB004AC6HCA1"     // 1.5–3.0 ton
+            case 2.5..<3.5: "4MXCC005AC6HCA1"  // 2.5–3.0 ton
+            case 3.5..<4.5: "4MXCC007AC6HCA1"  // 3.0–4.0 ton
+            default: "4MXCC009AC6HCA1"          // 3.5–5.0 ton
+            }
+        }
+
+        /// American Standard GAM5, whose model carries its capacity in Btu/h.
+        static func americanStandardAirHandler(code: String) -> String? {
+            switch code {
+            case "018": "GAM5B0A18M11EA"
+            case "024": "GAM5B0A24M21EA"
+            case "030": "GAM5B0B30M21EA"
+            case "036": "GAM5B0B36M31EA"
+            case "042": "GAM5B0C42M31EA"
+            case "048": "GAM5B0C48M41EA"
+            case "060": "GAM5B0C60M51EA"
+            default: nil
+            }
+        }
+    }
+
     /// One matched system.
     public struct Candidate: Sendable, Equatable {
         public let brand: Brand
@@ -95,7 +147,8 @@ public enum EquipmentCatalog {
                    heatingDominant ? "heating-dominant" : "cooling-dominant",
                    floor * 100, ceiling * 100, totalLoad),
             "Capacities are nominal (tons × 12,000), not certified ratings. Select against the manufacturer's expanded performance data at the design condition before ordering.",
-            "Indoor coil and air-handler size codes are not emitted: their encoding could not be verified, and a fabricated part number would be ordered."
+            "Indoor components are matched from manufacturer literature: Lennox CX35 coils and CBA38MV air handlers, American Standard 4MXC coils by published tonnage range and GAM5 air handlers. Confirm the cabinet width against the furnace or closet before ordering.",
+            "A cooling-only split is paired with a cased coil for the existing furnace; a heat pump is paired with an air handler, which carries its own coil. No furnace is selected here — a furnace is sized on the heating load, not the cooling load."
         ]
 
         for (code, tons) in nominalCodes {
@@ -119,13 +172,28 @@ public enum EquipmentCatalog {
             }
 
             for brand in brands {
+                // A heat pump takes an air handler, which contains its own coil. A cooling
+                // -only split pairs a cased coil with the furnace already on site.
+                let coil: String? = heatPump ? nil : {
+                    switch brand {
+                    case .lennox: Indoor.lennoxCoil(code: code)
+                    case .americanStandard: Indoor.americanStandardCoil(tons: tons)
+                    }
+                }()
+                let airHandler: String? = heatPump ? {
+                    switch brand {
+                    case .lennox: Indoor.lennoxAirHandler(code: code)
+                    case .americanStandard: Indoor.americanStandardAirHandler(code: code)
+                    }
+                }() : nil
+
                 for model in brand.outdoorUnit(code: code, heatPump: heatPump) {
                     candidates.append(Candidate(
                         brand: brand,
                         systemType: heatPump ? "Heat Pump" : "Split System AC",
                         outdoorUnit: model,
-                        indoorCoil: nil,
-                        furnaceOrAirHandler: nil,
+                        indoorCoil: coil,
+                        furnaceOrAirHandler: airHandler,
                         nominalTons: tons,
                         totalCoolingBtu: Int(nominalTotal.rounded()),
                         sensibleCoolingBtu: Int(sensible.rounded()),

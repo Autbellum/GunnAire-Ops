@@ -303,8 +303,8 @@ struct LibraryBrowser: View {
                                     Text(String(format: "U %.3f", assembly.uValue))
                                     Text(String(format: "nominal R-%.0f", assembly.nominalR))
                                     Text(String(format: "effective R-%.1f", assembly.effectiveR))
-                                    if assembly.framingPenalty > 0.01 {
-                                        Text(String(format: "%.0f%% lost to framing", assembly.framingPenalty * 100))
+                                    if let framing = assembly.framingDescription {
+                                        Text(framing)
                                             .foregroundStyle(assembly.framingPenalty > 0.3 ? .orange : .secondary)
                                     }
                                 }

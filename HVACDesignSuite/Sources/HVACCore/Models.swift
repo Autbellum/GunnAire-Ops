@@ -159,8 +159,9 @@ public enum Construction: Codable, Sendable, Equatable {
     public var basis: String {
         switch self {
         case .assembly(let assembly):
-            String(format: "Computed from layers — nominal R-%.0f, effective R-%.1f, %.0f%% lost to framing",
-                   assembly.nominalR, assembly.effectiveR, assembly.framingPenalty * 100)
+            String(format: "Computed from layers — nominal R-%.0f, effective R-%.1f%@",
+                   assembly.nominalR, assembly.effectiveR,
+                   assembly.framingDescription.map { ", " + $0 } ?? "")
         case .glazing(let glazing, let shading):
             String(format: "%@ — U %.2f, SHGC %.2f%@",
                    glazing.isCertified ? "NFRC certified" : "Typical for construction",

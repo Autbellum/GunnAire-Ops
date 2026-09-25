@@ -118,7 +118,12 @@ final class TransientConductionTests: XCTestCase {
         let fine = try TransientConduction.solve(assembly: assembly, solAir: solAir,
                                                  roomF: 75, stepsPerHour: 16)
         XCTAssertEqual(coarse.peakFlux, fine.peakFlux, accuracy: abs(fine.peakFlux) * 0.05)
-        XCTAssertEqual(coarse.peakHour, fine.peakHour)
+        // Hours are cyclic. A heavy wall can peak either side of midnight, and 23 and 0
+        // are adjacent, not twenty-three hours apart.
+        var separation = abs(coarse.peakHour - fine.peakHour)
+        if separation > 12 { separation = 24 - separation }
+        XCTAssertLessThanOrEqual(separation, 1,
+                                 "peak moved from \(fine.peakHour) to \(coarse.peakHour)")
     }
 
     func testMalformedDesignDayIsRefused() {
