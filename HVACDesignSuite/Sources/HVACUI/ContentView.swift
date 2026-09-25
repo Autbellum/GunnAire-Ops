@@ -10,10 +10,21 @@ import HVACCore
 /// The arrangement is deliberate: a designer changes one number on the left and watches
 /// the consequence on the right without losing their place in the middle.
 public struct ContentView: View {
-    @State private var engine = DesignEngine()
+    /// The document's project. The engine works on its own copy and publishes back, so a
+    /// recalculation never writes through a binding mid-edit.
+    @Binding private var project: Project
+    @State private var engine: DesignEngine
     @State private var centreSelection: CentrePanel = .spaces
 
-    public init() {}
+    public init(project: Binding<Project>) {
+        self._project = project
+        self._engine = State(initialValue: DesignEngine(project: project.wrappedValue))
+    }
+
+    /// Convenience for a window with no backing file.
+    public init() {
+        self.init(project: .constant(.sample))
+    }
 
     public var body: some View {
         NavigationSplitView {
@@ -28,6 +39,16 @@ public struct ContentView: View {
         }
         .navigationTitle(engine.project.name)
         .frame(minWidth: 1120, minHeight: 700)
+        // Push edits back to the document so Save, autosave, versions and the dirty dot
+        // all work without the engine knowing a file exists.
+        .onChange(of: engine.project) { _, updated in
+            if project != updated { project = updated }
+        }
+        // And pick up a change that arrived from outside the engine — a revert, or an
+        // undo through the document's own stack.
+        .onChange(of: project) { _, updated in
+            if engine.project != updated { engine.project = updated }
+        }
     }
 }
 
