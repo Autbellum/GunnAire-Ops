@@ -285,16 +285,31 @@ public enum DuctDesigner {
                     diameter = try self.diameter(cfm: cfm, targetFrictionRate: rate,
                                                  roughnessFeet: run.roughnessFeet)
                     nominal = nominalRoundSizes.first { $0 >= diameter } ?? diameter.rounded(.up)
-                    let area = Double.pi * pow(nominal / 12, 2) / 4
-                    velocity = cfm / area
+
+                    // Friction rate sets the size; the velocity limit caps it. Manual D
+                    // applies both, and where they disagree the quieter one wins — a run
+                    // sized purely on friction can land well over the noise threshold at
+                    // the airflow it actually carries. Step up until it is within limit.
+                    let limit = run.role.maximumVelocityFPM
+                    let velocityAt: (Double) -> Double = { size in
+                        cfm / (Double.pi * pow(size / 12, 2) / 4)
+                    }
+                    if velocityAt(nominal) > limit {
+                        if let quieter = nominalRoundSizes.first(where: { $0 >= nominal && velocityAt($0) <= limit }) {
+                            warnings.append(String(format: "Upsized from %.0f in. to %.0f in.: the friction rate alone would have run %.0f FPM, over the %.0f FPM limit for a %@.",
+                                                   nominal, quieter, velocityAt(nominal), limit,
+                                                   run.role.rawValue.lowercased()))
+                            nominal = quieter
+                        } else {
+                            warnings.append(String(format: "%.0f FPM exceeds the %.0f FPM guideline for a %@ and no larger stock size is available; split the run.",
+                                                   velocityAt(nominal), limit, run.role.rawValue.lowercased()))
+                        }
+                    }
+
+                    velocity = velocityAt(nominal)
                     actual = (try? frictionRate(cfm: cfm, diameterInches: nominal,
                                                 roughnessFeet: run.roughnessFeet)) ?? 0
                     options = rectangularOptions(equivalentTo: nominal)
-
-                    if velocity > run.role.maximumVelocityFPM {
-                        warnings.append(String(format: "%.0f FPM exceeds the %.0f FPM guideline for a %@; this run will be audible.",
-                                               velocity, run.role.maximumVelocityFPM, run.role.rawValue.lowercased()))
-                    }
                 } catch {
                     warnings.append(error.localizedDescription)
                 }

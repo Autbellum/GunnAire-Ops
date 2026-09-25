@@ -57,6 +57,7 @@ public enum CentrePanel: String, CaseIterable, Identifiable {
     case equipment = "Equipment"
     case ducts = "Ducts"
     case detail = "Load Detail"
+    case library = "Library"
     public var id: String { rawValue }
 
     var symbol: String {
@@ -65,6 +66,7 @@ public enum CentrePanel: String, CaseIterable, Identifiable {
         case .equipment: "wind.snow"
         case .ducts: "pipe.and.drop"
         case .detail: "list.bullet.rectangle"
+        case .library: "books.vertical"
         }
     }
 }

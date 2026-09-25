@@ -116,6 +116,61 @@ public enum Orientation: String, Codable, Sendable, CaseIterable, Identifiable {
 
 }
 
+/// How a surface is built.
+///
+/// A surface no longer carries a bare R-value typed in from a book. It names a
+/// construction, and the U-value follows from it. `manual` remains for the case where an
+/// engineer genuinely has a certified figure the library does not cover — but it is the
+/// exception, not the way the tool is meant to be used.
+public enum Construction: Codable, Sendable, Equatable {
+    case assembly(Assembly)
+    case glazing(GlazingType, Shading)
+    case manual(rValue: Double, shgc: Double)
+
+    public var uValue: Double {
+        switch self {
+        case .assembly(let assembly): assembly.uValue
+        case .glazing(let glazing, _): glazing.uFactor
+        case .manual(let r, _): r > 0 ? 1 / r : 0
+        }
+    }
+
+    public var rValue: Double { uValue > 0 ? 1 / uValue : 0 }
+
+    /// Solar gain admitted, after shading. Opaque construction admits none.
+    public var solarHeatGainCoefficient: Double {
+        switch self {
+        case .assembly: 0
+        case .glazing(let glazing, let shading): glazing.effectiveSHGC(shading: shading)
+        case .manual(_, let shgc): shgc
+        }
+    }
+
+    public var name: String {
+        switch self {
+        case .assembly(let assembly): assembly.name
+        case .glazing(let glazing, let shading):
+            shading.factor < 1 ? "\(glazing.name) + \(shading.name.lowercased())" : glazing.name
+        case .manual: "Entered by hand"
+        }
+    }
+
+    /// One line describing where the numbers came from, for the load detail.
+    public var basis: String {
+        switch self {
+        case .assembly(let assembly):
+            String(format: "Computed from layers — nominal R-%.0f, effective R-%.1f, %.0f%% lost to framing",
+                   assembly.nominalR, assembly.effectiveR, assembly.framingPenalty * 100)
+        case .glazing(let glazing, let shading):
+            String(format: "%@ — U %.2f, SHGC %.2f%@",
+                   glazing.isCertified ? "NFRC certified" : "Typical for construction",
+                   glazing.uFactor, glazing.solarHeatGainCoefficient,
+                   shading.factor < 1 ? String(format: ", shaded to %.2f", glazing.effectiveSHGC(shading: shading)) : "")
+        case .manual: "Entered by hand"
+        }
+    }
+}
+
 /// One envelope element.
 ///
 /// Stored as a value type: copying a `Zone` copies its surfaces, so nothing in the
@@ -127,34 +182,41 @@ public struct Surface: Identifiable, Codable, Sendable, Equatable {
     public var name: String
     public var category: SurfaceCategory
     public var areaSquareFeet: Double
-    /// Thermal resistance, h·ft²·°F/Btu. U is its reciprocal.
-    public var rValue: Double
+    public var construction: Construction
     public var orientation: Orientation
-    /// Fraction of solar gain admitted, combining glazing SHGC with interior shading.
-    public var solarHeatGainCoefficient: Double
     /// Optional cooling equivalent temperature difference, °F.
     ///
     /// Plain ΔT understates a sunlit roof badly, because it ignores the sol-air rise of a
-    /// dark surface under peak irradiance. Manual J handles this with tabulated
-    /// equivalent differences. Setting this overrides the plain ΔT for cooling only.
+    /// dark surface under peak irradiance. Setting this overrides plain ΔT for cooling.
     public var coolingEquivalentDeltaTF: Double?
 
+    public init(id: UUID = UUID(), name: String, category: SurfaceCategory,
+                areaSquareFeet: Double, construction: Construction,
+                orientation: Orientation = .north,
+                coolingEquivalentDeltaTF: Double? = nil) {
+        self.id = id; self.name = name; self.category = category
+        self.areaSquareFeet = areaSquareFeet; self.construction = construction
+        self.orientation = orientation
+        self.coolingEquivalentDeltaTF = coolingEquivalentDeltaTF
+    }
+
+    /// Kept so an engineer with a certified figure, or an older saved file, still works.
     public init(id: UUID = UUID(), name: String, category: SurfaceCategory,
                 areaSquareFeet: Double, rValue: Double,
                 orientation: Orientation = .north,
                 solarHeatGainCoefficient: Double = 0.30,
                 coolingEquivalentDeltaTF: Double? = nil) {
-        self.id = id; self.name = name; self.category = category
-        self.areaSquareFeet = areaSquareFeet; self.rValue = rValue
-        self.orientation = orientation
-        self.solarHeatGainCoefficient = solarHeatGainCoefficient
-        self.coolingEquivalentDeltaTF = coolingEquivalentDeltaTF
+        self.init(id: id, name: name, category: category, areaSquareFeet: areaSquareFeet,
+                  construction: .manual(rValue: rValue, shgc: solarHeatGainCoefficient),
+                  orientation: orientation, coolingEquivalentDeltaTF: coolingEquivalentDeltaTF)
     }
 
     /// U = 1 / R, Btu/(h·ft²·°F).
-    public var uValue: Double { rValue > 0 ? 1 / rValue : 0 }
+    public var uValue: Double { construction.uValue }
+    public var rValue: Double { construction.rValue }
+    public var solarHeatGainCoefficient: Double { construction.solarHeatGainCoefficient }
 
-    public var isValid: Bool { areaSquareFeet > 0 && rValue > 0 }
+    public var isValid: Bool { areaSquareFeet > 0 && uValue > 0 }
 }
 
 // MARK: - Internal gains

@@ -566,16 +566,19 @@ final class DuctDesignTests: XCTestCase {
                                                        roughnessFeet: 0.0003))
     }
 
-    func testHighVelocityBranchIsFlagged() {
+    /// A high friction rate would force a small, fast duct. The sizer must upsize to the
+    /// velocity limit and say so, rather than hand over an undersized run with a warning
+    /// attached — a warning is not a duct size.
+    func testHighFrictionRateUpsizesRatherThanLeavingItFast() {
         let zoneID = UUID()
         let run = DuctRun(name: "Branch", role: .supplyBranch, physicalLengthFeet: 20,
                           servingZoneID: zoneID)
         let airflow = ZoneAirflow(id: UUID(), zoneID: zoneID, zoneName: "Z",
                                   coolingCFM: 900, heatingCFM: 0, designCFM: 900,
                                   sensibleLoadFraction: 1)
-        // A high friction rate forces a small duct and therefore a fast one.
         let sized = DuctDesigner.size(runs: [run], airflows: [airflow], systemCFM: 900, frictionRate: 0.6)
-        XCTAssertTrue(sized[0].warnings.contains { $0.contains("audible") })
+        XCTAssertLessThanOrEqual(sized[0].velocityFPM, run.role.maximumVelocityFPM)
+        XCTAssertTrue(sized[0].warnings.contains { $0.contains("Upsized") }, "\(sized[0].warnings)")
     }
 }
 
@@ -642,5 +645,25 @@ final class DesignEngineTests: XCTestCase {
         let altitude = engine.load?.coolingSensibleBtuh ?? 0
         // Thinner air carries less heat per CFM, so the infiltration term falls.
         XCTAssertLessThan(altitude, seaLevel)
+    }
+}
+
+extension DuctDesignTests {
+    /// Friction rate sets the size, the velocity limit caps it. A branch sized purely on
+    /// friction can land over the noise threshold at the airflow it carries, so the
+    /// sizer must step up rather than merely complain.
+    func testRunIsUpsizedToRespectTheVelocityLimit() {
+        let zoneID = UUID()
+        let run = DuctRun(name: "Branch", role: .supplyBranch, physicalLengthFeet: 20,
+                          servingZoneID: zoneID)
+        let airflow = ZoneAirflow(id: UUID(), zoneID: zoneID, zoneName: "Z",
+                                  coolingCFM: 215, heatingCFM: 0, designCFM: 215,
+                                  sensibleLoadFraction: 1)
+        let sized = DuctDesigner.size(runs: [run], airflows: [airflow],
+                                      systemCFM: 215, frictionRate: 0.113)
+        XCTAssertLessThanOrEqual(sized[0].velocityFPM, run.role.maximumVelocityFPM,
+                                 "sizer left a branch over its velocity limit")
+        XCTAssertTrue(sized[0].warnings.contains { $0.contains("Upsized") },
+                      "the upsize should be reported, not silent")
     }
 }

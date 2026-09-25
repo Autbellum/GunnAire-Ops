@@ -140,8 +140,10 @@ public final class DesignEngine {
 
     public func addSurface(to zoneID: UUID) {
         guard let index = project.zones.firstIndex(where: { $0.id == zoneID }) else { return }
+        let wall = AssemblyLibrary.assemblies(for: .wall).first
         project.zones[index].surfaces.append(
-            Surface(name: "New Surface", category: .wall, areaSquareFeet: 100, rValue: 13))
+            Surface(name: "New Surface", category: .wall, areaSquareFeet: 100,
+                    construction: wall.map { .assembly($0) } ?? .manual(rValue: 13, shgc: 0)))
     }
 
     public func addDuctRun() {
@@ -166,14 +168,19 @@ public extension Project {
             name: "Living Room",
             floorAreaSquareFeet: 320, ceilingHeightFeet: 9,
             surfaces: [
-                Surface(name: "South Wall", category: .wall, areaSquareFeet: 180, rValue: 13),
-                Surface(name: "West Wall", category: .wall, areaSquareFeet: 144, rValue: 13),
-                Surface(name: "Ceiling", category: .roof, areaSquareFeet: 320, rValue: 38,
+                Surface(name: "South Wall", category: .wall, areaSquareFeet: 180,
+                        construction: .assembly(AssemblyLibrary.standard[2]), orientation: .south),
+                Surface(name: "West Wall", category: .wall, areaSquareFeet: 144,
+                        construction: .assembly(AssemblyLibrary.standard[2]), orientation: .west),
+                Surface(name: "Ceiling", category: .roof, areaSquareFeet: 320,
+                        construction: .assembly(AssemblyLibrary.standard[6]),
                         orientation: .horizontal, coolingEquivalentDeltaTF: 32),
-                Surface(name: "South Windows", category: .window, areaSquareFeet: 45, rValue: 3.0,
-                        orientation: .south, solarHeatGainCoefficient: 0.30),
-                Surface(name: "West Windows", category: .window, areaSquareFeet: 24, rValue: 3.0,
-                        orientation: .west, solarHeatGainCoefficient: 0.30)
+                Surface(name: "South Windows", category: .window, areaSquareFeet: 45,
+                        construction: .glazing(.doublePaneLowEArgon, .interiorBlindsLight),
+                        orientation: .south),
+                Surface(name: "West Windows", category: .window, areaSquareFeet: 24,
+                        construction: .glazing(.doublePaneLowEArgon, .interiorBlindsLight),
+                        orientation: .west)
             ],
             internalGains: InternalGains(occupantCount: 3, sensiblePerOccupant: 230,
                                          latentPerOccupant: 200,
@@ -185,12 +192,16 @@ public extension Project {
             name: "Primary Bedroom",
             floorAreaSquareFeet: 220, ceilingHeightFeet: 9,
             surfaces: [
-                Surface(name: "North Wall", category: .wall, areaSquareFeet: 150, rValue: 13),
-                Surface(name: "East Wall", category: .wall, areaSquareFeet: 126, rValue: 13),
-                Surface(name: "Ceiling", category: .roof, areaSquareFeet: 220, rValue: 38,
+                Surface(name: "North Wall", category: .wall, areaSquareFeet: 150,
+                        construction: .assembly(AssemblyLibrary.standard[2]), orientation: .north),
+                Surface(name: "East Wall", category: .wall, areaSquareFeet: 126,
+                        construction: .assembly(AssemblyLibrary.standard[2]), orientation: .east),
+                Surface(name: "Ceiling", category: .roof, areaSquareFeet: 220,
+                        construction: .assembly(AssemblyLibrary.standard[6]),
                         orientation: .horizontal, coolingEquivalentDeltaTF: 32),
-                Surface(name: "East Windows", category: .window, areaSquareFeet: 20, rValue: 3.0,
-                        orientation: .east, solarHeatGainCoefficient: 0.30)
+                Surface(name: "East Windows", category: .window, areaSquareFeet: 20,
+                        construction: .glazing(.doublePaneLowEArgon, .interiorBlindsLight),
+                        orientation: .east)
             ],
             internalGains: InternalGains(occupantCount: 2, sensiblePerOccupant: 230,
                                          latentPerOccupant: 200,
@@ -201,10 +212,10 @@ public extension Project {
         let equipment = EquipmentSpec(
             manufacturer: "—", modelNumber: "Entered from expanded performance data",
             type: .heatPump,
-            totalCoolingCapacityBtuh: 11_200,
-            sensibleCoolingCapacityBtuh: 8_400,
-            heatingCapacityBtuh: 10_500,
-            maximumAirflowCFM: 500,
+            totalCoolingCapacityBtuh: 9_600,
+            sensibleCoolingCapacityBtuh: 7_200,
+            heatingCapacityBtuh: 7_000,
+            maximumAirflowCFM: 450,
             blowerExternalStaticPressure: 0.60)
 
         let supplyTrunk = DuctRun(

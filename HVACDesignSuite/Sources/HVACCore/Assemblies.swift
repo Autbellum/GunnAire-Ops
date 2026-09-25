@@ -264,6 +264,36 @@ public enum AssemblyLibrary {
         ], framing: .none, solarAbsorptance: 0.85)
     }
 
+    /// A floor over an unconditioned crawl space or basement — the Piedmont default.
+    public static func framedFloor(name: String, insulation: Material,
+                                   thicknessInches: Double,
+                                   finish: Material = .carpetAndPad) -> Assembly {
+        Assembly(name: name, category: .floor, layers: [
+            Layer(material: .atticAirSpace, thicknessInches: 0),
+            Layer(material: insulation, thicknessInches: thicknessInches, isCavity: true),
+            Layer(material: .plywoodSubfloor, thicknessInches: 0.75),
+            Layer(material: finish, thicknessInches: 0),
+            Layer(material: .insideAirFilmHorizontal, thicknessInches: 0)
+        ], framing: Framing(name: "2×10 joists @ 16\" o.c.", depthInches: 9.25,
+                            framingFactor: 0.13, material: .softwoodFraming))
+    }
+
+    /// An opaque exterior door. Doors are sold by rated R-value rather than assembled on
+    /// site, so the rating is the input and the air films are added to it.
+    public static func door(name: String, ratedR: Double) -> Assembly {
+        Assembly(name: name, category: .door, layers: [
+            Layer(material: .outsideAirFilmWinter, thicknessInches: 0),
+            Layer(material: Material(name: name, fixedResistance: ratedR, category: .cladding),
+                  thicknessInches: 0),
+            Layer(material: .insideAirFilmVertical, thicknessInches: 0)
+        ], framing: .none, solarAbsorptance: 0.70)
+    }
+
+    /// Everything, filtered to what can legally go on a surface of this kind.
+    public static func assemblies(for category: SurfaceCategory) -> [Assembly] {
+        standard.filter { $0.category == category }
+    }
+
     /// The assemblies that actually turn up on Piedmont Triad jobs, so the common case is
     /// a single pick with nothing typed.
     public static let standard: [Assembly] = [
@@ -288,6 +318,30 @@ public enum AssemblyLibrary {
         atticCeiling(name: "Vented attic, R-38 blown cellulose",
                      insulation: .blownCellulose, thicknessInches: 10.9),
         atticCeiling(name: "Vented attic, R-49 blown cellulose",
-                     insulation: .blownCellulose, thicknessInches: 14.0)
+                     insulation: .blownCellulose, thicknessInches: 14.0),
+        atticCeiling(name: "Vented attic, R-19 blown fibreglass (older home)",
+                     insulation: .blownFiberglass, thicknessInches: 6.8),
+        framedWall(name: "2×4 wall, no insulation (pre-1960)",
+                   cladding: .woodBevelSiding, sheathing: .fiberboardSheathing,
+                   sheathingThickness: 0.5, framing: .woodStud2x4at16,
+                   cavityInsulation: Material(name: "Empty cavity", resistancePerInch: 0.28,
+                                              category: .insulation)),
+        framedWall(name: "8\" block wall, furred and insulated",
+                   cladding: .brickVeneer, sheathing: .concreteBlock8, sheathingThickness: 8,
+                   framing: Framing(name: "1×2 furring @ 16\" o.c.", depthInches: 1.5,
+                                    framingFactor: 0.10, material: .softwoodFraming),
+                   cavityInsulation: .extrudedPolystyrene),
+        framedFloor(name: "Floor over crawl space, R-19 batt",
+                    insulation: .fiberglassBatt, thicknessInches: 6.0),
+        framedFloor(name: "Floor over crawl space, R-30 batt",
+                    insulation: .fiberglassBatt, thicknessInches: 9.25),
+        framedFloor(name: "Floor over crawl space, uninsulated",
+                    insulation: Material(name: "Empty joist bay", resistancePerInch: 0.28,
+                                         category: .insulation),
+                    thicknessInches: 9.25),
+        door(name: "Steel door, polyurethane core", ratedR: 5.0),
+        door(name: "Steel door, polystyrene core", ratedR: 3.0),
+        door(name: "Solid wood door, 1¾\"", ratedR: 2.2),
+        door(name: "Fibreglass door, insulated core", ratedR: 5.6)
     ]
 }

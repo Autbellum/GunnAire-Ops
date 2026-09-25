@@ -94,3 +94,67 @@ final class AssemblyTests: XCTestCase {
         }
     }
 }
+
+/// The library has to be reachable and complete enough that no category leaves the user
+/// with nothing to pick — which is what forced hand-entered R-values in the first place.
+final class ConstructionSelectionTests: XCTestCase {
+
+    func testEverySurfaceCategoryHasLibraryOptions() {
+        for category in SurfaceCategory.allCases where category != .window {
+            XCTAssertFalse(AssemblyLibrary.assemblies(for: category).isEmpty,
+                           "no assemblies offered for \(category.rawValue)")
+        }
+        XCTAssertFalse(GlazingType.library.isEmpty)
+    }
+
+    func testAssembliesAreFilteredToTheirCategory() {
+        for category in SurfaceCategory.allCases {
+            for assembly in AssemblyLibrary.assemblies(for: category) {
+                XCTAssertEqual(assembly.category, category, assembly.name)
+            }
+        }
+    }
+
+    func testConstructionDerivesUAndSHGC() {
+        let wall = Construction.assembly(AssemblyLibrary.standard[0])
+        XCTAssertGreaterThan(wall.uValue, 0)
+        XCTAssertEqual(wall.solarHeatGainCoefficient, 0, "opaque construction admits no solar")
+
+        let window = Construction.glazing(.doublePaneLowEArgon, .interiorBlindsLight)
+        XCTAssertEqual(window.uValue, GlazingType.doublePaneLowEArgon.uFactor, accuracy: 1e-9)
+        XCTAssertEqual(window.solarHeatGainCoefficient,
+                       GlazingType.doublePaneLowEArgon.solarHeatGainCoefficient * 0.75, accuracy: 1e-9)
+
+        let manual = Construction.manual(rValue: 20, shgc: 0.4)
+        XCTAssertEqual(manual.uValue, 0.05, accuracy: 1e-9)
+    }
+
+    func testBasisExplainsWhereTheNumbersCameFrom() {
+        XCTAssertTrue(Construction.assembly(AssemblyLibrary.standard[0]).basis.contains("framing"))
+        XCTAssertTrue(Construction.glazing(.doublePaneLowEArgon, .none).basis.contains("Typical"))
+        XCTAssertTrue(Construction.glazing(.certified(name: "X", uFactor: 0.28, shgc: 0.2), .none)
+                        .basis.contains("NFRC"))
+    }
+
+    /// Changing a surface's category must not leave a wall assembly on a window.
+    func testDefaultConstructionMatchesCategory() {
+        for category in SurfaceCategory.allCases {
+            let construction = SurfaceRowDefaults.defaultConstruction(for: category)
+            XCTAssertGreaterThan(construction.uValue, 0, category.rawValue)
+            if category == .window {
+                XCTAssertGreaterThan(construction.solarHeatGainCoefficient, 0)
+            } else {
+                XCTAssertEqual(construction.solarHeatGainCoefficient, 0, category.rawValue)
+            }
+        }
+    }
+}
+
+/// Mirrors the picker's default so the rule is testable without importing the UI layer.
+enum SurfaceRowDefaults {
+    static func defaultConstruction(for category: SurfaceCategory) -> Construction {
+        if category == .window { return .glazing(.doublePaneLowEArgon, .none) }
+        if let first = AssemblyLibrary.assemblies(for: category).first { return .assembly(first) }
+        return .manual(rValue: 13, shgc: 0)
+    }
+}
