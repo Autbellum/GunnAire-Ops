@@ -37,6 +37,8 @@ public final class DesignEngine {
     public private(set) var zoneAirflows: [ZoneAirflow] = []
     public private(set) var frictionRate: FrictionRateResult?
     public private(set) var ductSizing: [DuctSizingResult] = []
+    /// The design-day hourly profile, which carries the coincident peak and its hour.
+    public private(set) var coolingProfile: CoolingProfile?
 
     /// Set when a stage threw rather than merely disagreeing with the design.
     public private(set) var calculationError: String?
@@ -55,6 +57,7 @@ public final class DesignEngine {
             // Stage 1 — Manual J / Manual N.
             let load = try LoadCalculator.calculate(project: project)
             self.load = load
+            coolingProfile = try LoadCalculator.coolingProfile(project: project)
 
             // Stage 2 — Manual S.
             let selection = try EquipmentSelector.evaluate(
@@ -98,7 +101,7 @@ public final class DesignEngine {
             lastCalculated = Date()
         } catch {
             calculationError = error.localizedDescription
-            load = nil; selection = nil
+            load = nil; selection = nil; coolingProfile = nil
             zoneAirflows = []; frictionRate = nil; ductSizing = []
         }
     }
@@ -164,16 +167,21 @@ public final class DesignEngine {
 public extension Project {
     /// A small Piedmont Triad house, so the interface opens with something calculable.
     static var sample: Project {
+        let sampleWall = AssemblyLibrary.named("2×6 wall, R-21 batt, vinyl siding")
+            ?? AssemblyLibrary.standard[0]
+        let sampleCeiling = AssemblyLibrary.named("Vented attic, R-38 blown cellulose")
+            ?? AssemblyLibrary.standard[0]
+
         let living = Zone(
             name: "Living Room",
             floorAreaSquareFeet: 320, ceilingHeightFeet: 9,
             surfaces: [
                 Surface(name: "South Wall", category: .wall, areaSquareFeet: 180,
-                        construction: .assembly(AssemblyLibrary.standard[2]), orientation: .south),
+                        construction: .assembly(sampleWall), orientation: .south),
                 Surface(name: "West Wall", category: .wall, areaSquareFeet: 144,
-                        construction: .assembly(AssemblyLibrary.standard[2]), orientation: .west),
+                        construction: .assembly(sampleWall), orientation: .west),
                 Surface(name: "Ceiling", category: .roof, areaSquareFeet: 320,
-                        construction: .assembly(AssemblyLibrary.standard[6]),
+                        construction: .assembly(sampleCeiling),
                         orientation: .horizontal, coolingEquivalentDeltaTF: 32),
                 Surface(name: "South Windows", category: .window, areaSquareFeet: 45,
                         construction: .glazing(.doublePaneLowEArgon, .interiorBlindsLight),
@@ -193,11 +201,11 @@ public extension Project {
             floorAreaSquareFeet: 220, ceilingHeightFeet: 9,
             surfaces: [
                 Surface(name: "North Wall", category: .wall, areaSquareFeet: 150,
-                        construction: .assembly(AssemblyLibrary.standard[2]), orientation: .north),
+                        construction: .assembly(sampleWall), orientation: .north),
                 Surface(name: "East Wall", category: .wall, areaSquareFeet: 126,
-                        construction: .assembly(AssemblyLibrary.standard[2]), orientation: .east),
+                        construction: .assembly(sampleWall), orientation: .east),
                 Surface(name: "Ceiling", category: .roof, areaSquareFeet: 220,
-                        construction: .assembly(AssemblyLibrary.standard[6]),
+                        construction: .assembly(sampleCeiling),
                         orientation: .horizontal, coolingEquivalentDeltaTF: 32),
                 Surface(name: "East Windows", category: .window, areaSquareFeet: 20,
                         construction: .glazing(.doublePaneLowEArgon, .interiorBlindsLight),

@@ -21,6 +21,17 @@ public struct Material: Identifiable, Codable, Sendable, Equatable, Hashable {
     /// Fixed resistance for materials made in a single form, h·ft²·°F/Btu.
     public let fixedResistance: Double?
     public let category: Category
+    /// Density, lb/ft³. Zero for an air film, which stores no heat.
+    public let density: Double
+    /// Specific heat, Btu/(lb·°F).
+    public let specificHeat: Double
+    /// Actual thickness for a material sold in one form, in.
+    ///
+    /// A fixed-resistance material still occupies space and still stores heat. Brick
+    /// veneer is quoted as R-0.44 and is four inches of masonry; without its real
+    /// thickness it would be modelled as a massless film, which is precisely backwards
+    /// for the heaviest layer in the wall.
+    public let nominalThicknessInches: Double?
 
     public enum Category: String, Codable, Sendable, CaseIterable {
         case airFilm = "Air Film"
@@ -35,10 +46,32 @@ public struct Material: Identifiable, Codable, Sendable, Equatable, Hashable {
     }
 
     public init(name: String, resistancePerInch: Double = 0,
-                fixedResistance: Double? = nil, category: Category) {
+                fixedResistance: Double? = nil, category: Category,
+                density: Double = 0, specificHeat: Double = 0.2,
+                nominalThicknessInches: Double? = nil) {
         self.name = name; self.resistancePerInch = resistancePerInch
         self.fixedResistance = fixedResistance; self.category = category
+        self.density = density; self.specificHeat = specificHeat
+        self.nominalThicknessInches = nominalThicknessInches
     }
+
+    /// Volumetric heat capacity, Btu/(ft³·°F). This is what gives an assembly its lag.
+    public var volumetricHeatCapacity: Double { density * specificHeat }
+
+    /// Thermal conductivity, Btu/(h·ft·°F).
+    ///
+    /// Derived from resistance per inch where the material is sold by thickness, and from
+    /// the fixed resistance over its actual thickness where it is not.
+    public var conductivity: Double? {
+        if resistancePerInch > 0 { return 1 / (12 * resistancePerInch) }
+        if let fixed = fixedResistance, fixed > 0, let thickness = nominalThicknessInches, thickness > 0 {
+            return (thickness / 12) / fixed
+        }
+        return nil
+    }
+
+    /// True when the material stores enough heat to delay a load.
+    public var isMassive: Bool { volumetricHeatCapacity > 1 && conductivity != nil }
 
     /// Resistance of this material at a thickness, h·ft²·°F/Btu.
     public func resistance(thicknessInches: Double) -> Double {
@@ -62,6 +95,23 @@ public struct Layer: Identifiable, Codable, Sendable, Equatable {
     }
 
     public var resistance: Double { material.resistance(thicknessInches: thicknessInches) }
+
+    /// The thickness that carries this layer's mass, ft. A fixed-resistance material
+    /// uses its own nominal thickness rather than whatever the builder passed in.
+    public var massThicknessFeet: Double {
+        (material.nominalThicknessInches ?? thicknessInches) / 12
+    }
+
+    /// Conductivity implied by this layer's own resistance over its own thickness.
+    public var conductivity: Double? {
+        guard resistance > 0, massThicknessFeet > 0 else { return nil }
+        return massThicknessFeet / resistance
+    }
+
+    /// True when this layer stores enough heat to shift a load in time.
+    public var isMassive: Bool {
+        material.volumetricHeatCapacity > 1 && conductivity != nil && massThicknessFeet > 0
+    }
 }
 
 /// Framing that interrupts the insulated cavity.
@@ -179,43 +229,43 @@ public extension Material {
     static let atticAirSpace = Material(name: "Vented attic air space", fixedResistance: 0.80, category: .airFilm)
 
     // Framing.
-    static let softwoodFraming = Material(name: "Softwood framing", resistancePerInch: 1.25, category: .framing)
+    static let softwoodFraming = Material(name: "Softwood framing", resistancePerInch: 1.25, category: .framing, density: 32, specificHeat: 0.33)
 
     // Cladding.
-    static let vinylSiding = Material(name: "Vinyl siding", fixedResistance: 0.61, category: .cladding)
-    static let woodBevelSiding = Material(name: "Wood bevel siding", fixedResistance: 0.80, category: .cladding)
-    static let fiberCementSiding = Material(name: "Fibre cement siding", fixedResistance: 0.21, category: .cladding)
-    static let brickVeneer = Material(name: "Brick veneer (4\")", fixedResistance: 0.44, category: .masonry)
-    static let stucco = Material(name: "Stucco", resistancePerInch: 0.20, category: .cladding)
+    static let vinylSiding = Material(name: "Vinyl siding", fixedResistance: 0.61, category: .cladding, density: 0, specificHeat: 0.2, nominalThicknessInches: 0.05)
+    static let woodBevelSiding = Material(name: "Wood bevel siding", fixedResistance: 0.80, category: .cladding, density: 32, specificHeat: 0.33, nominalThicknessInches: 0.75)
+    static let fiberCementSiding = Material(name: "Fibre cement siding", fixedResistance: 0.21, category: .cladding, density: 90, specificHeat: 0.24, nominalThicknessInches: 0.31)
+    static let brickVeneer = Material(name: "Brick veneer (4\")", fixedResistance: 0.44, category: .masonry, density: 120, specificHeat: 0.19, nominalThicknessInches: 3.5)
+    static let stucco = Material(name: "Stucco", resistancePerInch: 0.20, category: .cladding, density: 116, specificHeat: 0.2)
 
     // Sheathing.
-    static let osb = Material(name: "OSB / plywood", resistancePerInch: 1.25, category: .sheathing)
-    static let expandedPolystyrene = Material(name: "EPS rigid foam", resistancePerInch: 3.85, category: .sheathing)
-    static let extrudedPolystyrene = Material(name: "XPS rigid foam", resistancePerInch: 5.0, category: .sheathing)
-    static let polyisocyanurate = Material(name: "Polyisocyanurate", resistancePerInch: 6.0, category: .sheathing)
-    static let fiberboardSheathing = Material(name: "Fibreboard sheathing", resistancePerInch: 2.64, category: .sheathing)
+    static let osb = Material(name: "OSB / plywood", resistancePerInch: 1.25, category: .sheathing, density: 41, specificHeat: 0.45)
+    static let expandedPolystyrene = Material(name: "EPS rigid foam", resistancePerInch: 3.85, category: .sheathing, density: 1.8, specificHeat: 0.29)
+    static let extrudedPolystyrene = Material(name: "XPS rigid foam", resistancePerInch: 5.0, category: .sheathing, density: 2.2, specificHeat: 0.29)
+    static let polyisocyanurate = Material(name: "Polyisocyanurate", resistancePerInch: 6.0, category: .sheathing, density: 2.0, specificHeat: 0.22)
+    static let fiberboardSheathing = Material(name: "Fibreboard sheathing", resistancePerInch: 2.64, category: .sheathing, density: 18, specificHeat: 0.31)
 
     // Insulation.
-    static let fiberglassBatt = Material(name: "Fibreglass batt", resistancePerInch: 3.14, category: .insulation)
-    static let mineralWoolBatt = Material(name: "Mineral wool batt", resistancePerInch: 3.70, category: .insulation)
-    static let blownCellulose = Material(name: "Blown cellulose", resistancePerInch: 3.50, category: .insulation)
-    static let blownFiberglass = Material(name: "Blown fibreglass", resistancePerInch: 2.80, category: .insulation)
-    static let openCellSprayFoam = Material(name: "Open-cell spray foam", resistancePerInch: 3.70, category: .insulation)
-    static let closedCellSprayFoam = Material(name: "Closed-cell spray foam", resistancePerInch: 6.50, category: .insulation)
+    static let fiberglassBatt = Material(name: "Fibreglass batt", resistancePerInch: 3.14, category: .insulation, density: 0.8, specificHeat: 0.2)
+    static let mineralWoolBatt = Material(name: "Mineral wool batt", resistancePerInch: 3.70, category: .insulation, density: 2.5, specificHeat: 0.2)
+    static let blownCellulose = Material(name: "Blown cellulose", resistancePerInch: 3.50, category: .insulation, density: 2.2, specificHeat: 0.33)
+    static let blownFiberglass = Material(name: "Blown fibreglass", resistancePerInch: 2.80, category: .insulation, density: 0.6, specificHeat: 0.2)
+    static let openCellSprayFoam = Material(name: "Open-cell spray foam", resistancePerInch: 3.70, category: .insulation, density: 0.5, specificHeat: 0.35)
+    static let closedCellSprayFoam = Material(name: "Closed-cell spray foam", resistancePerInch: 6.50, category: .insulation, density: 2.0, specificHeat: 0.35)
 
     // Interior finish.
-    static let gypsumBoardHalf = Material(name: "Gypsum board ½\"", fixedResistance: 0.45, category: .interiorFinish)
-    static let gypsumBoardFiveEighths = Material(name: "Gypsum board ⅝\"", fixedResistance: 0.56, category: .interiorFinish)
+    static let gypsumBoardHalf = Material(name: "Gypsum board ½\"", fixedResistance: 0.45, category: .interiorFinish, density: 50, specificHeat: 0.26, nominalThicknessInches: 0.5)
+    static let gypsumBoardFiveEighths = Material(name: "Gypsum board ⅝\"", fixedResistance: 0.56, category: .interiorFinish, density: 50, specificHeat: 0.26, nominalThicknessInches: 0.625)
 
     // Masonry and floors.
-    static let concreteBlock8 = Material(name: "Concrete block 8\"", fixedResistance: 1.11, category: .masonry)
-    static let pouredConcrete = Material(name: "Poured concrete", resistancePerInch: 0.08, category: .masonry)
-    static let plywoodSubfloor = Material(name: "Plywood subfloor ¾\"", fixedResistance: 0.94, category: .flooring)
-    static let carpetAndPad = Material(name: "Carpet and pad", fixedResistance: 2.08, category: .flooring)
-    static let hardwoodFlooring = Material(name: "Hardwood ¾\"", fixedResistance: 0.68, category: .flooring)
+    static let concreteBlock8 = Material(name: "Concrete block 8\"", fixedResistance: 1.11, category: .masonry, density: 85, specificHeat: 0.21, nominalThicknessInches: 7.625)
+    static let pouredConcrete = Material(name: "Poured concrete", resistancePerInch: 0.08, category: .masonry, density: 140, specificHeat: 0.2)
+    static let plywoodSubfloor = Material(name: "Plywood subfloor ¾\"", fixedResistance: 0.94, category: .flooring, density: 34, specificHeat: 0.45, nominalThicknessInches: 0.75)
+    static let carpetAndPad = Material(name: "Carpet and pad", fixedResistance: 2.08, category: .flooring, density: 10, specificHeat: 0.34, nominalThicknessInches: 0.5)
+    static let hardwoodFlooring = Material(name: "Hardwood ¾\"", fixedResistance: 0.68, category: .flooring, density: 45, specificHeat: 0.39, nominalThicknessInches: 0.75)
 
     // Roofing.
-    static let asphaltShingles = Material(name: "Asphalt shingles", fixedResistance: 0.44, category: .roofing)
+    static let asphaltShingles = Material(name: "Asphalt shingles", fixedResistance: 0.44, category: .roofing, density: 70, specificHeat: 0.3, nominalThicknessInches: 0.25)
 
     /// Everything, for a material picker.
     static let library: [Material] = [
@@ -287,6 +337,15 @@ public enum AssemblyLibrary {
                   thicknessInches: 0),
             Layer(material: .insideAirFilmVertical, thicknessInches: 0)
         ], framing: .none, solarAbsorptance: 0.70)
+    }
+
+    /// Looks an assembly up by name.
+    ///
+    /// Callers select by name rather than by position: the library grows, and an index
+    /// that silently points at a different wall is the kind of mistake that produces a
+    /// plausible number for the wrong assembly.
+    public static func named(_ name: String) -> Assembly? {
+        standard.first { $0.name == name }
     }
 
     /// Everything, filtered to what can legally go on a surface of this kind.

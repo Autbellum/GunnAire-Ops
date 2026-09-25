@@ -249,6 +249,12 @@ public enum Psychrometrics {
     }
 }
 
+/// Throws `HVACError.outOfRange` when a precondition fails, with a message that names the
+/// offending value. Used where a guard would otherwise repeat itself.
+func require(_ condition: Bool, _ message: String) throws {
+    if !condition { throw HVACError.outOfRange(message) }
+}
+
 /// Errors raised across the suite. Every message names the offending value, because a
 /// design tool that says only "invalid input" makes the engineer hunt for it.
 public enum HVACError: Error, LocalizedError, Equatable, Sendable {

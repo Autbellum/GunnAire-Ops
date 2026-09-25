@@ -253,7 +253,7 @@ public enum LoadCalculator {
     /// Manual J: a low-density occupant count against default per-person gains.
     /// Manual N: explicit lighting density, occupancy and appliance gains, because a
     /// commercial space is dominated by them rather than by its envelope.
-    static func internalGainComponents(zone: Zone, procedure: LoadProcedure) -> [LoadComponent] {
+    public static func internalGainComponents(zone: Zone, procedure: LoadProcedure) -> [LoadComponent] {
         let gains = zone.internalGains
         var components: [LoadComponent] = []
 

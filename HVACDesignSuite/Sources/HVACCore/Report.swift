@@ -57,6 +57,7 @@ public enum ReportBuilder {
                              airflows: [ZoneAirflow],
                              friction: FrictionRateResult?,
                              ducts: [DuctSizingResult],
+                             profile: CoolingProfile? = nil,
                              preparedOn: Date = Date()) -> DesignReport {
 
         var sections: [DesignReport.Section] = []
@@ -100,6 +101,24 @@ public enum ReportBuilder {
                               String(format: "%.0f", cfm)]
                   })
         ]))
+
+        // MARK: Design day
+        if let profile, profile.peakSensible > 0 {
+            sections.append(.init(title: "Design Day — Coincident Peak", rows: [
+                .init("Peak sensible load", btuh(profile.peakSensible), emphasis: true),
+                .init("Occurs at", String(format: "%02d:00 solar", profile.peakHour), emphasis: true),
+                .init("Sum of individual surface peaks", btuh(profile.sumOfIndividualPeaks)),
+                .init("Diversity", String(format: "%.0f%%", profile.diversityFactor * 100))
+            ], tables: [
+                .init(title: "Hourly Sensible Load",
+                      columns: ["Hour", "Btu/h", "Hour", "Btu/h"],
+                      rows: (0..<12).map { hour in
+                          [String(format: "%02d:00", hour), integer(profile.hourlySensible[hour]),
+                           String(format: "%02d:00", hour + 12), integer(profile.hourlySensible[hour + 12])]
+                      },
+                      note: "Opaque assemblies are solved transiently across the design day, so each carries the lag and damping its own mass produces. Surfaces do not peak together; the coincident figure is the largest the sum ever reaches.")
+            ]))
+        }
 
         // MARK: Envelope
         var envelopeRows: [[String]] = []

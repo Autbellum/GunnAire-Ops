@@ -57,6 +57,23 @@ struct ResultsDashboard: View {
             }
             Divider()
             MetricRow(label: "Heating Total", value: btuh(load.heatingBtuh), emphasis: true)
+
+            if let profile = engine.coolingProfile, profile.peakSensible > 0 {
+                Divider()
+                MetricRow(label: "Coincident peak",
+                          value: String(format: "%.0f Btu/h at %02d:00",
+                                        profile.peakSensible, profile.peakHour),
+                          emphasis: true)
+                MetricRow(label: "Sum of surface peaks",
+                          value: btuh(profile.sumOfIndividualPeaks))
+                MetricRow(label: "Diversity",
+                          value: String(format: "%.0f%%", profile.diversityFactor * 100),
+                          tint: .green)
+                Text("Surfaces peak at different hours, so the coincident figure is the largest the sum ever reaches. Opaque assemblies are solved transiently, carrying the lag their mass produces. Equipment above is still sized on the steady-state sensible load, which is the more conservative of the two.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 

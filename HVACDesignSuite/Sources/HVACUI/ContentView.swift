@@ -77,7 +77,8 @@ public struct ContentView: View {
                             selection: engine.selection,
                             airflows: engine.zoneAirflows,
                             friction: engine.frictionRate,
-                            ducts: engine.ductSizing)
+                            ducts: engine.ductSizing,
+                            profile: engine.coolingProfile)
     }
 
     public var body: some View {
