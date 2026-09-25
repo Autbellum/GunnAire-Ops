@@ -5306,7 +5306,10 @@ final class GunnAire_OpsUITests: XCTestCase {
         if submitKeyboard { replaceText(in: app.textFields["BundleQuantity"], with: "2") }
         else { enterQuantity("BundleQuantity", "2") }
         if submitKeyboard { app.textFields["BundleQuantity"].typeText("\n") }
-        XCTAssertTrue(waitForHittable(app.buttons["SaveBundleQuantity"], timeout: 4))
+        // Submitting dismisses the keyboard, and on a loaded CI runner the Save
+        // control can still be unlaid-out well past four seconds. Use the
+        // helper's default, which was raised to 10 s on exactly this evidence.
+        XCTAssertTrue(waitForHittable(app.buttons["SaveBundleQuantity"]))
         app.buttons["SaveBundleQuantity"].tap()
         XCTAssertTrue(app.navigationBars["Bundle Quantity"].waitForNonExistence(timeout: 4))
         let second = app.buttons["EditBundleMember-\(root)-1"]
@@ -5317,7 +5320,8 @@ final class GunnAire_OpsUITests: XCTestCase {
         if submitKeyboard { replaceText(in: quantity, with: "3") }
         else { enterQuantity("BundleMemberQuantity", "3") }
         if submitKeyboard { quantity.typeText("\n") }
-        XCTAssertTrue(waitForHittable(app.buttons["SaveBundleMember"], timeout: 4))
+        // Same keyboard-dismissal transition as the bundle-quantity save above.
+        XCTAssertTrue(waitForHittable(app.buttons["SaveBundleMember"]))
         app.buttons["SaveBundleMember"].tap()
         XCTAssertTrue(app.navigationBars["Included Item"].waitForNonExistence(timeout: 4))
         XCTAssertTrue(app.buttons["EditBundleMember-\(root)-1"].waitForExistence(timeout: 4))
