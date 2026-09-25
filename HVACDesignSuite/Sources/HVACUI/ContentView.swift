@@ -1,6 +1,48 @@
 import SwiftUI
 import HVACCore
 
+/// Carries the front window's report to the menu bar, so Export Report acts on the
+/// document the user is looking at rather than on a guess about which one is frontmost.
+public struct DesignReportKey: FocusedValueKey {
+    public typealias Value = () -> DesignReport
+}
+
+public extension FocusedValues {
+    var designReport: DesignReportKey.Value? {
+        get { self[DesignReportKey.self] }
+        set { self[DesignReportKey.self] = newValue }
+    }
+}
+
+/// The File ▸ Export Report… command.
+public struct ReportExportCommands: Commands {
+    @FocusedValue(\.designReport) private var report
+
+    public init() {}
+
+    public var body: some Commands {
+        CommandGroup(after: .saveItem) {
+            Button("Export Report as PDF…") {
+                guard let report = report?() else { return }
+                let panel = NSSavePanel()
+                panel.nameFieldStringValue = report.projectName
+                    .replacingOccurrences(of: "/", with: "-") + " — Load Calculation.pdf"
+                panel.allowedContentTypes = [.pdf]
+                panel.canCreateDirectories = true
+                guard panel.runModal() == .OK, let url = panel.url else { return }
+                do {
+                    try ReportPDF.write(report, to: url)
+                    NSWorkspace.shared.open(url)
+                } catch {
+                    NSAlert(error: error).runModal()
+                }
+            }
+            .keyboardShortcut("e", modifiers: [.command, .shift])
+            .disabled(report == nil)
+        }
+    }
+}
+
 /// The three-panel workspace.
 ///
 /// Left holds the things that govern the whole job — procedure, weather, indoor targets.
@@ -26,6 +68,18 @@ public struct ContentView: View {
         self.init(project: .constant(.sample))
     }
 
+    /// Builds the printable report from whatever the engine currently holds.
+    public func currentReport() -> DesignReport {
+        ReportBuilder.build(project: engine.project,
+                            load: engine.load ?? ProjectLoad(zoneLoads: [],
+                                                             designConditions: engine.project.designConditions,
+                                                             procedure: engine.project.procedure),
+                            selection: engine.selection,
+                            airflows: engine.zoneAirflows,
+                            friction: engine.frictionRate,
+                            ducts: engine.ductSizing)
+    }
+
     public var body: some View {
         NavigationSplitView {
             DesignConditionsSidebar(engine: engine)
@@ -39,6 +93,7 @@ public struct ContentView: View {
         }
         .navigationTitle(engine.project.name)
         .frame(minWidth: 1120, minHeight: 700)
+        .focusedSceneValue(\.designReport, currentReport)
         // Push edits back to the document so Save, autosave, versions and the dirty dot
         // all work without the engine knowing a file exists.
         .onChange(of: engine.project) { _, updated in

@@ -50,6 +50,12 @@ public struct ProjectLoad: Sendable, Equatable {
     public let designConditions: DesignConditions
     public let procedure: LoadProcedure
 
+    public init(zoneLoads: [ZoneLoad], designConditions: DesignConditions, procedure: LoadProcedure) {
+        self.zoneLoads = zoneLoads
+        self.designConditions = designConditions
+        self.procedure = procedure
+    }
+
     public var coolingSensibleBtuh: Double { zoneLoads.reduce(0) { $0 + $1.coolingSensibleBtuh } }
     public var coolingLatentBtuh: Double { zoneLoads.reduce(0) { $0 + $1.coolingLatentBtuh } }
     public var coolingTotalBtuh: Double { coolingSensibleBtuh + coolingLatentBtuh }

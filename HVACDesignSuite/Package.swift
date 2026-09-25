@@ -13,6 +13,6 @@ let package = Package(
         .target(name: "HVACCore"),
         .target(name: "HVACUI", dependencies: ["HVACCore"]),
         .executableTarget(name: "HVACDesignSuiteApp", dependencies: ["HVACUI"]),
-        .testTarget(name: "HVACCoreTests", dependencies: ["HVACCore"])
+        .testTarget(name: "HVACCoreTests", dependencies: ["HVACCore", "HVACUI"])
     ]
 )

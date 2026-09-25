@@ -13,6 +13,7 @@ struct HVACDesignSuiteApp: App {
         }
         .defaultSize(width: 1400, height: 880)
         .commands {
+            ReportExportCommands()
             CommandGroup(replacing: .help) {
                 Link("ACCA Manual J / S / T / D",
                      destination: URL(string: "https://www.acca.org/standards/technical-manuals")!)
