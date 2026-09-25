@@ -37,7 +37,7 @@ enum SharedBillingConnectionError: LocalizedError, Equatable {
     }
 }
 
-struct SharedBillingIdentity: Codable, Equatable {
+nonisolated struct SharedBillingIdentity: Codable, Equatable, Sendable {
     let companyID: UUID
     let documentType: BillingPublicationDocumentKind
     let localDocumentID: UUID
@@ -53,11 +53,11 @@ struct SharedBillingIdentity: Codable, Equatable {
         var parts = URLComponents()
         parts.path = "/api/billing-publications/connection"
         parts.queryItems = query.sorted { $0.key < $1.key }.map { .init(name: $0.key, value: $0.value) }
-        return parts.string!
+        return parts.string ?? ""
     }
 }
 
-struct SharedBillingConnection: Decodable {
+nonisolated struct SharedBillingConnection: Decodable, Sendable {
     let identity: SharedBillingIdentity
     let realmID: String
     let environment: String
@@ -73,8 +73,13 @@ struct SharedBillingConnection: Decodable {
         connectionRevision = try values.decode(String.self, forKey: .connectionRevision)
         protocolVersion = try values.decode(Int.self, forKey: .protocolVersion)
     }
+    static func decodeAsync(_ data: Data) async throws -> Self {
+        try await Task.detached(priority: .userInitiated) {
+            try JSONDecoder().decode(Self.self, from: data)
+        }.value
+    }
     func validate(_ expected: SharedBillingIdentity) throws {
-        guard protocolVersion == 1, identity == expected, PaymentAttemptRecord.isReference(realmID),
+        guard protocolVersion == 1, identity == expected, QuickBooksProviderReference.isValid(realmID),
               ["sandbox", "production"].contains(environment),
               JobBillingAssignmentSnapshot.validConnectionRevision(connectionRevision) else {
             throw SharedBillingConnectionError.invalid
@@ -155,7 +160,8 @@ final class SharedBillingPreparation {
             let data = try await client.transport(identity.path, "GET", nil)
             try operation.check(); try validateOriginal()
             guard data.count <= 16_384 else { throw SharedBillingConnectionError.invalid }
-            connection = try JSONDecoder().decode(SharedBillingConnection.self, from: data)
+            connection = try await SharedBillingConnection.decodeAsync(data)
+            try operation.check(); try validateOriginal()
             try connection.validate(identity)
         } catch {
             try operation.check(); try validateOriginal()
@@ -170,7 +176,11 @@ final class SharedBillingPreparation {
         }
         let api = QuickBooksDataAPI(sharedBilling: connection, operation: operation,
             billingPublisher: client, catalogPublisher: catalog, customerPublisher: customer)
+        let lineEvidence = try await QuickBooksSavedLineEvidence.captureAsync(
+            snapshotJSON: document.snapshotJSON, expectedSubtotal: document.subtotal)
+        try operation.check(); try validateOriginal()
         return try QuickBooksBillingWorkflow(document: document, context: context, api: api,
-            lifecycle: lifecycle, validateAccess: validateAccess, billingJournal: billingJournal)
+            lifecycle: lifecycle, validateAccess: validateAccess, billingJournal: billingJournal,
+            preparedLineEvidence: lineEvidence)
     }
 }

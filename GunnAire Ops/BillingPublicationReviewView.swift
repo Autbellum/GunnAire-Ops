@@ -217,8 +217,13 @@ import SwiftData
         milestoneOriginal = nil
         original = found
         if shared.journal.pending == nil, let original, let flow,
-           original.proposal.draftRevision == (try flow.billingDraftRevision()), original.publication.state != .cancelled {
-            try shared.adoptOriginal(original, revision: flow.billingDraftRevision())
+           original.publication.state != .cancelled {
+            let revision = try await flow.billingDraftRevisionAsync()
+            try shared.check()
+            guard visit == visitID else { throw CancellationError() }
+            if original.proposal.draftRevision == revision {
+                try shared.adoptOriginal(original, revision: revision)
+            }
         }
         pending = shared.journal.pending
         didLoad = true
@@ -393,7 +398,7 @@ import SwiftData
             lines = [.bundle(description: "Saved repair bundle", reference: .init(value: "BILLING-UI-GROUP", name: nil),
                              quantity: 2, components: members)]
         }
-        let revision = try value.billingDraftRevision()
+        let revision = try await value.billingDraftRevisionAsync()
         request = .init(companyID: company, realmID: "billing-review-fixture", environment: Config.QuickBooks.environment,
             documentType: .invoice, localDocumentID: retain ? originalID : document.id, localCustomerID: customer.id, operation: .create,
             document: .init(CustomerRef: .init(value: customer.quickBooksID ?? "C1", name: nil), Line: lines, TxnDate: "2026-09-07"),

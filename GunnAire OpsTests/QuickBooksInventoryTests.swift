@@ -255,6 +255,26 @@ struct QuickBooksInventoryTests {
         }
     }
 
+    @Test func backgroundPublicationMatchesFixtureMappingAndRejectsChangedEvidence() async throws {
+        let linkedItem = item(linked: true)
+        let json = try #require(CatalogLineItemSnapshot.encoded(from: [linkedItem]))
+        let expected = try QuickBooksDocumentLinePublication.lines(
+            snapshotJSON: json, expectedSubtotal: 125.375, catalogItems: [linkedItem])
+        let background = try await QuickBooksDocumentLinePublication.linesAsync(
+            snapshotJSON: json, expectedSubtotal: 125.375, catalogItems: [linkedItem])
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        #expect(try encoder.encode(background) == encoder.encode(expected))
+
+        let evidence = try await QuickBooksSavedLineEvidence.captureAsync(
+            snapshotJSON: json, expectedSubtotal: 125.375)
+        #expect(evidence.selectedItemIDs == [linkedItem.id])
+        #expect(evidence.checkedItemIDs == [linkedItem.id])
+        await #expect(throws: QuickBooksDocumentLinePublicationError.amountMismatch(expected: 126, mapped: 125.38)) {
+            try await QuickBooksSavedLineEvidence.captureAsync(snapshotJSON: json, expectedSubtotal: 126)
+        }
+    }
+
     @Test func offlineFirstLinkAndLegacySnapshotsRemainPublishableAfterApproval() throws {
         let item = item(), snapshot = CatalogLineItemSnapshot(item: item)
         item.quickBooksID = "I-42"

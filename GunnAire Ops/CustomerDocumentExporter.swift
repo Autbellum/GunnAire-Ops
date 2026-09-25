@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 import UIKit
 
 enum CustomerDocumentExportError: LocalizedError {
@@ -7,6 +8,7 @@ enum CustomerDocumentExportError: LocalizedError {
     case statementNeedsReview(String)
     case fieldFormNeedsReview(String)
     case textLayoutUnavailable
+    case sourceChangedDuringRender
 
     var errorDescription: String? {
         switch self {
@@ -20,6 +22,8 @@ enum CustomerDocumentExportError: LocalizedError {
             return message
         case .textLayoutUnavailable:
             return "The complete document could not be laid out. Your saved records and any previous PDF are unchanged. Please try again."
+        case .sourceChangedDuringRender:
+            return "These records changed while the document was being prepared, so it was not saved. Nothing was sent. Open the record and prepare the document again."
         }
     }
 }
@@ -100,7 +104,171 @@ struct CustomerAccountStatementSnapshot: Equatable {
     }
 }
 
+/// An immutable, model-free description of one customer document. Everything
+/// the renderer needs is copied in by value, so no SwiftData model ever
+/// crosses an isolation boundary and the rendered bytes describe the records
+/// exactly as they stood when the plan was captured.
+struct BusinessDocumentRenderPlan: Sendable, Equatable {
+    struct Row: Sendable, Equatable {
+        let label: String
+        let value: String
+    }
+
+    struct Section: Sendable, Equatable {
+        let title: String
+        let rows: [Row]
+        let keepsTogether: Bool
+    }
+
+    /// Paths and captions are frozen at projection, but the file behind a path
+    /// is not. Size and modification date are recorded so that a photo replaced
+    /// or deleted while the document rendered fails the export instead of
+    /// silently producing a stale or incomplete customer record.
+    struct Photo: Sendable, Equatable {
+        let filePath: String
+        let caption: String
+        let fileSize: Int
+        let modifiedAt: Date?
+
+        nonisolated static func fingerprint(_ path: String) -> (size: Int, modifiedAt: Date?) {
+            let values = try? URL(fileURLWithPath: path)
+                .resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            return (values?.fileSize ?? -1, values?.contentModificationDate)
+        }
+
+        nonisolated var matchesFileOnDisk: Bool {
+            let current = Self.fingerprint(filePath)
+            return current.size == fileSize && current.modifiedAt == modifiedAt
+        }
+    }
+
+    let title: String
+    let customerBlock: String
+    let sections: [Section]
+    let approvalSignatureImageBase64: String?
+    let photos: [Photo]
+    let generatedAt: Date
+}
+
+/// A render plan together with the source values it was projected from. The
+/// values are captured before rendering begins and are never recaptured: they
+/// exist so that the records can be proven unchanged before the finished bytes
+/// are published, rather than silently relabelled as current.
+struct PreparedCustomerDocument: Sendable, Equatable {
+    let plan: BusinessDocumentRenderPlan
+    let fileName: String
+    let sourceValues: [String]
+    /// The document header is drawn from the customer record but is not part of
+    /// `mailSourceValues`, so it is carried separately. Without it a name or
+    /// address edited while the document rendered would escape the fence.
+    let customerHeader: [String]
+    let customerID: UUID
+    let documentID: UUID
+}
+
 enum CustomerDocumentExporter {
+    /// Retains registration metadata without reading a deleted model's business
+    /// properties after suspension. These closures stay on the main actor.
+    @MainActor
+    private struct RetainedInput {
+        let isCurrent: @MainActor () -> Bool
+
+        init<Model: PersistentModel>(_ model: Model) {
+            let context = model.modelContext
+            let identity = model.persistentModelID
+            isCurrent = {
+                guard !model.isDeleted, model.modelContext === context,
+                      model.persistentModelID == identity else { return false }
+                guard let context else { return true }
+                let registered: Model? = context.registeredModel(for: identity)
+                return registered === model
+            }
+        }
+    }
+
+    @MainActor
+    private static func retainedInputs(
+        customer: Customer?, estimate: Estimate? = nil, invoice: Invoice? = nil,
+        serviceCall: ServiceCall? = nil, payments: [Payment] = [],
+        attachments: [ServiceDocumentAttachment] = [], equipmentProfiles: [CustomerEquipment] = [],
+        serviceCalls: [ServiceCall] = [], fieldFormTemplates: [FieldFormTemplate] = [],
+        fieldFormResponses: [FieldFormResponse] = [], timeEntries: [TimeEntry] = [],
+        serviceCallActivities: [ServiceCallActivity] = []
+    ) -> [RetainedInput] {
+        var inputs: [RetainedInput] = []
+        if let customer { inputs.append(RetainedInput(customer)) }
+        if let estimate { inputs.append(RetainedInput(estimate)) }
+        if let invoice { inputs.append(RetainedInput(invoice)) }
+        if let serviceCall { inputs.append(RetainedInput(serviceCall)) }
+        inputs += payments.map(RetainedInput.init)
+        inputs += attachments.map(RetainedInput.init)
+        inputs += equipmentProfiles.map(RetainedInput.init)
+        inputs += serviceCalls.map(RetainedInput.init)
+        inputs += fieldFormTemplates.map(RetainedInput.init)
+        inputs += fieldFormResponses.map(RetainedInput.init)
+        inputs += timeEntries.map(RetainedInput.init)
+        inputs += serviceCallActivities.map(RetainedInput.init)
+        return inputs
+    }
+
+    /// Source values only: no PDF rendering, file reads, or provider I/O. The
+    /// same row builders used by the documents keep draft validation aligned
+    /// with customer-visible text. Generated PDFs are outputs, not new inputs.
+    static func mailSourceValues(
+        estimate: Estimate?, invoice: Invoice?, serviceCall: ServiceCall?,
+        payments: [Payment], attachments: [ServiceDocumentAttachment],
+        equipmentProfiles: [CustomerEquipment], serviceCalls: [ServiceCall],
+        fieldFormTemplates: [FieldFormTemplate] = [], fieldFormResponses: [FieldFormResponse] = [],
+        timeEntries: [TimeEntry] = [], materialReadiness: JobMaterialCloseoutSummary = .notApplicable,
+        serviceCallActivities: [ServiceCallActivity] = [], requireWorkPerformedLog: Bool = true
+    ) -> [String] {
+        let sourceAttachments = attachments.filter {
+            ![ServiceDocumentAttachmentKind.estimateSupport, .invoiceSupport, .serviceReport].contains($0.kind)
+        }.sorted { $0.id.uuidString < $1.id.uuidString }
+        let orderedPayments = payments.sorted {
+            $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date < $1.date
+        }
+        var sections: [DocumentSection] = []
+        var values: [String] = []
+        if let estimate {
+            sections += estimateSections(estimate: estimate, serviceCall: serviceCall,
+                attachments: sourceAttachments, equipmentProfiles: equipmentProfiles.sorted { $0.id.uuidString < $1.id.uuidString }, serviceCalls: serviceCalls.sorted { $0.id.uuidString < $1.id.uuidString })
+            values += [estimate.customerApprovalSignatureImageBase64 ?? "", estimate.customerApprovalBlockedMessage ?? ""]
+        }
+        if let invoice {
+            sections += invoiceSections(invoice: invoice, serviceCall: serviceCall, payments: orderedPayments,
+                attachments: sourceAttachments, equipmentProfiles: equipmentProfiles.sorted { $0.id.uuidString < $1.id.uuidString }, serviceCalls: serviceCalls.sorted { $0.id.uuidString < $1.id.uuidString })
+            values += [invoice.customerSignatureImageBase64 ?? "", invoice.paymentCollectionBlockedMessage ?? ""]
+        }
+        if let serviceCall {
+            let scoped = onsiteReportAttachments(for: sourceAttachments, serviceCall: serviceCall,
+                estimate: estimate, invoice: invoice)
+            sections += onsiteReportSections(serviceCall: serviceCall, estimate: estimate, invoice: invoice,
+                payments: orderedPayments, attachments: scoped, equipmentProfiles: equipmentProfiles.sorted { $0.id.uuidString < $1.id.uuidString },
+                serviceCalls: serviceCalls.sorted { $0.id.uuidString < $1.id.uuidString },
+                fieldFormTemplates: fieldFormTemplates.sorted { $0.id.uuidString < $1.id.uuidString },
+                fieldFormResponses: fieldFormResponses.sorted { $0.id.uuidString < $1.id.uuidString },
+                timeEntries: timeEntries.sorted { $0.id.uuidString < $1.id.uuidString },
+                materialReadiness: materialReadiness,
+                serviceCallActivities: serviceCallActivities.sorted { $0.id.uuidString < $1.id.uuidString },
+                requireWorkPerformedLog: requireWorkPerformedLog)
+        }
+        for section in sections {
+            values.append(section.title)
+            for row in section.rows { values += [row.label, row.value] }
+        }
+        for attachment in sourceAttachments where
+            (estimate != nil && attachment.estimateID == estimate?.id) ||
+            (invoice != nil && attachment.invoiceID == invoice?.id) ||
+            (serviceCall != nil && attachment.serviceCallID == serviceCall?.id) {
+            values += [attachment.id.uuidString, attachment.kindRaw, attachment.displayName,
+                attachment.caption ?? "", attachment.localFilePath, attachment.contentType,
+                String(attachment.fileSizeBytes), attachment.createdAt.description,
+                attachment.customerEquipmentID?.uuidString ?? ""]
+        }
+        return values
+    }
+
     static func customerEmailAttachmentURLs(
         primaryDocumentURL: URL,
         serviceCallID: UUID?,
@@ -159,7 +327,8 @@ enum CustomerDocumentExporter {
         return convertedReports.first
     }
 
-    static func exportOnsiteReport(
+    @MainActor
+    static func preparedOnsiteReport(
         serviceCall: ServiceCall,
         estimate: Estimate?,
         invoice: Invoice?,
@@ -174,7 +343,7 @@ enum CustomerDocumentExporter {
         serviceCallActivities: [ServiceCallActivity] = [],
         requireWorkPerformedLog: Bool = false,
         includeFinancials: Bool = true
-    ) throws -> URL {
+    ) throws -> PreparedCustomerDocument {
         let scopedAttachments = onsiteReportAttachments(
             for: attachments,
             serviceCall: serviceCall,
@@ -203,15 +372,245 @@ enum CustomerDocumentExporter {
             requireWorkPerformedLog: requireWorkPerformedLog,
             includeFinancials: includeFinancials
         )
-        return try renderPDF(
-            title: title,
-            customer: serviceCall.customer,
-            sections: sections,
-            imageAttachments: scopedAttachments,
-            imageServiceCall: serviceCall,
-            imageEquipmentProfiles: equipmentProfiles,
-            fileName: fileName
+        return PreparedCustomerDocument(
+            plan: renderPlan(
+                title: title,
+                customer: serviceCall.customer,
+                sections: sections,
+                imageAttachments: scopedAttachments,
+                imageServiceCall: serviceCall,
+                imageEquipmentProfiles: equipmentProfiles
+            ),
+            fileName: uniqueExportFileName(fileName),
+            sourceValues: onsiteReportSourceValues(serviceCall: serviceCall, estimate: estimate,
+                invoice: invoice, payments: payments, attachments: attachments,
+                equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls,
+                fieldFormTemplates: fieldFormTemplates, fieldFormResponses: fieldFormResponses,
+                timeEntries: timeEntries, materialReadiness: materialReadiness,
+                serviceCallActivities: serviceCallActivities,
+                requireWorkPerformedLog: requireWorkPerformedLog),
+            customerHeader: customerHeaderValues(serviceCall.customer),
+            customerID: serviceCall.customer.id,
+            documentID: serviceCall.id
         )
+    }
+
+    @MainActor
+    private static func onsiteReportSourceValues(
+        serviceCall: ServiceCall,
+        estimate: Estimate?,
+        invoice: Invoice?,
+        payments: [Payment],
+        attachments: [ServiceDocumentAttachment],
+        equipmentProfiles: [CustomerEquipment],
+        serviceCalls: [ServiceCall],
+        fieldFormTemplates: [FieldFormTemplate],
+        fieldFormResponses: [FieldFormResponse],
+        timeEntries: [TimeEntry],
+        materialReadiness: JobMaterialCloseoutSummary,
+        serviceCallActivities: [ServiceCallActivity],
+        requireWorkPerformedLog: Bool
+    ) -> [String] {
+        mailSourceValues(estimate: estimate, invoice: invoice, serviceCall: serviceCall,
+            payments: payments, attachments: attachments, equipmentProfiles: equipmentProfiles,
+            serviceCalls: serviceCalls, fieldFormTemplates: fieldFormTemplates,
+            fieldFormResponses: fieldFormResponses, timeEntries: timeEntries,
+            materialReadiness: materialReadiness, serviceCallActivities: serviceCallActivities,
+            requireWorkPerformedLog: requireWorkPerformedLog)
+    }
+
+    @MainActor
+    static func exportOnsiteReport(
+        serviceCall: ServiceCall,
+        estimate: Estimate?,
+        invoice: Invoice?,
+        payments: [Payment],
+        attachments: [ServiceDocumentAttachment] = [],
+        equipmentProfiles: [CustomerEquipment] = [],
+        serviceCalls: [ServiceCall] = [],
+        fieldFormTemplates: [FieldFormTemplate] = [],
+        fieldFormResponses: [FieldFormResponse] = [],
+        timeEntries: [TimeEntry] = [],
+        materialReadiness: JobMaterialCloseoutSummary = .notApplicable,
+        serviceCallActivities: [ServiceCallActivity] = [],
+        requireWorkPerformedLog: Bool = false,
+        includeFinancials: Bool = true
+    ) throws -> URL {
+        let prepared = try preparedOnsiteReport(serviceCall: serviceCall, estimate: estimate,
+            invoice: invoice, payments: payments, attachments: attachments,
+            equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls,
+            fieldFormTemplates: fieldFormTemplates, fieldFormResponses: fieldFormResponses,
+            timeEntries: timeEntries, materialReadiness: materialReadiness,
+            serviceCallActivities: serviceCallActivities,
+            requireWorkPerformedLog: requireWorkPerformedLog, includeFinancials: includeFinancials)
+        return try writeDocument(renderDocumentData(prepared.plan), fileName: prepared.fileName)
+    }
+
+    /// Off-main-actor sibling of `exportOnsiteReport`. Field reports carry the
+    /// job photos, so this is the path that benefits most from moving image
+    /// decoding and rasterization away from layout.
+    @MainActor
+    static func exportOnsiteReportOffMainActor(
+        serviceCall: ServiceCall,
+        estimate: Estimate?,
+        invoice: Invoice?,
+        payments: [Payment],
+        attachments: [ServiceDocumentAttachment] = [],
+        equipmentProfiles: [CustomerEquipment] = [],
+        serviceCalls: [ServiceCall] = [],
+        fieldFormTemplates: [FieldFormTemplate] = [],
+        fieldFormResponses: [FieldFormResponse] = [],
+        timeEntries: [TimeEntry] = [],
+        materialReadiness: JobMaterialCloseoutSummary = .notApplicable,
+        serviceCallActivities: [ServiceCallActivity] = [],
+        requireWorkPerformedLog: Bool = false,
+        includeFinancials: Bool = true,
+        beforePublication: (@MainActor () async -> Void)? = nil,
+        authorize: @MainActor () throws -> Void
+    ) async throws -> URL {
+        guard !serviceCall.isDeleted, let customer = serviceCall.customer else {
+            throw CustomerDocumentExportError.sourceChangedDuringRender
+        }
+        let retained = retainedInputs(customer: customer, estimate: estimate, invoice: invoice,
+            serviceCall: serviceCall, payments: payments, attachments: attachments,
+            equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls,
+            fieldFormTemplates: fieldFormTemplates, fieldFormResponses: fieldFormResponses,
+            timeEntries: timeEntries, serviceCallActivities: serviceCallActivities)
+        guard retained.allSatisfy({ $0.isCurrent() }) else {
+            throw CustomerDocumentExportError.sourceChangedDuringRender
+        }
+        let prepared = try preparedOnsiteReport(serviceCall: serviceCall, estimate: estimate,
+            invoice: invoice, payments: payments, attachments: attachments,
+            equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls,
+            fieldFormTemplates: fieldFormTemplates, fieldFormResponses: fieldFormResponses,
+            timeEntries: timeEntries, materialReadiness: materialReadiness,
+            serviceCallActivities: serviceCallActivities,
+            requireWorkPerformedLog: requireWorkPerformedLog, includeFinancials: includeFinancials)
+
+        let staged = try await renderDetached(prepared)
+        // Test-only seam: lets a caller act at the one moment that matters —
+        // the document is rendered, nothing is published, the fences are next.
+        // Production callers pass nothing, so there is no shared mutable state.
+        if let beforePublication { await beforePublication() }
+        return try publishOrDiscard(staged: staged, prepared: prepared, retained: retained, authorize: authorize,
+            currentSourceValues: {
+                onsiteReportSourceValues(serviceCall: serviceCall, estimate: estimate,
+                    invoice: invoice, payments: payments, attachments: attachments,
+                    equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls,
+                    fieldFormTemplates: fieldFormTemplates, fieldFormResponses: fieldFormResponses,
+                    timeEntries: timeEntries, materialReadiness: materialReadiness,
+                    serviceCallActivities: serviceCallActivities,
+                    requireWorkPerformedLog: requireWorkPerformedLog)
+            }, currentIdentity: { (serviceCall.customer, serviceCall.id) })
+    }
+
+    /// Renders and writes the bytes off the main actor. Only Sendable values
+    /// cross the boundary, so the detached task cannot reach a SwiftData model
+    /// or the main actor. The file it produces is staged, not published: it is
+    /// a sibling of its destination so that publishing is a metadata-only
+    /// replace, and an existing customer PDF is never overwritten by a document
+    /// whose fences have not yet passed.
+    nonisolated static func renderDetached(_ prepared: PreparedCustomerDocument) async throws -> URL {
+        try await Task.detached(priority: .userInitiated) {
+            try stageDocument(renderDocumentData(prepared.plan), fileName: prepared.fileName)
+        }.value
+    }
+
+    nonisolated private static func stageDocument(_ data: Data, fileName: String) throws -> URL {
+        let staged = try exportFolder()
+            .appendingPathComponent(stagingPrefix + UUID().uuidString + "-" + fileName)
+        do {
+            try data.write(to: staged, options: .atomic)
+            return staged
+        } catch {
+            discardStagedDocument(staged)
+            throw error
+        }
+    }
+
+    /// Publishing is a rename, so a rejected document cannot replace a complete
+    /// one already on disk, and the expensive write has already happened.
+    nonisolated private static func publishDocument(staged: URL, fileName: String) throws -> URL {
+        let url = try exportFolder().appendingPathComponent(fileName)
+        if FileManager.default.fileExists(atPath: url.path) {
+            _ = try FileManager.default.replaceItemAt(url, withItemAt: staged)
+        } else {
+            try FileManager.default.moveItem(at: staged, to: url)
+        }
+        return url
+    }
+
+    nonisolated private static func discardStagedDocument(_ staged: URL) {
+        try? FileManager.default.removeItem(at: staged)
+    }
+
+    nonisolated static let stagingPrefix = ".staging-"
+
+    /// Cancellation, current authorization and the exact original source are all
+    /// required before the staged document is published. Anything that fails
+    /// here leaves the previous PDF, if any, exactly as it was.
+    @MainActor
+    private static func publishOrDiscard(
+        staged: URL,
+        prepared: PreparedCustomerDocument,
+        retained: [RetainedInput],
+        authorize: @MainActor () throws -> Void,
+        currentSourceValues: @MainActor () -> [String],
+        currentIdentity: @MainActor () -> (customer: Customer?, documentID: UUID?)
+    ) throws -> URL {
+        do {
+            try Task.checkCancellation()
+            // Authorization runs before any retained model is read again, so a
+            // record deleted or replaced while the renderer worked is never
+            // touched on the strength of a session that has already ended.
+            try authorize()
+            guard retained.allSatisfy({ $0.isCurrent() }) else {
+                throw CustomerDocumentExportError.sourceChangedDuringRender
+            }
+            let identity = currentIdentity()
+            try requireUnchanged(prepared, customerID: identity.customer?.id,
+                documentID: identity.documentID,
+                currentSourceValues: currentSourceValues(),
+                currentCustomerHeader: customerHeaderValues(identity.customer))
+            try Task.checkCancellation()
+            return try publishDocument(staged: staged, fileName: prepared.fileName)
+        } catch {
+            discardStagedDocument(staged)
+            throw error
+        }
+    }
+
+    /// Compare against the values captured before rendering; never recapture
+    /// them as a fresh baseline. Bytes that describe a record as it used to be
+    /// must not be published as if they were current.
+    ///
+    /// This compares the record graph it was handed. A row inserted during the
+    /// await that is absent from both the retained arrays and this recompute
+    /// cannot be seen here, so callers that need insertion coverage must also
+    /// re-validate a whole-source snapshot fetched from the model context in
+    /// their `authorize` closure — as the billing mail paths do.
+    @MainActor
+    private static func requireUnchanged(
+        _ prepared: PreparedCustomerDocument,
+        customerID: UUID?,
+        documentID: UUID?,
+        currentSourceValues: [String],
+        currentCustomerHeader: [String]
+    ) throws {
+        guard let customerID, customerID == prepared.customerID,
+              let documentID, documentID == prepared.documentID,
+              currentCustomerHeader == prepared.customerHeader,
+              currentSourceValues == prepared.sourceValues else {
+            throw CustomerDocumentExportError.sourceChangedDuringRender
+        }
+    }
+
+    /// The exact fields `startPage` draws, compared field by field rather than
+    /// as the joined block, so one field cannot be emptied into another.
+    @MainActor
+    static func customerHeaderValues(_ customer: Customer?) -> [String] {
+        guard let customer else { return [] }
+        return [customer.name, customer.address ?? "", customer.phone ?? "", customer.email ?? ""]
     }
 
     static func exportFieldFormResponse(
@@ -259,13 +658,14 @@ enum CustomerDocumentExporter {
         )
     }
 
-    static func exportEstimate(
+    @MainActor
+    static func preparedEstimate(
         _ estimate: Estimate,
         serviceCall: ServiceCall?,
         attachments: [ServiceDocumentAttachment] = [],
         equipmentProfiles: [CustomerEquipment] = [],
         serviceCalls: [ServiceCall] = []
-    ) throws -> URL {
+    ) throws -> PreparedCustomerDocument {
         if let blockedMessage = estimate.customerApprovalBlockedMessage {
             throw CustomerDocumentExportError.authoritativeTaxRequired(blockedMessage)
         }
@@ -278,19 +678,85 @@ enum CustomerDocumentExporter {
             serviceCalls: serviceCalls
         )
         let title = estimate.isProposalOption ? "\(estimate.proposalOptionDisplayName) Estimate" : "Estimate"
-        return try renderPDF(
-            title: title,
-            customer: estimate.customer,
-            sections: sections,
-            imageAttachments: billingPhotoAttachments(
-                for: attachments,
-                serviceCall: serviceCall,
-                invoiceID: nil,
-                estimateID: estimate.id
+        return PreparedCustomerDocument(
+            plan: renderPlan(
+                title: title,
+                customer: estimate.customer,
+                sections: sections,
+                imageAttachments: billingPhotoAttachments(
+                    for: attachments,
+                    serviceCall: serviceCall,
+                    invoiceID: nil,
+                    estimateID: estimate.id
+                ),
+                approvalSignatureImageBase64: estimate.customerApprovalSignatureImageBase64
             ),
-            approvalSignatureImageBase64: estimate.customerApprovalSignatureImageBase64,
-            fileName: fileName
+            fileName: uniqueExportFileName(fileName),
+            sourceValues: estimateSourceValues(estimate, serviceCall: serviceCall, attachments: attachments,
+                equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls),
+            customerHeader: customerHeaderValues(estimate.customer),
+            customerID: estimate.customer.id,
+            documentID: estimate.id
         )
+    }
+
+    @MainActor
+    private static func estimateSourceValues(
+        _ estimate: Estimate,
+        serviceCall: ServiceCall?,
+        attachments: [ServiceDocumentAttachment],
+        equipmentProfiles: [CustomerEquipment],
+        serviceCalls: [ServiceCall]
+    ) -> [String] {
+        mailSourceValues(estimate: estimate, invoice: nil, serviceCall: serviceCall, payments: [],
+            attachments: attachments, equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls)
+    }
+
+    @MainActor
+    static func exportEstimate(
+        _ estimate: Estimate,
+        serviceCall: ServiceCall?,
+        attachments: [ServiceDocumentAttachment] = [],
+        equipmentProfiles: [CustomerEquipment] = [],
+        serviceCalls: [ServiceCall] = []
+    ) throws -> URL {
+        let prepared = try preparedEstimate(estimate, serviceCall: serviceCall, attachments: attachments,
+            equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls)
+        return try writeDocument(renderDocumentData(prepared.plan), fileName: prepared.fileName)
+    }
+
+    /// Off-main-actor sibling of `exportEstimate`; see `exportInvoiceOffMainActor`.
+    @MainActor
+    static func exportEstimateOffMainActor(
+        _ estimate: Estimate,
+        serviceCall: ServiceCall?,
+        attachments: [ServiceDocumentAttachment] = [],
+        equipmentProfiles: [CustomerEquipment] = [],
+        serviceCalls: [ServiceCall] = [],
+        beforePublication: (@MainActor () async -> Void)? = nil,
+        authorize: @MainActor () throws -> Void
+    ) async throws -> URL {
+        guard !estimate.isDeleted, let customer = estimate.customer else {
+            throw CustomerDocumentExportError.sourceChangedDuringRender
+        }
+        let retained = retainedInputs(customer: customer, estimate: estimate, serviceCall: serviceCall,
+            attachments: attachments, equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls)
+        guard retained.allSatisfy({ $0.isCurrent() }) else {
+            throw CustomerDocumentExportError.sourceChangedDuringRender
+        }
+        let prepared = try preparedEstimate(estimate, serviceCall: serviceCall, attachments: attachments,
+            equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls)
+
+        let staged = try await renderDetached(prepared)
+        // Test-only seam: lets a caller act at the one moment that matters —
+        // the document is rendered, nothing is published, the fences are next.
+        // Production callers pass nothing, so there is no shared mutable state.
+        if let beforePublication { await beforePublication() }
+        return try publishOrDiscard(staged: staged, prepared: prepared, retained: retained, authorize: authorize,
+            currentSourceValues: {
+                estimateSourceValues(estimate, serviceCall: serviceCall, attachments: attachments,
+                    equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls)
+            }, currentIdentity: { (estimate.customer, estimate.id) })
     }
 
     static func exportMaintenanceAgreement(
@@ -381,14 +847,18 @@ enum CustomerDocumentExporter {
         )
     }
 
-    static func exportInvoice(
+    @MainActor
+    static func preparedInvoice(
         _ invoice: Invoice,
         serviceCall: ServiceCall?,
         payments: [Payment],
         attachments: [ServiceDocumentAttachment] = [],
         equipmentProfiles: [CustomerEquipment] = [],
         serviceCalls: [ServiceCall] = []
-    ) throws -> URL {
+    ) throws -> PreparedCustomerDocument {
+        // Authoritative tax must be settled before customer-facing invoice
+        // bytes exist at all. This runs ahead of rendering on both the
+        // synchronous and the off-main-actor path.
         if let blockedMessage = invoice.paymentCollectionBlockedMessage {
             throw CustomerDocumentExportError.authoritativeTaxRequired(blockedMessage)
         }
@@ -403,19 +873,94 @@ enum CustomerDocumentExporter {
             equipmentProfiles: equipmentProfiles,
             serviceCalls: serviceCalls
         )
-        return try renderPDF(
-            title: paid ? "Paid \(invoice.workType.documentTitle)" : invoice.workType.documentTitle,
-            customer: invoice.customer,
-            sections: sections,
-            imageAttachments: billingPhotoAttachments(
-                for: attachments,
-                serviceCall: serviceCall,
-                invoiceID: invoice.id,
-                estimateID: nil
+        return PreparedCustomerDocument(
+            plan: renderPlan(
+                title: paid ? "Paid \(invoice.workType.documentTitle)" : invoice.workType.documentTitle,
+                customer: invoice.customer,
+                sections: sections,
+                imageAttachments: billingPhotoAttachments(
+                    for: attachments,
+                    serviceCall: serviceCall,
+                    invoiceID: invoice.id,
+                    estimateID: nil
+                ),
+                approvalSignatureImageBase64: invoice.customerSignatureImageBase64
             ),
-            approvalSignatureImageBase64: invoice.customerSignatureImageBase64,
-            fileName: fileName
+            fileName: uniqueExportFileName(fileName),
+            sourceValues: invoiceSourceValues(invoice, serviceCall: serviceCall, payments: payments,
+                attachments: attachments, equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls),
+            customerHeader: customerHeaderValues(invoice.customer),
+            customerID: invoice.customer.id,
+            documentID: invoice.id
         )
+    }
+
+    @MainActor
+    private static func invoiceSourceValues(
+        _ invoice: Invoice,
+        serviceCall: ServiceCall?,
+        payments: [Payment],
+        attachments: [ServiceDocumentAttachment],
+        equipmentProfiles: [CustomerEquipment],
+        serviceCalls: [ServiceCall]
+    ) -> [String] {
+        mailSourceValues(estimate: nil, invoice: invoice, serviceCall: serviceCall, payments: payments,
+            attachments: attachments, equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls)
+    }
+
+    @MainActor
+    static func exportInvoice(
+        _ invoice: Invoice,
+        serviceCall: ServiceCall?,
+        payments: [Payment],
+        attachments: [ServiceDocumentAttachment] = [],
+        equipmentProfiles: [CustomerEquipment] = [],
+        serviceCalls: [ServiceCall] = []
+    ) throws -> URL {
+        let prepared = try preparedInvoice(invoice, serviceCall: serviceCall, payments: payments,
+            attachments: attachments, equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls)
+        return try writeDocument(renderDocumentData(prepared.plan), fileName: prepared.fileName)
+    }
+
+    /// The same projection and the same fences as `exportInvoice`, but the
+    /// CoreText layout, photo decoding, rasterization and the write of the
+    /// rendered bytes all run off the main actor. What remains on the main
+    /// actor is the projection, the fences, and a rename to publish. The
+    /// document reaches its customer-facing path only once cancellation,
+    /// authorization and the original source have all been re-checked.
+    @MainActor
+    static func exportInvoiceOffMainActor(
+        _ invoice: Invoice,
+        serviceCall: ServiceCall?,
+        payments: [Payment],
+        attachments: [ServiceDocumentAttachment] = [],
+        equipmentProfiles: [CustomerEquipment] = [],
+        serviceCalls: [ServiceCall] = [],
+        beforePublication: (@MainActor () async -> Void)? = nil,
+        authorize: @MainActor () throws -> Void
+    ) async throws -> URL {
+        guard !invoice.isDeleted, let customer = invoice.customer else {
+            throw CustomerDocumentExportError.sourceChangedDuringRender
+        }
+        let retained = retainedInputs(customer: customer, invoice: invoice, serviceCall: serviceCall,
+            payments: payments, attachments: attachments, equipmentProfiles: equipmentProfiles,
+            serviceCalls: serviceCalls)
+        guard retained.allSatisfy({ $0.isCurrent() }) else {
+            throw CustomerDocumentExportError.sourceChangedDuringRender
+        }
+        let prepared = try preparedInvoice(invoice, serviceCall: serviceCall, payments: payments,
+            attachments: attachments, equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls)
+
+        let staged = try await renderDetached(prepared)
+        // Test-only seam: lets a caller act at the one moment that matters —
+        // the document is rendered, nothing is published, the fences are next.
+        // Production callers pass nothing, so there is no shared mutable state.
+        if let beforePublication { await beforePublication() }
+        return try publishOrDiscard(staged: staged, prepared: prepared, retained: retained, authorize: authorize,
+            currentSourceValues: {
+                invoiceSourceValues(invoice, serviceCall: serviceCall, payments: payments,
+                    attachments: attachments, equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls)
+            }, currentIdentity: { (invoice.customer, invoice.id) })
     }
 
     static func exportPaidInvoice(
@@ -1650,6 +2195,56 @@ enum CustomerDocumentExporter {
         return (beforeCount, afterCount)
     }
 
+    /// Every SwiftData read and every business fence belongs on this side of
+    /// the boundary. What comes back is an immutable value, so rendering can
+    /// run anywhere and cannot observe a later edit to the records it came
+    /// from — a document is a point-in-time copy, not a live view.
+    @MainActor
+    private static func renderPlan(
+        title: String,
+        customer: Customer,
+        sections: [DocumentSection],
+        imageAttachments: [ServiceDocumentAttachment] = [],
+        imageServiceCall: ServiceCall? = nil,
+        imageEquipmentProfiles: [CustomerEquipment] = [],
+        approvalSignatureImageBase64: String? = nil,
+        generatedAt: Date = Date()
+    ) -> BusinessDocumentRenderPlan {
+        let customerBlock = [customer.name, customer.address, customer.phone, customer.email]
+            .compactMap { value -> String? in
+                guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+                return value
+            }
+            .joined(separator: "\n")
+        return BusinessDocumentRenderPlan(
+            title: title,
+            customerBlock: customerBlock,
+            sections: sections.map { section in
+                BusinessDocumentRenderPlan.Section(
+                    title: section.title,
+                    rows: section.rows.map { .init(label: $0.label, value: $0.value) },
+                    keepsTogether: section.keepsTogether
+                )
+            },
+            approvalSignatureImageBase64: approvalSignatureImageBase64,
+            photos: embeddedPhotoEvidenceAttachments(for: imageAttachments).map { attachment -> BusinessDocumentRenderPlan.Photo in
+                let fingerprint = BusinessDocumentRenderPlan.Photo.fingerprint(attachment.localFilePath)
+                return BusinessDocumentRenderPlan.Photo(
+                    filePath: attachment.localFilePath,
+                    caption: photoAttachmentCaption(
+                        for: attachment,
+                        serviceCall: imageServiceCall,
+                        equipmentProfiles: imageEquipmentProfiles
+                    ),
+                    fileSize: fingerprint.size,
+                    modifiedAt: fingerprint.modifiedAt
+                )
+            },
+            generatedAt: generatedAt
+        )
+    }
+
+    @MainActor
     private static func renderPDF(
         title: String,
         customer: Customer,
@@ -1660,55 +2255,70 @@ enum CustomerDocumentExporter {
         approvalSignatureImageBase64: String? = nil,
         fileName: String
     ) throws -> URL {
-        let folder = try exportFolder()
-        let url = folder.appendingPathComponent(fileName)
+        let plan = renderPlan(
+            title: title,
+            customer: customer,
+            sections: sections,
+            imageAttachments: imageAttachments,
+            imageServiceCall: imageServiceCall,
+            imageEquipmentProfiles: imageEquipmentProfiles,
+            approvalSignatureImageBase64: approvalSignatureImageBase64
+        )
+        return try writeDocument(renderDocumentData(plan), fileName: uniqueExportFileName(fileName))
+    }
+
+    /// Reads nothing but the plan: no SwiftData, no main-actor state. The
+    /// CoreText layout, photo decoding and rasterization here are the
+    /// expensive part of producing a customer document, and this is what makes
+    /// them safe to run off the main actor.
+    nonisolated static func renderDocumentData(_ plan: BusinessDocumentRenderPlan) throws -> Data {
         let pageBounds = CGRect(x: 0, y: 0, width: 612, height: 792)
         let renderer = UIGraphicsPDFRenderer(bounds: pageBounds)
 
         var layoutError: Error?
         let data = renderer.pdfData { context in
-            var y = startPage(context: context, bounds: pageBounds, title: title, customer: customer)
+            var y = startPage(context: context, bounds: pageBounds, plan: plan)
             do {
-                for section in sections {
-                    y = try drawSection(section, at: y, in: pageBounds, context: context, title: title, customer: customer)
+                for section in plan.sections {
+                    y = try drawSection(section, at: y, in: pageBounds, context: context, plan: plan)
                 }
             } catch {
                 layoutError = error
                 return
             }
-            y = drawApprovalSignature(
-                approvalSignatureImageBase64,
-                at: y,
-                in: pageBounds,
-                context: context,
-                title: title,
-                customer: customer
-            )
-            y = drawImageAttachments(
-                imageAttachments,
-                at: y,
-                in: pageBounds,
-                context: context,
-                title: title,
-                customer: customer,
-                serviceCall: imageServiceCall,
-                equipmentProfiles: imageEquipmentProfiles
-            )
-            drawFooter(in: pageBounds)
+            do {
+                y = drawApprovalSignature(
+                    plan.approvalSignatureImageBase64,
+                    at: y,
+                    in: pageBounds,
+                    context: context,
+                    plan: plan
+                )
+                y = try drawPhotos(plan.photos, at: y, in: pageBounds, context: context, plan: plan)
+            } catch {
+                layoutError = error
+                return
+            }
+            drawFooter(in: pageBounds, generatedAt: plan.generatedAt)
         }
         if let layoutError { throw layoutError }
-        // A layout failure must not replace an existing, complete customer PDF.
+        return data
+    }
+
+    /// A layout failure must not replace an existing, complete customer PDF,
+    /// so nothing is written until the whole document has rendered.
+    nonisolated private static func writeDocument(_ data: Data, fileName: String) throws -> URL {
+        let url = try exportFolder().appendingPathComponent(fileName)
         try data.write(to: url, options: .atomic)
         return url
     }
 
-    private static func drawApprovalSignature(
+    nonisolated private static func drawApprovalSignature(
         _ base64: String?,
         at initialY: CGFloat,
         in bounds: CGRect,
         context: UIGraphicsPDFRendererContext,
-        title: String,
-        customer: Customer
+        plan: BusinessDocumentRenderPlan
     ) -> CGFloat {
         guard let base64,
               let data = Data(base64Encoded: base64),
@@ -1719,8 +2329,8 @@ enum CustomerDocumentExporter {
         let margin: CGFloat = 42
         var y = initialY
         if y > bounds.height - 190 {
-            drawFooter(in: bounds)
-            y = startPage(context: context, bounds: bounds, title: title, customer: customer)
+            drawFooter(in: bounds, generatedAt: plan.generatedAt)
+            y = startPage(context: context, bounds: bounds, plan: plan)
         }
         "Customer Signature".draw(at: CGPoint(x: margin, y: y), withAttributes: [
             .font: UIFont.systemFont(ofSize: 15, weight: .semibold),
@@ -1734,11 +2344,10 @@ enum CustomerDocumentExporter {
         return y + size.height + 18
     }
 
-    private static func startPage(
+    nonisolated private static func startPage(
         context: UIGraphicsPDFRendererContext,
         bounds: CGRect,
-        title: String,
-        customer: Customer
+        plan: BusinessDocumentRenderPlan
     ) -> CGFloat {
         context.beginPage()
         let margin: CGFloat = 42
@@ -1750,32 +2359,20 @@ enum CustomerDocumentExporter {
             .font: UIFont.systemFont(ofSize: 10, weight: .semibold),
             .foregroundColor: UIColor.darkGray
         ])
-        title.draw(at: CGPoint(x: margin, y: 96), withAttributes: [
+        plan.title.draw(at: CGPoint(x: margin, y: 96), withAttributes: [
             .font: UIFont.systemFont(ofSize: 22, weight: .semibold),
             .foregroundColor: UIColor.black
         ])
-        let customerBlock = [
-            customer.name,
-            customer.address,
-            customer.phone,
-            customer.email
-        ]
-            .compactMap { value -> String? in
-                guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-                return value
-            }
-            .joined(separator: "\n")
-        drawWrapped(customerBlock, in: CGRect(x: margin, y: 126, width: bounds.width - margin * 2, height: 84), font: .systemFont(ofSize: 11), color: .darkGray)
+        drawWrapped(plan.customerBlock, in: CGRect(x: margin, y: 126, width: bounds.width - margin * 2, height: 84), font: .systemFont(ofSize: 11), color: .darkGray)
         return 216
     }
 
-    private static func drawSection(
-        _ section: DocumentSection,
+    nonisolated private static func drawSection(
+        _ section: BusinessDocumentRenderPlan.Section,
         at initialY: CGFloat,
         in bounds: CGRect,
         context: UIGraphicsPDFRendererContext,
-        title: String,
-        customer: Customer
+        plan: BusinessDocumentRenderPlan
     ) throws -> CGFloat {
         let rows = section.rows.filter { !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         guard !rows.isEmpty else { return initialY }
@@ -1794,8 +2391,8 @@ enum CustomerDocumentExporter {
         let heights = layouts.map { max(22, max($0.label.height(width: labelWidth) + 2, $0.value.height(width: valueWidth)) + 8) }
         var y = initialY
         func nextPage() -> CGFloat {
-            drawFooter(in: bounds)
-            return startPage(context: context, bounds: bounds, title: title, customer: customer)
+            drawFooter(in: bounds, generatedAt: plan.generatedAt)
+            return startPage(context: context, bounds: bounds, plan: plan)
         }
         func heading(at position: CGFloat, continued: Bool) {
             (continued ? "\(section.title) (continued)" : section.title).draw(
@@ -1846,29 +2443,32 @@ enum CustomerDocumentExporter {
         return y + 12
     }
 
-    private static func drawImageAttachments(
-        _ attachments: [ServiceDocumentAttachment],
+    /// Photo selection and captions are projected on the main actor, so this
+    /// only decodes files. Image decoding is the heaviest step in a
+    /// photo-bearing report and is exactly what should not block layout.
+    nonisolated private static func drawPhotos(
+        _ photos: [BusinessDocumentRenderPlan.Photo],
         at initialY: CGFloat,
         in bounds: CGRect,
         context: UIGraphicsPDFRendererContext,
-        title: String,
-        customer: Customer,
-        serviceCall: ServiceCall? = nil,
-        equipmentProfiles: [CustomerEquipment] = []
-    ) -> CGFloat {
-        let images = embeddedPhotoEvidenceAttachments(for: attachments)
-            .compactMap { attachment -> (attachment: ServiceDocumentAttachment, image: UIImage)? in
-                guard let image = UIImage(contentsOfFile: attachment.localFilePath) else { return nil }
-                return (attachment, image)
+        plan: BusinessDocumentRenderPlan
+    ) throws -> CGFloat {
+        // A customer document that quietly loses its evidence photos is worse
+        // than one that fails: the missing page is invisible to whoever sends it.
+        let images = try photos.map { photo -> (photo: BusinessDocumentRenderPlan.Photo, image: UIImage) in
+            guard photo.matchesFileOnDisk, let image = UIImage(contentsOfFile: photo.filePath) else {
+                throw CustomerDocumentExportError.sourceChangedDuringRender
             }
+            return (photo, image)
+        }
         guard !images.isEmpty else { return initialY }
 
         let margin: CGFloat = 42
         let contentWidth = bounds.width - margin * 2
         var y = initialY
         if y > bounds.height - 180 {
-            drawFooter(in: bounds)
-            y = startPage(context: context, bounds: bounds, title: title, customer: customer)
+            drawFooter(in: bounds, generatedAt: plan.generatedAt)
+            y = startPage(context: context, bounds: bounds, plan: plan)
         }
 
         "Attached Photos".draw(at: CGPoint(x: margin, y: y), withAttributes: [
@@ -1879,8 +2479,8 @@ enum CustomerDocumentExporter {
 
         for item in images {
             if y > bounds.height - 230 {
-                drawFooter(in: bounds)
-                y = startPage(context: context, bounds: bounds, title: title, customer: customer)
+                drawFooter(in: bounds, generatedAt: plan.generatedAt)
+                y = startPage(context: context, bounds: bounds, plan: plan)
             }
 
             let maxHeight: CGFloat = 190
@@ -1891,11 +2491,7 @@ enum CustomerDocumentExporter {
             item.image.draw(in: imageRect)
             y += drawSize.height + 6
 
-            let caption = photoAttachmentCaption(
-                for: item.attachment,
-                serviceCall: serviceCall,
-                equipmentProfiles: equipmentProfiles
-            )
+            let caption = item.photo.caption
             drawWrapped(caption, in: CGRect(x: margin, y: y, width: contentWidth, height: 42), font: .systemFont(ofSize: 9), color: .darkGray)
             y += measuredHeight(caption, width: contentWidth, font: .systemFont(ofSize: 9)) + 16
         }
@@ -1903,15 +2499,15 @@ enum CustomerDocumentExporter {
         return y
     }
 
-    private static func drawFooter(in bounds: CGRect) {
-        let footer = "Generated \(formattedDateTime(Date()))"
+    nonisolated private static func drawFooter(in bounds: CGRect, generatedAt: Date) {
+        let footer = "Generated \(formattedDateTime(generatedAt))"
         footer.draw(at: CGPoint(x: 42, y: bounds.height - 44), withAttributes: [
             .font: UIFont.systemFont(ofSize: 9),
             .foregroundColor: UIColor.gray
         ])
     }
 
-    private static func drawWrapped(_ text: String, in rect: CGRect, font: UIFont, color: UIColor) {
+    nonisolated private static func drawWrapped(_ text: String, in rect: CGRect, font: UIFont, color: UIColor) {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byWordWrapping
         paragraph.lineSpacing = 2
@@ -1922,7 +2518,7 @@ enum CustomerDocumentExporter {
         ]).draw(in: rect)
     }
 
-    private static func measuredHeight(_ text: String, width: CGFloat, font: UIFont) -> CGFloat {
+    nonisolated private static func measuredHeight(_ text: String, width: CGFloat, font: UIFont) -> CGFloat {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byWordWrapping
         paragraph.lineSpacing = 2
@@ -1937,7 +2533,7 @@ enum CustomerDocumentExporter {
         return ceil(rect.height)
     }
 
-    private static func exportFolder() throws -> URL {
+    nonisolated private static func exportFolder() throws -> URL {
         guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
             throw CustomerDocumentExportError.documentsDirectoryUnavailable
         }
@@ -1958,6 +2554,14 @@ enum CustomerDocumentExporter {
         ]
             .compactMap { $0 }
         return references.joined(separator: "-")
+    }
+
+    /// A retained URL identifies one immutable export, even when another window
+    /// regenerates the same document. Reusable attachment records may point at
+    /// the new output without changing a PDF already held by a pending draft.
+    nonisolated private static func uniqueExportFileName(_ fileName: String) -> String {
+        let stem = (fileName as NSString).deletingPathExtension
+        return "\(stem)-\(UUID().uuidString).pdf"
     }
 
     private static func makeFileName(prefix: String, customerName: String, descriptor: String? = nil) -> String {
@@ -2014,7 +2618,7 @@ enum CustomerDocumentExporter {
         date.formatted(date: .abbreviated, time: .omitted)
     }
 
-    private static func formattedDateTime(_ date: Date) -> String {
+    nonisolated private static func formattedDateTime(_ date: Date) -> String {
         date.formatted(date: .abbreviated, time: .shortened)
     }
 

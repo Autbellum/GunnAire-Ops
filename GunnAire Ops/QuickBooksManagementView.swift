@@ -7,6 +7,9 @@ private enum QuickBooksSyncState: String {
     case success = "Synced"
     case warning = "Warning"
     case failed = "Failed"
+    /// The sync ended before this resource ran. It is not a failure: nothing
+    /// was read, so this says nothing about the company's books either way.
+    case notAttempted = "Not attempted"
 
     var tint: Color {
         switch self {
@@ -15,6 +18,7 @@ private enum QuickBooksSyncState: String {
         case .success: return .green
         case .warning: return .orange
         case .failed: return .red
+        case .notAttempted: return .secondary
         }
     }
 
@@ -25,6 +29,7 @@ private enum QuickBooksSyncState: String {
         case .success: return "checkmark.circle.fill"
         case .warning: return "exclamationmark.triangle.fill"
         case .failed: return "xmark.octagon.fill"
+        case .notAttempted: return "minus.circle"
         }
     }
 }
@@ -48,7 +53,7 @@ struct QuickBooksInvoicePublicationInputs {
     let shipAddress: QuickBooksAddress?
 }
 
-enum QuickBooksDocumentLinePublicationError: LocalizedError, Equatable {
+nonisolated enum QuickBooksDocumentLinePublicationError: LocalizedError, Equatable {
     case missingCatalogSnapshot
     case missingCatalogItem(String)
     case ambiguousLocalCatalogItem(String)
@@ -95,6 +100,28 @@ enum QuickBooksDocumentLinePublicationError: LocalizedError, Equatable {
 /// reuse an ambiguous QBO Item ID, or publish a different total than the local
 /// customer document.
 enum QuickBooksDocumentLinePublication {
+    nonisolated struct CatalogItem: Sendable {
+        let id: UUID
+        let name: String
+        let createdAt: Date
+        let quickBooksID: String?
+        let itemTypeRawValue: String
+        let requiresPricebookReview: Bool
+        let isCatalogArchived: Bool
+
+        var itemType: CatalogItemType { CatalogItemType(rawValue: itemTypeRawValue) ?? .unknown }
+
+        @MainActor init(_ item: Item) {
+            id = item.id
+            name = item.name
+            createdAt = item.createdAt
+            quickBooksID = item.quickBooksID
+            itemTypeRawValue = item.itemTypeRawValue
+            requiresPricebookReview = item.requiresPricebookReview
+            isCatalogArchived = item.isCatalogArchived
+        }
+    }
+
     nonisolated static func validateSnapshotTotals(snapshotJSON: String?, expectedSubtotal: Double) throws {
         let snapshots = try CatalogSnapshotPayload.read(snapshotJSON)?.lines ?? []
         guard !snapshots.isEmpty else { throw QuickBooksDocumentLinePublicationError.missingCatalogSnapshot }
@@ -128,10 +155,31 @@ enum QuickBooksDocumentLinePublication {
         return (storedItems + documentItems).filter { seen.insert(ObjectIdentifier($0)).inserted }
     }
 
-    static func lines(
+    @MainActor static func lines(
         snapshotJSON: String?,
         expectedSubtotal: Double,
         catalogItems: [Item]
+    ) throws -> [QuickBooksLineItem] {
+        try mappedLines(snapshotJSON: snapshotJSON, expectedSubtotal: expectedSubtotal,
+            catalogItems: catalogItems.map(CatalogItem.init))
+    }
+
+    @MainActor static func linesAsync(
+        snapshotJSON: String?,
+        expectedSubtotal: Double,
+        catalogItems: [Item]
+    ) async throws -> [QuickBooksLineItem] {
+        let items = catalogItems.map(CatalogItem.init)
+        return try await Task.detached(priority: .userInitiated) {
+            try mappedLines(snapshotJSON: snapshotJSON, expectedSubtotal: expectedSubtotal,
+                catalogItems: items)
+        }.value
+    }
+
+    nonisolated private static func mappedLines(
+        snapshotJSON: String?,
+        expectedSubtotal: Double,
+        catalogItems: [CatalogItem]
     ) throws -> [QuickBooksLineItem] {
         let snapshots = try CatalogSnapshotPayload.read(snapshotJSON)?.lines ?? []
         guard !snapshots.isEmpty else {
@@ -155,7 +203,23 @@ enum QuickBooksDocumentLinePublication {
             }
             return item
         }
-        try QuickBooksCatalogMappingIntegrity.validateDocumentItems(documentItems, against: catalogItems)
+        let linkedItems = Dictionary(grouping: catalogItems.filter {
+            !QuickBooksCatalogMappingIntegrity.normalizedIdentifier($0.quickBooksID ?? "").isEmpty
+        }, by: { QuickBooksCatalogMappingIntegrity.normalizedIdentifier($0.quickBooksID ?? "") })
+        for item in documentItems {
+            let identifier = QuickBooksCatalogMappingIntegrity.normalizedIdentifier(item.quickBooksID ?? "")
+            guard !identifier.isEmpty, let matches = linkedItems[identifier], matches.count > 1 else { continue }
+            let sorted = matches.sorted {
+                let nameOrder = $0.name.localizedCaseInsensitiveCompare($1.name)
+                if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
+                if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+                return $0.id.uuidString < $1.id.uuidString
+            }
+            throw QuickBooksCatalogMappingIntegrityError.ambiguousIdentifier(
+                quickBooksID: item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? identifier,
+                localItemNames: sorted.map(\.name)
+            )
+        }
 
         func mappedLine(_ snapshot: CatalogLineItemSnapshot) throws -> QuickBooksLineItem {
             guard let item = itemsByID[snapshot.catalogItemID]?.first else {
@@ -200,7 +264,7 @@ enum QuickBooksDocumentLinePublication {
                     Qty: snapshot.quantity,
                     UnitPrice: snapshot.unitPrice,
                     TaxCodeRef: QuickBooksReference(
-                        value: BillingTaxPolicy.quickBooksTaxCodeValue(isTaxable: snapshot.isTaxable),
+                        value: snapshot.isTaxable ? "TAX" : "NON",
                         name: nil
                     )
                 )
@@ -269,6 +333,72 @@ enum QuickBooksInvoicePublicationRecovery {
         catalogItems: [Item],
         payments: [Payment]
     ) throws -> QuickBooksInvoicePublicationInputs {
+        _ = try validatedCustomerID(for: invoice, payments: payments)
+        let lines = try QuickBooksDocumentLinePublication.lines(
+            snapshotJSON: invoice.catalogSnapshotJSON,
+            expectedSubtotal: invoice.subtotalAmount,
+            catalogItems: catalogItems
+        )
+        let note = accountingNote(existing: invoice.accountingPrivateNote,
+            snapshotJSON: invoice.catalogSnapshotJSON)
+        return try publicationInputs(for: invoice, payments: payments, lines: lines, auditNote: note)
+    }
+
+    static func publicationInputsAsync(
+        for invoice: Invoice,
+        catalogItems: [Item],
+        payments: [Payment],
+        validateCurrent: () throws -> Void
+    ) async throws -> QuickBooksInvoicePublicationInputs {
+        try validateCurrent()
+        _ = try validatedCustomerID(for: invoice, payments: payments)
+        let snapshotJSON = invoice.catalogSnapshotJSON
+        let expectedSubtotal = invoice.subtotalAmount
+        let existingNote = invoice.accountingPrivateNote
+        async let note = Task.detached(priority: .userInitiated) {
+            accountingNote(existing: existingNote, snapshotJSON: snapshotJSON)
+        }.value
+        let lines = try await QuickBooksDocumentLinePublication.linesAsync(
+            snapshotJSON: snapshotJSON, expectedSubtotal: expectedSubtotal, catalogItems: catalogItems)
+        let auditNote = await note
+        try validateCurrent()
+        guard invoice.catalogSnapshotJSON == snapshotJSON, invoice.subtotalAmount == expectedSubtotal,
+              invoice.accountingPrivateNote == existingNote else {
+            throw QuickBooksBillingWorkflowError.changed
+        }
+        return try publicationInputs(for: invoice, payments: payments, lines: lines, auditNote: auditNote)
+    }
+
+    nonisolated private static func accountingNote(existing: String?, snapshotJSON: String?) -> String? {
+        BillingDocumentDiscountAudit.quickBooksPrivateNote(
+            existing: BillingPriceAdjustmentAudit.quickBooksPrivateNote(
+                existing: existing, snapshotJSON: snapshotJSON),
+            snapshotJSON: snapshotJSON)
+    }
+
+    private static func publicationInputs(
+        for invoice: Invoice,
+        payments: [Payment],
+        lines: [QuickBooksLineItem],
+        auditNote: String?
+    ) throws -> QuickBooksInvoicePublicationInputs {
+        let customerID = try validatedCustomerID(for: invoice, payments: payments)
+        return QuickBooksInvoicePublicationInputs(
+            customerRef: QuickBooksReference(value: customerID, name: invoice.customer.name),
+            lines: lines,
+            billEmail: invoice.customer.email.flatMap { email in
+                let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : QuickBooksEmailAddress(Address: trimmed)
+            },
+            privateNote: QuickBooksInvoiceLineage.appendingLineage(to: auditNote, for: invoice),
+            shipAddress: invoice.siteAddress.flatMap { address in
+                let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : QuickBooksAddress(Line1: trimmed)
+            }
+        )
+    }
+
+    private static func validatedCustomerID(for invoice: Invoice, payments: [Payment]) throws -> String {
         if let message = invoice.quickBooksIdentityReviewMessage {
             throw QuickBooksInvoicePublicationRecoveryError.protectedHistory(message)
         }
@@ -281,35 +411,7 @@ enum QuickBooksInvoicePublicationRecovery {
               !customerID.isEmpty else {
             throw QuickBooksInvoicePublicationRecoveryError.missingCustomerMapping
         }
-
-        let lines = try QuickBooksDocumentLinePublication.lines(
-            snapshotJSON: invoice.catalogSnapshotJSON,
-            expectedSubtotal: invoice.subtotalAmount,
-            catalogItems: catalogItems
-        )
-
-        return QuickBooksInvoicePublicationInputs(
-            customerRef: QuickBooksReference(value: customerID, name: invoice.customer.name),
-            lines: lines,
-            billEmail: invoice.customer.email.flatMap { email in
-                let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : QuickBooksEmailAddress(Address: trimmed)
-            },
-            privateNote: QuickBooksInvoiceLineage.appendingLineage(
-                to: BillingDocumentDiscountAudit.quickBooksPrivateNote(
-                    existing: BillingPriceAdjustmentAudit.quickBooksPrivateNote(
-                        existing: invoice.accountingPrivateNote,
-                        snapshotJSON: invoice.catalogSnapshotJSON
-                    ),
-                    snapshotJSON: invoice.catalogSnapshotJSON
-                ),
-                for: invoice
-            ),
-            shipAddress: invoice.siteAddress.flatMap { address in
-                let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : QuickBooksAddress(Line1: trimmed)
-            }
-        )
+        return customerID
     }
 
     static func matchingRemoteInvoice(
@@ -367,28 +469,58 @@ enum QuickBooksEstimatePublicationRecovery {
         for estimate: Estimate,
         catalogItems: [Item]
     ) throws -> QuickBooksEstimatePublicationInputs {
-        guard let customerID = estimate.customer.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !customerID.isEmpty else {
-            throw QuickBooksEstimatePublicationRecoveryError.missingCustomerMapping
-        }
-
+        _ = try validatedCustomerID(for: estimate)
         let lines = try QuickBooksDocumentLinePublication.lines(
             snapshotJSON: estimate.catalogSnapshotJSON,
             expectedSubtotal: estimate.subtotalAmount,
             catalogItems: catalogItems
         )
+        let note = accountingNote(existing: draftNote(for: estimate), snapshotJSON: estimate.catalogSnapshotJSON)
+        return try publicationInputs(for: estimate, lines: lines, auditNote: note)
+    }
 
-        let notes = [estimate.notes, estimate.changeOrderReason.map { "Change order reason: \($0)" }]
+    static func publicationInputsAsync(
+        for estimate: Estimate,
+        catalogItems: [Item],
+        validateCurrent: () throws -> Void
+    ) async throws -> QuickBooksEstimatePublicationInputs {
+        try validateCurrent()
+        _ = try validatedCustomerID(for: estimate)
+        let snapshotJSON = estimate.catalogSnapshotJSON
+        let expectedSubtotal = estimate.subtotalAmount
+        let existingNote = draftNote(for: estimate)
+        async let note = Task.detached(priority: .userInitiated) {
+            accountingNote(existing: existingNote, snapshotJSON: snapshotJSON)
+        }.value
+        let lines = try await QuickBooksDocumentLinePublication.linesAsync(
+            snapshotJSON: snapshotJSON, expectedSubtotal: expectedSubtotal, catalogItems: catalogItems)
+        let auditNote = await note
+        try validateCurrent()
+        guard estimate.catalogSnapshotJSON == snapshotJSON, estimate.subtotalAmount == expectedSubtotal,
+              draftNote(for: estimate) == existingNote else { throw QuickBooksBillingWorkflowError.changed }
+        return try publicationInputs(for: estimate, lines: lines, auditNote: auditNote)
+    }
+
+    private static func draftNote(for estimate: Estimate) -> String {
+        [estimate.notes, estimate.changeOrderReason.map { "Change order reason: \($0)" }]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }.joined(separator: "\n")
-        let adjustedNote = BillingPriceAdjustmentAudit.quickBooksPrivateNote(
-            existing: notes.isEmpty ? nil : notes,
-            snapshotJSON: estimate.catalogSnapshotJSON
-        )
-        let discountedNote = BillingDocumentDiscountAudit.quickBooksPrivateNote(
-            existing: adjustedNote,
-            snapshotJSON: estimate.catalogSnapshotJSON
-        )
+    }
+
+    nonisolated private static func accountingNote(existing: String?, snapshotJSON: String?) -> String? {
+        BillingDocumentDiscountAudit.quickBooksPrivateNote(
+            existing: BillingPriceAdjustmentAudit.quickBooksPrivateNote(
+                existing: existing, snapshotJSON: snapshotJSON),
+            snapshotJSON: snapshotJSON)
+    }
+
+    private static func publicationInputs(
+        for estimate: Estimate,
+        lines: [QuickBooksLineItem],
+        auditNote: String?
+    ) throws -> QuickBooksEstimatePublicationInputs {
+        let customerID = try validatedCustomerID(for: estimate)
+
         return QuickBooksEstimatePublicationInputs(
             customerRef: QuickBooksReference(value: customerID, name: estimate.customer.name),
             lines: lines,
@@ -396,12 +528,18 @@ enum QuickBooksEstimatePublicationRecovery {
                 let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
                 return trimmed.isEmpty ? nil : QuickBooksEmailAddress(Address: trimmed)
             },
-            privateNote: QuickBooksEstimateLineage.appendingLineage(to: discountedNote, for: estimate),
+            privateNote: QuickBooksEstimateLineage.appendingLineage(to: auditNote, for: estimate),
             shipAddress: estimate.siteAddress.flatMap { address in
                 let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
                 return trimmed.isEmpty ? nil : QuickBooksAddress(Line1: trimmed)
             }
         )
+    }
+
+    private static func validatedCustomerID(for estimate: Estimate) throws -> String {
+        guard let customerID = estimate.customer.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !customerID.isEmpty else { throw QuickBooksEstimatePublicationRecoveryError.missingCustomerMapping }
+        return customerID
     }
 
     static func matchingRemoteEstimate(
@@ -3351,7 +3489,6 @@ struct QuickBooksManagementView: View {
                         accountingConfigurationStore.installFixture(Self.accountingMappingFixtureConfiguration)
                     }
                     #endif
-                    QuickBooksDataAPI.shared.loadTokens()
                     #if DEBUG
                     if catalogReconciliationFixtureRequested || accountingMappingFixtureRequested {
                         statusMessage = accountingMappingFixtureRequested
@@ -3362,12 +3499,17 @@ struct QuickBooksManagementView: View {
                         return
                     }
                     #endif
-                    if isAuthenticated {
-                        syncAllQuickBooksData()
-                    } else if !quickBooksConfigReady {
-                        statusMessage = "QuickBooks client credentials are missing on this Mac. Add them in Config/Local.xcconfig, then reconnect QuickBooks."
-                    } else {
-                        statusMessage = "QuickBooks is not connected. Open Settings to authenticate."
+                    let visit = catalogVisit
+                    Task {
+                        await QuickBooksDataAPI.shared.restoreStoredSession()
+                        guard catalogVisible, catalogVisit == visit else { return }
+                        if isAuthenticated {
+                            syncAllQuickBooksData()
+                        } else if !quickBooksConfigReady {
+                            statusMessage = "QuickBooks client credentials are missing on this Mac. Add them in Config/Local.xcconfig, then reconnect QuickBooks."
+                        } else {
+                            statusMessage = "QuickBooks is not connected. Open Settings to authenticate."
+                        }
                     }
                 }
                 .onDisappear {
@@ -3456,9 +3598,10 @@ struct QuickBooksManagementView: View {
                         quickBooksReconnectRequired = true
                         throw QuickBooksDataAPI.QBError.unauthorized
                     }
-                    let events = try await loadQuickBooksWebhookEvents(syncRun)
+                    let alerts = try await loadQuickBooksWebhookEvents(syncRun)
                     try await runQuickBooksResourceSync(syncRun, context: context,
-                                                       webhookEventIDs: events.map(\.id))
+                                                       webhookEventIDs: alerts.events.map(\.id),
+                                                       alertsUnavailable: alerts.unavailable)
                 }
             } catch {
                 guard syncLifecycle.isCurrent(syncRun) else { return }
@@ -3482,69 +3625,66 @@ struct QuickBooksManagementView: View {
     }
 
     private func runQuickBooksResourceSync(_ syncRun: QuickBooksSyncRun, context: ModelContext,
-                                            webhookEventIDs: [String]) async throws {
+                                            webhookEventIDs: [String],
+                                            alertsUnavailable: String?) async throws {
         var failures: [String] = []
+        // Every resource this pass intends to attempt, in run order. Sales
+        // receipts and deposits sit at the end, so they are the ones an early
+        // stop used to cost silently; the orchestrator records which of them
+        // ran and decides, from each error, whether the pass may continue.
+        let orchestrator = QuickBooksResourceSyncOrchestrator(
+            order: QuickBooksManagementView.syncResourceOrder,
+            checkAccess: { try syncRun.check() },
+            describe: { error in
+                self.userFacingQuickBooksMessage(for: error) + self.changeHistoryFailureSuffix(for: error)
+            },
+            emit: { change in
+                self.applySyncStatusChange(change)
+                if case let .failed(id, message) = change {
+                    let prefix = self.syncResourceStatuses.first(where: { $0.id == id })?.name ?? id
+                    failures.append("\(prefix): \(message)")
+                }
+            }
+        )
 
         @MainActor
         func run<T: Decodable>(
             id: String,
-            required: Bool,
             fetch: (@escaping (Result<[T], Error>) -> Void) -> Void,
             apply: @escaping ([T]) -> Void
         ) async throws -> Bool {
-            try syncRun.check()
-            guard !quickBooksReconnectRequired else {
-                return false
-            }
-
-            updateSyncStatus(id: id, state: .syncing, detail: "Loading...", count: nil)
-            let result: Result<[T], Error>
-            do {
-                result = .success(try await syncRun.receiveResource(id: id, fetch: fetch))
-            } catch {
-                try syncRun.check()
-                // Never fall back to a different source, import a partial
-                // shared ledger, or continue on a replacement server grant.
-                if syncRun.sharedHistory != nil, QuickBooksChangeEntity(resourceID: id) != nil { throw error }
-                result = .failure(error)
-            }
-            try syncRun.check()
-
-            switch result {
-            case .success(let records):
+            guard !quickBooksReconnectRequired else { return false }
+            // The orchestrator owns the sequencing: it records the attempt,
+            // classifies any error, and stops the pass when continuing would
+            // be unsafe or futile. An ordinary provider failure is recorded and
+            // the pass continues, so the resources that run last are still
+            // attempted; a partial ledger is still refused downstream by
+            // `prepareLocalImport`, and nothing here falls back to another
+            // source, because a change-tracked resource is only read from the
+            // ledger.
+            let mayContinue = try await orchestrator.perform(id: id) {
+                let records = try await syncRun.receiveResource(id: id, fetch: fetch)
                 try syncRun.commit { apply(records) }
                 try syncRun.markSucceeded(id)
-                updateSyncStatus(id: id, state: .success, detail: "Loaded \(records.count) records.", count: records.count)
-                return true
-            case .failure(let error):
-                let message = userFacingQuickBooksMessage(for: error) + changeHistoryFailureSuffix(for: error)
-                if let qbError = error as? QuickBooksDataAPI.QBError,
-                   qbError.requiresReconnect {
-                    quickBooksReconnectRequired = true
-                    updateSyncStatus(id: id, state: .failed, detail: message, count: nil)
-                    markPendingSyncStatusesFailed("Reconnect QuickBooks. The saved QuickBooks session was rejected before this resource could sync.")
-                } else {
-                    updateSyncStatus(id: id, state: required ? .failed : .warning, detail: message, count: nil)
-                }
-                let prefix = syncResourceStatuses.first(where: { $0.id == id })?.name ?? id
-                failures.append("\(prefix): \(message)")
-                return !quickBooksReconnectRequired
+                return records.count
             }
+            if orchestrator.halt == .reconnectRequired { quickBooksReconnectRequired = true }
+            return mayContinue
         }
 
-        guard try await run(id: "customers", required: true, fetch: liveAPI.fetchCustomers, apply: { records in
+        guard try await run(id: "customers", fetch: liveAPI.fetchCustomers, apply: { records in
             customers = records.sorted { $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending }
-        }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
+        }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures, pass: orchestrator.pass, alertsUnavailable: alertsUnavailable); return }
 
-        guard try await run(id: "catalog", required: true, fetch: liveAPI.fetchItems, apply: { records in
+        guard try await run(id: "catalog", fetch: liveAPI.fetchItems, apply: { records in
             items = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
-        }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
+        }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures, pass: orchestrator.pass, alertsUnavailable: alertsUnavailable); return }
 
-        guard try await run(id: "accounts", required: true, fetch: { completion in
+        guard try await run(id: "accounts", fetch: { completion in
             quickBooksDataAPI.fetchAccounts(completion: completion)
         }, apply: { records in
             accounts = records.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
-        }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
+        }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures, pass: orchestrator.pass, alertsUnavailable: alertsUnavailable); return }
 
         await accountingConfigurationStore.refresh(
             realmID: syncRun.workflow.realmID,
@@ -3570,63 +3710,66 @@ struct QuickBooksManagementView: View {
             )
         }
 
-        guard try await run(id: "estimates", required: true, fetch: liveAPI.fetchEstimates, apply: { records in estimates = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
-        guard try await run(id: "bills", required: true, fetch: liveAPI.fetchBills, apply: { records in bills = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
-        guard try await run(id: "vendorCredits", required: true, fetch: liveAPI.fetchVendorCredits, apply: { records in vendorCredits = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
-        guard try await run(id: "purchases", required: true, fetch: liveAPI.fetchPurchases, apply: { records in purchases = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
+        guard try await run(id: "estimates", fetch: liveAPI.fetchEstimates, apply: { records in estimates = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures, pass: orchestrator.pass, alertsUnavailable: alertsUnavailable); return }
+        guard try await run(id: "bills", fetch: liveAPI.fetchBills, apply: { records in bills = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures, pass: orchestrator.pass, alertsUnavailable: alertsUnavailable); return }
+        guard try await run(id: "vendorCredits", fetch: liveAPI.fetchVendorCredits, apply: { records in vendorCredits = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures, pass: orchestrator.pass, alertsUnavailable: alertsUnavailable); return }
+        guard try await run(id: "purchases", fetch: liveAPI.fetchPurchases, apply: { records in purchases = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures, pass: orchestrator.pass, alertsUnavailable: alertsUnavailable); return }
 
-        guard try await run(id: "vendors", required: true, fetch: liveAPI.fetchVendors, apply: { records in
+        guard try await run(id: "vendors", fetch: liveAPI.fetchVendors, apply: { records in
             vendors = records.sorted { $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending }
-        }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
+        }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures, pass: orchestrator.pass, alertsUnavailable: alertsUnavailable); return }
 
-        guard try await run(id: "payments", required: true, fetch: liveAPI.fetchPayments, apply: { records in payments = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
+        guard try await run(id: "payments", fetch: liveAPI.fetchPayments, apply: { records in payments = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures, pass: orchestrator.pass, alertsUnavailable: alertsUnavailable); return }
         // Read balances after payment activity, rather than replacing them
         // with arithmetic over an earlier or incomplete payment response.
-        guard try await run(id: "invoices", required: true, fetch: liveAPI.fetchInvoices, apply: { records in invoices = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
+        guard try await run(id: "invoices", fetch: liveAPI.fetchInvoices, apply: { records in invoices = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures, pass: orchestrator.pass, alertsUnavailable: alertsUnavailable); return }
 
-        guard try await run(id: "paymentMethods", required: true, fetch: liveAPI.fetchPaymentMethods, apply: { records in
+        guard try await run(id: "paymentMethods", fetch: liveAPI.fetchPaymentMethods, apply: { records in
             paymentMethods = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
-        }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
+        }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures, pass: orchestrator.pass, alertsUnavailable: alertsUnavailable); return }
 
         if !syncRun.successfulResourceIDs.contains("customers") {
             storedCards = []
-            updateSyncStatus(id: "storedCards", state: .warning,
-                detail: "Refresh customers before loading their stored payment methods.", count: 0)
+            orchestrator.skip(id: "storedCards",
+                message: "Refresh customers before loading their stored payment methods.")
         } else if quickBooksDataAPI.canUseQuickBooksPaymentsAPI {
-            guard try await run(id: "storedCards", required: false, fetch: { completion in
+            guard try await run(id: "storedCards", fetch: { completion in
                 liveAPI.fetchCards(forCustomerIDs: customers.map(\.Id), completion: completion)
             }, apply: { records in
                 storedCards = records
-            }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
+            }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures, pass: orchestrator.pass, alertsUnavailable: alertsUnavailable); return }
         } else if Config.QuickBooks.enablePaymentsScope {
             storedCards = []
-            updateSyncStatus(
-                id: "storedCards",
-                state: .warning,
-                detail: "Skipped because this QuickBooks token is not authorized for \(Config.QuickBooks.paymentsScope). Accounting sync remains active.",
-                count: 0
-            )
+            orchestrator.skip(id: "storedCards",
+                message: "Skipped because this QuickBooks token is not authorized for \(Config.QuickBooks.paymentsScope). Accounting sync remains active.")
         } else {
-            updateSyncStatus(
-                id: "storedCards",
-                state: .warning,
-                detail: "Skipped because QB_ENABLE_PAYMENTS_SCOPE is off for Accounting-only login.",
-                count: 0
-            )
+            storedCards = []
+            orchestrator.skip(id: "storedCards",
+                message: "Skipped because QB_ENABLE_PAYMENTS_SCOPE is off for Accounting-only login.")
         }
 
-        guard try await run(id: "salesReceipts", required: true, fetch: liveAPI.fetchSalesReceipts, apply: { records in salesReceipts = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
-        guard try await run(id: "deposits", required: true, fetch: liveAPI.fetchDeposits, apply: { records in deposits = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
+        guard try await run(id: "salesReceipts", fetch: liveAPI.fetchSalesReceipts, apply: { records in salesReceipts = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures, pass: orchestrator.pass, alertsUnavailable: alertsUnavailable); return }
+        guard try await run(id: "deposits", fetch: liveAPI.fetchDeposits, apply: { records in deposits = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures, pass: orchestrator.pass, alertsUnavailable: alertsUnavailable); return }
 
         // Every resource the derivation reads has now run in this sync.
         try await setAccountingDefaultsAutomaticallyIfNeeded(syncRun)
 
-        try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures)
+        try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures, pass: orchestrator.pass, alertsUnavailable: alertsUnavailable)
     }
 
     /// Resources whose records `QuickBooksAccountingDefaults.propose` reads.
     private static let accountingDefaultsSourceResourceIDs: Set<String> = [
         "catalog", "accounts", "invoices", "salesReceipts", "payments", "deposits", "bills", "purchases"
+    ]
+
+    /// Every resource one sync pass attempts, in the order it runs them. Kept
+    /// beside the sequence below so a resource added there is also accounted
+    /// for when a pass stops early; `QuickBooksSyncPassTests` pins that the two
+    /// agree on the trailing financial resources.
+    static let syncResourceOrder: [String] = [
+        "customers", "catalog", "accounts", "estimates", "bills", "vendorCredits",
+        "purchases", "vendors", "payments", "invoices", "paymentMethods",
+        "storedCards", "salesReceipts", "deposits"
     ]
 
     /// Derives the six accounting mappings from what this sync received and
@@ -5123,19 +5266,25 @@ struct QuickBooksManagementView: View {
     }
 
     private func sendCreatedEstimateEmail(_ estimate: QuickBooksEstimate, to emailAddress: String?) {
-        let trimmedEmail = emailAddress?.trimmingCharacters(in: .whitespacesAndNewlines)
-        liveAPI.sendEstimate(id: estimate.Id, to: trimmedEmail) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let sentEstimate):
-                    actionMessage = "Estimate \(sentEstimate.DocNumber ?? sentEstimate.Id) emailed to \(trimmedEmail ?? "the customer")."
-                    syncAllQuickBooksData()
-                case .failure(let error):
-                    actionMessage = "Estimate email failed: \(error.localizedDescription)"
-                    isLoading = false
-                }
+        do {
+            let matches = localEstimates.filter { $0.quickBooksID == estimate.Id }
+            guard matches.count == 1, let local = matches.first,
+                  local.customer?.quickBooksID == estimate.CustomerRef.value else {
+                throw QuickBooksBillingWorkflowError.customerConflict
+            }
+            let workflow = try QuickBooksCustomerEmailWorkflow(context: modelContext,
+                document: .estimate(local), recipient: emailAddress)
+            try workflow.prepare()
+            liveAPI.sendEstimate(id: estimate.Id, to: workflow.recipient,
+                expectedCustomerID: workflow.quickBooksCustomerID, validateSend: { try workflow.validateSend() }) { result in
+                actionMessage = workflow.finish(result.map { _ in () })
+                isLoading = false
                 activeEmailEstimateID = nil
             }
+        } catch {
+            actionMessage = error.localizedDescription
+            isLoading = false
+            activeEmailEstimateID = nil
         }
     }
 
@@ -5164,19 +5313,25 @@ struct QuickBooksManagementView: View {
     }
 
     private func sendCreatedInvoiceEmail(_ invoice: QuickBooksInvoice, to emailAddress: String?) {
-        let trimmedEmail = emailAddress?.trimmingCharacters(in: .whitespacesAndNewlines)
-        liveAPI.sendInvoice(id: invoice.Id, to: trimmedEmail) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let sentInvoice):
-                    actionMessage = "Invoice \(sentInvoice.DocNumber ?? sentInvoice.Id) emailed to \(trimmedEmail ?? "the customer")."
-                    syncAllQuickBooksData()
-                case .failure(let error):
-                    actionMessage = "Invoice email failed: \(error.localizedDescription)"
-                    isLoading = false
-                }
+        do {
+            let matches = localInvoices.filter { $0.quickBooksID == invoice.Id }
+            guard matches.count == 1, let local = matches.first,
+                  local.customer?.quickBooksID == invoice.CustomerRef.value else {
+                throw QuickBooksBillingWorkflowError.customerConflict
+            }
+            let workflow = try QuickBooksCustomerEmailWorkflow(context: modelContext,
+                document: .invoice(local), recipient: emailAddress)
+            try workflow.prepare()
+            liveAPI.sendInvoice(id: invoice.Id, to: workflow.recipient,
+                expectedCustomerID: workflow.quickBooksCustomerID, validateSend: { try workflow.validateSend() }) { result in
+                actionMessage = workflow.finish(result.map { _ in () })
+                isLoading = false
                 activeEmailInvoiceID = nil
             }
+        } catch {
+            actionMessage = error.localizedDescription
+            isLoading = false
+            activeEmailInvoiceID = nil
         }
     }
 
@@ -5261,7 +5416,10 @@ struct QuickBooksManagementView: View {
                 name: status.name,
                 lane: status.lane,
                 required: status.required,
-                state: .syncing,
+                // Waiting, not loading. Only the resource actually being
+                // fetched is `.syncing`, so a pass that stops early can tell a
+                // resource it interrupted from one it never reached.
+                state: .idle,
                 detail: "Waiting for QuickBooks...",
                 count: nil,
                 updatedAt: now
@@ -5305,10 +5463,16 @@ struct QuickBooksManagementView: View {
                 status.detail = detail
                 status.count = nil
             case .idle:
-                status.state = status.required ? .failed : .warning
+                // Never reached, so it read nothing and proves nothing. It is
+                // reported as not attempted rather than failed, which used to
+                // send the owner hunting a provider fault that did not exist.
+                // This covers the derived Accounting Mappings phase too: it is
+                // computed from resources this run never finished reading, so
+                // it was likewise never attempted.
+                status.state = .notAttempted
                 status.detail = "Not reached: the run stopped\(stoppedSuffix)."
                 status.count = nil
-            case .warning, .failed:
+            case .warning, .failed, .notAttempted:
                 break // keeps its own, more specific message
             }
             status.updatedAt = now
@@ -5316,20 +5480,27 @@ struct QuickBooksManagementView: View {
         }
     }
 
-    private func markPendingSyncStatusesFailed(_ detail: String) {
-        let now = Date()
-        syncResourceStatuses = syncResourceStatuses.map { status in
-            guard status.state == .idle || status.state == .syncing else { return status }
-            return QuickBooksSyncResourceStatus(
-                id: status.id,
-                name: status.name,
-                lane: status.lane,
-                required: status.required,
-                state: status.required ? .failed : .warning,
-                detail: detail,
-                count: nil,
-                updatedAt: now
-            )
+    /// Applies one orchestrator status transition to the display rows.
+    ///
+    /// This is where a required resource becomes a failure and an optional one
+    /// a warning, so that distinction stays exactly where it was. A resource
+    /// the pass never reached is `.notAttempted` instead: it read nothing, and
+    /// calling that a failure sent the owner hunting a provider fault that did
+    /// not exist. Sales receipts and deposits run last, so they were the rows
+    /// most often mislabelled.
+    private func applySyncStatusChange(_ change: QuickBooksResourceSyncOrchestrator.StatusChange) {
+        switch change {
+        case let .loading(id):
+            updateSyncStatus(id: id, state: .syncing, detail: "Loading...", count: nil)
+        case let .loaded(id, count):
+            updateSyncStatus(id: id, state: .success, detail: "Loaded \(count) records.", count: count)
+        case let .failed(id, message):
+            let required = syncResourceStatuses.first(where: { $0.id == id })?.required ?? true
+            updateSyncStatus(id: id, state: required ? .failed : .warning, detail: message, count: nil)
+        case let .skipped(id, message):
+            updateSyncStatus(id: id, state: .warning, detail: message, count: 0)
+        case let .notAttempted(id, message):
+            updateSyncStatus(id: id, state: .notAttempted, detail: message, count: nil)
         }
     }
 
@@ -5342,7 +5513,9 @@ struct QuickBooksManagementView: View {
     }
 
     private func finishQuickBooksResourceSync(_ syncRun: QuickBooksSyncRun, context: ModelContext,
-                                              webhookEventIDs: [String], with failures: [String]) async throws {
+                                              webhookEventIDs: [String], with failures: [String],
+                                              pass: QuickBooksSyncPass,
+                                              alertsUnavailable: String?) async throws {
         try syncRun.check()
         guard !quickBooksReconnectRequired else {
             statusMessage = "Reconnect QuickBooks in Settings before syncing again."
@@ -5390,27 +5563,50 @@ struct QuickBooksManagementView: View {
         }
 
         try syncRun.check()
-        if completedFailures.isEmpty {
+        // Name what never ran. A resource the pass did not reach read nothing,
+        // so it must be reported separately from one that failed; sales
+        // receipts and deposits run last and were the usual casualties.
+        let resourceNames = Dictionary(syncResourceStatuses.map { ($0.id, $0.name) },
+                                       uniquingKeysWith: { first, _ in first })
+        // The ledger gate lives in `syncRun.prepareLocalImport()`, which refuses
+        // unless every change entity succeeded, and per-resource filtering
+        // handles the case with no shared history. Both are keyed on the change
+        // entities alone, so stored cards being skipped never withholds the
+        // accounting snapshot from an accounting-only company.
+        let completion = QuickBooksSyncPass.completion(
+            failures: completedFailures,
+            notAttemptedSummary: pass.notAttemptedSummary(names: resourceNames),
+            alertsUnavailable: alertsUnavailable,
+            hasPendingAlerts: !webhookEventIDs.isEmpty
+        )
+        statusMessage = completion.statusMessage
+        if let note = completion.alertRetentionNote { webhookStatusMessage = note }
+        if completion.recordsSuccessfulSyncDate {
             let now = Date()
             lastSuccessfulSyncAt = now
             if let key = syncRun.workflow.successfulSyncDateKey {
                 UserDefaults.standard.set(now, forKey: key)
             }
-            statusMessage = "QuickBooks data refreshed. Review any accounting or payment warnings below."
-            if !webhookEventIDs.isEmpty {
-                webhookStatusMessage = "Change alerts are retained until each record is reconciled. Refreshing data does not clear them."
-            }
-        } else {
-            statusMessage = "QuickBooks sync incomplete.\n" + completedFailures.joined(separator: "\n")
         }
     }
 
+    /// The outcome of reading the shared server's change alerts.
+    ///
+    /// An unreadable alert list is carried forward rather than swallowed: it
+    /// does not stop the resource reads, which are independent of it, but it
+    /// does make the run incomplete, so it can no longer look like a clean
+    /// sync that simply had no alerts.
+    private struct QuickBooksWebhookRead {
+        var events: [BackendQuickBooksWebhookEvent] = []
+        var unavailable: String?
+    }
+
     @MainActor
-    private func loadQuickBooksWebhookEvents(_ syncRun: QuickBooksSyncRun) async throws -> [BackendQuickBooksWebhookEvent] {
+    private func loadQuickBooksWebhookEvents(_ syncRun: QuickBooksSyncRun) async throws -> QuickBooksWebhookRead {
         try syncRun.check()
         guard GunnAireBackendService.isConfigured else {
             webhookStatusMessage = "Shared-server change alerts are not configured."
-            return []
+            return QuickBooksWebhookRead()
         }
         isLoadingWebhookEvents = true
         defer {
@@ -5423,11 +5619,15 @@ struct QuickBooksManagementView: View {
             try syncRun.commit { quickBooksWebhookEvents = events }
             webhookStatusMessage = events.isEmpty
                 ? "No pending QuickBooks changes reported by the server." : nil
-            return events
+            return QuickBooksWebhookRead(events: events)
         } catch {
             try syncRun.check()
+            // A refused administrator or a moved connection stops the whole run
+            // rather than becoming one more warning; nothing further is read.
+            if QuickBooksSyncPass.haltReason(for: error) != nil { throw error }
             webhookStatusMessage = "QuickBooks change alerts need attention in Shared Server Readiness."
-            return []
+            return QuickBooksWebhookRead(
+                unavailable: "Change alerts: " + userFacingQuickBooksMessage(for: error))
         }
     }
 

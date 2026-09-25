@@ -269,7 +269,8 @@ struct FieldCollectionNavigationTests {
             serviceCallID: serviceCallID,
             invoiceID: invoiceID,
             maintenanceContractID: maintenanceContractID,
-            workflow: .maintenanceRenewal
+            workflow: .maintenanceRenewal,
+            sourceSnapshot: ["fixture-origin", "original-source-digest"]
         )
         // Consume navigation as the real handoff does, not just its draft.
         // Leaving Mail pending causes the next Accounting launch to correctly
@@ -281,6 +282,7 @@ struct FieldCollectionNavigationTests {
         #expect(draft?.subject == "Service Report")
         #expect(draft?.body == "Attached.")
         #expect(draft?.attachmentPaths == ["/tmp/report.pdf"])
+        #expect(draft?.sourceSnapshot == ["fixture-origin", "original-source-digest"])
         #expect(draft?.customerID == customerID)
         #expect(draft?.serviceCallID == serviceCallID)
         #expect(draft?.invoiceID == invoiceID)

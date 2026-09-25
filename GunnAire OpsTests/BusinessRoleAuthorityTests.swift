@@ -23,18 +23,18 @@ struct BusinessRoleAuthorityTests {
         let admin = AppUser(email: email, role: .admin)
         #expect(AppAccess.activeRole(email: email, users: [], verifiedUser: approved(email, .admin)) == nil)
         #expect(AppAccess.activeRole(email: email, users: [admin], verifiedUser: nil) == nil)
-        #expect(AppAccess.activeRole(email: email, users: [admin], verifiedUser: approved(email, .fieldTechnician)) == nil)
+        #expect(AppAccess.activeRole(email: email, users: [admin], verifiedUser: approved(email, .fieldTechnician)) == .fieldTechnician)
         admin.isActive = false
         #expect(AppAccess.activeRole(email: email, users: [admin], verifiedUser: approved(email, .admin)) == nil)
         #expect(AppAccess.activeRole(email: email, users: []) == nil)
         #expect(!AppAccess.isAdmin(email: email, users: [admin]))
     }
 
-    @Test func cloudKitRoleEditsCannotPromoteAnyApprovedRole() {
+    @Test func cloudKitRoleEditsCannotPromoteBeyondApprovedRole() {
         for granted in AppUserRole.allCases {
             for mirrored in AppUserRole.allCases where granted != mirrored {
                 let user = AppUser(email: "staff@example.test", role: mirrored)
-                #expect(AppAccess.activeRole(email: user.email, users: [user], verifiedUser: approved(user.email, granted)) == nil)
+                #expect(AppAccess.activeRole(email: user.email, users: [user], verifiedUser: approved(user.email, granted)) == granted)
             }
         }
     }

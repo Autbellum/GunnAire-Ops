@@ -1,91 +1,169 @@
-// QuickBooksAPI.swift
-// Scaffolds OAuth2 flow and API request handling for QuickBooks Online
+// QuickBooks authorization and device-session lifecycle.
 import Foundation
 import AuthenticationServices
 import Combine
 
+@MainActor
 final class QuickBooksAuthAPI: ObservableObject {
-    // MARK: - OAuth2 Properties
     static let shared = QuickBooksAuthAPI()
-    
-    // OAuth client credentials and redirect URI referenced from Config.swift
+
     private let clientID = Config.QuickBooks.clientID
     private let redirectURI = Config.QuickBooks.redirectURI
-    private let callbackScheme = Config.QuickBooks.callbackScheme
+    private let callbackScheme: String
+    private let dataAPI: QuickBooksDataAPI
+    private let stateStore: QuickBooksOAuthStateStore
+    private let currentBinding: () -> String?
+    private let exchangeCode: (String, String) async throws -> QuickBooksOAuthTokens
+    private let restoreBusinessSession: () async -> Void
+    private let allowsSessionResume: () -> Bool
+    private let now: () -> Date
     private var activeAuthSession: ASWebAuthenticationSession?
     private var activePresentationContext: ASWebAuthenticationPresentationContextProviding?
     private var pendingOAuthState: String?
-    
-    @Published private(set) var isAuthenticated: Bool = false
+    private var pendingCancellation: Task<Void, Never>?
+    private var authorizationGeneration = UUID()
+    private var authorizationSuspended = false
+    private var suspendedBinding: String?
+    private var preparingAuthorization = false
+    private var handlingCallback = false
+    private var resumingAuthorization = false
+
+    @Published private(set) var isAuthenticated = false
+    @Published private(set) var callbackErrorMessage: String?
     @Published private var accessToken: String?
     @Published private var realmID: String?
     @Published private var tokenExpiry: Date?
 
     private init() {
-        reloadStoredSession()
+        dataAPI = .shared
+        stateStore = .shared
+        callbackScheme = Self.resolvedCallbackScheme
+        currentBinding = Self.liveBinding
+        exchangeCode = { try await GunnAireBackendService.exchangeQuickBooksAuthorizationCode($0, realmID: $1) }
+        restoreBusinessSession = {
+            async let apple: Void = AppleAuthManager.shared.restoreStoredSession()
+            async let google: Void = GoogleAuthManager.shared.restoreStoredSession()
+            _ = await (apple, google)
+            guard CompanyWorkspaceSession.current != nil else { return }
+            await CompanyWorkspaceAccessController.shared.refreshIfStale(
+                maxAge: CompanyWorkspaceAccessController.verificationInterval)
+        }
+        allowsSessionResume = { UserDefaults.standard.bool(forKey: "hasAuthenticatedUser") }
+        now = Date.init
     }
 
-    func reloadStoredSession() {
-        QuickBooksDataAPI.shared.loadTokens()
-        if let stored = QuickBooksDataAPI.shared.tokens {
-            accessToken = stored.accessToken
-            tokenExpiry = stored.expiration
-            realmID = QuickBooksDataAPI.shared.realmID
-            isAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
-        } else {
-            accessToken = nil
-            tokenExpiry = nil
-            realmID = nil
-            isAuthenticated = false
-        }
-    }
-    
-    // MARK: - OAuth2 Flow
-    func startSignIn(presentationContext: ASWebAuthenticationPresentationContextProviding, completion: @escaping (Result<Void, Error>) -> Void) {
-        if QuickBooksDataAPI.shared.tokens != nil {
-            QuickBooksDataAPI.shared.resetConnectionForReconnect { [weak self] _ in
-                self?.beginSignIn(presentationContext: presentationContext, completion: completion)
-            }
-            return
-        }
-        beginSignIn(presentationContext: presentationContext, completion: completion)
+    #if DEBUG
+    init(testDataAPI: QuickBooksDataAPI, stateStore: QuickBooksOAuthStateStore = .shared,
+         callbackScheme: String = "gunnaireops", currentBinding: @escaping () -> String? = { nil },
+         exchangeCode: @escaping (String, String) async throws -> QuickBooksOAuthTokens = { _, _ in throw QBOError.tokenExchangeUnavailable },
+         restoreBusinessSession: @escaping () async -> Void = {},
+         allowsSessionResume: @escaping () -> Bool = { true }, now: @escaping () -> Date = Date.init) {
+        dataAPI = testDataAPI
+        self.stateStore = stateStore
+        self.callbackScheme = callbackScheme
+        self.currentBinding = currentBinding
+        self.exchangeCode = exchangeCode
+        self.restoreBusinessSession = restoreBusinessSession
+        self.allowsSessionResume = allowsSessionResume
+        self.now = now
     }
 
-    private func beginSignIn(presentationContext: ASWebAuthenticationPresentationContextProviding, completion: @escaping (Result<Void, Error>) -> Void) {
+    func finishPendingCancellationForTesting() async {
+        if let pendingCancellation { await pendingCancellation.value }
+    }
+    #endif
+
+    func reloadStoredSession() async {
+        guard let binding = currentBinding() else { return }
+        if authorizationSuspended {
+            guard binding != suspendedBinding else { return }
+            authorizationSuspended = false
+            suspendedBinding = nil
+        }
+        let generation = authorizationGeneration
+        await dataAPI.restoreStoredSession()
+        guard generation == authorizationGeneration, !authorizationSuspended,
+              currentBinding() == binding else { return }
+        accessToken = dataAPI.tokens?.accessToken
+        tokenExpiry = dataAPI.tokens?.expiration
+        realmID = dataAPI.realmID
+        isAuthenticated = dataAPI.isAuthenticated
+    }
+
+    func startSignIn(presentationContext: ASWebAuthenticationPresentationContextProviding,
+                     completion: @escaping (Result<Void, Error>) -> Void) {
+        guard !preparingAuthorization, activeAuthSession == nil, !handlingCallback else {
+            completion(.failure(QBOError.authorizationInProgress)); return
+        }
         guard Config.QuickBooks.isConfigured else {
-            completion(Result<Void, Error>.failure(QBOError.missingConfiguration))
-            return
+            completion(.failure(QBOError.missingConfiguration)); return
         }
-        if Config.QuickBooks.isProduction && !Config.QuickBooks.redirectURIIsHTTPS {
-            completion(Result<Void, Error>.failure(QBOError.invalidRedirectURI(redirectURI)))
-            return
+        guard !Config.QuickBooks.isProduction || Config.QuickBooks.redirectURIIsHTTPS else {
+            completion(.failure(QBOError.invalidRedirectURI(redirectURI))); return
         }
-        guard let authURL = makeAuthURL() else {
-            completion(Result<Void, Error>.failure(QBOError.invalidAuthURL))
-            return
+        guard !callbackScheme.isEmpty, isCallbackSchemeRegistered(callbackScheme) else {
+            completion(.failure(QBOError.callbackSchemeNotRegistered(callbackScheme))); return
         }
-        let resolvedCallbackScheme = callbackScheme.isEmpty ? (URL(string: redirectURI)?.scheme ?? "") : callbackScheme
-        guard !resolvedCallbackScheme.isEmpty else {
-            completion(Result<Void, Error>.failure(QBOError.invalidRedirectURI(redirectURI)))
-            return
+        guard let binding = currentBinding() else {
+            completion(.failure(QBOError.businessSessionRequired)); return
         }
-        guard isCallbackSchemeRegistered(resolvedCallbackScheme) else {
-            completion(Result<Void, Error>.failure(QBOError.callbackSchemeNotRegistered(resolvedCallbackScheme)))
-            return
+        let record = QuickBooksOAuthStateRecord(binding: binding, createdAt: now())
+        guard let authURL = makeAuthURL(state: record.state) else {
+            completion(.failure(QBOError.invalidAuthURL)); return
         }
-        let session = ASWebAuthenticationSession(
-            url: authURL,
-            callbackURLScheme: resolvedCallbackScheme
-        ) { [weak self] callbackURL, error in
-            defer {
-                self?.activeAuthSession = nil
-                self?.activePresentationContext = nil
+        authorizationGeneration = UUID()
+        let generation = authorizationGeneration
+        authorizationSuspended = false
+        suspendedBinding = nil
+        preparingAuthorization = true
+        pendingOAuthState = record.state
+        Task {
+            if let pendingCancellation { await pendingCancellation.value }
+            do {
+                try requireCurrent(generation: generation, binding: binding)
+                try await stateStore.save(record)
+                try requireCurrent(generation: generation, binding: binding)
+                preparingAuthorization = false
+                openBrowser(url: authURL, record: record, generation: generation,
+                            presentationContext: presentationContext, completion: completion)
+            } catch {
+                _ = try? await stateStore.cancel(state: record.state)
+                if authorizationGeneration == generation {
+                    preparingAuthorization = false
+                    pendingOAuthState = nil
+                }
+                completion(.failure(Self.safeError(error)))
             }
-            guard let self = self, let callbackURL = callbackURL else {
-                completion(Result<Void, Error>.failure(error ?? QBOError.unknown))
-                return
+        }
+    }
+
+    private func openBrowser(url: URL, record: QuickBooksOAuthStateRecord, generation: UUID,
+                             presentationContext: ASWebAuthenticationPresentationContextProviding,
+                             completion: @escaping (Result<Void, Error>) -> Void) {
+        let session = ASWebAuthenticationSession(url: url, callbackURLScheme: callbackScheme) { [weak self] url, _ in
+            Task { @MainActor in
+                guard let self else { completion(.failure(QBOError.cancelled)); return }
+                guard self.authorizationGeneration == generation else {
+                    completion(.failure(QBOError.sessionChanged)); return
+                }
+                self.activeAuthSession = nil
+                self.activePresentationContext = nil
+                guard let url else {
+                    _ = try? await self.stateStore.cancel(state: record.state)
+                    if self.authorizationGeneration == generation { self.pendingOAuthState = nil }
+                    completion(.failure(QBOError.cancelled)); return
+                }
+                do {
+                    try self.requireCurrent(generation: generation, binding: record.binding)
+                    try await self.completeAuthCallback(url: url)
+                    completion(.success(()))
+                } catch {
+                    // A malformed callback cannot cancel another flow stored after this one.
+                    _ = try? await self.stateStore.cancel(state: record.state)
+                    if self.authorizationGeneration == generation { self.pendingOAuthState = nil }
+                    completion(.failure(Self.safeError(error)))
+                }
             }
-            self.handleAuthCallback(url: callbackURL, completion: completion)
         }
         session.presentationContextProvider = presentationContext
         session.prefersEphemeralWebBrowserSession = false
@@ -94,125 +172,184 @@ final class QuickBooksAuthAPI: ObservableObject {
         if !session.start() {
             activeAuthSession = nil
             activePresentationContext = nil
-            completion(Result<Void, Error>.failure(QBOError.unknown))
+            pendingOAuthState = nil
+            pendingCancellation = Task { _ = try? await stateStore.cancel(state: record.state) }
+            completion(.failure(QBOError.browserUnavailable))
         }
     }
 
+    /// Shared by the live browser and a callback that relaunches the app.
+    func completeAuthCallback(url: URL) async throws {
+        guard !handlingCallback else { throw QBOError.authorizationInProgress }
+        guard !authorizationSuspended, let binding = currentBinding() else {
+            throw QBOError.businessSessionRequired
+        }
+        let callback = try QuickBooksOAuthCallback.parse(url, expectedScheme: callbackScheme)
+        let generation = authorizationGeneration
+        handlingCallback = true
+        defer { handlingCallback = false }
+        do {
+            _ = try await stateStore.consume(state: callback.state, binding: binding, now: now())
+        } catch { throw Self.safeError(error) }
+        if pendingOAuthState == callback.state { pendingOAuthState = nil }
+        try requireCurrent(generation: generation, binding: binding)
+        let tokens: QuickBooksOAuthTokens
+        do { tokens = try await exchangeCode(callback.code, callback.realmID) }
+        catch {
+            try requireCurrent(generation: generation, binding: binding)
+            throw QBOError.tokenExchangeUnavailable
+        }
+        try requireCurrent(generation: generation, binding: binding)
+        guard !tokens.accessToken.isEmpty, tokens.expiration > now() else {
+            throw QBOError.tokenExchangeUnavailable
+        }
+        dataAPI.storeTokens(tokens, realmID: callback.realmID)
+        accessToken = tokens.accessToken
+        tokenExpiry = tokens.expiration
+        realmID = callback.realmID
+        isAuthenticated = true
+    }
+
+    func resumeAuthorization(from url: URL) async {
+        guard QuickBooksOAuthCallback.isCandidate(url, expectedScheme: callbackScheme),
+              activeAuthSession == nil, !preparingAuthorization, !handlingCallback, !resumingAuthorization else { return }
+        resumingAuthorization = true
+        defer { resumingAuthorization = false }
+        let generation = authorizationGeneration
+        do {
+            guard !authorizationSuspended, allowsSessionResume() else { throw QBOError.businessSessionRequired }
+            // Reject malformed URLs before doing any restore or workspace work.
+            _ = try QuickBooksOAuthCallback.parse(url, expectedScheme: callbackScheme)
+            await restoreBusinessSession()
+            guard generation == authorizationGeneration, !authorizationSuspended, allowsSessionResume() else {
+                throw QBOError.sessionChanged
+            }
+            try await completeAuthCallback(url: url)
+            callbackErrorMessage = nil
+        } catch {
+            if generation == authorizationGeneration {
+                callbackErrorMessage = Self.safeError(error).localizedDescription
+            }
+        }
+    }
+
+    func clearCallbackError() { callbackErrorMessage = nil }
+
     func signOut() {
+        let state = pendingOAuthState
+        let binding = currentBinding()
         isAuthenticated = false
         accessToken = nil
         realmID = nil
         tokenExpiry = nil
+        authorizationGeneration = UUID()
+        authorizationSuspended = true
+        suspendedBinding = binding
+        preparingAuthorization = false
         pendingOAuthState = nil
+        activeAuthSession?.cancel()
         activeAuthSession = nil
         activePresentationContext = nil
-        QuickBooksDataAPI.shared.resetConnectionForReconnect()
+        callbackErrorMessage = nil
+        dataAPI.suspendLocalSession()
+        // Include the persisted flow after a restart; never remove a different session's flow.
+        if state != nil || binding != nil {
+            let previousCancellation = pendingCancellation
+            pendingCancellation = Task {
+                if let previousCancellation { await previousCancellation.value }
+                if let state { _ = try? await stateStore.cancel(state: state) }
+                else if let binding { _ = try? await stateStore.cancel(binding: binding) }
+            }
+        }
+    }
+
+    /// Only the explicit, confirmed Disconnect action revokes company access.
+    func disconnect(completion: @escaping (Bool) -> Void = { _ in }) {
+        dataAPI.resetConnectionForReconnect { [weak self] succeeded in
+            if succeeded { self?.signOut() }
+            completion(succeeded)
+        }
+    }
+
+    private func requireCurrent(generation: UUID, binding: String) throws {
+        try Task.checkCancellation()
+        guard !authorizationSuspended, authorizationGeneration == generation,
+              currentBinding() == binding else { throw QBOError.sessionChanged }
+    }
+
+    private static var resolvedCallbackScheme: String {
+        Config.QuickBooks.callbackScheme.isEmpty
+            ? (URL(string: Config.QuickBooks.redirectURI)?.scheme ?? "") : Config.QuickBooks.callbackScheme
+    }
+
+    private static func liveBinding() -> String? {
+        guard let session = CompanyWorkspaceSession.current,
+              let companyID = CompanyWorkspaceAccessController.shared.verifiedCompanyID else { return nil }
+        let components = ["quickbooks-oauth-binding-v1", session.backendOrigin, session.email,
+                          session.tokenFingerprint, companyID.uuidString, Config.QuickBooks.environment,
+                          Config.QuickBooks.clientID, Config.QuickBooks.redirectURI, resolvedCallbackScheme,
+                          Config.QuickBooks.authorizationEndpoint] + Config.QuickBooks.oauthScopes.sorted()
+        guard let data = try? JSONEncoder().encode(components) else { return nil }
+        return CompanyWorkspaceSession.digest(data.base64EncodedString())
     }
 
     private func isCallbackSchemeRegistered(_ scheme: String) -> Bool {
-        guard let urlTypes = Bundle.main.object(forInfoDictionaryKey: "CFBundleURLTypes") as? [[String: Any]] else {
-            return false
-        }
-        let configured = urlTypes
-            .compactMap { $0["CFBundleURLSchemes"] as? [String] }
-            .flatMap { $0 }
-        return configured.contains { $0.caseInsensitiveCompare(scheme) == .orderedSame }
+        guard let urlTypes = Bundle.main.object(forInfoDictionaryKey: "CFBundleURLTypes") as? [[String: Any]] else { return false }
+        return urlTypes.compactMap { $0["CFBundleURLSchemes"] as? [String] }.flatMap { $0 }
+            .contains { $0.caseInsensitiveCompare(scheme) == .orderedSame }
     }
 
-    private func makeAuthURL() -> URL? {
+    private func makeAuthURL(state: String) -> URL? {
         var components = URLComponents(string: Config.QuickBooks.authorizationEndpoint)
-        let scopes = Config.QuickBooks.oauthScopes
-        let state = UUID().uuidString
-        pendingOAuthState = state
         components?.queryItems = [
             URLQueryItem(name: "client_id", value: clientID),
             URLQueryItem(name: "redirect_uri", value: redirectURI),
             URLQueryItem(name: "response_type", value: "code"),
-            URLQueryItem(name: "scope", value: scopes.joined(separator: " ")),
+            URLQueryItem(name: "scope", value: Config.QuickBooks.oauthScopes.joined(separator: " ")),
             URLQueryItem(name: "state", value: state)
         ]
         return components?.url
     }
-    
-    private func handleAuthCallback(url: URL, completion: @escaping (Result<Void, Error>) -> Void) {
-        // Parse auth code and exchange for access/refresh tokens
-        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            completion(Result<Void, Error>.failure(QBOError.unknown))
-            return
-        }
 
-        if let oauthError = components.queryItems?.first(where: { $0.name == "error" })?.value {
-            let description = components.queryItems?.first(where: { $0.name == "error_description" })?.value
-            completion(Result<Void, Error>.failure(QBOError.providerError(oauthError, description)))
-            return
-        }
-
-        guard
-              let codeItem = components.queryItems?.first(where: { $0.name == "code" }),
-              let code = codeItem.value else {
-            completion(Result<Void, Error>.failure(QBOError.missingAuthCode))
-            return
-        }
-        guard let state = components.queryItems?.first(where: { $0.name == "state" })?.value,
-              state == pendingOAuthState else {
-            completion(Result<Void, Error>.failure(QBOError.invalidState))
-            return
-        }
-        let realmID = components.queryItems?.first(where: { $0.name == "realmId" })?.value
-            ?? components.queryItems?.first(where: { $0.name == "realmid" })?.value
-        guard let realmID,
-              !realmID.isEmpty else {
-            completion(Result<Void, Error>.failure(QBOError.missingRealmID))
-            return
-        }
-        pendingOAuthState = nil
-        self.realmID = realmID
-
-        exchangeAuthorizationCode(code: code, realmID: realmID) { result in
-            DispatchQueue.main.async(execute: {
-                switch result {
-                case .success(let tokens):
-                    self.accessToken = tokens.accessToken
-                    self.tokenExpiry = tokens.expiration
-                    self.isAuthenticated = true
-                    QuickBooksDataAPI.shared.storeTokens(tokens, realmID: realmID)
-                    completion(Result<Void, Error>.success(()))
-                case .failure(let error):
-                    self.isAuthenticated = false
-                    completion(Result<Void, Error>.failure(error))
-                }
-            })
-        }
-    }
-
-    private func exchangeAuthorizationCode(code: String, realmID: String, completion: @escaping (Result<QuickBooksOAuthTokens, Error>) -> Void) {
-        Task {
-            do {
-                let tokens = try await GunnAireBackendService.exchangeQuickBooksAuthorizationCode(code, realmID: realmID)
-                completion(.success(tokens))
-            } catch {
-                completion(.failure(error))
+    private static func safeError(_ error: Error) -> QBOError {
+        if let error = error as? QBOError { return error }
+        if error is CancellationError { return .cancelled }
+        if let error = error as? QuickBooksOAuthStateError {
+            switch error {
+            case .expired, .clockRollback: return .expiredState
+            case .changedBinding: return .sessionChanged
+            case .missing, .invalidRecord, .mismatchedState: return .invalidState
+            case .removalNotConfirmed: return .stateStorageUnavailable
             }
         }
+        return .stateStorageUnavailable
     }
-    
 }
 
-enum QBOError: Error, LocalizedError {
-    case invalidAuthURL, missingAuthCode, missingRealmID, invalidState, notAuthenticated, invalidRedirectURI(String), callbackSchemeNotRegistered(String), missingConfiguration, providerError(String, String?), tokenExchangeFailed(Int, String?), unknown
+nonisolated enum QBOError: Error, LocalizedError, Equatable {
+    case invalidAuthURL, missingAuthCode, missingRealmID, invalidState, notAuthenticated
+    case invalidRedirectURI(String), callbackSchemeNotRegistered(String), missingConfiguration
+    case providerError(String, String?), tokenExchangeFailed(Int, String?), unknown
+    case invalidCallback, authorizationDeclined, authorizationInProgress, businessSessionRequired
+    case sessionChanged, expiredState, stateStorageUnavailable, tokenExchangeUnavailable, browserUnavailable, cancelled
+
     var errorDescription: String? {
         switch self {
-        case .invalidAuthURL: return "Could not build authorization URL."
-        case .missingAuthCode: return "Authorization code was not returned."
-        case .missingRealmID: return "QuickBooks realmId was not returned."
-        case .invalidState: return "OAuth state validation failed."
+        case .invalidAuthURL: return "QuickBooks authorization could not be opened. Check the app configuration."
+        case .missingAuthCode, .missingRealmID, .invalidCallback: return "QuickBooks returned an incomplete or ambiguous callback. Start Connect QuickBooks again."
+        case .invalidState: return "This QuickBooks connection attempt could not be verified or was already used. Start Connect QuickBooks again."
         case .notAuthenticated: return "You are not signed in to QuickBooks."
-        case .invalidRedirectURI(let uri): return "QuickBooks redirect URI is invalid: \(uri)"
-        case .callbackSchemeNotRegistered(let scheme): return "QuickBooks callback scheme '\(scheme)' is not registered in app URL Types."
-        case .missingConfiguration: return "QuickBooks OAuth credentials are missing. For production, set QB_ENVIRONMENT=production, the production Intuit client ID/secret, and the production HTTPS redirect URI from the Intuit Developer Portal."
-        case .providerError(let code, let description): return "QuickBooks OAuth error: \(code)\(description.map { " - \($0)" } ?? ""). Confirm this build is using the production Intuit app credentials and production redirect URI."
-        case .tokenExchangeFailed(let statusCode, let detail): return "QuickBooks token exchange failed (HTTP \(statusCode))\(detail.map { ": \($0)" } ?? ""). Confirm QB_ENVIRONMENT=production, the client ID/secret are from the Intuit production keys, and the redirect URI exactly matches the production Intuit Developer Portal entry."
-        case .unknown: return "An unknown error occurred."
+        case .invalidRedirectURI, .callbackSchemeNotRegistered, .missingConfiguration: return "QuickBooks authorization is not configured correctly for this build. Contact your administrator."
+        case .providerError, .authorizationDeclined: return "QuickBooks authorization was declined or cancelled. Your existing connection was kept."
+        case .tokenExchangeFailed, .tokenExchangeUnavailable: return "QuickBooks could not finish the connection. Check connection status before starting Connect QuickBooks again."
+        case .authorizationInProgress: return "A QuickBooks connection attempt is already in progress."
+        case .businessSessionRequired: return "Sign in to your GunnAire business workspace before connecting QuickBooks."
+        case .sessionChanged: return "Your business session changed during QuickBooks authorization. Start Connect QuickBooks again."
+        case .expiredState: return "This QuickBooks connection attempt expired. Start Connect QuickBooks again."
+        case .stateStorageUnavailable: return "QuickBooks could not securely verify the saved connection attempt. Unlock this device and start Connect QuickBooks again."
+        case .browserUnavailable: return "The QuickBooks sign-in browser could not open. Try Connect QuickBooks again."
+        case .cancelled: return "QuickBooks authorization was cancelled."
+        case .unknown: return "QuickBooks authorization could not finish. Try Connect QuickBooks again."
         }
     }
 }

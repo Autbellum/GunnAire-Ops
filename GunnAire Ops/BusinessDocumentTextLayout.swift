@@ -3,7 +3,12 @@ import UIKit
 
 /// One immutable text backing store, consumed only by ranges Core Text actually
 /// fits. UTF-16 offsets stay in the original string across page boundaries.
-struct BusinessDocumentTextLayout {
+///
+/// Core Text and the attributed string behind it need no main actor, and this
+/// type is built and consumed entirely inside a single render, so it is
+/// explicitly nonisolated rather than inheriting the module's main-actor
+/// default. That is what lets document rendering leave the main actor.
+nonisolated struct BusinessDocumentTextLayout {
     private let text: NSAttributedString
     private let framesetter: CTFramesetter
     private(set) var offset = 0

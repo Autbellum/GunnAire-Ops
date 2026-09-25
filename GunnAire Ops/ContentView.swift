@@ -533,13 +533,12 @@ struct ContentView: View {
             }
         }
         .task {
-            // Startup work that used to run in `onAppear`, on the main context,
-            // before the first screen could respond. The credential reads stay
-            // on the main actor; the store maintenance runs on a background
-            // context (`ContentStartupMaintenance`).
+            // Restore credentials and maintain the store without blocking the
+            // first interactive screen while secure storage or SQLite responds.
             NetworkConnectivityMonitor.shared.start()
-            QuickBooksDataAPI.shared.loadTokens()
+            await QuickBooksDataAPI.shared.resumeStoredSessionForCurrentBusiness()
             isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+            await GoogleAuthManager.shared.restoreStoredSession()
             isGoogleAuthenticated = GoogleAuthManager.shared.isAuthenticated
             refreshGoogleAccountIdentityIfNeeded()
             await runStartupDataMaintenance()
@@ -555,7 +554,13 @@ struct ContentView: View {
                 authenticateQuickBooks: authenticateQuickBooks,
                 authenticateGoogle: authenticateGoogle,
                 disconnectQuickBooks: {
-                    QuickBooksAuthAPI.shared.signOut()
+                    QuickBooksAuthAPI.shared.disconnect { succeeded in
+                        isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+                        if !succeeded {
+                            presentAuthAlert(title: "QuickBooks Disconnect Failed",
+                                message: "The disconnect was not confirmed. Check QuickBooks connection status before reconnecting.")
+                        }
+                    }
                 },
                 disconnectGoogle: {
                     GoogleAuthManager.shared.signOut()
@@ -610,8 +615,10 @@ struct ContentView: View {
             }
         )
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-            QuickBooksAuthAPI.shared.reloadStoredSession()
-            isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+            Task { @MainActor in
+                await QuickBooksAuthAPI.shared.reloadStoredSession()
+                isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+            }
             retryPendingSharedCompanyDocumentUploadsIfNeeded()
             retryPendingCustomerCommunicationUploadsIfNeeded()
             applyPendingAppRouteIfNeeded()
@@ -623,8 +630,10 @@ struct ContentView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .quickBooksAuthenticationDidChange)) { _ in
-            QuickBooksAuthAPI.shared.reloadStoredSession()
-            isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+            Task { @MainActor in
+                await QuickBooksAuthAPI.shared.reloadStoredSession()
+                isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .CKAccountChanged)) { _ in
             Task {
@@ -786,16 +795,27 @@ struct ContentView: View {
     }
 
     /// The store maintenance that used to run on the main context at first
-    /// appearance. The fetches and the user-duplicate collapse run on
-    /// `ContentStartupMaintenance`; the customer deletion pass, which walks
-    /// every related table, stays on the main context and runs only when the
-    /// actor has found something to delete.
+    /// appearance. The full-table fetches, user-duplicate collapse, and
+    /// relationship cleanup run on a private context on a background queue.
     private func runStartupDataMaintenance() async {
-        let maintenance = ContentStartupMaintenance(modelContainer: modelContext.container)
+        let container = modelContext.container
+        let maintenance = ContentStartupColdMaintenance(modelContainer: container)
+        let generation = CompanyWorkspaceAccessController.shared.generation
         await maintenance.collapseCloudKitUserDuplicates()
-        guard AppAccess.canDeleteCustomerRecords(email: currentUserEmail, users: users),
+        guard !Task.isCancelled,
+              CompanyWorkspaceAccessController.shared.generation == generation,
+              AppAccess.canDeleteCustomerRecords(email: currentUserEmail, users: users),
               await maintenance.hasCalendarCreatedCustomersToClean() else { return }
-        _ = CustomerDataMaintenance.cleanupCalendarNamedCustomers(modelContext: modelContext)
+        guard !Task.isCancelled,
+              CompanyWorkspaceAccessController.shared.generation == generation,
+              AppAccess.canDeleteCustomerRecords(email: currentUserEmail, users: users) else { return }
+        _ = try? await maintenance.cleanupCalendarNamedCustomers {
+            guard AppAccess.canDeleteCustomerRecords(email: currentUserEmail, users: users) else {
+                throw CustomerCalendarCleanupError.accessChanged
+            }
+            return try CompanyWorkspaceAccessController.shared.customerCleanupPermit(
+                generation: generation, container: container)
+        }
     }
 
     private func retryPendingSharedCompanyDocumentUploadsIfNeeded() {
@@ -806,7 +826,8 @@ struct ContentView: View {
         isRetryingSharedCompanyDocumentUploads = true
         let container = modelContext.container
         Task { @MainActor in
-            await ContentStartupMaintenance(modelContainer: container).retryPendingSharedCompanyDocumentUploads()
+            let maintenance = ContentStartupUploadMaintenance(modelContainer: container)
+            await maintenance.retryPendingSharedCompanyDocumentUploads()
             isRetryingSharedCompanyDocumentUploads = false
         }
     }
@@ -817,7 +838,8 @@ struct ContentView: View {
         isRetryingCustomerCommunicationUploads = true
         let container = modelContext.container
         Task { @MainActor in
-            await ContentStartupMaintenance(modelContainer: container).retryPendingCustomerCommunicationUploads()
+            let maintenance = ContentStartupUploadMaintenance(modelContainer: container)
+            await maintenance.retryPendingCustomerCommunicationUploads()
             isRetryingCustomerCommunicationUploads = false
         }
     }
@@ -2253,27 +2275,38 @@ GunnAire
         _ attachment: ServiceDocumentAttachment,
         data: Data
     ) {
-        guard GunnAireBackendService.isConfigured else { return }
-        Task {
-            do {
-                let response = try await GunnAireBackendService.uploadDocument(
-                    data: data,
-                    filename: attachment.displayName,
-                    contentType: attachment.contentType,
-                    kind: attachment.kindRaw,
-                    serviceCallID: call.id,
-                    maintenanceContractID: attachment.maintenanceContractID,
-                    customerEquipmentID: nil,
-                    customerName: call.customer.name
-                )
-                attachment.markSharedCompanyStored(id: response.id)
-                try? modelContext.save()
-            } catch {
-                attachment.markSharedCompanyUploadFailed(error.localizedDescription)
-                try? modelContext.save()
-                maintenanceAgreementMessage = "Agreement saved locally. Company storage upload failed: \(error.localizedDescription)"
+        guard GunnAireBackendService.isConfigured,
+              GunnAireCloudKit.usesTestDatabase ||
+                CompanyWorkspaceAccessController.shared.authorizedContainer === modelContext.container,
+              CustomerDocumentUpload.isCurrentRecord(call, in: modelContext),
+              let customer = call.customer,
+              CustomerDocumentUpload.isCurrentRecord(customer, in: modelContext) else { return }
+        let context = modelContext
+        let originalCall = call
+        let callID = call.id, callPersistentID = call.persistentModelID
+        let email = AppAccess.normalizedEmail(currentActivityActor)
+        do {
+            let upload = try CustomerDocumentUpload(attachment: attachment, customer: customer,
+                context: context, data: data) {
+                guard modelContext === context,
+                      GunnAireCloudKit.usesTestDatabase ||
+                        CompanyWorkspaceAccessController.shared.authorizedContainer === context.container,
+                      AppAccess.normalizedEmail(currentActivityActor) == email,
+                      call === originalCall, CustomerDocumentUpload.isCurrentRecord(originalCall, in: context),
+                      originalCall.persistentModelID == callPersistentID, originalCall.id == callID,
+                      originalCall.customer === customer else { throw GmailDraftError.businessChanged }
+                let currentUsers = try context.fetch(FetchDescriptor<AppUser>())
+                let currentTechnicians = try context.fetch(FetchDescriptor<Technician>())
+                guard AppAccess.canOfferMaintenanceAgreements(email: currentActivityActor, users: currentUsers),
+                      AppAccess.canAccessServiceCall(originalCall, email: currentActivityActor, users: currentUsers,
+                          serviceCalls: [originalCall], technicians: currentTechnicians) else { throw GmailComposeError.access }
             }
-        }
+            Task { @MainActor in
+                await upload.perform { detail in
+                    maintenanceAgreementMessage = "Agreement saved locally. Company storage: \(detail)"
+                }
+            }
+        } catch { return }
     }
 
     private func scheduledApprovedWork(for estimate: Estimate) -> ServiceCall? {
@@ -3810,6 +3843,12 @@ GunnAire
                             call.status = .completed
                             call.completeLinkedMaintenanceAgreementIfNeeded()
                             ServiceCallActivity.record(for: call, action: "Job completed", detail: "Status changed from in progress to completed.", actorEmail: currentActivityActor, in: modelContext)
+                        } else {
+                            // The button is disabled only on operational blockers, which do
+                            // not evaluate the service report's own readiness. Without this
+                            // the tap changed nothing and explained nothing. Name the missing
+                            // items, as the other completion surfaces already do.
+                            jobActionStatus = call.documentationCompletionBlockedMessage
                         }
                     } label: {
                         Label("Mark Complete", systemImage: "checkmark.circle.fill")
@@ -5993,8 +6032,10 @@ extension ContentView {
                                 failures.append("\(label): \(error.localizedDescription)")
                                 if let qbError = error as? QuickBooksDataAPI.QBError,
                                    qbError.requiresReconnect {
-                                    QuickBooksAuthAPI.shared.reloadStoredSession()
-                                    isQuickBooksAuthenticated = false
+                                    Task { @MainActor in
+                                        await QuickBooksAuthAPI.shared.reloadStoredSession()
+                                        isQuickBooksAuthenticated = false
+                                    }
                                 }
                                 continuation.resume(returning: [])
                             }

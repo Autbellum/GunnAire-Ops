@@ -1201,6 +1201,25 @@ def binary_uuids(path: Path) -> set[str]:
     return set(re.findall(r"UUID: ([0-9A-F-]+)", output))
 
 
+def forbidden_release_markers(strings_text: str) -> list[str]:
+    # Release dd5d56d's dSYM identifies this exact string as the private
+    # JobBillingDispatch property for its production encrypted offline queue.
+    # Exclude only that complete strings-output line, never a substring or
+    # other spelling; unknown lowercase bootstrap strings remain forbidden.
+    inspected = "\n".join(
+        line for line in strings_text.splitlines() if line != "bootstrapStore"
+    )
+    markers = (
+        "-uiTest", "bootstrap", "localhost", "127.0.0.1",
+        "-disableCloudKitForTesting",
+        "-initializeCloudKitSchema", "-cleanupCloudKitSchemaBootstrap",
+        "GunnAireCloudKitSchemaBootstrap", "__GUNNAIRE_CLOUDKIT_SCHEMA_BOOTSTRAP__",
+        "SCHEMA-BOOTSTRAP",
+        "GunnAireCloudKitRoundTripProbe", "CloudKitRoundTripCanary", "CloudKitConflict",
+    )
+    return [marker for marker in markers if marker in inspected]
+
+
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -1500,10 +1519,10 @@ def check_archive(
 
     strings_process = run(["strings", str(binary_path)], check=False)
     strings_text = strings_process.stdout.decode("utf-8", errors="replace")
-    forbidden = [marker for marker in ("-uiTest", "bootstrap", "localhost", "127.0.0.1") if marker in strings_text]
+    forbidden = forbidden_release_markers(strings_text)
     results.require(
         strings_process.returncode == 0 and not forbidden,
-        "Release binary contains no UI-test, bootstrap, or local-host markers",
+        "Release binary contains no forbidden UI-test, schema-bootstrap, or local-host markers",
         f"Release binary contains forbidden markers: {forbidden}",
     )
 
@@ -1730,14 +1749,10 @@ def check_mac_app(
 
     strings_process = run(["strings", str(binary_path)], check=False)
     strings_text = strings_process.stdout.decode("utf-8", errors="replace")
-    forbidden = [
-        marker
-        for marker in ("-uiTest", "bootstrap", "localhost", "127.0.0.1")
-        if marker in strings_text
-    ]
+    forbidden = forbidden_release_markers(strings_text)
     results.require(
         strings_process.returncode == 0 and not forbidden,
-        "Mac Catalyst binary contains no UI-test, bootstrap, or local-host markers",
+        "Mac Catalyst binary contains no forbidden UI-test, schema-bootstrap, or local-host markers",
         f"Mac Catalyst binary contains forbidden markers: {forbidden}",
     )
 

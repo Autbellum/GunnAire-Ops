@@ -89,13 +89,24 @@ import Testing
 
     @Test func nativeInvoiceAndEstimateUseOnlySharedPublisherAndPersistOriginalFirst() async throws {
         for estimate in [false, true] {
-            let f = try Fixture(), flow = try f.flow(estimate: estimate)
+            let f = try Fixture()
+            if !estimate {
+                f.app.invoice.status = "overdue"
+                try f.app.context.save()
+            }
+            let flow = try f.flow(estimate: estimate)
             let outcome = try await flow.execute()
             #expect(f.writes == 1); #expect(f.app.requests.isEmpty)
             #expect(outcome.invoice?.Id == "D1" || outcome.estimate?.Id == "D1")
             #expect(f.request?.document.Line.first?.SalesItemLineDetail.UnitPrice == 190)
             #expect(f.request?.connectionRevision == f.epoch)
-            #expect(f.journals.values.first?.pending?.settled == true)
+            let settled = try #require(f.journals.values.first?.pending)
+            #expect(settled.settled)
+            #expect(settled.draftRevision == (try flow.billingDraftRevision()))
+            if !estimate {
+                #expect(f.app.invoice.status == "unpaid")
+                #expect(settled.draftRevision != f.request?.draftRevision)
+            }
             f.finish(flow)
         }
     }

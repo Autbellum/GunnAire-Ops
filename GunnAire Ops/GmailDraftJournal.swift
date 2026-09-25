@@ -1,6 +1,8 @@
 import Foundation
 import CryptoKit
 import SwiftData
+import Observation
+import CoreData
 
 enum GmailDraftError: LocalizedError, Equatable {
     case storage, changed, access, locked, limit, businessChanged
@@ -11,7 +13,7 @@ enum GmailDraftError: LocalizedError, Equatable {
         case .access: "Verify access to the original business and Google account before opening this draft."
         case .locked: "This message may already have been sent. Review Sent; another copy will not be sent from this draft."
         case .limit: "This device's draft storage is full. Keep this message open and review your saved drafts."
-        case .businessChanged: "The linked customer or work changed after this draft was saved. Review the original customer, job or billing document and prepare an updated message. This draft was not sent."
+        case .businessChanged: "The original customer, work, or document source changed or could not be verified. Save any pending edits, return to the original record, regenerate its PDF if attached, and prepare an updated message. This draft was not sent."
         }
     }
 }
@@ -96,38 +98,486 @@ struct GmailDraftContent: Codable, Equatable {
 /// because the new send coordinator captured a fresh in-memory baseline.
 enum GmailDraftBusinessSnapshot {
     static func capture(_ business: GmailBusinessContext?, context: ModelContext) throws -> [String]? {
+        try AppPerformanceSignposts.measure("Mail Source Preparation") {
+            try captureValues(business, context: context)
+        }
+    }
+
+    private static func captureValues(_ business: GmailBusinessContext?, context: ModelContext) throws -> [String]? {
         guard let business else { return nil }
-        let customers = try context.fetch(FetchDescriptor<Customer>()).filter { $0.id == business.customerID }
+        let customerID = business.customerID
+        let customers = try context.fetch(FetchDescriptor<Customer>(predicate: #Predicate { $0.id == customerID }))
         guard customers.count == 1 else { throw GmailDraftError.businessChanged }
         let customer = customers[0]
-        var values = [customer.id.uuidString, customer.name, customer.email ?? "", customer.address ?? "",
-            String(customer.allowsTransactionalEmail), String(customer.allowsMarketing), customer.communicationConsentUpdatedAt?.description ?? ""]
+        var values = customerValues(customer)
+        if business.workflow == .accountStatement {
+            values += try accountStatementValues(accountStatementInputs(customerID: customerID, context: context))
+        }
+        var sourceCall: ServiceCall?
+        var sourceInvoice: Invoice?
+        var sourceEstimate: Estimate?
         if let id = business.serviceCallID {
-            let rows = try context.fetch(FetchDescriptor<ServiceCall>()).filter { $0.id == id }
+            let rows = try context.fetch(FetchDescriptor<ServiceCall>(predicate: #Predicate { $0.id == id }))
             guard rows.count == 1, rows[0].customer === customer else { throw GmailDraftError.businessChanged }
             let row = rows[0]
+            sourceCall = row
             values += [id.uuidString, row.status.rawValue, row.eventTitle ?? "", row.scheduledDate.description,
                 String(row.duration), row.notes ?? "", row.assignedTechnician?.id.uuidString ?? "", row.additionalTechnicianIDsJSON ?? ""]
         }
         if let id = business.invoiceID {
-            let rows = try context.fetch(FetchDescriptor<Invoice>()).filter { $0.id == id }
+            let rows = try context.fetch(FetchDescriptor<Invoice>(predicate: #Predicate { $0.id == id }))
             guard rows.count == 1, rows[0].customer === customer else { throw GmailDraftError.businessChanged }
             let row = rows[0]
+            sourceInvoice = row
             values += [id.uuidString, row.status, String(row.amount), String(describing: row.quickBooksBalanceDue),
                 row.catalogSnapshotJSON ?? "", row.quickBooksID ?? "", row.serviceCallID?.uuidString ?? ""]
+            values.append(try digest([row.createdAt.description, row.dueDate?.description ?? "",
+                row.lineItemSummary, row.notes ?? "", row.completionNotes ?? "", row.siteAddress ?? "",
+                row.workTypeRaw, String(row.salesTaxAmount), row.taxCalculationStatusRawValue ?? "",
+                row.taxCalculatedAt?.description ?? "", row.customerSignatureName ?? "",
+                row.customerSignedAt?.description ?? "", row.finalizedAt?.description ?? "",
+                row.projectMilestoneID?.uuidString ?? "", row.projectMilestoneTitle ?? "",
+                String(describing: row.projectMilestoneSequence), String(describing: row.projectContractAmount),
+                String(describing: row.projectBillingPercent)]))
         }
         if let id = business.estimateID {
-            let rows = try context.fetch(FetchDescriptor<Estimate>()).filter { $0.id == id }
+            let rows = try context.fetch(FetchDescriptor<Estimate>(predicate: #Predicate { $0.id == id }))
             guard rows.count == 1, rows[0].customer === customer else { throw GmailDraftError.businessChanged }
             let row = rows[0]
+            sourceEstimate = row
             values += [id.uuidString, row.status, String(row.amount), row.catalogSnapshotJSON ?? "", row.quickBooksID ?? "", row.serviceCallID?.uuidString ?? ""]
+            values.append(try digest([row.createdAt.description, row.lineItemSummary, row.notes ?? "",
+                row.siteAddress ?? "", String(row.salesTaxAmount), row.taxCalculationStatusRawValue ?? "",
+                row.taxCalculatedAt?.description ?? "", row.parentEstimateID?.uuidString ?? "",
+                row.changeOrderReason ?? "", row.proposalGroupID?.uuidString ?? "", row.proposalOption ?? "",
+                String(row.proposalIsRecommended), row.customerApprovedByName ?? "",
+                row.customerApprovedAt?.description ?? "", row.customerApprovalMethodRaw ?? "",
+                row.customerApprovalReference ?? "", row.customerApprovalRecordedByEmail ?? ""]))
         }
         if let id = business.maintenanceContractID {
-            let rows = try context.fetch(FetchDescriptor<RecurringMaintenanceContract>()).filter { $0.id == id }
+            let rows = try context.fetch(FetchDescriptor<RecurringMaintenanceContract>(predicate: #Predicate { $0.id == id }))
             guard rows.count == 1, rows[0].customer === customer else { throw GmailDraftError.businessChanged }
             values += [id.uuidString, String(rows[0].active)]
         }
+        let payments: [Payment]
+        if let sourceInvoice {
+            let invoiceID = sourceInvoice.id
+            payments = try boundedFetch(FetchDescriptor<Payment>(predicate: #Predicate { $0.invoice?.id == invoiceID }), context: context)
+                .sorted { $0.id.uuidString < $1.id.uuidString }
+            values.append(try FieldPaymentReceiptReconciliation.paymentDigest(payments))
+        } else { payments = [] }
+        // Receipts are text-only invoice/payment messages, not an onsite report.
+        // Keep the document graph for origins which actually generate a PDF.
+        if business.workflow != .receipt &&
+            (sourceInvoice != nil || sourceEstimate != nil || business.workflow == .customerDocument) {
+            let calls = try boundedFetch(FetchDescriptor<ServiceCall>(predicate: #Predicate { $0.customer?.id == customerID }), context: context)
+            let attachments = try boundedFetch(FetchDescriptor<ServiceDocumentAttachment>(predicate: #Predicate { $0.customer?.id == customerID }), context: context)
+            let equipment = try boundedFetch(FetchDescriptor<CustomerEquipment>(predicate: #Predicate { $0.customer?.id == customerID }), context: context)
+            var formTemplates: [FieldFormTemplate] = []
+            var formResponses: [FieldFormResponse] = []
+            var entries: [TimeEntry] = []
+            var activities: [ServiceCallActivity] = []
+            let material: JobMaterialCloseoutSummary
+            if let sourceCall {
+                let callID = sourceCall.id
+                formResponses = try boundedFetch(FetchDescriptor<FieldFormResponse>(predicate: #Predicate { $0.serviceCallID == callID }), context: context)
+                let templateIDs = formResponses.map(\.templateID)
+                formTemplates = try boundedFetch(FetchDescriptor<FieldFormTemplate>(predicate: #Predicate {
+                    $0.isActive || templateIDs.contains($0.id)
+                }), context: context)
+                entries = try boundedFetch(FetchDescriptor<TimeEntry>(predicate: #Predicate { $0.serviceCall?.id == callID }), context: context)
+                activities = try boundedFetch(FetchDescriptor<ServiceCallActivity>(predicate: #Predicate { $0.serviceCallID == callID }), context: context)
+                let estimates = try boundedFetch(FetchDescriptor<Estimate>(predicate: #Predicate { $0.customer?.id == customerID }), context: context)
+                let milestones = try boundedFetch(FetchDescriptor<ProjectMilestone>(predicate: #Predicate { $0.projectServiceCallID == callID }), context: context)
+                let jobMovements = try boundedFetch(FetchDescriptor<InventoryMovement>(predicate: #Predicate { $0.serviceCallID == callID }), context: context)
+                let projectEstimateID = milestones.sorted { $0.sequence < $1.sequence }.first?.estimateID ?? sourceCall.linkedEstimateID
+                let projectEstimate = estimates.first { $0.id == projectEstimateID }
+                let linkedEstimate = estimates.first { $0.id == sourceCall.linkedEstimateID }
+                let materialEstimate = !milestones.isEmpty && projectEstimate != nil ? projectEstimate : (sourceInvoice == nil ? linkedEstimate : nil)
+                let snapshots = materialEstimate?.catalogLineSnapshots ?? sourceInvoice?.catalogLineSnapshots ?? []
+                let legacySummary = materialEstimate?.lineItemSummary ?? sourceInvoice?.lineItemSummary ?? ""
+                let itemIDs = Array(Set(jobMovements.map(\.itemID) + snapshots.flatMap {
+                    [$0.catalogItemID] + $0.soldLeaves.map(\.catalogItemID) + ($0.assembly?.components.map(\.itemID) ?? [])
+                }))
+                // Core Data cannot translate constant.contains(model.name).
+                // The legacy policy accepts any catalog-name substring, including
+                // service items with a ledger. Filter a capped superset in Swift;
+                // reject an oversized catalog rather than omit a requirement.
+                let normalizedSummary = legacySummary.lowercased()
+                let materialItems = try boundedFetch(FetchDescriptor<Item>(), context: context).filter {
+                    itemIDs.contains($0.id) || normalizedSummary.contains($0.name.lowercased())
+                }
+                let materialIDs = materialItems.map(\.id)
+                let movements = try boundedFetch(FetchDescriptor<InventoryMovement>(predicate: #Predicate {
+                    materialIDs.contains($0.itemID) || $0.serviceCallID == callID
+                }), context: context)
+                material = JobMaterialCloseoutPolicy.summary(for: sourceCall, invoice: sourceInvoice,
+                    estimates: estimates, projectMilestones: milestones, items: materialItems, movements: movements)
+            } else { material = .notApplicable }
+            let source = CustomerDocumentExporter.mailSourceValues(estimate: sourceEstimate, invoice: sourceInvoice,
+                serviceCall: sourceCall, payments: payments, attachments: attachments,
+                equipmentProfiles: equipment, serviceCalls: calls,
+                fieldFormTemplates: formTemplates,
+                fieldFormResponses: formResponses,
+                timeEntries: entries,
+                materialReadiness: material,
+                serviceCallActivities: activities,
+                requireWorkPerformedLog: UserDefaults.standard.object(forKey: "requireWorkPerformedLogForCloseout") as? Bool ?? true)
+            values.append(try digest(source))
+        }
         return values
+    }
+
+    /// Create the projection and its source fence from the same bounded inputs.
+    /// The returned projection retains its original cutoff/calendar; subsequent
+    /// validation hashes saved inputs, never a new time-dependent projection.
+    static func prepareAccountStatement(customer: Customer, context: ModelContext) throws
+        -> (statement: CustomerAccountStatementSnapshot, sourceSnapshot: [String]) {
+        let customerID = customer.id
+        let rows = try context.fetch(FetchDescriptor<Customer>(predicate: #Predicate { $0.id == customerID }))
+        guard rows.count == 1, rows.first === customer else { throw GmailDraftError.businessChanged }
+        let inputs = try accountStatementInputs(customerID: customerID, context: context)
+        let values = try customerValues(customer) + accountStatementValues(inputs)
+        let statement = CustomerDocumentExporter.accountStatementSnapshot(for: customer,
+            invoices: inputs.invoices, payments: inputs.payments)
+        return (statement, values)
+    }
+
+    private static func customerValues(_ customer: Customer) -> [String] {
+        ["customer-document-source-v2", customer.id.uuidString, customer.name, customer.email ?? "",
+         customer.address ?? "", customer.phone ?? "", String(customer.allowsTransactionalEmail),
+         String(customer.allowsMarketing), customer.communicationConsentUpdatedAt?.description ?? ""]
+    }
+
+    private static func accountStatementInputs(customerID: UUID, context: ModelContext) throws
+        -> (invoices: [Invoice], payments: [Payment]) {
+        let invoices = try boundedFetch(FetchDescriptor<Invoice>(predicate: #Predicate {
+            $0.customer?.id == customerID
+        }), context: context)
+        guard !invoices.isEmpty else { throw GmailDraftError.businessChanged }
+        // A chained optional relationship is not translatable by Core Data.
+        // Use the already verified invoice identities with a single relationship.
+        let invoiceIDs = invoices.map(\.id)
+        let payments = try boundedFetch(FetchDescriptor<Payment>(predicate: #Predicate { payment in
+            payment.invoice.flatMap { invoice in
+                invoiceIDs.contains(invoice.id)
+            } ?? false
+        }), context: context)
+        return (invoices, payments)
+    }
+
+    private static func accountStatementValues(_ inputs: (invoices: [Invoice], payments: [Payment])) throws -> [String] {
+        // Include membership as well as totals: new/deleted invoices, refunds,
+        // duplicate identities and reviewed milestone drafts change the source.
+        var rows: [String] = []
+        for invoice in inputs.invoices.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
+            rows += [invoice.id.uuidString, try BillingMilestoneReconciliation.digest(invoice),
+                invoice.quickBooksID ?? "", String(describing: invoice.quickBooksBalanceDue),
+                invoice.quickBooksLastSyncedAt?.description ?? "", invoice.quickBooksSyncStatus,
+                invoice.quickBooksSyncDetail ?? "", invoice.quickBooksPaymentReviewJSON ?? "",
+                invoice.taxCalculationStatusRawValue ?? "", invoice.taxCalculatedAt?.description ?? "",
+                invoice.milestoneDraftReceiptJSON ?? ""]
+        }
+        return ["account-statement-inputs-v1", try digest(rows),
+            try FieldPaymentReceiptReconciliation.paymentDigest(inputs.payments)]
+    }
+
+    private static func boundedFetch<T: PersistentModel>(_ descriptor: FetchDescriptor<T>, context: ModelContext) throws -> [T] {
+        var descriptor = descriptor
+        descriptor.fetchLimit = 2_001
+        let rows = try context.fetch(descriptor)
+        guard rows.count <= 2_000 else { throw GmailDraftError.businessChanged }
+        return rows
+    }
+
+    private static func digest(_ values: [String]) throws -> String {
+        let bytes = try JSONEncoder().encode(values)
+        return SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func validate(_ expected: [String]?, business: GmailBusinessContext?, context: ModelContext) throws {
+        guard try expected == capture(business, context: context) else { throw GmailDraftError.businessChanged }
+    }
+}
+
+/// A history anchor is a value, never a UI context or managed model.
+nonisolated struct GmailSourceHistoryAnchor: Sendable {
+    let storeID: String
+    let token: DefaultHistoryToken
+    let transactionID: Int64
+}
+
+nonisolated enum GmailSourceHistoryReader {
+    static func capture(_ container: ModelContainer) async throws -> GmailSourceHistoryAnchor? {
+        try await Task.detached(priority: .userInitiated) {
+            guard container.configurations.count == 1, let configuration = container.configurations.first else {
+                throw GmailDraftError.businessChanged
+            }
+            if configuration.isStoredInMemoryOnly { return nil }
+            guard let storeID = try CompanyWorkspaceStore.identity(at: configuration.url) else { throw GmailDraftError.businessChanged }
+            let context = ModelContext(container); context.autosaveEnabled = false
+            var descriptor = HistoryDescriptor<DefaultHistoryTransaction>(sortBy: [SortDescriptor(\.transactionIdentifier, order: .reverse)])
+            descriptor.fetchLimit = 1
+            guard let row = try context.fetchHistory(descriptor).first,
+                  row.storeIdentifier.lowercased() == storeID.lowercased() else { throw GmailDraftError.businessChanged }
+            return GmailSourceHistoryAnchor(storeID: storeID.lowercased(), token: row.token, transactionID: row.transactionIdentifier)
+        }.value
+    }
+
+    /// Transaction count is bounded; a transaction's change payload can still
+    /// be large, so all history materialization stays off the main actor.
+    static func verify(_ anchor: GmailSourceHistoryAnchor, container: ModelContainer,
+                       ownAuthor: String? = nil, allowedIDs: Set<PersistentIdentifier> = []) async throws -> GmailSourceHistoryAnchor {
+        try await Task.detached(priority: .userInitiated) {
+            guard container.configurations.count == 1, let configuration = container.configurations.first,
+                  !configuration.isStoredInMemoryOnly,
+                  try CompanyWorkspaceStore.identity(at: configuration.url)?.lowercased() == anchor.storeID else {
+                throw GmailDraftError.businessChanged
+            }
+            let context = ModelContext(container); context.autosaveEnabled = false
+            let identifier = anchor.transactionID
+            var exact = HistoryDescriptor<DefaultHistoryTransaction>(predicate: #Predicate { $0.transactionIdentifier == identifier })
+            exact.fetchLimit = 1
+            guard let original = try context.fetchHistory(exact).first,
+                  original.storeIdentifier.lowercased() == anchor.storeID,
+                  original.token == anchor.token else { throw GmailDraftError.businessChanged }
+            let previous = anchor.token
+            var newer = HistoryDescriptor<DefaultHistoryTransaction>(predicate: #Predicate { $0.token > previous })
+            newer.fetchLimit = ownAuthor == nil ? 1 : 2
+            let rows = try context.fetchHistory(newer)
+            guard try CompanyWorkspaceStore.identity(at: configuration.url)?.lowercased() == anchor.storeID else {
+                throw GmailDraftError.businessChanged
+            }
+            guard let ownAuthor else {
+                guard rows.isEmpty else { throw GmailDraftError.businessChanged }
+                return anchor
+            }
+            guard rows.count == 1, let row = rows.first,
+                  row.storeIdentifier.lowercased() == anchor.storeID, row.author == ownAuthor,
+                  row.transactionIdentifier > anchor.transactionID, row.token > anchor.token,
+                  !row.changes.isEmpty,
+                  row.changes.allSatisfy({ allowedIDs.contains($0.changedPersistentIdentifier) }) else {
+                throw GmailDraftError.businessChanged
+            }
+            return GmailSourceHistoryAnchor(storeID: anchor.storeID, token: row.token, transactionID: row.transactionIdentifier)
+        }.value
+    }
+}
+
+/// Synchronous checks inspect only observation, pending models and epochs.
+/// Disk history is resolved asynchronously before an actual provider request.
+@MainActor
+final class GmailDraftSourceLease {
+    let snapshot: [String]?
+    private let invalidation: GmailDraftSourceInvalidation
+    private let settings: [String]
+    private let notificationCenter: NotificationCenter
+    private var history: GmailSourceHistoryAnchor?
+    private var verifiedRemoteEpoch: UInt64?
+
+    /// Synchronous construction is restricted to genuinely in-memory stores.
+    convenience init(business: GmailBusinessContext, context: ModelContext,
+                     notificationCenter: NotificationCenter = .default,
+                     validatePreparation: () throws -> Void = {}) throws {
+        guard context.container.configurations.allSatisfy(\.isStoredInMemoryOnly) else { throw GmailDraftError.businessChanged }
+        try self.init(business: business, context: context, history: nil,
+            invalidation: GmailDraftSourceInvalidation(context: context, notificationCenter: notificationCenter),
+            notificationCenter: notificationCenter, validatePreparation: validatePreparation)
+        verifiedRemoteEpoch = invalidation.remoteEpoch
+    }
+
+    static func prepare(business: GmailBusinessContext, context: ModelContext,
+                        notificationCenter: NotificationCenter = .default,
+                        validatePreparation: () throws -> Void = {}) async throws -> GmailDraftSourceLease {
+        try requireClean(context)
+        let invalidation = GmailDraftSourceInvalidation(context: context, notificationCenter: notificationCenter)
+        let history = try await GmailSourceHistoryReader.capture(context.container)
+        try invalidation.check()
+        let lease = try GmailDraftSourceLease(business: business, context: context, history: history,
+            invalidation: invalidation, notificationCenter: notificationCenter, validatePreparation: validatePreparation)
+        try await lease.validateHistory(context: context)
+        return lease
+    }
+
+    private init(business: GmailBusinessContext, context: ModelContext, history: GmailSourceHistoryAnchor?,
+                 invalidation: GmailDraftSourceInvalidation, notificationCenter: NotificationCenter,
+                 validatePreparation: () throws -> Void) throws {
+        self.invalidation = invalidation; self.history = history; self.notificationCenter = notificationCenter
+        invalidation.setStoreID(history?.storeID)
+        try validatePreparation()
+        try Self.requireClean(context)
+        settings = Self.currentSettings
+        let captured = withObservationTracking {
+            Result { try GmailDraftBusinessSnapshot.capture(business, context: context) }
+        } onChange: { [weak invalidation] in invalidation?.sourceChanged() }
+        snapshot = try captured.get()
+        try check(context: context)
+    }
+
+    func check(context: ModelContext) throws {
+        try invalidation.check()
+        try Self.requireClean(context)
+        guard settings == Self.currentSettings else { throw GmailDraftError.businessChanged }
+    }
+
+    func checkTransportPermit(context: ModelContext) throws {
+        try check(context: context)
+        guard verifiedRemoteEpoch == invalidation.remoteEpoch else { throw GmailDraftError.businessChanged }
+    }
+
+    func validateHistory(context: ModelContext) async throws {
+        for _ in 0..<2 {
+            try check(context: context)
+            let epoch = invalidation.remoteEpoch
+            if let history { _ = try await GmailSourceHistoryReader.verify(history, container: context.container) }
+            try check(context: context)
+            if epoch == invalidation.remoteEpoch {
+                verifiedRemoteEpoch = epoch
+                return
+            }
+        }
+        throw GmailDraftError.businessChanged
+    }
+
+    /// The author is installed only around this synchronous save. After it is
+    /// restored, the entire old-anchor interval must contain exactly that one
+    /// transaction and only the model identities touched by this write.
+    func replacingAfterHistoryWrite(business: GmailBusinessContext, context: ModelContext,
+                                   expectedSnapshot: (() throws -> [String]?)? = nil,
+                                   beforeWrite: () throws -> Void = {},
+                                   validatePreparation: () throws -> Void,
+                                   write: () throws -> Set<PersistentIdentifier>) async throws -> GmailDraftSourceLease {
+        try await validateHistory(context: context)
+        try checkTransportPermit(context: context)
+        try beforeWrite()
+        let author = "mail-history-" + UUID().uuidString.lowercased()
+        let allowedIDs = try invalidation.withOwnSave {
+            let previousAuthor = context.author
+            context.author = author
+            defer { context.author = previousAuthor }
+            return try write()
+        }
+        // Establish fresh Observation before awaiting history; the old observer
+        // is permanently retired and may have fired during inverse bookkeeping.
+        let replacement = try GmailDraftSourceLease(business: business, context: context, history: history,
+            invalidation: GmailDraftSourceInvalidation(context: context, notificationCenter: notificationCenter),
+            notificationCenter: notificationCenter, validatePreparation: validatePreparation)
+        let expected: [String]?
+        if let expectedSnapshot { expected = try expectedSnapshot() } else { expected = snapshot }
+        guard expected == replacement.snapshot,
+              settings == Self.currentSettings else { throw GmailDraftError.businessChanged }
+        if let history {
+            replacement.history = try await GmailSourceHistoryReader.verify(history, container: context.container,
+                ownAuthor: author, allowedIDs: allowedIDs)
+            replacement.invalidation.setStoreID(replacement.history?.storeID)
+        }
+        try invalidation.checkAfterWrite()
+        try replacement.check(context: context)
+        try await replacement.validateHistory(context: context)
+        try invalidation.checkAfterWrite()
+        try validatePreparation()
+        try replacement.checkTransportPermit(context: context)
+        return replacement
+    }
+
+    private static func requireClean(_ context: ModelContext) throws {
+        guard !context.hasChanges, context.insertedModelsArray.isEmpty,
+              context.changedModelsArray.isEmpty, context.deletedModelsArray.isEmpty else { throw GmailDraftError.businessChanged }
+    }
+
+    private static var currentSettings: [String] {
+        [String(UserDefaults.standard.object(forKey: "requireWorkPerformedLogForCloseout") as? Bool ?? true),
+         Locale.current.identifier, TimeZone.current.identifier]
+    }
+}
+
+/// Thread-safe epochs contain no context/model. Known store notifications ask
+/// for history classification; unknown payloads and actual external context
+/// saves/imports revoke immediately. No notification handler reads the database.
+private nonisolated final class GmailDraftSourceInvalidation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var invalidated = false
+    private var ownSave = false
+    private var retired = false
+    private var epoch: UInt64 = 0
+    private var storeID: String?
+    private var observers: [NSObjectProtocol] = []
+    private let notificationCenter: NotificationCenter
+    var remoteEpoch: UInt64 { lock.withLock { epoch } }
+
+    @MainActor init(context: ModelContext, notificationCenter: NotificationCenter) {
+        self.notificationCenter = notificationCenter
+        let contextID = ObjectIdentifier(context)
+        let containerID = ObjectIdentifier(context.container)
+        let isInMemory = context.container.configurations.allSatisfy(\.isStoredInMemoryOnly)
+        let configurationURLs = Set(context.container.configurations.map { $0.url.standardizedFileURL.resolvingSymlinksInPath() })
+        for name in [ModelContext.willSave, ModelContext.didSave] {
+            observers.append(notificationCenter.addObserver(forName: name, object: nil, queue: nil) { [weak self] notification in
+                guard let self else { return }
+                guard let saving = notification.object as? ModelContext else { self.invalidate(); return }
+                if ObjectIdentifier(saving.container) != containerID {
+                    if isInMemory || saving.container.configurations.allSatisfy(\.isStoredInMemoryOnly) { return }
+                    let savingURLs = Set(saving.container.configurations.map { $0.url.standardizedFileURL.resolvingSymlinksInPath() })
+                    if !savingURLs.isEmpty, !configurationURLs.isEmpty,
+                       savingURLs.isDisjoint(with: configurationURLs) { return }
+                }
+                self.lock.withLock {
+                    if ObjectIdentifier(saving) != contextID || !self.ownSave { self.invalidated = true }
+                }
+            })
+        }
+        observers.append(notificationCenter.addObserver(forName: .NSPersistentStoreRemoteChange, object: nil, queue: nil) { [weak self] notification in
+            guard let self else { return }
+            guard let coordinator = notification.object as? NSPersistentStoreCoordinator,
+                  let url = notification.userInfo?[NSPersistentStoreURLKey] as? URL,
+                  let uuid = notification.userInfo?[NSStoreUUIDKey] as? String,
+                  notification.userInfo?[NSPersistentHistoryTokenKey] is NSPersistentHistoryToken else {
+                self.invalidate(); return
+            }
+            let stores = coordinator.persistentStores
+            // A SQLite coordinator cannot mutate a separate in-memory store,
+            // even when SwiftData assigns both configurations the default URL.
+            if isInMemory, !stores.isEmpty, stores.allSatisfy({ $0.type == NSSQLiteStoreType }) { return }
+            self.lock.withLock {
+                let sameID = self.storeID == uuid.lowercased()
+                let sameURL = configurationURLs.contains(url.standardizedFileURL.resolvingSymlinksInPath())
+                if let expected = self.storeID, sameURL, expected != uuid.lowercased() {
+                    self.invalidated = true
+                } else if sameID || sameURL {
+                    if self.epoch == .max { self.invalidated = true } else { self.epoch += 1 }
+                }
+            }
+        })
+        observers.append(notificationCenter.addObserver(forName: NSPersistentCloudKitContainer.eventChangedNotification,
+            object: nil, queue: nil) { [weak self] notification in
+                guard let self else { return }
+                guard let event = notification.userInfo?[NSPersistentCloudKitContainer.eventNotificationUserInfoKey]
+                        as? NSPersistentCloudKitContainer.Event else { self.invalidate(); return }
+                self.lock.withLock {
+                    guard self.storeID == event.storeIdentifier.lowercased() else {
+                        if self.storeID == nil, !isInMemory { self.invalidated = true }
+                        return
+                    }
+                    if event.type == .import { self.invalidated = true }
+                }
+            })
+    }
+
+    deinit { observers.forEach { notificationCenter.removeObserver($0) } }
+    func setStoreID(_ value: String?) { lock.withLock { storeID = value } }
+    func invalidate() { lock.withLock { invalidated = true } }
+    func sourceChanged() { lock.withLock { if !ownSave { invalidated = true } } }
+    func check() throws {
+        guard !lock.withLock({ invalidated || retired }) else { throw GmailDraftError.businessChanged }
+    }
+    func checkAfterWrite() throws {
+        guard !lock.withLock({ invalidated }) else { throw GmailDraftError.businessChanged }
+    }
+    func withOwnSave<T>(_ body: () throws -> T) throws -> T {
+        try check()
+        lock.withLock { ownSave = true }
+        defer { lock.withLock { ownSave = false; retired = true } }
+        return try body()
     }
 }
 

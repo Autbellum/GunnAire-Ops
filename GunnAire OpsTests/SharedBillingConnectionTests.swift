@@ -87,6 +87,19 @@ import Testing
         #expect(customer.connectionRevision == f.epoch)
     }
 
+    @Test func backgroundConnectionDecodePreservesIdentityAndRejectsMalformedPayload() async throws {
+        let f = try BillingNativeWorkflowTests.Fixture()
+        let identity = SharedBillingIdentity(companyID: f.company, documentType: .invoice,
+            localDocumentID: f.app.invoice.id, localCustomerID: f.app.customer.id,
+            serviceCallID: nil, projectMilestoneID: nil)
+        let connection = try await SharedBillingConnection.decodeAsync(connectionData(f, path: identity.path))
+        try connection.validate(identity)
+        #expect(connection.connectionRevision == f.epoch)
+        await #expect(throws: DecodingError.self) {
+            try await SharedBillingConnection.decodeAsync(Data("{\"realmID\":1}".utf8))
+        }
+    }
+
     @Test func staleOrMalformedDiscoveryCannotStartAWorkflow() async throws {
         for changes: [String: Any] in [["companyID": UUID().uuidString], ["localDocumentID": UUID().uuidString],
             ["localCustomerID": UUID().uuidString], ["documentType": "Estimate"], ["realmID": ""],

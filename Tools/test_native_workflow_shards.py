@@ -60,6 +60,30 @@ class NativeWorkflowShardTests(unittest.TestCase):
         self.assertLessEqual(abs(len(left) - len(right)), 1)
         self.assertIn("${{ matrix.platform }}-${{ matrix.shard }}-native-", WORKFLOW.read_text())
 
+    def test_estimate_delivery_journeys_execute_on_separate_ipad_shards(self):
+        prefix = "-only-testing:GunnAire OpsUITests/GunnAire_OpsUITests/"
+        creation = prefix + "testNewEstimateOpensMailDraftWithPDFWithoutQuickBooksConnection"
+        saved_list = prefix + "testSavedEstimateListOpensMailDraftWithPDFWithoutQuickBooksConnection"
+        first = self.selectors("iPad", 0)
+        second = self.selectors("iPad", 1)
+        self.assertEqual(first.count(creation), 1)
+        self.assertNotIn(creation, second)
+        self.assertEqual(second.count(saved_list), 1)
+        self.assertNotIn(saved_list, first)
+        self.assertEqual(len(first), len(second))
+
+    def test_invoice_delivery_journeys_execute_on_separate_ipad_shards(self):
+        prefix = "-only-testing:GunnAire OpsUITests/GunnAire_OpsUITests/"
+        creation = prefix + "testNewInvoiceOpensMailDraftWithPDFWithoutQuickBooksConnection"
+        saved_list = prefix + "testSavedInvoiceListOpensMailDraftWithPDFWithoutQuickBooksConnection"
+        first = self.selectors("iPad", 0)
+        second = self.selectors("iPad", 1)
+        self.assertEqual(first.count(creation), 1)
+        self.assertNotIn(creation, second)
+        self.assertEqual(second.count(saved_list), 1)
+        self.assertNotIn(saved_list, first)
+        self.assertEqual(len(first), len(second))
+
     def test_mac_keeps_the_complete_logic_target(self):
         self.assertEqual(self.selectors("Mac", 0), ["-only-testing:GunnAire OpsTests"])
         self.assertIn('ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO', WORKFLOW.read_text())
@@ -67,7 +91,7 @@ class NativeWorkflowShardTests(unittest.TestCase):
 
     def test_hosted_ipad_has_time_for_the_complete_unweakened_suite(self):
         text = WORKFLOW.read_text()
-        self.assertIn("timeout-minutes: ${{ matrix.platform == 'iPad' && 90 || 60 }}", text)
+        self.assertIn("timeout-minutes: ${{ matrix.platform == 'iPad' && 120 || 90 }}", text)
         self.assertIn("-parallel-testing-enabled NO", text)
         self.assertIn("python3 Tools/verify_native_test_execution.py", text)
         self.assertIn(".failedTests == 0 and .passedTests > 0", text)

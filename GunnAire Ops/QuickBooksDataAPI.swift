@@ -43,18 +43,37 @@ private final class QuickBooksRequestGate: @unchecked Sendable {
     }
 }
 
-struct QuickBooksOAuthTokens: Codable {
+nonisolated struct QuickBooksOAuthTokens: Codable, Sendable {
     let accessToken: String
     let expiration: Date
 }
 
-private struct QuickBooksKeychainPayload: Codable {
+/// Stable across business-session token rotation, but never across companies or backend deployments.
+nonisolated struct QuickBooksCredentialOwner: Codable, Equatable, Sendable {
+    let companyID: UUID
+    let backendOrigin: String
+}
+
+nonisolated private struct QuickBooksKeychainPayload: Codable, Sendable {
     let tokens: QuickBooksOAuthTokens
     let realmID: String
     let environment: String?
     let clientIDFingerprint: String?
     let redirectURI: String?
     let scopeSignature: String?
+    let owner: QuickBooksCredentialOwner?
+}
+
+/// Serial secure storage keeps credential encoding and Keychain calls off UI.
+private actor QuickBooksCredentialPersistence {
+    private let account = "QuickBooksOAuthPayload"
+    func load() throws -> QuickBooksKeychainPayload? {
+        try KeychainStore.loadCodable(QuickBooksKeychainPayload.self, account: account)
+    }
+    func replace(_ payload: QuickBooksKeychainPayload?) throws {
+        if let payload { try KeychainStore.saveCodable(payload, account: account) }
+        else { try KeychainStore.remove(account: account) }
+    }
 }
 
 enum QuickBooksProviderResponseError: LocalizedError, Equatable {
@@ -174,8 +193,17 @@ final class QuickBooksDataAPI: ObservableObject {
 
     private var tokenRefreshTimer: AnyCancellable?
     private var connectionGeneration = UUID()
+    private var deviceSessionSuspended = false
+    private var storedCredentialOwner: QuickBooksCredentialOwner?
+    private var requiresCredentialOwnership = true
+    private var currentCredentialOwner: () -> QuickBooksCredentialOwner? = { QuickBooksDataAPI.liveCredentialOwner() }
+    private var disconnectInProgress = false
+    private let credentialStore = QuickBooksCredentialPersistence()
+    private var credentialPersistenceTask: Task<Void, Never>?
     private let requestTransport: WorkspaceProviderOperation.Transport
+    private var documentEmailJournal = QuickBooksDocumentEmailJournal.device
     private let persistsCredentials: Bool
+    private let revokeConnection: () async -> Bool
     let catalogPublicationTransport: CatalogPublicationBoundary.Transport?
     let customerPublicationTransport: CustomerPublicationBoundary.Transport?
     let billingPublicationClient: BillingPublicationClient?
@@ -200,12 +228,12 @@ final class QuickBooksDataAPI: ObservableObject {
     private init() {
         requestTransport = { try await URLSession.shared.data(for: $0) }
         persistsCredentials = true
+        revokeConnection = { (try? await GunnAireBackendService.revokeQuickBooksConnection()) != nil }
         catalogPublicationTransport = GunnAireBackendService.publishCatalog
         customerPublicationTransport = GunnAireBackendService.publishCustomer
         billingPublicationClient = GunnAireBackendService.billingPublicationClient
         catalogRecoveryTransport = GunnAireBackendService.recoverCatalogPublication
         catalogFixtureCompanyID = nil
-        loadTokens()
         startAutomaticTokenRefresh()
     }
 
@@ -229,6 +257,8 @@ final class QuickBooksDataAPI: ObservableObject {
          catalogRead: ((String) async throws -> QuickBooksItem)? = nil) {
         requestTransport = { _ in throw BillingPublicationError.accessRequired }
         persistsCredentials = false
+        requiresCredentialOwnership = false
+        revokeConnection = { false }
         catalogFixtureCompanyID = sharedCompanyID
         catalogPublicationTransport = catalogPublisher
         customerPublicationTransport = customerPublisher
@@ -250,10 +280,19 @@ final class QuickBooksDataAPI: ObservableObject {
          customerPublisher: CustomerPublicationBoundary.Transport? = nil,
          billingPublisher: BillingPublicationClient? = nil,
          catalogRecovery: @escaping (UUID) async throws -> CatalogPublicationResponse = { _ in throw CatalogPublicationError.unavailable },
+         revokeConnection: @escaping () async -> Bool = { false },
+         emailJournal: QuickBooksDocumentEmailJournal? = nil,
+         credentialOwner: QuickBooksCredentialOwner? = nil,
+         currentCredentialOwner: (() -> QuickBooksCredentialOwner?)? = nil,
          transport: @escaping WorkspaceProviderOperation.Transport) {
         precondition(GunnAireCloudKit.usesTestDatabase)
         requestTransport = transport
+        documentEmailJournal = emailJournal ?? QuickBooksDocumentEmailJournal(directory: nil, memoryOnly: true)
         persistsCredentials = false
+        requiresCredentialOwnership = currentCredentialOwner != nil
+        self.currentCredentialOwner = currentCredentialOwner ?? { nil }
+        storedCredentialOwner = credentialOwner
+        self.revokeConnection = revokeConnection
         catalogPublicationTransport = catalogPublisher
         customerPublicationTransport = customerPublisher
         billingPublicationClient = billingPublisher
@@ -287,6 +326,7 @@ final class QuickBooksDataAPI: ObservableObject {
     }
 
     var realmID: String? {
+        guard !deviceSessionSuspended, credentialOwnershipMatchesCurrentBusiness else { return nil }
         guard let storedRealmID else { return nil }
         let normalizedRealmID = storedRealmID.trimmingCharacters(in: .whitespacesAndNewlines)
         return normalizedRealmID.isEmpty ? nil : normalizedRealmID
@@ -301,7 +341,28 @@ final class QuickBooksDataAPI: ObservableObject {
     }
 
     var tokenExpiration: Date? {
-        tokens?.expiration
+        credentialOwnershipMatchesCurrentBusiness ? tokens?.expiration : nil
+    }
+
+    private static func liveCredentialOwner() -> QuickBooksCredentialOwner? {
+        guard let session = CompanyWorkspaceSession.current,
+              let companyID = CompanyWorkspaceAccessController.shared.verifiedCompanyID else { return nil }
+        return QuickBooksCredentialOwner(companyID: companyID, backendOrigin: session.backendOrigin)
+    }
+
+    private func credentialOwnershipMatches(_ owner: QuickBooksCredentialOwner?) -> Bool {
+        guard requiresCredentialOwnership else { return true }
+        guard let owner, let current = currentCredentialOwner() else { return false }
+        return owner == current
+    }
+
+    private var credentialOwnershipMatchesCurrentBusiness: Bool {
+        credentialOwnershipMatches(storedCredentialOwner)
+    }
+
+    private func rejectUnverifiedCredentialOwner() {
+        suspendLocalSession()
+        lastAuthorizationFailureDetail = "The saved QuickBooks credential could not be verified for this business. Connect QuickBooks again for the current company."
     }
 
     var connectionDiagnosticSummary: String {
@@ -394,27 +455,46 @@ final class QuickBooksDataAPI: ObservableObject {
     }
 
     func resetConnectionForReconnect(completion: ((Bool) -> Void)? = nil) {
-        guard realmID != nil else {
-            clearTokens()
-            completion?(true)
-            return
-        }
-
-        revoke { [weak self] ok in
-            Task { @MainActor in
-                self?.clearTokens()
+        guard !disconnectInProgress else { completion?(false); return }
+        // The backend company connection can outlive this device credential.
+        // Capture the business workspace even when no local realm is loaded.
+        let generation = connectionGeneration
+        let operation: WorkspaceProviderOperation
+        do {
+            operation = try WorkspaceProviderOperation.capture { [weak self] in
+                self?.connectionGeneration == generation
+            }
+        } catch { completion?(false); return }
+        disconnectInProgress = true
+        Task {
+            defer { disconnectInProgress = false }
+            do {
+                try operation.check()
+                guard connectionGeneration == generation else { completion?(false); return }
+                let ok = try await operation.performExternalMutation { await revokeConnection() }
+                guard connectionGeneration == generation else { completion?(false); return }
+                if ok { clearTokens() }
                 completion?(ok)
+            } catch {
+                completion?(false)
             }
         }
     }
 
     func storeTokens(_ tokens: QuickBooksOAuthTokens, realmID: String) {
+        deviceSessionSuspended = false
         connectionGeneration = UUID()
         storeTokens(tokens, realmID: realmID, authorizedScopeSignature: QuickBooksDataAPI.currentScopeSignature)
     }
 
     private func storeTokens(_ tokens: QuickBooksOAuthTokens, realmID: String, authorizedScopeSignature: String?) {
+        let owner = currentCredentialOwner()
+        guard !requiresCredentialOwnership || owner != nil else {
+            rejectUnverifiedCredentialOwner()
+            return
+        }
         let normalizedRealmID = realmID.trimmingCharacters(in: .whitespacesAndNewlines)
+        storedCredentialOwner = owner
         self.tokens = tokens
         self.storedRealmID = normalizedRealmID.isEmpty ? nil : normalizedRealmID
         self.storedEnvironment = Config.QuickBooks.environment
@@ -424,24 +504,42 @@ final class QuickBooksDataAPI: ObservableObject {
             UserDefaults.standard.removeObject(forKey: realmIDKey)
             return
         }
-        try? KeychainStore.saveCodable(
-            QuickBooksKeychainPayload(
-                tokens: tokens,
-                realmID: normalizedRealmID,
-                environment: self.storedEnvironment,
-                clientIDFingerprint: Self.currentClientIDFingerprint,
-                redirectURI: Config.QuickBooks.redirectURI,
-                scopeSignature: authorizedScopeSignature
-            ),
-            account: keychainAccount
-        )
+        persistCredential(QuickBooksKeychainPayload(
+            tokens: tokens, realmID: normalizedRealmID,
+            environment: self.storedEnvironment,
+            clientIDFingerprint: Self.currentClientIDFingerprint,
+            redirectURI: Config.QuickBooks.redirectURI,
+            scopeSignature: authorizedScopeSignature,
+            owner: owner
+        ))
         UserDefaults.standard.set(normalizedRealmID, forKey: realmIDKey)
         NotificationCenter.default.post(name: .quickBooksAuthenticationDidChange, object: nil)
     }
 
-    func loadTokens() {
-        guard persistsCredentials else { return }
-        if let payload = try? KeychainStore.loadCodable(QuickBooksKeychainPayload.self, account: keychainAccount) {
+    /// Explicit business login is the only path that resumes a suspended device.
+    func resumeStoredSessionForCurrentBusiness() async {
+        guard currentCredentialOwner() != nil else { return }
+        deviceSessionSuspended = false
+        await restoreStoredSession()
+    }
+
+    /// Restore the saved connection after the first frame without blocking UI.
+    func restoreStoredSession() async {
+        guard persistsCredentials, !deviceSessionSuspended else { return }
+        guard let owner = currentCredentialOwner() else { return }
+        let generation = connectionGeneration
+        await credentialPersistenceTask?.value
+        let result: (payload: QuickBooksKeychainPayload?, readFailed: Bool)
+        do { result = (try await credentialStore.load(), false) }
+        catch { result = (nil, true) }
+        guard connectionGeneration == generation, !deviceSessionSuspended,
+              currentCredentialOwner() == owner else { return }
+        guard !result.readFailed else { return }
+        if let payload = result.payload {
+            guard credentialOwnershipMatches(payload.owner) else {
+                rejectUnverifiedCredentialOwner()
+                return
+            }
             guard savedPayloadMatchesCurrentConfiguration(payload) else {
                 lastAuthorizationFailureDetail = "Saved QuickBooks session was created by a different Intuit client, redirect URI, or sandbox/production environment. Reconnect once with the production Intuit app settings in this build."
                 lastRejectedRealmID = payload.realmID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -456,7 +554,7 @@ final class QuickBooksDataAPI: ObservableObject {
                     ? UserDefaults.standard.string(forKey: realmIDKey)?.trimmingCharacters(in: .whitespacesAndNewlines)
                     : keychainRealmID,
                 environment: payload.environment ?? Config.QuickBooks.environment,
-                scopeSignature: payload.scopeSignature)
+                scopeSignature: payload.scopeSignature, owner: payload.owner)
             return
         }
 
@@ -464,6 +562,7 @@ final class QuickBooksDataAPI: ObservableObject {
         // Do not delete Keychain data just because it is temporarily unavailable.
         if tokens != nil { connectionGeneration = UUID() }
         tokens = nil
+        storedCredentialOwner = nil
         storedRealmID = nil
         storedEnvironment = nil
         storedScopeSignature = nil
@@ -477,11 +576,17 @@ final class QuickBooksDataAPI: ObservableObject {
     }
 
     private func applyLoadedSession(_ loaded: QuickBooksOAuthTokens, realmID: String?,
-                                    environment: String, scopeSignature: String?) {
+                                    environment: String, scopeSignature: String?, owner: QuickBooksCredentialOwner?) {
+        guard credentialOwnershipMatches(owner) else {
+            rejectUnverifiedCredentialOwner()
+            return
+        }
         let unchanged = tokens?.accessToken == loaded.accessToken &&
             tokens?.expiration == loaded.expiration && storedRealmID == realmID &&
-            storedEnvironment == environment && storedScopeSignature == scopeSignature
+            storedEnvironment == environment && storedScopeSignature == scopeSignature && storedCredentialOwner == owner
         if !unchanged { connectionGeneration = UUID() }
+        deviceSessionSuspended = false
+        storedCredentialOwner = owner
         tokens = loaded
         storedRealmID = realmID
         storedEnvironment = environment
@@ -490,16 +595,31 @@ final class QuickBooksDataAPI: ObservableObject {
 
     #if DEBUG
     func reloadSavedSessionForTesting(_ loaded: QuickBooksOAuthTokens, realmID: String,
-                                     environment: String? = nil, scopeSignature: String? = nil) {
+                                     environment: String? = nil, scopeSignature: String? = nil,
+                                     credentialOwner: QuickBooksCredentialOwner? = nil) {
         precondition(!persistsCredentials && GunnAireCloudKit.usesTestDatabase)
         applyLoadedSession(loaded, realmID: realmID, environment: environment ?? currentEnvironment,
-                           scopeSignature: scopeSignature ?? storedScopeSignature)
+                           scopeSignature: scopeSignature ?? storedScopeSignature, owner: credentialOwner)
     }
     #endif
+
+    /// Ends device use immediately without revoking the business connection or
+    /// deleting its saved short-lived credential. New login restores it normally.
+    func suspendLocalSession() {
+        deviceSessionSuspended = true
+        connectionGeneration = UUID()
+        tokens = nil
+        storedCredentialOwner = nil
+        storedRealmID = nil
+        storedEnvironment = nil
+        storedScopeSignature = nil
+        NotificationCenter.default.post(name: .quickBooksAuthenticationDidChange, object: nil)
+    }
 
     func clearTokens(clearAuthorizationFailure: Bool = true) {
         connectionGeneration = UUID()
         tokens = nil
+        storedCredentialOwner = nil
         storedRealmID = nil
         storedEnvironment = nil
         storedScopeSignature = nil
@@ -510,19 +630,31 @@ final class QuickBooksDataAPI: ObservableObject {
             lastRejectedEnvironment = nil
         }
         guard persistsCredentials else { return }
-        try? KeychainStore.remove(account: keychainAccount)
+        persistCredential(nil)
         UserDefaults.standard.removeObject(forKey: legacyTokenStorageKey)
         UserDefaults.standard.removeObject(forKey: realmIDKey)
         NotificationCenter.default.post(name: .quickBooksAuthenticationDidChange, object: nil)
     }
 
-    private func revoke(completion: @escaping (Bool) -> Void) {
-        Task {
-            completion((try? await GunnAireBackendService.revokeQuickBooksConnection()) != nil)
+    private func persistCredential(_ payload: QuickBooksKeychainPayload?) {
+        guard persistsCredentials else { return }
+        let previous = credentialPersistenceTask
+        let generation = connectionGeneration
+        let store = credentialStore
+        credentialPersistenceTask = Task { [weak self] in
+            await previous?.value
+            do { try await store.replace(payload) }
+            catch {
+                guard let self, self.connectionGeneration == generation else { return }
+                self.lastAuthorizationFailureDetail = "The device could not save the QuickBooks session securely. Reconnect after device secure storage is available."
+            }
         }
     }
 
     func refreshTokensIfNeeded(completion: @escaping (Bool) -> Void) {
+        guard !deviceSessionSuspended, credentialOwnershipMatchesCurrentBusiness else {
+            completeOnMain(completion, value: false); return
+        }
         if let tokens, tokens.expiration > Date().addingTimeInterval(60) {
             completeOnMain(completion, value: true)
             return
@@ -668,7 +800,7 @@ final class QuickBooksDataAPI: ObservableObject {
         contentType: String?,
         requestID: UUID? = nil
     ) -> URLRequest? {
-        guard let tokens else {
+        guard !deviceSessionSuspended, credentialOwnershipMatchesCurrentBusiness, let tokens else {
             return nil
         }
 
@@ -875,7 +1007,8 @@ final class QuickBooksDataAPI: ObservableObject {
         _ request: URLRequest?,
         originalContext: QuickBooksRetryContext
     ) -> URLRequest? {
-        guard let request, let tokens else { return nil }
+        guard !deviceSessionSuspended, credentialOwnershipMatchesCurrentBusiness,
+              let request, let tokens else { return nil }
         return QuickBooksRateLimitRetryPolicy.requestForRetry(
             request,
             accessToken: tokens.accessToken,
@@ -1350,29 +1483,12 @@ final class QuickBooksDataAPI: ObservableObject {
         }
     }
 
-    func sendEstimate(id: String, to emailAddress: String? = nil, completion: @escaping (Result<QuickBooksEstimate, Error>) -> Void) {
-        let trimmedID = id.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedID.isEmpty,
-              let encodedID = trimmedID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
-            completion(.failure(QBError.noData))
-            return
-        }
-        let trimmedEmail = emailAddress?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let queryItems = trimmedEmail?.isEmpty == false
-            ? [URLQueryItem(name: "sendTo", value: trimmedEmail)]
-            : []
-        performAuthorizedDecodingRequest(
-            { self.authorizedRequest(path: "estimate/\(encodedID)/send", queryItems: queryItems, method: "POST") },
-            decode: QuickBooksEstimateResponse.self
-        ) { result in
-            completion(result.flatMap {
-                QuickBooksProviderResponsePolicy.validated(
-                    $0.Estimate,
-                    identifier: $0.Estimate.Id,
-                    entity: "estimate"
-                )
-            })
-        }
+    func sendEstimate(id: String, to emailAddress: String? = nil, expectedCustomerID: String? = nil, validateSend: @escaping () throws -> Void = {}, completion: @escaping (Result<QuickBooksEstimate, Error>) -> Void) {
+        sendDocumentEmail(kind: "estimate", id: id, to: emailAddress, expectedCustomerID: expectedCustomerID, validateSend: validateSend, decode: QuickBooksEstimateResponse.self,
+            observe: { .init(id: $0.Estimate.Id, recipient: $0.Estimate.BillEmail?.Address,
+                emailStatus: $0.Estimate.EmailStatus, delivery: $0.Estimate.DeliveryInfo, customerID: $0.Estimate.CustomerRef.value) }) {
+                completion($0.map(\.Estimate))
+            }
     }
 
     func fetchInvoices(completion: @escaping (Result<[QuickBooksInvoice], Error>) -> Void) {
@@ -1467,29 +1583,130 @@ final class QuickBooksDataAPI: ObservableObject {
         }
     }
 
-    func sendInvoice(id: String, to emailAddress: String? = nil, completion: @escaping (Result<QuickBooksInvoice, Error>) -> Void) {
+    func sendInvoice(id: String, to emailAddress: String? = nil, expectedCustomerID: String? = nil, validateSend: @escaping () throws -> Void = {}, completion: @escaping (Result<QuickBooksInvoice, Error>) -> Void) {
+        sendDocumentEmail(kind: "invoice", id: id, to: emailAddress, expectedCustomerID: expectedCustomerID, validateSend: validateSend, decode: QuickBooksInvoiceResponse.self,
+            observe: { .init(id: $0.Invoice.Id, recipient: $0.Invoice.BillEmail?.Address,
+                emailStatus: $0.Invoice.EmailStatus, delivery: $0.Invoice.DeliveryInfo, customerID: $0.Invoice.CustomerRef.value) }) {
+                completion($0.map(\.Invoice))
+            }
+    }
+
+    /// A retry first reads the original document. It never issues a second POST
+    /// while a retained attempt has an uncertain outcome, even after relaunch.
+    private func sendDocumentEmail<T: Decodable>(kind: String, id: String, to emailAddress: String?, expectedCustomerID: String?,
+        validateSend: @escaping () throws -> Void, decode: T.Type, observe: @escaping (T) -> QuickBooksDocumentEmailObservation,
+        completion: @escaping (Result<T, Error>) -> Void) {
+        guard sharedBillingOperation == nil else {
+            completion(.failure(BillingPublicationError.savedDocumentRequired)); return
+        }
         let trimmedID = id.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedID.isEmpty,
-              let encodedID = trimmedID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
-            completion(.failure(QBError.noData))
-            return
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        guard !trimmedID.isEmpty, trimmedID.count <= 256,
+              trimmedID.unicodeScalars.allSatisfy({ allowed.contains($0) }) else {
+            completion(.failure(QuickBooksDocumentEmailError.invalidDocument)); return
         }
-        let trimmedEmail = emailAddress?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let queryItems = trimmedEmail?.isEmpty == false
-            ? [URLQueryItem(name: "sendTo", value: trimmedEmail)]
-            : []
-        performAuthorizedDecodingRequest(
-            { self.authorizedRequest(path: "invoice/\(encodedID)/send", queryItems: queryItems, method: "POST") },
-            decode: QuickBooksInvoiceResponse.self
-        ) { result in
-            completion(result.flatMap {
-                QuickBooksProviderResponsePolicy.validated(
-                    $0.Invoice,
-                    identifier: $0.Invoice.Id,
-                    entity: "invoice"
-                )
-            })
+        let operation: WorkspaceProviderOperation
+        do {
+            try validateSend()
+            operation = WorkspaceProviderOperation(parent: try captureProviderOperation()) {
+                (try? validateSend()) != nil
+            }
         }
+        catch { completion(.failure(error)); return }
+        let key = QuickBooksDocumentEmailAttempt.digest([
+            storedCredentialOwner?.companyID.uuidString ?? "fixture",
+            storedCredentialOwner?.backendOrigin ?? Config.Backend.normalizedBaseURL,
+            currentEnvironment, realmID ?? "", kind, trimmedID
+        ].joined(separator: "\n"))
+        let journal = documentEmailJournal
+        Task { @MainActor in
+            var acquired = false
+            var attempt: QuickBooksDocumentEmailAttempt?
+            var accepted = false
+            let result: Result<T, Error>
+            do {
+                try operation.check()
+                let previous = try await journal.acquire(key)
+                acquired = true
+                try operation.check()
+                let document: T = try await withCheckedThrowingContinuation { continuation in
+                    performAuthorizedDecodingRequest({ self.authorizedRequest(path: "\(kind)/\(trimmedID)") },
+                        decode: decode, completion: { continuation.resume(with: $0) }, operation: operation)
+                }
+                try operation.check()
+                let before = observe(document)
+                guard before.id == trimmedID, expectedCustomerID == nil ||
+                    (expectedCustomerID?.isEmpty == false && before.customerID == expectedCustomerID) else {
+                    throw QuickBooksDocumentEmailError.invalidDocument
+                }
+                if let previous, previous.state == .pending {
+                    guard before.confirms(previous) else { throw QuickBooksDocumentEmailError.reviewRequired }
+                    try await journal.finish(previous, state: .accepted)
+                    accepted = true
+                    try operation.check()
+                    throw QuickBooksDocumentEmailError.reconciled
+                }
+                let addresses = try? GmailAddressList.parse(emailAddress ?? before.recipient ?? "")
+                guard let addresses, addresses.count == 1, let recipient = addresses.first?.lowercased() else {
+                    throw QuickBooksDocumentEmailError.recipientRequired
+                }
+                try operation.check()
+                let prepared = try await journal.begin(key: key, recipient: recipient,
+                    previousDeliveryTime: before.delivery?.DeliveryTime)
+                attempt = prepared
+                try operation.check()
+                let response: T = try await withCheckedThrowingContinuation { continuation in
+                    performAuthorizedDecodingRequest({ self.authorizedRequest(path: "\(kind)/\(trimmedID)/send",
+                        queryItems: [URLQueryItem(name: "sendTo", value: recipient),
+                            URLQueryItem(name: "requestid", value: prepared.requestID.uuidString)],
+                        method: "POST", contentType: "application/octet-stream") },
+                        decode: decode, completion: { continuation.resume(with: $0) }, operation: operation)
+                }
+                try operation.check()
+                let sent = observe(response)
+                guard sent.id == trimmedID, sent.emailStatus == "EmailSent",
+                      expectedCustomerID == nil || sent.customerID == expectedCustomerID,
+                      sent.recipient?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == recipient else {
+                    throw QuickBooksDocumentEmailError.reviewRequired
+                }
+                try await journal.finish(prepared, state: .accepted)
+                attempt = nil
+                accepted = true
+                try operation.check()
+                result = .success(response)
+            } catch {
+                if let attempt {
+                    if !operation.mayHaveReachedProvider || Self.documentEmailWasRejected(error) {
+                        do {
+                            try await journal.finish(attempt, state: .rejected)
+                            result = .failure(error)
+                        } catch { result = .failure(QuickBooksDocumentEmailError.storage) }
+                    } else { result = .failure(QuickBooksDocumentEmailError.reviewRequired) }
+                } else {
+                    let lostContext = operation.failure != nil || error is CancellationError
+                    result = .failure(accepted && lostContext ? QuickBooksDocumentEmailError.acceptedInOriginalWorkspace : error)
+                }
+            }
+            if acquired { await journal.release(key) }
+            do {
+                try operation.check()
+                completion(result)
+            } catch {
+                completion(.failure(accepted ? QuickBooksDocumentEmailError.acceptedInOriginalWorkspace :
+                    (operation.mayHaveReachedProvider ? QuickBooksDocumentEmailError.reviewRequired : error)))
+            }
+        }
+    }
+
+    private static func documentEmailWasRejected(_ error: Error) -> Bool {
+        guard let error = error as? QBError else { return false }
+        let status: Int
+        switch error {
+        case .http(let code), .api(let code, _), .httpDetail(let code, _), .authorizationFailed(let code, _): status = code
+        case .rateLimited: status = 429
+        default: return false
+        }
+        return [400, 401, 403, 404, 405, 415, 422, 429].contains(status)
     }
 
     func fetchBills(completion: @escaping (Result<[QuickBooksBill], Error>) -> Void) {
@@ -2688,7 +2905,7 @@ enum QuickBooksDateOnly {
     }
 }
 
-struct QuickBooksReference: Codable, Hashable {
+nonisolated struct QuickBooksReference: Codable, Hashable, Sendable {
     let value: String
     let name: String?
 
@@ -2732,7 +2949,7 @@ struct QuickBooksAddress: Codable {
     var Country: String? = nil
 }
 
-struct QuickBooksLineItem: Codable {
+nonisolated struct QuickBooksLineItem: Codable, Sendable {
     /// Read-only provider identity, retained to detect duplicate nested rows.
     let Id: String?
     let Amount: Double
@@ -2845,19 +3062,19 @@ struct QuickBooksLineItem: Codable {
     }
 }
 
-struct QuickBooksGroupLineDetail: Codable {
+nonisolated struct QuickBooksGroupLineDetail: Codable, Sendable {
     let GroupItemRef: QuickBooksReference
     /// Bundle count, not a second multiplier for the already-extended leaves.
     let Quantity: Double
     let Line: [QuickBooksLineItem]
 }
 
-struct QuickBooksDiscountLineDetail: Codable {
+nonisolated struct QuickBooksDiscountLineDetail: Codable, Sendable {
     let PercentBased: Bool
     let DiscountPercent: Double?
 }
 
-struct QuickBooksSalesItemLineDetail: Codable {
+nonisolated struct QuickBooksSalesItemLineDetail: Codable, Sendable {
     let ItemRef: QuickBooksReference
     let Qty: Double?
     let UnitPrice: Double?
@@ -3409,6 +3626,7 @@ struct QuickBooksEstimate: Codable, Identifiable {
     let TxnDate: String?
     let BillEmail: QuickBooksEmailAddress?
     let EmailStatus: String?
+    let DeliveryInfo: QuickBooksDocumentDeliveryInfo?
     let ShipAddr: QuickBooksAddress?
     let PrivateNote: String?
     let TxnTaxDetail: QuickBooksTxnTaxDetail?
@@ -3424,6 +3642,7 @@ struct QuickBooksEstimate: Codable, Identifiable {
         TxnDate: String? = nil,
         BillEmail: QuickBooksEmailAddress? = nil,
         EmailStatus: String? = nil,
+        DeliveryInfo: QuickBooksDocumentDeliveryInfo? = nil,
         ShipAddr: QuickBooksAddress? = nil,
         PrivateNote: String? = nil,
         TxnTaxDetail: QuickBooksTxnTaxDetail? = nil,
@@ -3436,6 +3655,7 @@ struct QuickBooksEstimate: Codable, Identifiable {
         self.TxnDate = TxnDate
         self.BillEmail = BillEmail
         self.EmailStatus = EmailStatus
+        self.DeliveryInfo = DeliveryInfo
         self.ShipAddr = ShipAddr
         self.PrivateNote = PrivateNote
         self.TxnTaxDetail = TxnTaxDetail
@@ -3643,6 +3863,7 @@ struct QuickBooksInvoice: Codable, Identifiable {
     let PrivateNote: String?
     let BillEmail: QuickBooksEmailAddress?
     let EmailStatus: String?
+    let DeliveryInfo: QuickBooksDocumentDeliveryInfo?
     let ShipAddr: QuickBooksAddress?
     let TxnTaxDetail: QuickBooksTxnTaxDetail?
     let Line: [QuickBooksLineItem]?
@@ -3654,7 +3875,7 @@ struct QuickBooksInvoice: Codable, Identifiable {
     var isVoided: Bool { status == "Voided" }
 
     private enum CodingKeys: String, CodingKey {
-        case Id, SyncToken, DocNumber, CustomerRef, TotalAmt, Balance, TxnDate, DueDate, PrivateNote, BillEmail, EmailStatus, ShipAddr, TxnTaxDetail, Line, status
+        case Id, SyncToken, DocNumber, CustomerRef, TotalAmt, Balance, TxnDate, DueDate, PrivateNote, BillEmail, EmailStatus, DeliveryInfo, ShipAddr, TxnTaxDetail, Line, status
     }
 
     init(from decoder: Decoder) throws {
@@ -3676,6 +3897,7 @@ struct QuickBooksInvoice: Codable, Identifiable {
         PrivateNote = try container.decodeIfPresent(String.self, forKey: .PrivateNote)
         BillEmail = try container.decodeIfPresent(QuickBooksEmailAddress.self, forKey: .BillEmail)
         EmailStatus = try container.decodeIfPresent(String.self, forKey: .EmailStatus)
+        DeliveryInfo = try container.decodeIfPresent(QuickBooksDocumentDeliveryInfo.self, forKey: .DeliveryInfo)
         ShipAddr = try container.decodeIfPresent(QuickBooksAddress.self, forKey: .ShipAddr)
         TxnTaxDetail = try container.decodeIfPresent(QuickBooksTxnTaxDetail.self, forKey: .TxnTaxDetail)
         Line = try container.decodeIfPresent([QuickBooksLineItem].self, forKey: .Line)

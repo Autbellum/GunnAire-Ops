@@ -11,23 +11,121 @@ import StoreKit
 /// `CompanyCloudKitTimeout` if the deadline wins. The access controller
 /// treats that like a network outage (a bounded lease may keep the workspace
 /// open) and reports it as a server-side failure otherwise.
-struct CompanyCloudKitTimeout: Error, CustomStringConvertible {
+nonisolated struct CompanyCloudKitTimeout: Error, CustomStringConvertible, Sendable {
     let seconds: TimeInterval
     var description: String { "CloudKit call exceeded \(Int(seconds)) s" }
 }
 
-private func withCloudKitTimeout<T: Sendable>(
+/// The account still exists, but CloudKit explicitly forbids new operations
+/// until it becomes available. Retain durable proof without opening a store.
+nonisolated struct CompanyCloudKitAccountTemporarilyUnavailable: Error, Sendable {}
+
+/// Carries what the store transaction check actually saw across the retrying,
+/// concurrency-crossing closure that performs it, so a rejection can name its
+/// own reason instead of collapsing into a generic configuration failure.
+private actor StoreDistributionVerdict {
+    private(set) var summary: String?
+    func record(_ value: String) { summary = value }
+}
+
+/// A concurrent account result retired this lookup. It is neither proof of
+/// revocation nor permission to reuse an earlier account without rechecking.
+///
+/// When the retired lookup had already failed, that failure is the only
+/// evidence of *why* verification is not succeeding, and replacing it with a
+/// bare "superseded" left the device showing a race instead of its cause. The
+/// cause is carried here for display only: it is deliberately not rethrown,
+/// because a result from a retired epoch must never be treated as current.
+nonisolated struct CompanyCloudKitAccountVerificationSuperseded: Error, Sendable, LocalizedError {
+    let retiredCause: String?
+
+    init(retiredCause: String? = nil) {
+        self.retiredCause = retiredCause
+    }
+
+    var errorDescription: String? {
+        guard let retiredCause else {
+            return "Another account check replaced this one before it finished."
+        }
+        return "Another account check replaced this one before it finished. The replaced check reported: \(retiredCause)"
+    }
+}
+
+nonisolated private final class CompanyCloudKitTimeoutRace<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Value, Error>?
+    private var result: Result<Value, Error>?
+    private var operationTask: Task<Void, Never>?
+    private var timerTask: Task<Void, Never>?
+
+    /// Returns false when cancellation already settled the race before the
+    /// continuation was installed. In that case no CloudKit work is started.
+    func install(_ continuation: CheckedContinuation<Value, Error>) -> Bool {
+        lock.lock()
+        let settled = result
+        if settled == nil { self.continuation = continuation }
+        lock.unlock()
+        if let settled { continuation.resume(with: settled) }
+        return settled == nil
+    }
+
+    func retain(operation: Task<Void, Never>, timer: Task<Void, Never>) {
+        lock.lock()
+        let settled = result != nil
+        if !settled {
+            operationTask = operation
+            timerTask = timer
+        }
+        lock.unlock()
+        if settled {
+            operation.cancel()
+            timer.cancel()
+        }
+    }
+
+    func finish(_ next: Result<Value, Error>) {
+        lock.lock()
+        guard result == nil else { lock.unlock(); return }
+        result = next
+        let continuation = self.continuation
+        self.continuation = nil
+        let operation = operationTask
+        let timer = timerTask
+        operationTask = nil
+        timerTask = nil
+        lock.unlock()
+        operation?.cancel()
+        timer?.cancel()
+        continuation?.resume(with: next)
+    }
+}
+
+nonisolated func withCloudKitTimeout<T: Sendable>(
     seconds: TimeInterval,
     _ operation: @escaping @Sendable () async throws -> T
 ) async throws -> T {
-    try await withThrowingTaskGroup(of: T.self) { group in
-        group.addTask { try await operation() }
-        group.addTask {
-            try await Task.sleep(for: .seconds(seconds))
-            throw CompanyCloudKitTimeout(seconds: seconds)
+    let race = CompanyCloudKitTimeoutRace<T>()
+    return try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { continuation in
+            guard race.install(continuation) else { return }
+            let operationTask = Task.detached(priority: .userInitiated) {
+                guard !Task.isCancelled else { return }
+                do { race.finish(.success(try await operation())) }
+                catch { race.finish(.failure(error)) }
+            }
+            let timerTask = Task.detached(priority: .utility) {
+                guard !Task.isCancelled else { return }
+                do {
+                    try await Task.sleep(for: .seconds(max(0, seconds)))
+                    race.finish(.failure(CompanyCloudKitTimeout(seconds: seconds)))
+                } catch {
+                    // The operation won or the caller was cancelled.
+                }
+            }
+            race.retain(operation: operationTask, timer: timerTask)
         }
-        defer { group.cancelAll() }
-        return try await group.next()!
+    } onCancel: {
+        race.finish(.failure(CancellationError()))
     }
 }
 
@@ -55,19 +153,73 @@ enum CompanyWorkspaceDiagnostics {
     static var lastResolvedEnvironment: String = ""
 }
 
-enum CompanyCloudKitRuntimeAccount {
+/// Account lookups can overlap between workspace and staff operations. An
+/// explicit unavailable result retires successes from the same epoch, even
+/// when a sibling lookup finishes after that failure.
+@MainActor
+final class CompanyCloudKitAccountCache {
+    private var cached: (account: CompanyCloudKitAccount, resolvedAt: Date)?
+    private var generation = UUID()
+    private let lifetime: TimeInterval
+
+    init(lifetime: TimeInterval) { self.lifetime = lifetime }
+
+    func invalidate() {
+        cached = nil
+        generation = UUID()
+    }
+
+    func current(
+        resolve: @escaping @Sendable () async throws -> CompanyCloudKitAccount
+    ) async throws -> CompanyCloudKitAccount {
+        try Task.checkCancellation()
+        let now = Date()
+        if let cached, now >= cached.resolvedAt,
+           now.timeIntervalSince(cached.resolvedAt) < lifetime {
+            return cached.account
+        }
+        let operation = generation
+        // Approachable concurrency makes nonisolated async work inherit its
+        // caller's executor. Profile I/O and parsing need an explicit hop.
+        let work = Task.detached(priority: .userInitiated) { try await resolve() }
+        let account: CompanyCloudKitAccount
+        do {
+            account = try await withTaskCancellationHandler {
+                try await work.value
+            } onCancel: { work.cancel() }
+        } catch {
+            // Carry the retired failure's cause. Without it, a real
+            // configuration failure racing a sibling lookup reaches the gate
+            // as a bare "superseded", so the screen that names the actual
+            // problem and the screen that names the race disagree.
+            guard generation == operation else {
+                throw CompanyCloudKitAccountVerificationSuperseded(
+                    retiredCause: CompanyWorkspaceAccessController.describeRawError(error))
+            }
+            if error is CompanyCloudKitAccountTemporarilyUnavailable ||
+                (error as? CompanyWorkspaceFailure) == .accountUnavailable ||
+                (error as? CompanyWorkspaceFailure) == .configuration {
+                invalidate()
+            }
+            throw error
+        }
+        try Task.checkCancellation()
+        guard generation == operation else { throw CompanyCloudKitAccountVerificationSuperseded() }
+        cached = (account, Date())
+        return account
+    }
+}
+
+nonisolated enum CompanyCloudKitRuntimeAccount {
     /// The installed, signed profile determines CloudKit's environment when
-    /// present. When it is absent, StoreKit's AppTransaction is the
-    /// preferred proof, but AppTransaction.shared has a known real-world
-    /// reliability problem (StoreKitError.unknown, confirmed on-device,
-    /// independent of network or account state) that must not hard-block
-    /// every staff device. The absence of the embedded profile is itself
-    /// strong evidence: only Apple's own App Store Connect processing
-    /// pipeline (App Store or TestFlight) strips it - a Development, Ad Hoc,
-    /// or Enterprise build always keeps it, so this cannot be replicated by
-    /// simply omitting a file from a side-loaded build. Never infer this
-    /// from DEBUG, a receipt file, or QBO.
-    static func environment(profileData: Data?, hasVerifiedStoreDistribution: Bool) -> String? {
+    /// present. A missing profile alone is not signing evidence: simulator
+    /// and custom builds can also omit it. Such builds require a verified
+    /// AppTransaction before selecting the production CloudKit environment.
+    static func environment(
+        profileData: Data?,
+        hasVerifiedStoreDistribution: Bool,
+        hasStoreReceipt: Bool = false
+    ) -> String? {
         if let data = profileData {
             guard let start = data.range(of: Data("<?xml".utf8)),
                   let end = data.range(of: Data("</plist>".utf8), in: start.lowerBound..<data.endIndex),
@@ -106,7 +258,7 @@ enum CompanyCloudKitRuntimeAccount {
             let debuggable = (entitlements["get-task-allow"] as? Bool) ?? false
             return debuggable ? "development" : "production"
         }
-        return hasVerifiedStoreDistribution ? "production" : nil
+        return hasVerifiedStoreDistribution || hasStoreReceipt ? "production" : nil
     }
 
     /// Resolving the account costs a StoreKit transaction lookup (with
@@ -114,19 +266,93 @@ enum CompanyCloudKitRuntimeAccount {
     /// publication pass and staff delivery repeats it. A successful result is
     /// reused briefly; CloudKit's account-change notification drops it.
     static let cacheLifetime: TimeInterval = 15 * 60
-    @MainActor private static var cachedAccount: (account: CompanyCloudKitAccount, resolvedAt: Date)?
+    @MainActor private static let accountCache = CompanyCloudKitAccountCache(lifetime: cacheLifetime)
 
-    @MainActor static func invalidateCache() { cachedAccount = nil }
+    @MainActor static func invalidateCache() {
+        accountCache.invalidate()
+    }
 
     static func current() async throws -> CompanyCloudKitAccount {
         guard !GunnAireCloudKit.usesTestDatabase else { throw CompanyWorkspaceFailure.configuration }
-        if let cached = await MainActor.run(body: { Self.cachedAccount }),
-           Date().timeIntervalSince(cached.resolvedAt) < Self.cacheLifetime {
-            return cached.account
+        return try await accountCache.current { try await resolve() }
+    }
+
+    /// Only transport failures retry. An unverified or mismatched transaction
+    /// is a configuration failure and cannot inherit an older authorization.
+    static func verifyStoreDistribution(
+        attempt: @escaping @Sendable () async throws -> Bool,
+        pause: @escaping @Sendable () async throws -> Void = {
+            try await Task.sleep(for: .seconds(1))
         }
-        let account = try await resolve()
-        await MainActor.run { Self.cachedAccount = (account, Date()) }
-        return account
+    ) async throws {
+        for index in 0..<3 {
+            try Task.checkCancellation()
+            do {
+                guard try await withCloudKitTimeout(seconds: 6, attempt) else {
+                    throw CompanyWorkspaceFailure.configuration
+                }
+                return
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                let transportError: Error
+                if let storeError = error as? StoreKitError,
+                   case .networkError(let networkError) = storeError {
+                    transportError = networkError
+                } else { transportError = error }
+                guard CompanyWorkspaceAccessController.isConnectivityFailure(transportError) else {
+                    throw CompanyWorkspaceFailure.configuration
+                }
+                if index == 2 { throw transportError }
+                try await pause()
+            }
+        }
+    }
+
+    /// TestFlight can omit the embedded profile and, on some iOS releases,
+    /// StoreKit can surface its configuration failure as a private error
+    /// string rather than a public StoreKitError case. A nonempty App Store
+    /// receipt is the signed distribution marker available in that state. It
+    /// is accepted only for that exact diagnostic; unverified transactions,
+    /// bundle mismatches and transport failures still fail closed.
+    static func permitsStoreReceiptFallback(error: Error, receiptData: Data?) -> Bool {
+        guard receiptData?.isEmpty == false else { return false }
+        if let storeError = error as? StoreKitError {
+            if case .networkError = storeError { return false }
+            if case .userCancelled = storeError { return false }
+            if case .notAvailableInStorefront = storeError { return false }
+            if case .notEntitled = storeError { return false }
+        }
+        let description = String(describing: error).trimmingCharacters(in: .whitespacesAndNewlines)
+        return description == "configuration" || description.localizedCaseInsensitiveContains("configuration")
+    }
+
+    static func requireAvailableAccount(
+        status: @escaping @Sendable () async throws -> CKAccountStatus,
+        pause: @escaping @Sendable () async throws -> Void = {
+            try await Task.sleep(for: .seconds(1))
+        }
+    ) async throws {
+        for index in 0..<3 {
+            try Task.checkCancellation()
+            let value = try await withCloudKitTimeout(seconds: 20, status)
+            await MainActor.run {
+                CompanyWorkspaceDiagnostics.lastAccountStatusDetail = "accountStatus=\(Self.describe(value))"
+            }
+            switch value {
+            case .available:
+                return
+            case .temporarilyUnavailable:
+                throw CompanyCloudKitAccountTemporarilyUnavailable()
+            case .couldNotDetermine:
+                if index == 2 { throw URLError(.timedOut) }
+                try await pause()
+            case .noAccount, .restricted:
+                throw CompanyWorkspaceFailure.accountUnavailable
+            @unknown default:
+                throw CompanyWorkspaceFailure.accountUnavailable
+            }
+        }
     }
 
     private static func resolve() async throws -> CompanyCloudKitAccount {
@@ -137,55 +363,99 @@ enum CompanyCloudKitRuntimeAccount {
         let profileURL = profileURLs.first { FileManager.default.fileExists(atPath: $0.path) }
         let profileData = try profileURL.map { try Data(contentsOf: $0) }
         var hasVerifiedDistribution = false
+        var hasStoreReceipt = false
+        var hasStrippedDistributionProfile = false
         if profileData == nil {
-            // App Store / TestFlight distribution strips the embedded
-            // provisioning profile from the on-device bundle, so this is the
-            // only path real staff devices take: distribution is proven via
-            // StoreKit's AppTransaction instead. A thrown error here (network,
-            // or the App Store receipt not yet settling right after a fresh
-            // install/update) must never propagate as a raw, uncategorized
-            // error — the caller maps any such error to accountUnavailable,
-            // which misleadingly sends staff to check their iCloud sign-in
-            // for what is really a StoreKit verification problem. Retry
-            // briefly before giving up.
-            var lastDetail = ""
-            for attempt in 0..<3 {
-                if attempt > 0 { try? await Task.sleep(for: .seconds(1)) }
-                do {
-                    let result = try await AppTransaction.shared
+            // Development, ad-hoc and enterprise signing all embed a
+            // provisioning profile; only App Store and TestFlight processing
+            // strips it. On a real device its absence is therefore itself the
+            // distribution marker, and unlike StoreKit it cannot be absent for
+            // a legitimate install: an app distributed privately through
+            // TestFlight was never bought from the storefront, so
+            // AppTransaction has no transaction to return and throws
+            // StoreKitError.unknown. Verified on the owner's iPhone across
+            // builds 2026092301-2026092305.
+            //
+            // The Simulator also has no profile, so it cannot use this signal
+            // and still has to prove distribution through StoreKit below.
+            #if !targetEnvironment(simulator)
+            hasStrippedDistributionProfile = true
+            #endif
+            // StoreKit remains a secondary signal: when it does answer, it is
+            // stronger evidence than an absent file. Its failure no longer
+            // blocks a device build, but it is still recorded.
+            // The App Store receipt's file name depends on the environment:
+            // "receipt" for an App Store build but "sandboxReceipt" under
+            // TestFlight and sandbox. Hardcoding the production name read
+            // nothing on TestFlight, so the fallback below could never engage
+            // and the gate failed with the same message a build without the
+            // fallback produced. Always ask Bundle for the resolved URL.
+            let receiptData = Bundle.main.appStoreReceiptURL.flatMap { try? Data(contentsOf: $0) }
+            // Three different conditions make this check fail, and all three
+            // previously surfaced as the single word "configuration". Record
+            // which one actually failed; without it the device cannot say
+            // whether StoreKit rejected the signature, returned another app's
+            // bundle, or reported an environment this build must not trust.
+            let verdict = StoreDistributionVerdict()
+            do {
+                try await verifyStoreDistribution {
+                    let result: VerificationResult<AppTransaction>
+                    do {
+                        result = try await AppTransaction.shared
+                    } catch {
+                        // verifyStoreDistribution converts a non-transport
+                        // throw into a bare .configuration, discarding this.
+                        // It is the only description of what StoreKit actually
+                        // refused, so capture it before that happens.
+                        await verdict.record("threw \(type(of: error)): \(String(describing: error))")
+                        throw error
+                    }
                     switch result {
                     case .verified(let transaction):
-                        if transaction.bundleID != Bundle.main.bundleIdentifier {
-                            lastDetail = "bundleID mismatch: got \(transaction.bundleID)"
-                        } else if !(transaction.environment == .production || transaction.environment == .sandbox) {
-                            lastDetail = "unexpected environment: \(transaction.environment)"
-                        } else {
-                            hasVerifiedDistribution = true
-                        }
+                        let bundleMatches = transaction.bundleID == Bundle.main.bundleIdentifier
+                        let environmentAllowed = transaction.environment == .production ||
+                            transaction.environment == .sandbox
+                        await verdict.record(
+                            "verified bundleID=\(transaction.bundleID) expected=\(Bundle.main.bundleIdentifier ?? "nil") " +
+                            "environment=\(transaction.environment.rawValue)")
+                        return bundleMatches && environmentAllowed
                     case .unverified(_, let verificationError):
-                        lastDetail = "unverified: \(verificationError)"
+                        await verdict.record("unverified: \(String(describing: verificationError))")
+                        return false
                     }
-                } catch {
-                    lastDetail = "threw: \(String(describing: error))"
                 }
-                if hasVerifiedDistribution { break }
-            }
-            if hasVerifiedDistribution {
+                hasVerifiedDistribution = true
                 let detail = "profileData=nil, AppTransaction verified"
                 await MainActor.run { CompanyWorkspaceDiagnostics.lastConfigurationDetail = detail }
-            } else {
-                // AppTransaction did not verify, but the missing embedded
-                // profile is itself sufficient proof this is a real Apple
-                // Store Connect distribution (see comment above). Fall back
-                // rather than blocking every device on a flaky StoreKit call.
-                hasVerifiedDistribution = true
-                let detail = "profileData=nil, AppTransaction: \(lastDetail) — fell back to profile-absence proof"
-                await MainActor.run { CompanyWorkspaceDiagnostics.lastConfigurationDetail = detail }
+            } catch {
+                if Self.permitsStoreReceiptFallback(error: error, receiptData: receiptData) {
+                    hasStoreReceipt = true
+                    let detail = "profileData=nil, AppTransaction configuration; nonempty store receipt present"
+                    await MainActor.run { CompanyWorkspaceDiagnostics.lastConfigurationDetail = detail }
+                } else {
+                    // Name the receipt as well as the transaction. Without it a
+                    // missing receipt and a rejected transaction are the same
+                    // sentence on the device, which is what hid this.
+                    let receipt = receiptData.map { "\($0.count) bytes" } ?? "absent"
+                    let transaction = await verdict.summary ?? "no transaction result"
+                    let source = hasStrippedDistributionProfile ? "stripped distribution profile" : "none"
+                    let detail = "profileData=nil, AppTransaction: \(String(describing: error)), " +
+                        "receipt: \(receipt), transaction: \(transaction), distribution: \(source)"
+                    await MainActor.run { CompanyWorkspaceDiagnostics.lastConfigurationDetail = detail }
+                    // A device build with no embedded profile is already
+                    // distribution-signed. Only the Simulator, which cannot use
+                    // that signal, still fails closed here.
+                    if !hasStrippedDistributionProfile { throw error }
+                }
             }
         } else {
             await MainActor.run { CompanyWorkspaceDiagnostics.lastConfigurationDetail = "profileData present, \(profileData?.count ?? -1) bytes" }
         }
-        guard let environment = environment(profileData: profileData, hasVerifiedStoreDistribution: hasVerifiedDistribution) else {
+        guard let environment = environment(
+            profileData: profileData,
+            hasVerifiedStoreDistribution: hasVerifiedDistribution,
+            hasStoreReceipt: hasStoreReceipt || hasStrippedDistributionProfile
+        ) else {
             throw CompanyWorkspaceFailure.configuration
         }
         // The resolved environment namespaces accountHash, the workspace
@@ -201,11 +471,7 @@ enum CompanyCloudKitRuntimeAccount {
         // staring at an unbounded "Verifying company access…" spinner with
         // no feedback at all. Bound each call so a stall surfaces as a clear,
         // actionable failure instead of hanging indefinitely.
-        let status = try await withCloudKitTimeout(seconds: 20, { try await container.accountStatus() })
-        guard status == .available else {
-            await MainActor.run { CompanyWorkspaceDiagnostics.lastAccountStatusDetail = "accountStatus=\(Self.describe(status))" }
-            throw CompanyWorkspaceFailure.accountUnavailable
-        }
+        try await requireAvailableAccount { try await container.accountStatus() }
         let identifier = try await withCloudKitTimeout(seconds: 20) { try await container.userRecordID() }
         guard !identifier.recordName.isEmpty else {
             await MainActor.run { CompanyWorkspaceDiagnostics.lastAccountStatusDetail = "accountStatus=available, userRecordID.recordName=empty" }

@@ -1,7 +1,7 @@
 import Foundation
 import SwiftData
 
-enum AppUserRole: String, Codable, CaseIterable, Identifiable {
+nonisolated enum AppUserRole: String, Codable, CaseIterable, Identifiable, Sendable {
     case standard = "Standard"
     case fieldTechnician = "Field Technician"
     case dispatcher = "Dispatcher"
@@ -73,7 +73,10 @@ enum AppAccess {
         guard let verifiedUser, verifiedUser.isActive,
               normalizedEmail(verifiedUser.email) == normalizedEmail(email),
               let approvedRole = AppUserRole(rawValue: verifiedUser.role),
-              localRole(email: email, users: users) == approvedRole else { return nil }
+              localRole(email: email, users: users) != nil else { return nil }
+        // The backend-verified role is authoritative. A loaded SwiftData
+        // mirror can lag a background reconciliation; it may confirm that the
+        // account is present and unambiguous, but cannot grant a higher role.
         return approvedRole
     }
 

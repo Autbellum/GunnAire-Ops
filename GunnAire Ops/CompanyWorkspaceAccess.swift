@@ -5,34 +5,48 @@ import CoreData
 import CloudKit
 import Combine
 
-struct CompanyWorkspaceSession: Codable, Equatable {
+nonisolated struct CompanyWorkspaceSession: Codable, Equatable, Sendable {
     let backendOrigin: String
     let email: String
     let tokenFingerprint: String
     let expiresAt: Date
 
-    static func digest(_ value: String) -> String {
+    nonisolated static func digest(_ value: String) -> String {
         SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
-    static var current: Self? {
+    /// Build once on a background task immediately after a successful
+    /// Keychain restore or save. Render-time authorization never parses a
+    /// date, hashes a token, or reads secure storage.
+    nonisolated static func validated(token: String, email: String, expiry: String,
+                                      backendOrigin: String) -> Self? {
+        let normalizedEmail = AppAccess.normalizedEmail(email)
+        guard !token.isEmpty, let expiresAt = CompanyWorkspaceClock.parse(expiry),
+              expiresAt > Date(), !normalizedEmail.isEmpty else { return nil }
+        return Self(backendOrigin: backendOrigin,
+                    email: normalizedEmail,
+                    tokenFingerprint: digest(token), expiresAt: expiresAt)
+    }
+
+    @MainActor static var current: Self? {
         guard Config.Backend.isProductionReady,
               let url = URL(string: Config.Backend.normalizedBaseURL),
               url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else { return nil }
-        let token: String
-        let email: String
-        let expiry: String
-        if AppleAuthManager.shared.isAuthenticated,
-           let stored = try? KeychainStore.loadCodable(GunnAireApplicationSession.self, account: "GunnAireAppleApplicationSession"),
-           stored.token == AppleAuthManager.shared.sessionToken {
-            (token, email, expiry) = (stored.token, stored.email, stored.expiresAt)
-        } else if let stored = try? KeychainStore.loadCodable(GunnAireGoogleApplicationSession.self, account: "GunnAireGoogleApplicationSession"),
-                  stored.token == GoogleAuthManager.shared.applicationSessionToken {
-            (token, email, expiry) = (stored.token, stored.email, stored.expiresAt)
+        let proof: Self?
+        let apple = AppleAuthManager.shared
+        let google = GoogleAuthManager.shared
+        if apple.isAuthenticated,
+           let stored = apple.businessApplicationSessionSnapshot,
+           stored.token == apple.sessionToken {
+            proof = apple.workspaceSessionProof
+        } else if let stored = google.businessApplicationSessionSnapshot,
+                  stored.token == google.applicationSessionToken {
+            proof = google.workspaceSessionProof
         } else { return nil }
-        guard !token.isEmpty, let expiresAt = CompanyWorkspaceClock.parse(expiry), expiresAt > Date(),
-              AppAccess.normalizedEmail(email) == AppAccess.normalizedEmail(AppIdentity.currentEmail) else { return nil }
-        return Self(backendOrigin: Config.Backend.normalizedBaseURL, email: AppAccess.normalizedEmail(email), tokenFingerprint: digest(token), expiresAt: expiresAt)
+        guard let proof, proof.backendOrigin == Config.Backend.normalizedBaseURL,
+              proof.expiresAt > Date(),
+              proof.email == AppAccess.normalizedEmail(AppIdentity.currentEmail) else { return nil }
+        return proof
     }
 }
 
@@ -86,7 +100,7 @@ enum CompanyWorkspaceRequestPolicy {
 
 /// Stored in device-only Keychain, not editable preferences. The SQLite store
 /// UUID anchors approval to the actual file without attaching CloudKit first.
-struct CompanyWorkspaceStoreRegistration: Codable, Equatable {
+nonisolated struct CompanyWorkspaceStoreRegistration: Codable, Equatable, Sendable {
     let backendOrigin: String
     let binding: CompanyCloudKitBinding
     let storeUUID: String
@@ -97,7 +111,7 @@ struct CompanyWorkspaceStoreRegistration: Codable, Equatable {
     }
 }
 
-struct CompanyWorkspaceLease: Codable {
+nonisolated struct CompanyWorkspaceLease: Codable, Sendable {
     let session: CompanyWorkspaceSession
     let binding: CompanyCloudKitBinding
     let user: BackendAppUserRecord
@@ -112,7 +126,7 @@ struct CompanyWorkspaceLease: Codable {
     }
 }
 
-enum CompanyWorkspaceFailure: String, Error, LocalizedError, Equatable {
+nonisolated enum CompanyWorkspaceFailure: String, Error, LocalizedError, Equatable, Sendable {
     case configuration, signIn, accountUnavailable, differentWorkspace, administratorRequired
     case storage, server, restartRequired
 
@@ -137,7 +151,7 @@ enum CompanyWorkspacePhase: Equatable {
     case blocked(CompanyWorkspaceFailure)
 }
 
-struct CompanyCloudKitAccount {
+nonisolated struct CompanyCloudKitAccount: Sendable {
     let environment: String
     let accountHash: String
     /// Available only from live CKContainer lookup; never used as a substitute
@@ -171,6 +185,76 @@ nonisolated enum CompanyWorkspaceStore {
     }
 }
 
+/// Swift's default actor isolation can place even a ModelActor executor on
+/// the physical main thread. Create and use a private context on one dedicated
+/// serial queue for this unlock; no context or model crosses the queue edge.
+nonisolated private final class CompanyWorkspaceWorkCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    func cancel() { lock.lock(); cancelled = true; lock.unlock() }
+    func check() throws {
+        lock.lock(); let value = cancelled; lock.unlock()
+        if value { throw CancellationError() }
+    }
+}
+
+nonisolated struct CompanyWorkspaceUnlockMaintenance: Sendable {
+    let modelContainer: ModelContainer
+
+    nonisolated struct VerifiedUserProjection: Sendable {
+        nonisolated struct Record: Sendable {
+            let id: PersistentIdentifier
+            let email: String
+            let roleRawValue: String
+            let isActive: Bool
+        }
+
+        let records: [Record]
+        let ranOnMainThread: Bool
+    }
+
+    func prepareVerifiedUser(email: String, role: String, isActive: Bool, createdAt: String?,
+                             seedStarterTemplates: Bool) async throws -> VerifiedUserProjection {
+        let cancellation = CompanyWorkspaceWorkCancellation()
+        let queue = DispatchQueue(label: "com.gunnaire.workspace.unlock.\(UUID().uuidString)", qos: .userInitiated)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                queue.async {
+                    do {
+                        try cancellation.check()
+                        let context = ModelContext(modelContainer)
+                        context.autosaveEnabled = false
+                        let users = try context.fetch(FetchDescriptor<AppUser>())
+                        let technicians = try context.fetch(FetchDescriptor<Technician>())
+                        let user = BackendAppUserRecord(email: email, role: role,
+                                                        isActive: isActive, createdAt: createdAt)
+                        let reconciled = GunnAireBackendService.applyVerifiedUser(
+                            user, into: context, currentUsers: users, technicians: technicians
+                        )
+                        try cancellation.check()
+                        if seedStarterTemplates { FieldFormTemplate.ensureStarterTemplates(in: context) }
+                        try cancellation.check()
+                        if context.hasChanges { try context.save() }
+                        let verifiedEmail = AppAccess.normalizedEmail(email)
+                        let result = VerifiedUserProjection(
+                            records: reconciled.filter { AppAccess.normalizedEmail($0.email) == verifiedEmail }
+                                .map { .init(id: $0.persistentModelID, email: $0.email,
+                                             roleRawValue: $0.roleRawValue, isActive: $0.isActive) },
+                            ranOnMainThread: Thread.isMainThread
+                        )
+                        continuation.resume(returning: result)
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+        } onCancel: {
+            cancellation.cancel()
+        }
+    }
+}
+
 struct CompanyWorkspaceDependencies {
     var session: () -> CompanyWorkspaceSession?
     var account: () async throws -> CompanyCloudKitAccount
@@ -180,6 +264,14 @@ struct CompanyWorkspaceDependencies {
     var saveRegistration: (CompanyWorkspaceStoreRegistration) throws -> Void
     var readLease: () throws -> CompanyWorkspaceLease?
     var saveLease: (CompanyWorkspaceLease?) throws -> Void
+    /// Production Keychain access suspends the UI actor. Test fixtures retain
+    /// the synchronous hooks so their state stays on their owning actor.
+    var readRegistrationAsync: (() async throws -> CompanyWorkspaceStoreRegistration?)? = nil
+    var saveRegistrationAsync: ((CompanyWorkspaceStoreRegistration) async throws -> Void)? = nil
+    var readLeaseAsync: (() async throws -> CompanyWorkspaceLease?)? = nil
+    var saveLeaseAsync: ((CompanyWorkspaceLease?) async throws -> Void)? = nil
+    var sessionStorageValidAsync: (() async -> Bool)? = nil
+    var clearSessionProofs: () -> Void = {}
     /// Both read the store file, and `openStore` loads it with CloudKit
     /// mirroring attached; `unlock` runs them on a background task so the
     /// "Verifying company access" screen keeps drawing while the store opens.
@@ -200,12 +292,58 @@ struct CompanyWorkspaceDependencies {
             account: { try await CompanyCloudKitRuntimeAccount.current() },
             fetchWorkspace: { try await GunnAireBackendService.fetchCompanyWorkspace() },
             approve: { try await GunnAireBackendService.approveCompanyCloudKitWorkspace($0) },
-            readRegistration: { try KeychainStore.loadCodable(CompanyWorkspaceStoreRegistration.self, account: "GunnAireCompanyStoreRegistration") },
-            saveRegistration: { try KeychainStore.saveCodable($0, account: "GunnAireCompanyStoreRegistration") },
-            readLease: { try KeychainStore.loadCodable(CompanyWorkspaceLease.self, account: "GunnAireCompanyWorkspaceLease") },
-            saveLease: { lease in
-                if let lease { try KeychainStore.saveCodable(lease, account: "GunnAireCompanyWorkspaceLease") }
-                else { try KeychainStore.remove(account: "GunnAireCompanyWorkspaceLease") }
+            readRegistration: { throw CompanyWorkspaceFailure.storage },
+            saveRegistration: { _ in throw CompanyWorkspaceFailure.storage },
+            readLease: { throw CompanyWorkspaceFailure.storage },
+            saveLease: { _ in throw CompanyWorkspaceFailure.storage },
+            readRegistrationAsync: {
+                try await Task.detached(priority: .userInitiated) {
+                    try KeychainStore.loadCodable(CompanyWorkspaceStoreRegistration.self, account: "GunnAireCompanyStoreRegistration")
+                }.value
+            },
+            saveRegistrationAsync: { registration in
+                try await Task.detached(priority: .userInitiated) {
+                    try KeychainStore.saveCodable(registration, account: "GunnAireCompanyStoreRegistration")
+                }.value
+            },
+            readLeaseAsync: {
+                try await Task.detached(priority: .userInitiated) {
+                    try KeychainStore.loadCodable(CompanyWorkspaceLease.self, account: "GunnAireCompanyWorkspaceLease")
+                }.value
+            },
+            saveLeaseAsync: { lease in
+                try await Task.detached(priority: .userInitiated) {
+                    if let lease { try KeychainStore.saveCodable(lease, account: "GunnAireCompanyWorkspaceLease") }
+                    else { try KeychainStore.remove(account: "GunnAireCompanyWorkspaceLease") }
+                }.value
+            },
+            sessionStorageValidAsync: {
+                let apple = AppleAuthManager.shared
+                if apple.isAuthenticated,
+                   let expected = apple.businessApplicationSessionSnapshot,
+                   expected.token == apple.sessionToken {
+                    do {
+                        let stored = try await Task.detached(priority: .userInitiated) {
+                            try KeychainStore.loadCodable(GunnAireApplicationSession.self,
+                                                          account: "GunnAireAppleApplicationSession")
+                        }.value
+                        return stored == expected
+                    } catch { return false }
+                }
+                let google = GoogleAuthManager.shared
+                guard let expected = google.businessApplicationSessionSnapshot,
+                      expected.token == google.applicationSessionToken else { return false }
+                do {
+                    let stored = try await Task.detached(priority: .userInitiated) {
+                        try KeychainStore.loadCodable(GunnAireGoogleApplicationSession.self,
+                                                      account: "GunnAireGoogleApplicationSession")
+                    }.value
+                    return stored == expected
+                } catch { return false }
+            },
+            clearSessionProofs: {
+                AppleAuthManager.shared.discardBusinessSessionProof()
+                GoogleAuthManager.shared.discardBusinessSessionProof()
             },
             storeIdentity: { try CompanyWorkspaceStore.identity(at: CompanyWorkspaceStore.url) },
             openStore: { try CompanyWorkspaceStore.open() },
@@ -231,20 +369,33 @@ final class CompanyWorkspaceAccessController: ObservableObject {
     /// stuck verification can be localized to a specific step without needing
     /// console access to the device — read the on-screen text and report it.
     @Published private(set) var diagnosticStep: String = "Starting…"
-    private(set) var generation = UUID()
+    private(set) var generation = UUID() {
+        didSet {
+            invalidateMutationPermits()
+        }
+    }
+    private var mutationEpoch = CompanyWorkspaceMutationEpoch()
+
+    /// Authentication owners call this before replacing or clearing in-memory
+    /// business credentials; SwiftUI's later onChange is too late for a worker.
+    func invalidateMutationPermits() {
+        mutationEpoch.invalidate()
+        mutationEpoch = CompanyWorkspaceMutationEpoch()
+    }
     private var container: ModelContainer?
     private var activeLease: CompanyWorkspaceLease?
     private var pending: (CompanyWorkspaceSession, BackendCompanyWorkspaceResponse, CompanyCloudKitAccount)?
     private var mustRestart = false
+    private var accountAvailabilityRequiresVerification = false
     private var refreshTask: (id: UUID, task: Task<Void, Never>)?
     private var expiryTask: Task<Void, Never>?
+    private var leaseWriteTail: Task<Void, Never>?
     private let dependencies: CompanyWorkspaceDependencies
     private var accountObserver: NSObjectProtocol?
     /// The render-time getters (`verifiedUser`, `verifiedRole`, `operationStamp`,
     /// `verifiedCompanyID`) are evaluated hundreds of times per SwiftUI body
-    /// pass, and every fresh `dependencies.session()` read costs one or two
-    /// Keychain round-trips plus JSON decoding. The decoded session is therefore
-    /// memoized for at most `sessionMemoLifetime`. The memo never extends
+    /// pass. The session is derived from prevalidated in-memory authentication
+    /// snapshots, then memoized for at most `sessionMemoLifetime`. It never extends
     /// authority: lease expiry, the email match and the clock are evaluated on
     /// every call; the entry is discarded when the in-memory session tokens or
     /// signed-in email change, when the clock moves backwards, and whenever
@@ -268,6 +419,10 @@ final class CompanyWorkspaceAccessController: ObservableObject {
             accountObserver = NotificationCenter.default.addObserver(forName: .CKAccountChanged, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
                     CompanyCloudKitRuntimeAccount.invalidateCache()
+                    // This notification can accompany recovery or a different
+                    // account. SwiftData and staff tasks may retain the prior
+                    // mirrored container, so only a fresh process can prove
+                    // that every old account-bound reference is retired.
                     self?.invalidate(accountChanged: true)
                 }
             }
@@ -331,6 +486,19 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         verifiedUser.flatMap { AppUserRole(rawValue: $0.role) }
     }
 
+    /// Issued only after the caller's current administrator check. The worker
+    /// must consume this permit immediately before its background save begins.
+    func customerCleanupPermit(generation expected: UUID, container expectedContainer: ModelContainer) throws -> CustomerCleanupCommitPermit {
+        let now = dependencies.now()
+        guard generation == expected, !Task.isCancelled,
+              let lease = activeLease, verifiedRole == .admin,
+              authorizedContainer(for: dependencies.session()) === expectedContainer else {
+            throw CustomerCalendarCleanupError.accessChanged
+        }
+        return CustomerCleanupCommitPermit(epoch: mutationEpoch, issuedAt: now,
+            expiresAt: min(lease.expiresAt, now.addingTimeInterval(5)))
+    }
+
     /// Obtained only from the current bounded server lease, never SwiftData.
     /// Expiry, logout, account changes and revocation remove this authority.
     var verifiedUser: BackendAppUserRecord? {
@@ -350,8 +518,50 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         forgetSessionMemo()
         mustRestart = mustRestart || accountChanged
         dependencies.clearContinuations()
-        if !preserveCachedLease { try? dependencies.saveLease(nil) }
+        if !preserveCachedLease { clearSavedLease() }
         phase = .blocked(mustRestart ? .restartRequired : reason)
+    }
+
+    private func readRegistration() async throws -> CompanyWorkspaceStoreRegistration? {
+        if let read = dependencies.readRegistrationAsync { return try await read() }
+        return try dependencies.readRegistration()
+    }
+
+    private func saveRegistration(_ registration: CompanyWorkspaceStoreRegistration) async throws {
+        if let save = dependencies.saveRegistrationAsync { try await save(registration) }
+        else { try dependencies.saveRegistration(registration) }
+    }
+
+    private func readLease() async throws -> CompanyWorkspaceLease? {
+        await leaseWriteTail?.value
+        if let read = dependencies.readLeaseAsync { return try await read() }
+        return try dependencies.readLease()
+    }
+
+    private func saveLease(_ lease: CompanyWorkspaceLease?) async throws {
+        if let save = dependencies.saveLeaseAsync {
+            let previous = leaseWriteTail
+            let write = Task<Void, Error> {
+                await previous?.value
+                try await save(lease)
+            }
+            leaseWriteTail = Task { _ = try? await write.value }
+            try await write.value
+        } else {
+            try dependencies.saveLease(lease)
+        }
+    }
+
+    private func clearSavedLease() {
+        if let save = dependencies.saveLeaseAsync {
+            let previous = leaseWriteTail
+            leaseWriteTail = Task {
+                await previous?.value
+                try? await save(nil)
+            }
+        } else {
+            try? dependencies.saveLease(nil)
+        }
     }
 
     /// Also called when foregrounding or changing the system clock so a
@@ -376,6 +586,25 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         if refreshTask?.id == id { refreshTask = nil }
     }
 
+    /// A foreground check catches an externally removed or rotated Keychain
+    /// session without bringing secure-storage I/O into SwiftUI body reads.
+    /// A replacement sign-in during the suspended read owns the new state.
+    func revalidateSessionStorageOnForeground() async {
+        guard phase == .ready, let validate = dependencies.sessionStorageValidAsync,
+              let session = dependencies.session() else { return }
+        let operation = generation
+        let signal = dependencies.sessionSignal()
+        let valid = await validate()
+        guard operation == generation, signal == dependencies.sessionSignal(),
+              dependencies.session() == session else {
+            enforceAccessDeadline()
+            return
+        }
+        guard !valid else { return }
+        dependencies.clearSessionProofs()
+        invalidate(reason: .signIn)
+    }
+
     /// How long a server-verified lease is trusted before the workspace is
     /// re-verified with the server: the lease itself is bounded to 24 hours,
     /// so re-verification at 23 hours renews it before it lapses. Launches and
@@ -395,20 +624,27 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         if authorizedContainer != nil, let lease = activeLease, now.timeIntervalSince(lease.verifiedAt) < maxAge {
             return
         }
-        if activeLease == nil, !mustRestart, let session = dependencies.session(),
-           let lease = try? dependencies.readLease(),
+        let operation = generation
+        if activeLease == nil, !mustRestart, !accountAvailabilityRequiresVerification,
+           let session = dependencies.session(),
+           let lease = try? await readLease(),
            now.timeIntervalSince(lease.verifiedAt) < maxAge,
            lease.isValid(for: session, accountHash: lease.binding.cloudAccountHash,
                          environment: lease.binding.environment, now: now),
-           let registration = try? dependencies.readRegistration(),
-           registration.matches(session: session, binding: lease.binding, storeUUID: (try? dependencies.storeIdentity()) ?? nil) {
+           let registration = try? await readRegistration() {
+            guard isCurrent(operation, session: session) else { return }
             do {
-                lastMismatchDetail = ""
-                try await unlock(lease, allowLegacyAdoption: false, isOffline: true)
-                return
+                let storeUUID = try await Self.offMain(dependencies.storeIdentity)
+                guard isCurrent(operation, session: session) else { return }
+                if registration.matches(session: session, binding: lease.binding, storeUUID: storeUUID) {
+                    lastMismatchDetail = ""
+                    try await unlock(lease, allowLegacyAdoption: false, isOffline: true)
+                    return
+                }
             } catch {
                 // A stale or unusable saved lease falls through to a full verification.
             }
+            guard isCurrent(operation, session: session) else { return }
         }
         await refresh()
     }
@@ -438,21 +674,27 @@ final class CompanyWorkspaceAccessController: ObservableObject {
                 // transport failure, like an unreachable server: a lease that
                 // is still within its bound keeps the workspace open offline.
                 // Anything else (no iCloud account, configuration) still fails.
-                if Self.isConnectivityFailure(error), let lease = try dependencies.readLease(),
+                if !accountAvailabilityRequiresVerification,
+                   Self.isConnectivityFailure(error), let lease = try await readLease(),
                    lease.isValid(for: session, accountHash: lease.binding.cloudAccountHash,
                                  environment: lease.binding.environment, now: dependencies.now()),
-                   let registration = try dependencies.readRegistration(),
-                   registration.matches(session: session, binding: lease.binding, storeUUID: try dependencies.storeIdentity()) {
-                    diagnosticStep = "iCloud unreachable. Using the verified workspace lease…"
-                    try await unlock(lease, allowLegacyAdoption: false, isOffline: true)
-                    diagnosticStep = "Store opened. Ready."
-                    return
+                   let registration = try await readRegistration() {
+                    guard isCurrent(operation, session: session) else { return }
+                    let storeUUID = try await Self.offMain(dependencies.storeIdentity)
+                    guard isCurrent(operation, session: session) else { return }
+                    if registration.matches(session: session, binding: lease.binding, storeUUID: storeUUID) {
+                        diagnosticStep = "iCloud unreachable. Using the verified workspace lease…"
+                        try await unlock(lease, allowLegacyAdoption: false, isOffline: true)
+                        diagnosticStep = "Store opened. Ready."
+                        return
+                    }
                 }
                 throw error
             }
             verifiedAccount = true
             diagnosticStep = "iCloud account confirmed. Contacting server…"
             guard isCurrent(operation, session: session) else { return }
+            accountAvailabilityRequiresVerification = false
             do {
                 let response = try await dependencies.fetchWorkspace()
                 diagnosticStep = "Server responded. Verifying workspace binding…"
@@ -472,7 +714,7 @@ final class CompanyWorkspaceAccessController: ObservableObject {
                         throw mismatch("no \(account.environment) binding; \(response.workspace.bindings.count) other binding(s) invalid or for another company")
                     }
                     diagnosticStep = "No binding yet. Requesting admin approval…"
-                    try requireApproval(user: response.user)
+                    try await requireApproval(user: response.user, operation: operation, session: session)
                     return
                 }
                 guard binding.cloudAccountHash == account.accountHash else {
@@ -486,20 +728,28 @@ final class CompanyWorkspaceAccessController: ObservableObject {
                 guard isCurrent(operation, session: session) else { return }
                 // Only transport failure can use an existing bounded lease.
                 // A 401/403/404, changed company, or malformed response cannot.
-                if Self.isConnectivityFailure(error), let lease = try dependencies.readLease(),
+                if Self.isConnectivityFailure(error), let lease = try await readLease(),
                    lease.isValid(for: session, accountHash: account.accountHash, environment: account.environment, now: dependencies.now()),
-                   let registration = try dependencies.readRegistration(),
-                   registration.matches(session: session, binding: lease.binding, storeUUID: try dependencies.storeIdentity()) {
-                    try await unlock(lease, allowLegacyAdoption: false, isOffline: true)
+                   let registration = try await readRegistration() {
+                    guard isCurrent(operation, session: session) else { return }
+                    let storeUUID = try await Self.offMain(dependencies.storeIdentity)
+                    guard isCurrent(operation, session: session) else { return }
+                    if registration.matches(session: session, binding: lease.binding, storeUUID: storeUUID) {
+                        try await unlock(lease, allowLegacyAdoption: false, isOffline: true)
+                    } else { throw error }
                 } else { throw error }
             }
         } catch {
             guard isCurrent(operation, session: session) else { return }
+            if Self.requiresAccountReverification(error) {
+                accountAvailabilityRequiresVerification = true
+            }
             let failure = Self.failure(for: error, verifiedAccount: verifiedAccount)
             if failure == .server {
                 CompanyWorkspaceDiagnostics.lastServerFailureDetail = Self.describeRawError(error)
             }
-            invalidate(reason: failure, preserveCachedLease: Self.isConnectivityFailure(error))
+            invalidate(reason: failure, preserveCachedLease: Self.isConnectivityFailure(error) ||
+                       Self.requiresAccountReverification(error))
         }
     }
 
@@ -507,13 +757,17 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         if authorizedContainer == nil { await refresh() }
     }
 
-    private func requireApproval(user: BackendAppUserRecord, ignoringStaleRegistration: Bool = false) throws {
+    private func requireApproval(user: BackendAppUserRecord, ignoringStaleRegistration: Bool = false,
+                                 operation: UUID, session: CompanyWorkspaceSession) async throws {
         guard user.role == AppUserRole.admin.rawValue else { throw CompanyWorkspaceFailure.administratorRequired }
         // Even an administrator cannot relabel a previously registered store.
-        if !ignoringStaleRegistration, let registration = try dependencies.readRegistration() {
+        if !ignoringStaleRegistration, let registration = try await readRegistration() {
+            guard isCurrent(operation, session: session) else { return }
             throw mismatch("saved store \(Self.fingerprint(registration.storeUUID)) is already registered to the \(registration.binding.environment) binding for account \(Self.fingerprint(registration.binding.cloudAccountHash))")
         }
-        phase = .needsApproval(hasSavedStore: try dependencies.storeIdentity() != nil)
+        let hasSavedStore = try await Self.offMain(dependencies.storeIdentity) != nil
+        guard isCurrent(operation, session: session) else { return }
+        phase = .needsApproval(hasSavedStore: hasSavedStore)
     }
 
     /// Records which check failed before the generic `.differentWorkspace` is
@@ -597,7 +851,8 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         }
         let identity = try await Self.offMain(dependencies.storeIdentity)
         try requireCurrent(operation, lease: lease)
-        var registration = try dependencies.readRegistration()
+        var registration = try await readRegistration()
+        try requireCurrent(operation, lease: lease)
         if let existing = registration, !existing.matches(session: lease.session, binding: lease.binding, storeUUID: identity) {
             if Self.canAdopt(registration: existing, session: lease.session, binding: lease.binding, storeUUID: identity) {
                 // The server re-approved the same iCloud account for the same
@@ -607,7 +862,8 @@ final class CompanyWorkspaceAccessController: ObservableObject {
                 let updated = CompanyWorkspaceStoreRegistration(
                     backendOrigin: lease.session.backendOrigin, binding: lease.binding, storeUUID: existing.storeUUID
                 )
-                try dependencies.saveRegistration(updated)
+                try await saveRegistration(updated)
+                try requireCurrent(operation, lease: lease)
                 registration = updated
             } else if Self.registeredStoreIsGone(registration: existing, session: lease.session, binding: lease.binding, storeUUID: identity) {
                 // The registered store is no longer on this device and no other
@@ -631,7 +887,8 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         }
         if registration == nil {
             if identity != nil && !allowLegacyAdoption {
-                try requireApproval(user: lease.user, ignoringStaleRegistration: true)
+                try await requireApproval(user: lease.user, ignoringStaleRegistration: true,
+                                          operation: operation, session: lease.session)
                 return
             } else if isOffline { throw CompanyWorkspaceFailure.storage }
         }
@@ -646,26 +903,36 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         guard let storeUUID = try await Self.offMain(dependencies.storeIdentity) else { throw CompanyWorkspaceFailure.storage }
         try requireCurrent(operation, lease: lease)
         if registration == nil {
-            try dependencies.saveRegistration(CompanyWorkspaceStoreRegistration(backendOrigin: lease.session.backendOrigin, binding: lease.binding, storeUUID: storeUUID))
+            try await saveRegistration(CompanyWorkspaceStoreRegistration(backendOrigin: lease.session.backendOrigin, binding: lease.binding, storeUUID: storeUUID))
+            try requireCurrent(operation, lease: lease)
         }
-        // The user reconciliation and template seeding stay on the main
-        // context on purpose: they touch a handful of rows, the screens that
-        // mount next read the result immediately, and the tests below pin
-        // that an unchanged user never saves. The store open above was the
-        // expensive part.
-        let context = opened.mainContext
-        let users = try context.fetch(FetchDescriptor<AppUser>())
-        let technicians = try context.fetch(FetchDescriptor<Technician>())
-        _ = GunnAireBackendService.applyVerifiedUser(lease.user, into: context, currentUsers: users, technicians: technicians)
-        // Starter templates are seeded once per workspace generation. Every
-        // foreground refresh re-runs unlock, and each unconditional save here
-        // is a CloudKit export candidate on the production store.
-        if starterTemplatesGeneration != generation {
-            FieldFormTemplate.ensureStarterTemplates(in: context)
-            starterTemplatesGeneration = generation
+        // Build the private context off main, then reconcile and save there.
+        // The lease is checked after each suspension before the store is
+        // published to the UI. An unchanged user does not produce a save.
+        let maintenance = try await Self.offMain { CompanyWorkspaceUnlockMaintenance(modelContainer: opened) }
+        try requireCurrent(operation, lease: lease)
+        let seedStarterTemplates = starterTemplatesGeneration != generation
+        let projection = try await maintenance.prepareVerifiedUser(
+            email: lease.user.email, role: lease.user.role,
+            isActive: lease.user.isActive, createdAt: lease.user.createdAt,
+            seedStarterTemplates: seedStarterTemplates
+        )
+        try requireCurrent(operation, lease: lease)
+        // SwiftData does not expose a public context merge. A user already
+        // loaded by the UI can retain an old role and later save it over the
+        // authoritative background write. Touch only that registered model;
+        // no main-context fetch, store transaction, or rollback occurs here.
+        for record in projection.records {
+            guard let cached: AppUser = opened.mainContext.registeredModel(for: record.id),
+                  AppAccess.normalizedEmail(cached.email) == AppAccess.normalizedEmail(record.email) else { continue }
+            if cached.roleRawValue != record.roleRawValue { cached.roleRawValue = record.roleRawValue }
+            if cached.isActive != record.isActive { cached.isActive = record.isActive }
         }
-        if context.hasChanges { try context.save() }
-        if !isOffline { try dependencies.saveLease(lease) }
+        if seedStarterTemplates { starterTemplatesGeneration = generation }
+        if !isOffline {
+            try await saveLease(lease)
+            try requireCurrent(operation, lease: lease)
+        }
         if let activeLease, activeLease.user.role != lease.user.role {
             // Invalidate privileged sheets and late responses when the server
             // changes permissions, even if the user's session token is stable.
@@ -713,6 +980,7 @@ final class CompanyWorkspaceAccessController: ObservableObject {
 
     static func failure(for error: Error, verifiedAccount: Bool) -> CompanyWorkspaceFailure {
         if let failure = error as? CompanyWorkspaceFailure { return failure }
+        if Self.requiresAccountReverification(error) { return .accountUnavailable }
         if error is CompanyCloudKitTimeout { return .server }
         if let backend = error as? GunnAireBackendError {
             switch backend {
@@ -741,7 +1009,11 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         return "\(type(of: error)): \(error.localizedDescription)"
     }
 
-    static func isConnectivityFailure(_ error: Error) -> Bool {
+    nonisolated private static func requiresAccountReverification(_ error: Error) -> Bool {
+        error is CompanyCloudKitAccountTemporarilyUnavailable || error is CompanyCloudKitAccountVerificationSuperseded
+    }
+
+    nonisolated static func isConnectivityFailure(_ error: Error) -> Bool {
         if error is CompanyCloudKitTimeout { return true }
         if let error = error as? CKError {
             return [.networkFailure, .networkUnavailable].contains(error.code)

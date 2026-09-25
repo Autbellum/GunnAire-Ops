@@ -203,6 +203,17 @@ struct QuickBooksBillingWorkflowTests {
         #expect(f.customer.quickBooksID == nil)
     }
 
+    @Test func backgroundDraftRevisionMatchesSavedDraftAndRejectsUnsavedEdit() async throws {
+        let f = try Fixture()
+        let flow = try f.flow()
+        #expect(try await flow.billingDraftRevisionAsync() == flow.billingDraftRevision())
+        f.invoice.notes = "Changed while the billing draft remains open"
+        await #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try await flow.billingDraftRevisionAsync()
+        }
+        f.owner.finish(flow.run)
+    }
+
     @Test func invoiceUsesServerConfirmedCustomerAndRetainsSoldLines() async throws {
         let f = try Fixture(mapped: false)
         f.item.quickBooksID = "I1"

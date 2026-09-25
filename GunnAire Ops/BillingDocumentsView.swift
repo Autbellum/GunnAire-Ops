@@ -111,6 +111,7 @@ struct BillingDocumentsView: View {
     @State private var newItemPurchaseDescription = ""
     @State private var newItemTaxable = false
     @State private var actionMessage = ""
+    @State private var estimateSendIssue: String?
     @State private var isCreatingDocument = false
     @State private var isImportingQuickBooksItems = false
     @State private var billingSyncLifecycles: [String: QuickBooksSyncLifecycle] = [:]
@@ -136,12 +137,15 @@ struct BillingDocumentsView: View {
     @State private var agreementBillingSetupPending: RecurringMaintenanceContract?
     @State private var didResolveInitialCloseoutRequest = false
     @State private var generatedCustomerDocumentURL: URL?
+    @State private var generatedDocumentOrigins: [URL: [String]] = [:]
     @State private var generatedCustomerDocumentRecipientID: UUID?
     @State private var generatedCustomerDocumentServiceCallID: UUID?
     @State private var generatedCustomerDocumentInvoiceID: UUID?
     @State private var generatedCustomerDocumentEstimateID: UUID?
     @State private var generatedCustomerDocumentKind = "document"
     @State private var isEmailingGeneratedDocument = false
+    @State private var isPreparingCustomerDocument = false
+    @State private var documentExportGeneration = UUID()
     @State private var generatedEmailAttempts: [URL: GmailSendWorkflow] = [:]
     @State private var showingDocumentationFileImporter = false
     @State private var showingDocumentationCamera = false
@@ -1214,79 +1218,60 @@ GunnAire
         return components.url
     }
 
-    private func openEstimateFollowUpEmail(for estimate: Estimate, fallbackURL: URL) {
+    private func openEstimateFollowUpEmail(for estimate: Estimate, fallbackURL: URL) async {
+        guard !isPreparingCustomerDocument else { return }
+        let actionGeneration = documentExportGeneration
+        isPreparingCustomerDocument = true
+        defer { if actionGeneration == documentExportGeneration { isPreparingCustomerDocument = false } }
         if googleAuth.isAuthenticated, let draft = followUpEmailDraft(for: estimate) {
+            guard let prepared = await estimateEmailAttachmentPaths(for: estimate) else { return }
+            do { try prepared.validate() }
+            catch { actionMessage = error.localizedDescription; return }
+            let paths = prepared.paths
+            guard let primary = paths.first, let original = generatedDocumentOrigins[URL(fileURLWithPath: primary)] else { return }
             GunnAireAppIntentRouter.storeMailDraftRoute(
                 to: draft.to,
                 subject: draft.subject,
                 body: draft.body,
-                attachmentPaths: estimateEmailAttachmentPaths(for: estimate),
+                attachmentPaths: paths,
                 customerID: estimate.customer.id,
                 serviceCallID: estimate.serviceCallID,
                 estimateID: estimate.id,
-                workflow: .estimateFollowUp
+                workflow: .estimateFollowUp,
+                sourceSnapshot: original
             )
         } else {
             openURL(fallbackURL)
         }
     }
 
-    private func estimateEmailAttachmentPaths(for estimate: Estimate) -> [String] {
+    private func estimateEmailAttachmentPaths(for estimate: Estimate) async
+        -> (paths: [String], validate: @MainActor () throws -> Void)? {
         do {
-            let serviceCall = serviceCall(for: estimate)
-            if let serviceCall {
-                saveCurrentEquipmentProfile(for: serviceCall, announce: false)
-                linkExistingEstimateAttachments(to: estimate, serviceCallID: serviceCall.id)
+            let linkedCall = serviceCall(for: estimate)
+            let (url, origin, validateExport, adoptExport) = try await exportingCustomerDocument(
+                customerID: estimate.customer.id, serviceCallID: linkedCall?.id,
+                invoiceID: nil, estimateID: estimate.id, requiresGoogleSession: true,
+                membershipIsIntact: { isCurrentRecord(estimate) && isCurrentRecord(estimate.customer) }
+            ) { authorize in
+                try await CustomerDocumentExporter.exportEstimateOffMainActor(
+                    estimate, serviceCall: linkedCall, attachments: attachments,
+                    equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls, authorize: authorize)
             }
-            let url = try CustomerDocumentExporter.exportEstimate(
-                estimate,
-                serviceCall: serviceCall,
-                attachments: attachments,
-                equipmentProfiles: equipmentProfiles,
-                serviceCalls: serviceCalls
-            )
+            try validateExport()
+            adoptExport()
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = estimate.customer.id
-            generatedCustomerDocumentServiceCallID = serviceCall?.id
+            generatedCustomerDocumentServiceCallID = linkedCall?.id
             generatedCustomerDocumentInvoiceID = nil
             generatedCustomerDocumentEstimateID = estimate.id
             generatedCustomerDocumentKind = "estimate"
-            var emailAttachments = attachments
-            if let estimateAttachment = persistGeneratedBillingDocument(
-                url,
-                customer: estimate.customer,
-                serviceCallID: serviceCall?.id,
-                invoiceID: nil,
-                estimateID: estimate.id,
-                kind: .estimateSupport,
-                caption: "Generated estimate PDF",
-                successMessage: "Estimate PDF generated for email."
-            ) {
-                emailAttachments.append(estimateAttachment)
-            }
-            if let serviceCall {
-                let report = try generateAndPersistOnsiteReportAttachment(
-                    for: serviceCall,
-                    estimate: estimate,
-                    invoice: nil,
-                    payments: [],
-                    attachments: reportEvidenceAttachments(for: serviceCall, in: emailAttachments),
-                    equipmentProfiles: equipmentProfiles,
-                    serviceCalls: serviceCalls
-                )
-                report.attachment.linkToEstimateIfNeeded(estimate)
-                syncAttachmentIfPossible(report.attachment, data: report.data)
-                emailAttachments.append(report.attachment)
-            }
-            return CustomerDocumentExporter.customerEmailAttachmentURLs(
-                primaryDocumentURL: url,
-                serviceCallID: serviceCall?.id,
-                estimateID: estimate.id,
-                attachments: emailAttachments
-            ).map(\.path)
+            storeGeneratedDocumentOrigin(url, origin: origin)
+            return (CustomerDocumentExporter.customerEmailAttachmentURLs(primaryDocumentURL: url,
+                serviceCallID: linkedCall?.id, estimateID: estimate.id, attachments: attachments).map(\.path), validateExport)
         } catch {
             actionMessage = "Could not prepare estimate attachment for email: \(error.localizedDescription)"
-            return []
+            return nil
         }
     }
 
@@ -1322,86 +1307,247 @@ GunnAire
         return components.url
     }
 
-    private func openPaymentReminderEmail(for invoice: Invoice, fallbackURL: URL) {
+    private func openPaymentReminderEmail(for invoice: Invoice, fallbackURL: URL) async {
+        guard !isPreparingCustomerDocument else { return }
+        let actionGeneration = documentExportGeneration
+        isPreparingCustomerDocument = true
+        defer { if actionGeneration == documentExportGeneration { isPreparingCustomerDocument = false } }
         if googleAuth.isAuthenticated, let draft = paymentReminderEmailDraft(for: invoice) {
+            guard let prepared = await invoiceEmailAttachmentPaths(for: invoice) else { return }
+            do { try prepared.validate() }
+            catch { actionMessage = error.localizedDescription; return }
+            let paths = prepared.paths
+            guard let primary = paths.first, let original = generatedDocumentOrigins[URL(fileURLWithPath: primary)] else { return }
             GunnAireAppIntentRouter.storeMailDraftRoute(
                 to: draft.to,
                 subject: draft.subject,
                 body: draft.body,
-                attachmentPaths: invoiceEmailAttachmentPaths(for: invoice),
+                attachmentPaths: paths,
                 customerID: invoice.customer.id,
                 serviceCallID: invoice.serviceCallID,
                 invoiceID: invoice.id,
-                workflow: .paymentReminder
+                estimateID: generatedCustomerDocumentEstimateID,
+                workflow: .paymentReminder,
+                sourceSnapshot: original
             )
         } else {
             openURL(fallbackURL)
         }
     }
 
-    private func invoiceEmailAttachmentPaths(for invoice: Invoice) -> [String] {
+    private func invoiceEmailAttachmentPaths(for invoice: Invoice) async
+        -> (paths: [String], validate: @MainActor () throws -> Void)? {
         do {
-            let invoicePayments = payments.filter { $0.invoice.id == invoice.id }
-            let serviceCall = serviceCall(for: invoice)
-            if let serviceCall {
-                saveCurrentEquipmentProfile(for: serviceCall, announce: false)
+            let invoicePayments = payments.filter { $0.invoice?.id == invoice.id }
+            let linkedCall = serviceCall(for: invoice)
+            let (url, origin, validateExport, adoptExport) = try await exportingCustomerDocument(
+                customerID: invoice.customer.id, serviceCallID: linkedCall?.id,
+                invoiceID: invoice.id, estimateID: nil, requiresGoogleSession: true,
+                membershipIsIntact: { isCurrentRecord(invoice) && isCurrentRecord(invoice.customer) }
+            ) { authorize in
+                try await CustomerDocumentExporter.exportInvoiceOffMainActor(
+                    invoice, serviceCall: linkedCall, payments: invoicePayments,
+                    attachments: attachments, equipmentProfiles: equipmentProfiles,
+                    serviceCalls: serviceCalls, authorize: authorize)
             }
-            let url = try CustomerDocumentExporter.exportInvoice(
-                invoice,
-                serviceCall: serviceCall,
-                payments: invoicePayments,
-                attachments: attachments,
-                equipmentProfiles: equipmentProfiles,
-                serviceCalls: serviceCalls
-            )
+            try validateExport()
+            adoptExport()
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = invoice.customer.id
-            generatedCustomerDocumentServiceCallID = serviceCall?.id
+            generatedCustomerDocumentServiceCallID = linkedCall?.id
             generatedCustomerDocumentInvoiceID = invoice.id
-            generatedCustomerDocumentEstimateID = linkedEstimate(for: serviceCall)?.id
-            let documentLabel = CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments).lowercased()
-            generatedCustomerDocumentKind = documentLabel
-            var emailAttachments = attachments
-            if let invoiceAttachment = persistGeneratedBillingDocument(
-                url,
-                customer: invoice.customer,
-                serviceCallID: serviceCall?.id,
-                invoiceID: invoice.id,
-                estimateID: nil,
-                kind: .invoiceSupport,
-                caption: CustomerDocumentExporter.invoiceDocumentCaption(for: invoice, payments: invoicePayments),
-                successMessage: "\(CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments)) PDF generated for email."
-            ) {
-                emailAttachments.append(invoiceAttachment)
-            }
-            if let serviceCall {
-                let linkedEstimate = currentJobEstimate ?? estimates.first { estimate in
-                    estimate.id == serviceCall.linkedEstimateID || estimate.serviceCallID == serviceCall.id
-                }
-                let report = try generateAndPersistOnsiteReportAttachment(
-                    for: serviceCall,
-                    estimate: linkedEstimate,
-                    invoice: invoice,
-                    payments: invoicePayments,
-                    attachments: reportEvidenceAttachments(for: serviceCall, in: emailAttachments),
-                    equipmentProfiles: equipmentProfiles,
-                    serviceCalls: serviceCalls
-                )
-                report.attachment.linkToInvoiceIfNeeded(invoice)
-                syncAttachmentIfPossible(report.attachment, data: report.data)
-                emailAttachments.append(report.attachment)
-            }
-            return CustomerDocumentExporter.customerEmailAttachmentURLs(
-                primaryDocumentURL: url,
-                serviceCallID: serviceCall?.id,
-                invoiceID: invoice.id,
-                estimateID: linkedEstimate(for: serviceCall)?.id,
-                attachments: emailAttachments
-            ).map(\.path)
+            generatedCustomerDocumentEstimateID = nil
+            generatedCustomerDocumentKind = CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments).lowercased()
+            storeGeneratedDocumentOrigin(url, origin: origin)
+            return (CustomerDocumentExporter.customerEmailAttachmentURLs(primaryDocumentURL: url,
+                serviceCallID: linkedCall?.id, invoiceID: invoice.id,
+                estimateID: nil, attachments: attachments).map(\.path), validateExport)
         } catch {
             actionMessage = "Could not prepare invoice attachment for email: \(error.localizedDescription)"
-            return []
+            return nil
         }
+    }
+
+    /// Binds the workspace — and on Google paths the signed-in Google identity
+    /// and connection generation — before anything suspends, then requires all
+    /// of it again before the document is published. A sign-out and sign-in to
+    /// another account, a workspace or role change, or a record deleted and
+    /// replaced by a fresh row carrying the same id, all fail here. Documents
+    /// that need no Google connection still bind the workspace alone.
+    /// Captures the whole-source snapshot BEFORE the export suspends, and hands
+    /// the export a fence that re-proves cancellation, the Google session where
+    /// one is required, and that exact original source before anything is
+    /// published. The same snapshot — never a fresh one — is stored against the
+    /// finished document, so what a later send validates against is the source
+    /// the document was actually rendered from.
+    private func exportingCustomerDocument(
+        customerID: UUID,
+        serviceCallID: UUID?,
+        invoiceID: UUID?,
+        estimateID: UUID?,
+        requiresGoogleSession: Bool = false,
+        requiresMail: Bool = false,
+        membershipIsIntact: @escaping @MainActor () -> Bool,
+        export: (@escaping @MainActor () throws -> Void) async throws -> URL
+    ) async throws -> (url: URL, origin: [String]?, validate: @MainActor () throws -> Void,
+        adopt: @MainActor () -> Void) {
+        let business = GmailBusinessContext(customerID: customerID, serviceCallID: serviceCallID,
+            invoiceID: invoiceID, estimateID: estimateID, workflow: .customerDocument)
+        let operation: WorkspaceProviderOperation
+        if let originating = BillingDocumentPreparation.exportOperation { operation = originating }
+        else if requiresGoogleSession { operation = try googleAuth.captureProviderOperation() }
+        else { operation = try WorkspaceProviderOperation.capture { true } }
+        let generation = documentExportGeneration
+        let navigation = [pendingIntentServiceCallID, selectedCustomerID, selectedInvoiceForEditingID, focusedInvoiceID]
+        let financialAccess = canViewFinancials || canCollectFieldPayments
+        let originalCustomer = try validateDocumentExportAccess(customerID: customerID, serviceCallID: serviceCallID,
+            invoiceID: invoiceID, estimateID: estimateID, requiresMail: requiresMail || requiresGoogleSession)
+        // Preserve every model supplied by the surrounding view's export
+        // actions through their later byte-read and caller continuations too.
+        let retainedInputs = [
+            BillingDocumentPreparation.membership([originalCustomer], in: modelContext),
+            BillingDocumentPreparation.membership(serviceCalls, in: modelContext),
+            BillingDocumentPreparation.membership(payments, in: modelContext),
+            BillingDocumentPreparation.membership(attachments, in: modelContext),
+            BillingDocumentPreparation.membership(equipmentProfiles, in: modelContext),
+            BillingDocumentPreparation.membership(fieldFormTemplates, in: modelContext),
+            BillingDocumentPreparation.membership(fieldFormResponses, in: modelContext),
+            BillingDocumentPreparation.membership(timeEntries, in: modelContext),
+            BillingDocumentPreparation.membership(serviceCallActivities, in: modelContext),
+            BillingDocumentPreparation.membership(estimates.filter { $0.id == estimateID }, in: modelContext),
+            BillingDocumentPreparation.membership(invoices.filter { $0.id == invoiceID }, in: modelContext)
+        ]
+        guard membershipIsIntact() else { throw GmailDraftError.businessChanged }
+        try operation.check()
+        let origin = try GmailDraftBusinessSnapshot.capture(business, context: modelContext)
+        let validate: @MainActor @Sendable () throws -> Void = {
+            try Task.checkCancellation()
+            try operation.check()
+            for checkMembership in retainedInputs { try checkMembership() }
+            guard generation == documentExportGeneration,
+                  navigation == [pendingIntentServiceCallID, selectedCustomerID, selectedInvoiceForEditingID, focusedInvoiceID],
+                  financialAccess == (canViewFinancials || canCollectFieldPayments),
+                  membershipIsIntact() else { throw GmailDraftError.businessChanged }
+            try validateDocumentExportAccess(customerID: customerID, serviceCallID: serviceCallID,
+                invoiceID: invoiceID, estimateID: estimateID, requiresMail: requiresMail || requiresGoogleSession)
+            // A fresh fetch of the whole business graph, so a row inserted while
+            // the document rendered is caught as well as one that was edited.
+            try GmailDraftBusinessSnapshot.validate(origin, business: business, context: modelContext)
+        }
+        try validate()
+        let url = try await export(validate)
+        let publication = BillingDocumentExportPublication(url: url, check: validate)
+        try publication.validate()
+        return (url, origin, publication.validate, publication.adopt)
+    }
+
+    @discardableResult
+    private func validateDocumentExportAccess(customerID: UUID?, serviceCallID: UUID?,
+        invoiceID: UUID?, estimateID: UUID?, requiresMail: Bool) throws -> Customer {
+        guard GunnAireCloudKit.usesTestDatabase ||
+                CompanyWorkspaceAccessController.shared.authorizedContainer === modelContext.container,
+              let customerID else { throw GmailComposeError.access }
+        let currentUsers = try modelContext.fetch(FetchDescriptor<AppUser>())
+        if requiresMail, !AppAccess.canAccessSidebarItem(.mail, email: currentUserEmail, users: currentUsers) {
+            throw GmailComposeError.access
+        }
+        let customers = try modelContext.fetch(FetchDescriptor<Customer>()).filter { $0.id == customerID }
+        guard customers.count == 1, let customer = customers.first else { throw GmailDraftError.businessChanged }
+        if let invoiceID {
+            let rows = try modelContext.fetch(FetchDescriptor<Invoice>()).filter { $0.id == invoiceID }
+            guard rows.count == 1, let invoice = rows.first, invoice.customer === customer
+            else { throw GmailDraftError.businessChanged }
+            try QuickBooksBillingAccessPolicy.validate(context: modelContext, document: .invoice(invoice))
+        }
+        if let estimateID {
+            let rows = try modelContext.fetch(FetchDescriptor<Estimate>()).filter { $0.id == estimateID }
+            guard rows.count == 1, let estimate = rows.first, estimate.customer === customer
+            else { throw GmailDraftError.businessChanged }
+            if invoiceID == nil {
+                try QuickBooksBillingAccessPolicy.validate(context: modelContext, document: .estimate(estimate))
+            }
+        }
+        if let serviceCallID {
+            let calls = try modelContext.fetch(FetchDescriptor<ServiceCall>())
+            let matches = calls.filter { $0.id == serviceCallID }
+            guard matches.count == 1, let call = matches.first, call.customer === customer,
+                  AppAccess.canAccessServiceCall(call, email: currentUserEmail, users: currentUsers,
+                    serviceCalls: calls, technicians: try modelContext.fetch(FetchDescriptor<Technician>()))
+            else { throw GmailComposeError.access }
+        } else if invoiceID == nil && estimateID == nil {
+            guard AppAccess.canAccessSidebarItem(.customers, email: currentUserEmail, users: currentUsers)
+            else { throw GmailComposeError.access }
+        }
+        return customer
+    }
+
+    private func scheduleCustomerDocumentExport(document: QuickBooksBillingDocument? = nil,
+        serviceCall: ServiceCall? = nil, requiresGoogleSession: Bool = false,
+        _ action: @escaping @MainActor () async -> Void) {
+        guard !isPreparingCustomerDocument, !isCreatingDocument else { return }
+        let generation = documentExportGeneration
+        do {
+            if let document { try QuickBooksBillingAccessPolicy.validate(context: modelContext, document: document) }
+            if let serviceCall, !isCurrentRecord(serviceCall) { throw GmailDraftError.businessChanged }
+            guard let customerID = document?.customer?.id ?? serviceCall?.customer?.id else {
+                throw GmailDraftError.businessChanged
+            }
+            let invoiceID: UUID?, estimateID: UUID?
+            switch document {
+            case .invoice(let value): invoiceID = value.id; estimateID = nil
+            case .estimate(let value): invoiceID = nil; estimateID = value.id
+            case nil: invoiceID = serviceCall?.linkedInvoiceID; estimateID = serviceCall?.linkedEstimateID
+            }
+            let sourceBusiness = GmailBusinessContext(customerID: customerID,
+                serviceCallID: serviceCall?.id ?? document?.serviceCallID,
+                invoiceID: invoiceID, estimateID: estimateID, workflow: .customerDocument)
+            let originalCustomer = try validateDocumentExportAccess(customerID: customerID, serviceCallID: sourceBusiness.serviceCallID,
+                invoiceID: invoiceID, estimateID: estimateID, requiresMail: requiresGoogleSession)
+            let customerMembership = BillingDocumentPreparation.membership([originalCustomer], in: modelContext)
+            let source = try GmailDraftBusinessSnapshot.capture(sourceBusiness, context: modelContext)
+            let hadGoogle = googleAuth.isAuthenticated
+            let original = requiresGoogleSession && hadGoogle ? try googleAuth.captureProviderOperation()
+                : try WorkspaceProviderOperation.capture { true }
+            let operation = WorkspaceProviderOperation(parent: original, isCurrent: {
+                (try? customerMembership()) != nil && generation == documentExportGeneration &&
+                (!requiresGoogleSession || hadGoogle == googleAuth.isAuthenticated) &&
+                (GunnAireCloudKit.usesTestDatabase ||
+                    CompanyWorkspaceAccessController.shared.authorizedContainer === modelContext.container)
+            })
+            try operation.check()
+            Task { @MainActor in
+                guard (try? operation.check()) != nil else { return }
+                do { try GmailDraftBusinessSnapshot.validate(source, business: sourceBusiness, context: modelContext) }
+                catch { actionMessage = error.localizedDescription; return }
+                await BillingDocumentPreparation.$exportOperation.withValue(operation) { await action() }
+            }
+        } catch { actionMessage = error.localizedDescription }
+    }
+
+
+    /// Identity, not equality: a record can be deleted and replaced by a fresh
+    /// row with the same id and the same values, and only the object identity
+    /// registered in this context tells the two apart.
+    private func isCurrentRecord<T: PersistentModel>(_ model: T?) -> Bool {
+        guard let model, model.modelContext === modelContext, !model.isDeleted,
+              let registered: T = modelContext.registeredModel(for: model.persistentModelID)
+        else { return false }
+        return registered === model
+    }
+
+    private func storeGeneratedDocumentOrigin(_ url: URL, origin: [String]?) {
+        generatedDocumentOrigins.removeValue(forKey: url)
+        generatedDocumentOrigins[url] = origin
+    }
+
+    private func captureGeneratedDocumentOrigin(_ url: URL) throws {
+        generatedDocumentOrigins.removeValue(forKey: url)
+        guard let customerID = generatedCustomerDocumentRecipientID else { throw GmailDraftError.businessChanged }
+        let business = GmailBusinessContext(customerID: customerID,
+            serviceCallID: generatedCustomerDocumentServiceCallID,
+            invoiceID: generatedCustomerDocumentInvoiceID, estimateID: generatedCustomerDocumentEstimateID,
+            workflow: .customerDocument)
+        generatedDocumentOrigins[url] = try GmailDraftBusinessSnapshot.capture(business, context: modelContext)
     }
 
     private var canEmailGeneratedCustomerDocument: Bool {
@@ -1460,22 +1606,27 @@ GunnAire
             return
         }
         do {
-            if generatedEmailAttempts[url] == nil {
-                let outgoing = try GmailOutgoingMessage(to: email, subject: subject, body: body, attachments: gmailAttachments)
-                generatedEmailAttempts[url] = try GmailSendWorkflow(auth: googleAuth, context: modelContext,
-                    message: outgoing, business: GmailBusinessContext(customerID: recipient.id,
-                        serviceCallID: generatedCustomerDocumentServiceCallID,
-                        invoiceID: generatedCustomerDocumentInvoiceID,
-                        estimateID: generatedCustomerDocumentEstimateID, workflow: .customerDocument))
-            }
-            guard let attempt = generatedEmailAttempts[url] else { throw GmailComposeError.changed }
+            let business = GmailBusinessContext(customerID: recipient.id,
+                serviceCallID: generatedCustomerDocumentServiceCallID,
+                invoiceID: generatedCustomerDocumentInvoiceID,
+                estimateID: generatedCustomerDocumentEstimateID, workflow: .customerDocument)
+            guard let original = generatedDocumentOrigins[url] else { throw GmailDraftError.businessChanged }
+            try GmailDraftBusinessSnapshot.validate(original, business: business, context: modelContext)
+            let outgoing = try GmailOutgoingMessage(to: email, subject: subject, body: body, attachments: gmailAttachments)
             isEmailingGeneratedDocument = true
-            actionMessage = "Sending document..."
+            actionMessage = "Preparing document email..."
             Task { @MainActor in
-                let result = await attempt.send()
-                isEmailingGeneratedDocument = false
-                actionMessage = result.message
-                if result.canRetry { generatedEmailAttempts.removeValue(forKey: url) }
+                defer { isEmailingGeneratedDocument = false }
+                do {
+                    if generatedEmailAttempts[url] == nil {
+                        generatedEmailAttempts[url] = try await GmailSendWorkflow.prepare(auth: googleAuth, context: modelContext,
+                            message: outgoing, business: business, sourceSnapshot: original)
+                    }
+                    guard let attempt = generatedEmailAttempts[url] else { throw GmailComposeError.changed }
+                    let result = await attempt.send()
+                    actionMessage = result.message
+                    if result.canRetry { generatedEmailAttempts.removeValue(forKey: url) }
+                } catch { actionMessage = GmailSendOutcome.notSent(error).message }
             }
         } catch { actionMessage = GmailSendOutcome.notSent(error).message }
     }
@@ -1659,7 +1810,10 @@ GunnAire
                         AnyView(StaffOwnerInvoiceReviewLink())
                     }
                     AnyView(stackSafeGeneratedInvoiceDocumentSection)
-                    if focusedInvoiceID != nil, !actionMessage.isEmpty {
+                    // Invoice row actions (including Send Invoice) can report a
+                    // recovery message while no invoice is focused, so this must not
+                    // be gated on focusedInvoiceID.
+                    if !actionMessage.isEmpty {
                         Section { Text(actionMessage).accessibilityIdentifier("FocusedInvoiceStatus") }
                     }
                     AnyView(invoicesWorkspaceSection)
@@ -1708,6 +1862,12 @@ GunnAire
                                 BillingPublicationReviewLink(document: document, context: modelContext)
                                 Button("Sync Saved \(document.label)") { publishBillingDocument(document) }
                                     .disabled(!canAttemptSharedBilling || billingSyncLifecycles["\(document.label)-\(document.id)"] != nil)
+                                if case .estimate(let estimate) = document {
+                                    estimateDeliveryAction(estimate)
+                                }
+                                if case .invoice(let invoice) = document {
+                                    invoiceDeliveryAction(invoice)
+                                }
                             } else {
                                 Button("Retry Saving Original Draft") { retryNewDocumentSave(document) }
                                     .disabled(isCreatingDocument)
@@ -2007,9 +2167,26 @@ GunnAire
         } message: {
             Text("Only this unsaved document will be discarded. Saved customers, pricebook items and existing invoices or estimates are retained.")
         }
+        .alert("Estimate Email Needs Attention", isPresented: Binding(
+            get: { estimateSendIssue != nil },
+            set: { if !$0 { estimateSendIssue = nil } }
+        )) {
+            Button("OK", role: .cancel) { estimateSendIssue = nil }
+        } message: {
+            Text(estimateSendIssue ?? "Nothing was sent.")
+        }
         .onDisappear {
+            documentExportGeneration = UUID()
+            isPreparingCustomerDocument = false
+            isCreatingDocument = false
             for owner in billingSyncLifecycles.values { owner.cancel() }
             billingSyncLifecycles.removeAll()
+        }
+        .onChange(of: pendingIntentServiceCallID) { _, _ in
+            documentExportGeneration = UUID()
+            billingSyncLifecycles.removeValue(forKey: "document-preparation")
+            isPreparingCustomerDocument = false
+            isCreatingDocument = false
         }
         .onReceive(NotificationCenter.default.publisher(for: .gunnaireConnectivityRestored)) { _ in
             guard canAttemptSharedBilling else { return }
@@ -2142,6 +2319,12 @@ GunnAire
                 })
 
                 AnyView(currentJobDocumentsSection)
+
+                AnyView(Group {
+                    if !actionMessage.isEmpty {
+                        Section { Text(actionMessage).accessibilityIdentifier("JobDocumentsStatus") }
+                    }
+                })
 
                 AnyView(Group {
                     if let customer = contextCustomer,
@@ -2874,6 +3057,8 @@ GunnAire
                                 }
                                 .buttonStyle(.bordered)
 
+                                estimateDeliveryAction(estimate)
+
                                 if estimate.status == "accepted", currentJobInvoice == nil {
                                     Button("Create Change Order") {
                                         beginChangeOrder(from: estimate)
@@ -2884,7 +3069,7 @@ GunnAire
                                 let financingEligibility = customerFinancingEligibility(for: estimate)
                                 Menu {
                                     Button {
-                                        generateEstimateDocument(estimate)
+                                        scheduleCustomerDocumentExport(document: .estimate(estimate)) { await generateEstimateDocument(estimate) }
                                     } label: {
                                         Label("Generate Estimate PDF", systemImage: "doc.richtext")
                                     }
@@ -2898,7 +3083,7 @@ GunnAire
 
                                     if let estimateFollowUpEmailURL {
                                         Button {
-                                            openEstimateFollowUpEmail(for: estimate, fallbackURL: estimateFollowUpEmailURL)
+                                            scheduleCustomerDocumentExport(document: .estimate(estimate), requiresGoogleSession: true) { await openEstimateFollowUpEmail(for: estimate, fallbackURL: estimateFollowUpEmailURL) }
                                         } label: {
                                             Label("Draft Estimate Follow-Up", systemImage: "envelope")
                                         }
@@ -3049,8 +3234,10 @@ GunnAire
                                 .tint(.blue)
                                 .disabled(!QuickBooksDataAPI.shared.isAuthenticated || invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false)
 
+                                invoiceDeliveryAction(invoice)
+
                                 Button("Generate Invoice PDF") {
-                                    generateInvoiceDocument(invoice)
+                                    scheduleCustomerDocumentExport(document: .invoice(invoice)) { await generateInvoiceDocument(invoice) }
                                 }
                                 .buttonStyle(.bordered)
 
@@ -3107,7 +3294,7 @@ GunnAire
 
                                     if let followUpURL = followUpEmailURL(for: estimate) {
                                         Button("Draft Follow-Up") {
-                                            openEstimateFollowUpEmail(for: estimate, fallbackURL: followUpURL)
+                                            scheduleCustomerDocumentExport(document: .estimate(estimate), requiresGoogleSession: true) { await openEstimateFollowUpEmail(for: estimate, fallbackURL: followUpURL) }
                                         }
                                         .buttonStyle(.bordered)
                                     }
@@ -3343,7 +3530,7 @@ GunnAire
 
                                     if let reminderURL = paymentReminderEmailURL(for: invoice) {
                                         Button("Draft Reminder") {
-                                            openPaymentReminderEmail(for: invoice, fallbackURL: reminderURL)
+                                            scheduleCustomerDocumentExport(document: .invoice(invoice), requiresGoogleSession: true) { await openPaymentReminderEmail(for: invoice, fallbackURL: reminderURL) }
                                         }
                                         .buttonStyle(.bordered)
                                     }
@@ -3388,7 +3575,7 @@ GunnAire
 
                                     if let reminderURL = paymentReminderEmailURL(for: invoice) {
                                         Button("Draft Reminder") {
-                                            openPaymentReminderEmail(for: invoice, fallbackURL: reminderURL)
+                                            scheduleCustomerDocumentExport(document: .invoice(invoice), requiresGoogleSession: true) { await openPaymentReminderEmail(for: invoice, fallbackURL: reminderURL) }
                                         }
                                         .buttonStyle(.bordered)
                                     }
@@ -3726,6 +3913,7 @@ GunnAire
                                                 .foregroundColor(.secondary)
                                         }
                                         BillingPublicationReviewLink(document: .estimate(estimate), context: modelContext)
+                                        estimateDeliveryAction(estimate)
                                         Button("Create Invoice") {
                                             createInvoiceFromEstimate(estimate)
                                         }
@@ -3738,7 +3926,7 @@ GunnAire
                                         }
 
                                         Button("Generate Estimate PDF") {
-                                            generateEstimateDocument(estimate)
+                                            scheduleCustomerDocumentExport(document: .estimate(estimate)) { await generateEstimateDocument(estimate) }
                                         }
                                         .buttonStyle(.bordered)
                                     }
@@ -3889,8 +4077,10 @@ GunnAire
                                             .disabled(isInvoicePaid(invoice) || !invoice.isReadyForPaymentCollection)
                                         }
 
+                                        invoiceDeliveryAction(invoice)
+
                                         Button("Generate Invoice PDF") {
-                                            generateInvoiceDocument(invoice)
+                                            scheduleCustomerDocumentExport(document: .invoice(invoice)) { await generateInvoiceDocument(invoice) }
                                         }
                                         .buttonStyle(.bordered)
                                     }
@@ -4371,7 +4561,7 @@ GunnAire
                     if selectedJobStage == .files {
                         Section("Customer Documents") {
                         Button {
-                            generateOnsiteReport(for: call)
+                            scheduleCustomerDocumentExport(serviceCall: call) { await generateOnsiteReport(for: call) }
                         } label: {
                             Label("Generate Onsite Report", systemImage: "doc.badge.gearshape")
                         }
@@ -4379,7 +4569,7 @@ GunnAire
 
                         if let estimate = currentJobEstimate {
                             Button {
-                                generateEstimateDocument(estimate)
+                                scheduleCustomerDocumentExport(document: .estimate(estimate)) { await generateEstimateDocument(estimate) }
                             } label: {
                                 Label("Generate Estimate PDF", systemImage: "doc.text")
                             }
@@ -4388,7 +4578,7 @@ GunnAire
 
                         if let invoice = currentJobInvoice {
                             Button {
-                                generateInvoiceDocument(invoice)
+                                scheduleCustomerDocumentExport(document: .invoice(invoice)) { await generateInvoiceDocument(invoice) }
                             } label: {
                                 Label("Generate Invoice PDF", systemImage: "doc.text.fill")
                             }
@@ -7231,25 +7421,55 @@ GunnAire
         call.documentationChecklist = true
     }
 
-    private func syncAttachmentIfPossible(_ attachment: ServiceDocumentAttachment, data: Data) {
+    @discardableResult
+    private func syncAttachmentIfPossible(_ attachment: ServiceDocumentAttachment, data: Data,
+        validatePreparation: @escaping () throws -> Void = {}) -> Task<Void, Never>? {
+        guard isCurrentRecord(attachment) else { return nil }
+        let customer = attachment.customer
+        let filename = attachment.displayName, contentType = attachment.contentType, kind = attachment.kindRaw
+        let serviceCallID = attachment.serviceCallID, invoiceID = attachment.invoiceID, estimateID = attachment.estimateID
+        let equipmentID = attachment.customerEquipmentID, path = attachment.localFilePath
+        let byteCount = attachment.fileSizeBytes
+        let equipmentName = attachment.linkedEquipment(in: equipmentProfiles, serviceCalls: serviceCalls)?.displayName
+        let customerName = customer?.name
+        let check = {
+            try validatePreparation()
+            guard isCurrentRecord(attachment), isCurrentRecord(customer), attachment.customer === customer,
+                  attachment.displayName == filename, attachment.contentType == contentType,
+                  attachment.kindRaw == kind, attachment.serviceCallID == serviceCallID,
+                  attachment.invoiceID == invoiceID, attachment.estimateID == estimateID,
+                  attachment.customerEquipmentID == equipmentID, attachment.localFilePath == path,
+                  attachment.fileSizeBytes == byteCount, customer?.name == customerName else {
+                throw GmailDraftError.businessChanged
+            }
+            try validateDocumentExportAccess(customerID: customer?.id, serviceCallID: serviceCallID,
+                invoiceID: invoiceID, estimateID: estimateID, requiresMail: false)
+        }
+        let operation: WorkspaceProviderOperation
+        do {
+            try check()
+            operation = try WorkspaceProviderOperation.capture {
+                do { try check(); return true } catch { return false }
+            }
+        } catch { return nil }
+        var upload: Task<Void, Never>?
         if GunnAireBackendService.isConfigured {
-            Task {
+            upload = Task { @MainActor in
                 do {
+                    try operation.check()
                     let response = try await GunnAireBackendService.uploadDocument(
                         data: data,
-                        filename: attachment.displayName,
-                        contentType: attachment.contentType,
-                        kind: attachment.kindRaw,
-                        serviceCallID: attachment.serviceCallID,
-                        invoiceID: attachment.invoiceID,
-                        estimateID: attachment.estimateID,
-                        customerEquipmentID: attachment.customerEquipmentID,
-                        equipmentName: attachment.linkedEquipment(in: equipmentProfiles, serviceCalls: serviceCalls)?.displayName,
-                        customerName: attachment.customer?.name
+                        filename: filename, contentType: contentType, kind: kind,
+                        serviceCallID: serviceCallID, invoiceID: invoiceID, estimateID: estimateID,
+                        customerEquipmentID: equipmentID, equipmentName: equipmentName, customerName: customerName,
+                        originatingOperation: operation
                     )
+                    try operation.check()
+                    try check()
                     attachment.markSharedCompanyStored(id: response.id)
-                    try? modelContext.save()
+                    try modelContext.save()
                 } catch {
+                    guard (try? operation.check()) != nil, (try? check()) != nil else { return }
                     attachment.markSharedCompanyUploadFailed(error.localizedDescription)
                     try? modelContext.save()
                     attachmentMessage = "Attachment saved locally. Company storage upload failed: \(error.localizedDescription)"
@@ -7257,7 +7477,8 @@ GunnAire
             }
         }
 
-        syncAttachmentToQuickBooksIfPossible(attachment)
+        if (try? operation.check()) != nil { syncAttachmentToQuickBooksIfPossible(attachment) }
+        return upload
     }
 
     private func linkExistingServiceReports(to invoice: Invoice, serviceCallID: UUID?) {
@@ -7300,7 +7521,9 @@ GunnAire
         syncLinkedInvoiceAttachmentsToQuickBooks(invoice)
     }
 
-    private func prepareLinkedOnsiteReportForInvoiceCreation(_ invoice: Invoice, serviceCall: ServiceCall?) -> String? {
+    private func prepareLinkedOnsiteReportForInvoiceCreation(_ invoice: Invoice, serviceCall: ServiceCall?,
+        preparation: BillingDocumentPreparation) async throws -> (() throws -> Void)? {
+        try preparation.check()
         guard let serviceCall else { return nil }
         linkExistingInvoiceAttachments(to: invoice, serviceCallID: serviceCall.id)
         saveCurrentEquipmentProfile(for: serviceCall, announce: false)
@@ -7308,21 +7531,30 @@ GunnAire
             let linkedEstimate = estimates.first { estimate in
                 estimate.id == serviceCall.linkedEstimateID || estimate.serviceCallID == serviceCall.id
             }
-            let invoicePayments = payments.filter { $0.invoice.id == invoice.id }
-            let report = try generateAndPersistOnsiteReportAttachment(
+            let invoicePayments = payments.filter { $0.invoice?.id == invoice.id }
+            let report = try await generateAndPersistOnsiteReportAttachment(
                 for: serviceCall,
                 estimate: linkedEstimate,
                 invoice: invoice,
                 payments: invoicePayments,
                 attachments: reportEvidenceAttachments(for: serviceCall),
                 equipmentProfiles: equipmentProfiles,
-                serviceCalls: serviceCalls
+                serviceCalls: serviceCalls,
+                preparation: preparation
             )
+            try preparation.check()
+            try report.validate()
             report.attachment.linkToInvoiceIfNeeded(invoice)
-            syncAttachmentIfPossible(report.attachment, data: report.data)
-            return nil
+            try modelContext.save()
+            try await preparation.waitForAttachment(
+                syncAttachmentIfPossible(report.attachment, data: report.data, validatePreparation: report.validate),
+                validateSource: report.validate)
+            try report.validate()
+            return report.validate
         } catch {
-            return "Invoice created, but the onsite report could not be generated automatically: \(error.localizedDescription)"
+            // A saved invoice remains recoverable, but a failed preparation
+            // cannot silently continue to publish it from a different source.
+            throw error
         }
     }
 
@@ -7344,28 +7576,52 @@ GunnAire
         }
     }
 
-    @discardableResult
-    private func prepareEstimateDocumentationForQuickBooksSend(_ estimate: Estimate) -> Bool {
-        do {
+    private func prepareEstimateDocumentationForQuickBooksSend(_ estimate: Estimate,
+        preparation: BillingDocumentPreparation) async throws -> (() throws -> Void) {
+            try preparation.check()
             let linkedCall = serviceCall(for: estimate)
             if let linkedCall {
                 saveCurrentEquipmentProfile(for: linkedCall, announce: false)
                 linkExistingEstimateAttachments(to: estimate, serviceCallID: linkedCall.id)
+                linkedCall.markDocumentationCompleteIfReady()
+                try modelContext.save()
             }
-            let url = try CustomerDocumentExporter.exportEstimate(
-                estimate,
-                serviceCall: linkedCall,
-                attachments: attachments,
-                equipmentProfiles: equipmentProfiles,
-                serviceCalls: serviceCalls
-            )
-            let data = try Data(contentsOf: url)
+            let customer = estimate.customer
+            guard let customer else { throw GmailDraftError.businessChanged }
+            let sourceAttachments = attachments, sourceEquipment = equipmentProfiles, sourceCalls = serviceCalls
+            let business = GmailBusinessContext(customerID: customer.id, serviceCallID: linkedCall?.id,
+                invoiceID: nil, estimateID: estimate.id, workflow: .customerDocument)
+            let membership: @MainActor @Sendable () -> Bool = {
+                isCurrentRecord(estimate) && isCurrentRecord(customer) &&
+                (linkedCall == nil || isCurrentRecord(linkedCall)) &&
+                sourceAttachments.allSatisfy { isCurrentRecord($0) } &&
+                sourceEquipment.allSatisfy { isCurrentRecord($0) } && sourceCalls.allSatisfy { isCurrentRecord($0) }
+            }
+            let (url, origin, validateExport, adoptExport) = try await exportingCustomerDocument(
+                customerID: customer.id, serviceCallID: linkedCall?.id, invoiceID: nil, estimateID: estimate.id,
+                membershipIsIntact: membership
+            ) { authorize in
+                try await CustomerDocumentExporter.exportEstimateOffMainActor(estimate, serviceCall: linkedCall,
+                    attachments: sourceAttachments, equipmentProfiles: sourceEquipment, serviceCalls: sourceCalls,
+                    authorize: { try preparation.check(); try authorize() })
+            }
+            try validateExport()
+            let validateSource = {
+                try validateExport()
+                try preparation.check()
+                guard membership() else { throw GmailDraftError.businessChanged }
+                try GmailDraftBusinessSnapshot.validate(origin, business: business, context: modelContext)
+            }
+            let data = try await preparation.read(url, validateSource: validateSource)
+            try validateSource()
+            adoptExport()
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = estimate.customer.id
             generatedCustomerDocumentServiceCallID = linkedCall?.id
             generatedCustomerDocumentInvoiceID = nil
             generatedCustomerDocumentEstimateID = estimate.id
             generatedCustomerDocumentKind = "estimate"
+            storeGeneratedDocumentOrigin(url, origin: origin)
 
             let attachment: ServiceDocumentAttachment
             if let reusable = ServiceDocumentAttachment.reusableGeneratedBillingDocument(
@@ -7408,72 +7664,95 @@ GunnAire
                 attachment = generated
             }
 
-            try? modelContext.save()
-            syncAttachmentIfPossible(attachment, data: data)
+            try modelContext.save()
+            var reportToUpload: (attachment: ServiceDocumentAttachment, data: Data, validate: () throws -> Void)?
             if let linkedCall {
-                do {
-                    let report = try generateAndPersistOnsiteReportAttachment(
+                    let report = try await generateAndPersistOnsiteReportAttachment(
                         for: linkedCall,
                         estimate: estimate,
                         invoice: nil,
                         payments: [],
                         attachments: reportEvidenceAttachments(for: linkedCall),
                         equipmentProfiles: equipmentProfiles,
-                        serviceCalls: serviceCalls
+                        serviceCalls: serviceCalls,
+                        preparation: preparation
                     )
-                    syncAttachmentIfPossible(report.attachment, data: report.data)
-                } catch {
-                    actionMessage = "Could not prepare the onsite report before sending this estimate: \(error.localizedDescription)"
-                    return false
-                }
+                    try preparation.check()
+                    try report.validate()
+                    reportToUpload = report
+            }
+            try preparation.check()
+            try validateSource()
+            let validateDocuments = {
+                try validateSource()
+                try reportToUpload?.validate()
+            }
+            try await preparation.waitForAttachment(
+                syncAttachmentIfPossible(attachment, data: data, validatePreparation: validateDocuments),
+                validateSource: validateDocuments)
+            try validateDocuments()
+            if let reportToUpload {
+                try await preparation.waitForAttachment(
+                    syncAttachmentIfPossible(reportToUpload.attachment, data: reportToUpload.data,
+                        validatePreparation: validateDocuments), validateSource: validateDocuments)
+                try validateDocuments()
             }
             syncLinkedEstimateAttachmentsToQuickBooks(estimate)
-            return true
-        } catch {
-            actionMessage = "Could not prepare the estimate PDF before sending: \(error.localizedDescription)"
-            return false
-        }
+            return validateDocuments
     }
 
-    @discardableResult
-    private func prepareInvoiceDocumentationForQuickBooksSend(_ invoice: Invoice) -> Bool {
+    private func prepareInvoiceDocumentationForQuickBooksSend(_ invoice: Invoice,
+        preparation: BillingDocumentPreparation) async throws -> (() throws -> Void) {
+        try preparation.check()
         let linkedServiceCall = serviceCall(for: invoice)
-        guard prepareInvoicePDFForQuickBooksSend(invoice, serviceCall: linkedServiceCall) else {
-            return false
+        if let linkedServiceCall {
+            linkExistingInvoiceAttachments(to: invoice, serviceCallID: linkedServiceCall.id)
+            saveCurrentEquipmentProfile(for: linkedServiceCall, announce: false)
+            linkedServiceCall.markDocumentationCompleteIfReady()
+            try modelContext.save()
         }
-
+        let pdf = try await prepareInvoicePDFForQuickBooksSend(invoice, serviceCall: linkedServiceCall,
+            preparation: preparation)
+        try preparation.check()
+        try pdf.validate()
         guard let serviceCall = linkedServiceCall else {
+            try await preparation.waitForAttachment(
+                syncAttachmentIfPossible(pdf.attachment, data: pdf.data, validatePreparation: pdf.validate),
+                validateSource: pdf.validate)
+            try pdf.validate()
             syncLinkedInvoiceAttachmentsToQuickBooks(invoice)
-            return true
+            return pdf.validate
         }
-
-        linkExistingInvoiceAttachments(to: invoice, serviceCallID: serviceCall.id)
-        saveCurrentEquipmentProfile(for: serviceCall, announce: false)
-
-        do {
-            let linkedEstimate = currentJobEstimate ?? estimates.first { estimate in
+            let linkedEstimate = estimates.first { estimate in
                 estimate.id == serviceCall.linkedEstimateID || estimate.serviceCallID == serviceCall.id
             }
-            let invoicePayments = payments.filter { $0.invoice.id == invoice.id }
-            let report = try generateAndPersistOnsiteReportAttachment(
+            let invoicePayments = payments.filter { $0.invoice?.id == invoice.id }
+            let report = try await generateAndPersistOnsiteReportAttachment(
                 for: serviceCall,
                 estimate: linkedEstimate,
                 invoice: invoice,
                 payments: invoicePayments,
                 attachments: reportEvidenceAttachments(for: serviceCall),
                 equipmentProfiles: equipmentProfiles,
-                serviceCalls: serviceCalls
+                serviceCalls: serviceCalls,
+                preparation: preparation
             )
+            try preparation.check()
+            try report.validate()
+            try pdf.validate()
             report.attachment.linkToInvoiceIfNeeded(invoice)
-            serviceCall.markDocumentationCompleteIfReady()
-            try? modelContext.save()
-            syncAttachmentIfPossible(report.attachment, data: report.data)
+            try modelContext.save()
+            let validateDocuments = { try pdf.validate(); try report.validate() }
+            try await preparation.waitForAttachment(
+                syncAttachmentIfPossible(pdf.attachment, data: pdf.data, validatePreparation: validateDocuments),
+                validateSource: validateDocuments)
+            try validateDocuments()
+            try await preparation.waitForAttachment(
+                syncAttachmentIfPossible(report.attachment, data: report.data, validatePreparation: validateDocuments),
+                validateSource: validateDocuments)
+            try validateDocuments()
             syncLinkedInvoiceAttachmentsToQuickBooks(invoice)
-            return true
-        } catch {
-            actionMessage = "Could not prepare the onsite report before sending this invoice: \(error.localizedDescription)"
-            return false
-        }
+            return validateDocuments
     }
 
     private func generateAndPersistOnsiteReportAttachment(
@@ -7483,9 +7762,33 @@ GunnAire
         payments: [Payment],
         attachments jobAttachments: [ServiceDocumentAttachment],
         equipmentProfiles: [CustomerEquipment],
-        serviceCalls: [ServiceCall]
-    ) throws -> (attachment: ServiceDocumentAttachment, data: Data) {
-        let url = try CustomerDocumentExporter.exportOnsiteReport(
+        serviceCalls: [ServiceCall],
+        preparation: BillingDocumentPreparation
+    ) async throws -> (attachment: ServiceDocumentAttachment, data: Data, validate: () throws -> Void) {
+        try preparation.check()
+        guard isCurrentRecord(serviceCall), let customer = serviceCall.customer,
+              isCurrentRecord(customer) else { throw GmailDraftError.businessChanged }
+        serviceCall.markDocumentationCompleteIfReady()
+        try modelContext.save()
+        let sourceTemplates = fieldFormTemplates
+        let sourceResponses = fieldFormResponses.filter { $0.serviceCallID == serviceCall.id }
+        let sourceTime = timeEntries, sourceActivities = serviceCallActivities
+        let includeFinancials = canViewFinancials || canCollectFieldPayments
+        let business = GmailBusinessContext(customerID: customer.id, serviceCallID: serviceCall.id,
+            invoiceID: invoice?.id, estimateID: estimate?.id, workflow: .customerDocument)
+        let membership: @MainActor @Sendable () -> Bool = {
+            isCurrentRecord(serviceCall) && isCurrentRecord(customer) &&
+            (invoice == nil || isCurrentRecord(invoice)) && (estimate == nil || isCurrentRecord(estimate)) &&
+            payments.allSatisfy { isCurrentRecord($0) } && jobAttachments.allSatisfy { isCurrentRecord($0) } &&
+            equipmentProfiles.allSatisfy { isCurrentRecord($0) } && serviceCalls.allSatisfy { isCurrentRecord($0) } &&
+            sourceTemplates.allSatisfy { isCurrentRecord($0) } && sourceResponses.allSatisfy { isCurrentRecord($0) } &&
+            sourceTime.allSatisfy { isCurrentRecord($0) } && sourceActivities.allSatisfy { isCurrentRecord($0) }
+        }
+        let (url, origin, validateExport, adoptExport) = try await exportingCustomerDocument(
+            customerID: customer.id, serviceCallID: serviceCall.id, invoiceID: invoice?.id, estimateID: estimate?.id,
+            membershipIsIntact: membership
+        ) { authorize in
+        try await CustomerDocumentExporter.exportOnsiteReportOffMainActor(
             serviceCall: serviceCall,
             estimate: estimate,
             invoice: invoice,
@@ -7493,9 +7796,9 @@ GunnAire
             attachments: jobAttachments,
             equipmentProfiles: equipmentProfiles,
             serviceCalls: serviceCalls,
-            fieldFormTemplates: fieldFormTemplates,
-            fieldFormResponses: fieldFormResponses.filter { $0.serviceCallID == serviceCall.id },
-            timeEntries: timeEntries,
+            fieldFormTemplates: sourceTemplates,
+            fieldFormResponses: sourceResponses,
+            timeEntries: sourceTime,
             materialReadiness: JobMaterialCloseoutPolicy.summary(
                 for: serviceCall,
                 invoice: invoice,
@@ -7504,18 +7807,29 @@ GunnAire
                 items: items,
                 movements: inventoryMovements
             ),
-            serviceCallActivities: serviceCallActivities,
+            serviceCallActivities: sourceActivities,
             requireWorkPerformedLog: requireWorkPerformedLogForCloseout,
-            includeFinancials: canViewFinancials || canCollectFieldPayments
+            includeFinancials: includeFinancials,
+            authorize: { try preparation.check(); try authorize() }
         )
-        let data = try Data(contentsOf: url)
+        }
+        try validateExport()
+        let validateSource = {
+            try validateExport()
+            try preparation.check()
+            guard membership(), includeFinancials == (canViewFinancials || canCollectFieldPayments)
+            else { throw GmailDraftError.businessChanged }
+            try GmailDraftBusinessSnapshot.validate(origin, business: business, context: modelContext)
+        }
+        let data = try await preparation.read(url, validateSource: validateSource)
+        try validateSource()
         let invoiceID = invoice?.id ?? serviceCall.linkedInvoiceID
         let estimateID = estimate?.id ?? serviceCall.linkedEstimateID
         let caption = CustomerDocumentExporter.onsiteReportAttachmentCaption(
             serviceCall: serviceCall,
             estimate: estimate,
             invoice: invoice,
-            includeFinancials: canViewFinancials || canCollectFieldPayments
+            includeFinancials: includeFinancials
         )
 
         let attachment: ServiceDocumentAttachment
@@ -7558,47 +7872,69 @@ GunnAire
             attachment = generated
         }
 
-        serviceCall.markDocumentationCompleteIfReady()
-        try? modelContext.save()
-        return (attachment, data)
+        try modelContext.save()
+        adoptExport()
+        return (attachment, data, validateSource)
     }
 
-    @discardableResult
-    private func prepareInvoicePDFForQuickBooksSend(_ invoice: Invoice, serviceCall: ServiceCall?) -> Bool {
-        do {
-            let invoicePayments = payments.filter { $0.invoice.id == invoice.id }
-            let url = try CustomerDocumentExporter.exportInvoice(
-                invoice,
-                serviceCall: serviceCall,
-                payments: invoicePayments,
-                attachments: attachments,
-                equipmentProfiles: equipmentProfiles,
-                serviceCalls: serviceCalls
-            )
+    private func prepareInvoicePDFForQuickBooksSend(_ invoice: Invoice, serviceCall: ServiceCall?,
+        preparation: BillingDocumentPreparation) async throws -> (attachment: ServiceDocumentAttachment, data: Data, validate: () throws -> Void) {
+            try preparation.check()
+            guard let customer = invoice.customer else { throw GmailDraftError.businessChanged }
+            let invoicePayments = payments.filter { $0.invoice?.id == invoice.id }
+            let sourceAttachments = attachments, sourceEquipment = equipmentProfiles, sourceCalls = serviceCalls
+            let business = GmailBusinessContext(customerID: customer.id, serviceCallID: serviceCall?.id,
+                invoiceID: invoice.id, estimateID: nil, workflow: .customerDocument)
+            let membership: @MainActor @Sendable () -> Bool = {
+                isCurrentRecord(invoice) && isCurrentRecord(customer) &&
+                (serviceCall == nil || isCurrentRecord(serviceCall)) && invoicePayments.allSatisfy { isCurrentRecord($0) } &&
+                sourceAttachments.allSatisfy { isCurrentRecord($0) } &&
+                sourceEquipment.allSatisfy { isCurrentRecord($0) } && sourceCalls.allSatisfy { isCurrentRecord($0) }
+            }
+            let (url, origin, validateExport, adoptExport) = try await exportingCustomerDocument(
+                customerID: customer.id, serviceCallID: serviceCall?.id, invoiceID: invoice.id, estimateID: nil,
+                membershipIsIntact: membership
+            ) { authorize in
+                try await CustomerDocumentExporter.exportInvoiceOffMainActor(invoice, serviceCall: serviceCall,
+                    payments: invoicePayments, attachments: sourceAttachments, equipmentProfiles: sourceEquipment,
+                    serviceCalls: sourceCalls, authorize: { try preparation.check(); try authorize() })
+            }
+            try validateExport()
+            let validateSource = {
+                try validateExport()
+                try preparation.check()
+                guard membership() else { throw GmailDraftError.businessChanged }
+                try GmailDraftBusinessSnapshot.validate(origin, business: business, context: modelContext)
+            }
+            let data = try await preparation.read(url, validateSource: validateSource)
+            try validateSource()
+            adoptExport()
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = invoice.customer.id
             generatedCustomerDocumentServiceCallID = serviceCall?.id
             generatedCustomerDocumentInvoiceID = invoice.id
-            generatedCustomerDocumentEstimateID = linkedEstimate(for: serviceCall)?.id
+            generatedCustomerDocumentEstimateID = nil
             let documentLabel = CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments)
             generatedCustomerDocumentKind = documentLabel.lowercased()
-            guard persistGeneratedBillingDocument(
-                url,
-                customer: invoice.customer,
-                serviceCallID: serviceCall?.id,
-                invoiceID: invoice.id,
-                estimateID: nil,
-                kind: .invoiceSupport,
-                caption: CustomerDocumentExporter.invoiceDocumentCaption(for: invoice, payments: invoicePayments),
-                successMessage: "\(documentLabel) PDF prepared for QuickBooks send."
-            ) != nil else {
-                return false
+            storeGeneratedDocumentOrigin(url, origin: origin)
+            let caption = CustomerDocumentExporter.invoiceDocumentCaption(for: invoice, payments: invoicePayments)
+            let attachment: ServiceDocumentAttachment
+            if let reusable = ServiceDocumentAttachment.reusableGeneratedBillingDocument(in: attachments,
+                kind: .invoiceSupport, serviceCallID: serviceCall?.id, invoiceID: invoice.id, estimateID: nil) {
+                reusable.replaceGeneratedFile(displayName: url.lastPathComponent, localFilePath: url.path,
+                    contentType: "application/pdf", fileSizeBytes: data.count, caption: caption)
+                reusable.refreshGeneratedDocumentContext(customer: customer, serviceCallID: serviceCall?.id,
+                    customerEquipmentID: serviceCall?.customerEquipmentID, invoiceID: invoice.id, estimateID: nil)
+                attachment = reusable
+            } else {
+                attachment = ServiceDocumentAttachment(customer: customer, serviceCallID: serviceCall?.id,
+                    customerEquipmentID: serviceCall?.customerEquipmentID, invoiceID: invoice.id, estimateID: nil,
+                    kind: .invoiceSupport, displayName: url.lastPathComponent, caption: caption,
+                    localFilePath: url.path, contentType: "application/pdf", fileSizeBytes: data.count)
+                modelContext.insert(attachment)
             }
-            return true
-        } catch {
-            actionMessage = "Could not prepare the invoice PDF before sending: \(error.localizedDescription)"
-            return false
-        }
+            try modelContext.save()
+            return (attachment, data, validateSource)
     }
 
     private func syncAttachmentToQuickBooksIfPossible(_ attachment: ServiceDocumentAttachment) {
@@ -7933,6 +8269,8 @@ GunnAire
     }
 
     private func createInvoiceFromEstimate(_ estimate: Estimate) {
+        guard !isCreatingDocument, !isPreparingCustomerDocument else { return }
+        guard isCurrentRecord(estimate), isCurrentRecord(estimate.customer) else { return }
         guard isCurrentProposal(estimate) else {
             actionMessage = "A newer change order is the active proposal. Invoice the approved current proposal instead."
             return
@@ -7964,18 +8302,77 @@ GunnAire
         let invoice = conversion.invoice
         selectedInvoiceForCloseout = invoice
         let restoredItems = restoredCatalogItems(snapshotJSON: estimate.catalogSnapshotJSON, lineItemSummary: estimate.lineItemSummary)
-        if let reportErrorMessage = conversion.reportErrorMessage {
-            actionMessage = reportErrorMessage
-            if canAttemptSharedBilling, !restoredItems.isEmpty {
-                syncInvoiceIfNeeded(invoice, customer: estimate.customer, items: restoredItems)
+        guard saveBillingContext(failureMessage: "Could not save the converted invoice") else { return }
+        beginInvoiceReportPreparation(invoice, serviceCall: conversion.serviceCall, items: restoredItems)
+    }
+
+    /// Saves happen before this synchronous boundary. The original invoice and
+    /// authority are captured before its report task is scheduled.
+    private func beginInvoiceReportPreparation(_ invoice: Invoice, serviceCall: ServiceCall?, items: [Item]) {
+        let key = "document-preparation"
+        guard billingSyncLifecycles[key] == nil else { return }
+        let owner = QuickBooksSyncLifecycle()
+        billingSyncLifecycles[key] = owner
+        do {
+            let document = QuickBooksBillingDocument.invoice(invoice)
+            let validateInvoice = document.validation(context: modelContext)
+            guard let customer = invoice.customer else { throw GmailDraftError.businessChanged }
+            let customerDraft = QuickBooksCustomerCreateOperation.draft(for: customer)
+            let sourceBusiness = GmailBusinessContext(customerID: customer.id, serviceCallID: nil,
+                invoiceID: invoice.id, estimateID: nil, workflow: .customerDocument)
+            let standaloneSource = serviceCall == nil
+                ? try GmailDraftBusinessSnapshot.capture(sourceBusiness, context: modelContext) : nil
+            let initiatingBusiness = GmailBusinessContext(customerID: customer.id, serviceCallID: serviceCall?.id,
+                invoiceID: invoice.id, estimateID: serviceCall?.linkedEstimateID, workflow: .customerDocument)
+            let initiatingSource = try GmailDraftBusinessSnapshot.capture(initiatingBusiness, context: modelContext)
+            let preparation = try BillingDocumentPreparation.capture(
+                isCurrent: { billingSyncLifecycles[key] === owner }, validate: {
+                    try QuickBooksBillingAccessPolicy.validate(context: modelContext, document: document)
+                    try validateInvoice()
+                    guard isCurrentRecord(customer), invoice.customer === customer,
+                          QuickBooksCustomerCreateOperation.draft(for: customer) == customerDraft,
+                          serviceCall == nil || isCurrentRecord(serviceCall) else { throw GmailDraftError.businessChanged }
+                    if serviceCall == nil {
+                        try GmailDraftBusinessSnapshot.validate(standaloneSource, business: sourceBusiness, context: modelContext)
+                    }
+                })
+            isCreatingDocument = true
+            isPreparingCustomerDocument = true
+            actionMessage = "Invoice saved locally. Preparing its documentation…"
+            Task { @MainActor in
+                defer {
+                    if billingSyncLifecycles[key] === owner {
+                        billingSyncLifecycles.removeValue(forKey: key)
+                        isCreatingDocument = false
+                        isPreparingCustomerDocument = false
+                    }
+                }
+                do {
+                    let validateReport = try await preparation.perform {
+                        try GmailDraftBusinessSnapshot.validate(initiatingSource, business: initiatingBusiness, context: modelContext)
+                        return try await prepareLinkedOnsiteReportForInvoiceCreation(invoice, serviceCall: serviceCall,
+                            preparation: preparation)
+                    }
+                    try preparation.check()
+                    try validateReport?()
+                    if !items.isEmpty {
+                        syncInvoiceIfNeeded(invoice, customer: customer, items: items)
+                        actionMessage = canAttemptSharedBilling
+                            ? "Invoice saved with its documentation. Checking QuickBooks publication…"
+                            : "Invoice and documentation saved locally."
+                    } else {
+                        actionMessage = "Invoice saved locally. Review the catalog lines before publishing to QuickBooks."
+                    }
+                } catch {
+                    guard billingSyncLifecycles[key] === owner else { return }
+                    actionMessage = "Invoice is saved locally. Documentation or publication stopped: \(error.localizedDescription)"
+                }
             }
-        } else if canAttemptSharedBilling, !restoredItems.isEmpty {
-            actionMessage = "Invoice created from estimate. Syncing to QuickBooks..."
-            syncInvoiceIfNeeded(invoice, customer: estimate.customer, items: restoredItems)
-        } else if canAttemptSharedBilling {
-            actionMessage = "Invoice created from estimate. QuickBooks sync skipped because the estimate lines do not match local catalog items."
-        } else {
-            actionMessage = "Invoice created from estimate."
+        } catch {
+            billingSyncLifecycles.removeValue(forKey: key)
+            isCreatingDocument = false
+            isPreparingCustomerDocument = false
+            actionMessage = "Invoice is saved locally. Documentation or publication stopped: \(error.localizedDescription)"
         }
     }
 
@@ -8066,59 +8463,84 @@ GunnAire
         }
     }
 
-    private func generateOnsiteReport(for serviceCall: ServiceCall) {
+    private func generateOnsiteReport(for serviceCall: ServiceCall) async {
+        guard !isPreparingCustomerDocument else { return }
+        let actionGeneration = documentExportGeneration
+        isPreparingCustomerDocument = true
+        defer { if actionGeneration == documentExportGeneration { isPreparingCustomerDocument = false } }
         do {
+            try BillingDocumentPreparation.exportOperation?.check()
+            guard isCurrentRecord(serviceCall), let customer = serviceCall.customer,
+                  isCurrentRecord(customer) else { throw GmailDraftError.businessChanged }
+            let invoice = currentJobInvoice, estimate = currentJobEstimate
+            let invoiceID = invoice?.id ?? serviceCall.linkedInvoiceID
+            let estimateID = estimate?.id ?? serviceCall.linkedEstimateID
+            try validateDocumentExportAccess(customerID: customer.id, serviceCallID: serviceCall.id,
+                invoiceID: invoiceID, estimateID: estimateID, requiresMail: false)
+            let sourcePayments = currentJobPayments
+            let includeFinancials = canViewFinancials || canCollectFieldPayments
             saveCurrentEquipmentProfile(for: serviceCall, announce: false)
-            let url = try CustomerDocumentExporter.exportOnsiteReport(
-                serviceCall: serviceCall,
-                estimate: currentJobEstimate,
-                invoice: currentJobInvoice,
-                payments: currentJobPayments,
-                attachments: activeJobReportEvidenceAttachments,
-                equipmentProfiles: equipmentProfiles,
-                serviceCalls: serviceCalls,
-                fieldFormTemplates: fieldFormTemplates,
-                fieldFormResponses: fieldFormResponses.filter { $0.serviceCallID == serviceCall.id },
-                timeEntries: timeEntries,
-                materialReadiness: JobMaterialCloseoutPolicy.summary(
-                    for: serviceCall,
-                    invoice: currentJobInvoice,
-                    estimates: estimates,
-                    projectMilestones: projectMilestones,
-                    items: items,
-                    movements: inventoryMovements
-                ),
-                serviceCallActivities: serviceCallActivities,
-                requireWorkPerformedLog: requireWorkPerformedLogForCloseout,
-                includeFinancials: canViewFinancials || canCollectFieldPayments
-            )
-            generatedCustomerDocumentURL = url
-            generatedCustomerDocumentRecipientID = serviceCall.customer.id
-            generatedCustomerDocumentServiceCallID = serviceCall.id
-            generatedCustomerDocumentInvoiceID = currentJobInvoice?.id ?? serviceCall.linkedInvoiceID
-            generatedCustomerDocumentEstimateID = currentJobEstimate?.id ?? serviceCall.linkedEstimateID
-            generatedCustomerDocumentKind = "\(serviceCall.type.displayName.lowercased()) report"
             if !serviceCall.markDocumentationCompleteIfReady() {
                 serviceCall.documentationChecklist = false
             }
-            persistGeneratedOnsiteReport(url, for: serviceCall)
+            try modelContext.save()
+            let (url, origin, validateExport, adoptExport) = try await exportingCustomerDocument(
+                customerID: serviceCall.customer.id, serviceCallID: serviceCall.id,
+                invoiceID: invoiceID, estimateID: estimateID,
+                membershipIsIntact: { isCurrentRecord(serviceCall) && isCurrentRecord(customer) &&
+                    (invoice == nil || isCurrentRecord(invoice)) && (estimate == nil || isCurrentRecord(estimate)) }
+            ) { authorize in
+                try await CustomerDocumentExporter.exportOnsiteReportOffMainActor(
+                    serviceCall: serviceCall,
+                    estimate: estimate,
+                    invoice: invoice,
+                    payments: sourcePayments,
+                    attachments: activeJobReportEvidenceAttachments,
+                    equipmentProfiles: equipmentProfiles,
+                    serviceCalls: serviceCalls,
+                    fieldFormTemplates: fieldFormTemplates,
+                    fieldFormResponses: fieldFormResponses.filter { $0.serviceCallID == serviceCall.id },
+                    timeEntries: timeEntries,
+                    materialReadiness: JobMaterialCloseoutPolicy.summary(
+                        for: serviceCall,
+                        invoice: invoice,
+                        estimates: estimates,
+                        projectMilestones: projectMilestones,
+                        items: items,
+                        movements: inventoryMovements
+                    ),
+                    serviceCallActivities: serviceCallActivities,
+                    requireWorkPerformedLog: requireWorkPerformedLogForCloseout,
+                    includeFinancials: includeFinancials,
+                    authorize: authorize)
+            }
+            try validateExport()
+            let data = try await BillingDocumentPreparation.readExported(url, validate: validateExport)
+            try validateExport()
+            adoptExport()
+            generatedCustomerDocumentURL = url
+            generatedCustomerDocumentRecipientID = serviceCall.customer.id
+            generatedCustomerDocumentServiceCallID = serviceCall.id
+            generatedCustomerDocumentInvoiceID = invoiceID
+            generatedCustomerDocumentEstimateID = estimateID
+            generatedCustomerDocumentKind = "\(serviceCall.type.displayName.lowercased()) report"
+            storeGeneratedDocumentOrigin(url, origin: origin)
+            persistGeneratedOnsiteReport(url, data: data, for: serviceCall, invoice: invoice, estimate: estimate,
+                invoiceID: invoiceID, estimateID: estimateID, includeFinancials: includeFinancials)
         } catch {
+            guard actionGeneration == documentExportGeneration else { return }
             actionMessage = "Could not generate onsite report: \(error.localizedDescription)"
         }
     }
 
-    private func persistGeneratedOnsiteReport(_ url: URL, for serviceCall: ServiceCall) {
+    private func persistGeneratedOnsiteReport(_ url: URL, data: Data, for serviceCall: ServiceCall,
+        invoice: Invoice?, estimate: Estimate?, invoiceID: UUID?, estimateID: UUID?, includeFinancials: Bool) {
         do {
-            let data = try Data(contentsOf: url)
-            let invoice = currentJobInvoice
-            let estimate = currentJobEstimate
-            let invoiceID = invoice?.id ?? serviceCall.linkedInvoiceID
-            let estimateID = estimate?.id ?? serviceCall.linkedEstimateID
             let caption = CustomerDocumentExporter.onsiteReportAttachmentCaption(
                 serviceCall: serviceCall,
                 estimate: estimate,
                 invoice: invoice,
-                includeFinancials: canViewFinancials || canCollectFieldPayments
+                includeFinancials: includeFinancials
             )
             let attachment: ServiceDocumentAttachment
             if let reusable = ServiceDocumentAttachment.reusableGeneratedServiceReport(
@@ -8165,7 +8587,7 @@ GunnAire
             if attachment.estimateID == nil {
                 attachment.estimateID = estimateID
             }
-            try? modelContext.save()
+            try modelContext.save()
             syncAttachmentIfPossible(attachment, data: data)
             let completionNote = serviceCall.documentationCompletionBlockedMessage.map { " \($0)" } ?? ""
             if invoice?.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
@@ -8178,27 +8600,253 @@ GunnAire
         }
     }
 
-    private func generateEstimateDocument(_ estimate: Estimate) {
+    private func estimateDeliveryAction(_ estimate: Estimate) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                scheduleCustomerDocumentExport(document: .estimate(estimate)) { await prepareEstimateEmail(estimate) }
+            } label: {
+                Label("Send Estimate", systemImage: "paperplane")
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("SendEstimate-\(estimate.id.uuidString)")
+            Text("Review the recipient, message, and attached PDF in Mail before sending.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if !googleAuth.canUseCurrentBusinessIdentity {
+                Text("You can prepare a draft now. Sending requires Google connected in Settings for your current business login.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func prepareEstimateEmail(_ estimate: Estimate) async {
+        guard !isPreparingCustomerDocument else { return }
+        let actionGeneration = documentExportGeneration
+        isPreparingCustomerDocument = true
+        defer { if actionGeneration == documentExportGeneration { isPreparingCustomerDocument = false } }
         do {
+            try QuickBooksBillingAccessPolicy.validate(context: modelContext, document: .estimate(estimate))
+            guard AppAccess.canAccessSidebarItem(.mail, email: currentUserEmail, users: users) else {
+                throw GmailComposeError.access
+            }
+            guard let customer = estimate.customer else {
+                actionMessage = "This estimate's customer is still syncing or unavailable. Reopen it after customer access recovers. Nothing was sent."
+                estimateSendIssue = actionMessage
+                return
+            }
+            let email = customer.email?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard let recipients = try? GmailAddressList.parse(email),
+                  recipients.count == 1,
+                  recipients.first.map(AppAccess.normalizedEmail) == AppAccess.normalizedEmail(email) else {
+                actionMessage = "Add a valid email address to this customer in Customers, then return to Send Estimate. Nothing was sent."
+                estimateSendIssue = actionMessage
+                return
+            }
+            let linkedCall = serviceCall(for: estimate)
+            if let linkedCall, linkedCall.customer !== customer {
+                throw GmailDraftError.businessChanged
+            }
+            // The snapshot is taken before the renderer suspends and is the one
+            // stored against the draft: what a later send validates against is
+            // the source this PDF was actually rendered from.
+            let (url, sourceSnapshot, validateExport, adoptExport) = try await exportingCustomerDocument(
+                customerID: customer.id, serviceCallID: linkedCall?.id,
+                invoiceID: nil, estimateID: estimate.id, requiresMail: true,
+                membershipIsIntact: { isCurrentRecord(estimate) && isCurrentRecord(customer) }
+            ) { authorize in
+                try await CustomerDocumentExporter.exportEstimateOffMainActor(
+                    estimate,
+                    serviceCall: linkedCall,
+                    attachments: attachments,
+                    equipmentProfiles: equipmentProfiles,
+                    serviceCalls: serviceCalls,
+                    authorize: authorize)
+            }
+            try validateExport()
+            let files = CustomerDocumentExporter.customerEmailAttachmentURLs(
+                primaryDocumentURL: url,
+                serviceCallID: linkedCall?.id,
+                estimateID: estimate.id,
+                attachments: attachments
+            )
+            guard files.contains(url) else {
+                throw GmailComposeError.attachment
+            }
+            adoptExport()
+            GunnAireAppIntentRouter.storeMailDraftRoute(
+                to: email,
+                subject: "GunnAire Estimate - \(customer.name)",
+                body: """
+Hello \(customer.name),
+
+Attached is your GunnAire estimate. Please review it and reply with any questions or to let us know you would like to move forward.
+
+Thank you,
+GunnAire
+""",
+                attachmentPaths: files.map(\.path),
+                customerID: customer.id,
+                serviceCallID: linkedCall?.id,
+                estimateID: estimate.id,
+                workflow: .customerDocument,
+                sourceSnapshot: sourceSnapshot
+            )
+            if showsDismissButton { dismiss() }
+        } catch {
+            guard actionGeneration == documentExportGeneration else { return }
+            actionMessage = "Could not prepare the estimate email: \(error.localizedDescription) Nothing was sent."
+            estimateSendIssue = actionMessage
+        }
+    }
+
+    private func invoiceDeliveryAction(_ invoice: Invoice) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                scheduleCustomerDocumentExport(document: .invoice(invoice)) { await prepareInvoiceMailDraft(invoice) }
+            } label: {
+                Label("Send Invoice", systemImage: "paperplane")
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("SendInvoice-\(invoice.id.uuidString)")
+            Text("Review the recipient, message, and attached PDF in Mail before sending.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if !googleAuth.canUseCurrentBusinessIdentity {
+                Text("You can prepare a draft now. Sending requires Google connected in Settings for your current business login.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// The invoice counterpart of `prepareEstimateEmail`. A fresh PDF is exported
+    /// from saved data on every use: `generatedCustomerDocumentURL` can belong to
+    /// another document or an earlier revision, so reusing it could attach the
+    /// wrong bill. This only opens a reviewed draft — no provider request, no
+    /// status change, and no saved document or job state.
+    private func prepareInvoiceMailDraft(_ invoice: Invoice) async {
+        guard !isPreparingCustomerDocument else { return }
+        let actionGeneration = documentExportGeneration
+        isPreparingCustomerDocument = true
+        defer { if actionGeneration == documentExportGeneration { isPreparingCustomerDocument = false } }
+        do {
+            try QuickBooksBillingAccessPolicy.validate(context: modelContext, document: .invoice(invoice))
+            guard AppAccess.canAccessSidebarItem(.mail, email: currentUserEmail, users: users) else {
+                throw GmailComposeError.access
+            }
+            // `Invoice.customer` is declared `Customer!`, so this relationship can
+            // be absent while CloudKit is still resolving it. Guard rather than
+            // implicitly unwrap, matching the estimate path.
+            guard let customer = invoice.customer else {
+                actionMessage = "This invoice's customer is still syncing or unavailable. Reopen it after customer access recovers. Nothing was sent."
+                return
+            }
+            let email = customer.email?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard let recipients = try? GmailAddressList.parse(email),
+                  recipients.count == 1,
+                  recipients.first.map(AppAccess.normalizedEmail) == AppAccess.normalizedEmail(email) else {
+                actionMessage = "Add a valid email address to this customer in Customers, then return to Send Invoice. Nothing was sent."
+                return
+            }
+            let linkedCall = serviceCall(for: invoice)
+            if let linkedCall, linkedCall.customer !== customer {
+                throw GmailDraftError.businessChanged
+            }
+            // `Payment.invoice` is an implicitly unwrapped relationship, so compare
+            // optionally rather than forcing it while CloudKit may still be resolving.
+            let invoicePayments = payments.filter { $0.invoice?.id == invoice.id }
+            // Snapshot before the renderer suspends; stored unchanged against
+            // the draft so a later send validates the source this PDF came from.
+            let (url, sourceSnapshot, validateExport, adoptExport) = try await exportingCustomerDocument(
+                customerID: customer.id, serviceCallID: linkedCall?.id,
+                invoiceID: invoice.id, estimateID: nil, requiresMail: true,
+                membershipIsIntact: { isCurrentRecord(invoice) && isCurrentRecord(customer) }
+            ) { authorize in
+                try await CustomerDocumentExporter.exportInvoiceOffMainActor(
+                    invoice,
+                    serviceCall: linkedCall,
+                    payments: invoicePayments,
+                    attachments: attachments,
+                    equipmentProfiles: equipmentProfiles,
+                    serviceCalls: serviceCalls,
+                    authorize: authorize)
+            }
+            try validateExport()
+            let files = CustomerDocumentExporter.customerEmailAttachmentURLs(
+                primaryDocumentURL: url,
+                serviceCallID: linkedCall?.id,
+                invoiceID: invoice.id,
+                attachments: attachments
+            )
+            guard files.contains(url) else {
+                throw GmailComposeError.attachment
+            }
+            adoptExport()
+            GunnAireAppIntentRouter.storeMailDraftRoute(
+                to: email,
+                subject: "GunnAire Invoice - \(customer.name)",
+                body: """
+Hello \(customer.name),
+
+Attached is your GunnAire invoice. Please review it and reply with any questions.
+
+Thank you,
+GunnAire
+""",
+                attachmentPaths: files.map(\.path),
+                customerID: customer.id,
+                serviceCallID: linkedCall?.id,
+                invoiceID: invoice.id,
+                workflow: .customerDocument,
+                sourceSnapshot: sourceSnapshot
+            )
+            if showsDismissButton { dismiss() }
+        } catch {
+            guard actionGeneration == documentExportGeneration else { return }
+            actionMessage = "Could not prepare the invoice email: \(error.localizedDescription) Nothing was sent."
+        }
+    }
+
+    private func generateEstimateDocument(_ estimate: Estimate) async {
+        guard !isPreparingCustomerDocument else { return }
+        let actionGeneration = documentExportGeneration
+        isPreparingCustomerDocument = true
+        defer { if actionGeneration == documentExportGeneration { isPreparingCustomerDocument = false } }
+        do {
+            try BillingDocumentPreparation.exportOperation?.check()
+            try QuickBooksBillingAccessPolicy.validate(context: modelContext, document: .estimate(estimate))
             let serviceCall = serviceCall(for: estimate)
             if let serviceCall {
                 saveCurrentEquipmentProfile(for: serviceCall, announce: false)
             }
-            let url = try CustomerDocumentExporter.exportEstimate(
-                estimate,
-                serviceCall: serviceCall,
-                attachments: attachments,
-                equipmentProfiles: equipmentProfiles,
-                serviceCalls: serviceCalls
-            )
+            let (url, origin, validateExport, adoptExport) = try await exportingCustomerDocument(
+                customerID: estimate.customer.id, serviceCallID: serviceCall?.id,
+                invoiceID: nil, estimateID: estimate.id,
+                membershipIsIntact: { isCurrentRecord(estimate) && isCurrentRecord(estimate.customer) }
+            ) { authorize in
+                try await CustomerDocumentExporter.exportEstimateOffMainActor(
+                    estimate,
+                    serviceCall: serviceCall,
+                    attachments: attachments,
+                    equipmentProfiles: equipmentProfiles,
+                    serviceCalls: serviceCalls,
+                    authorize: authorize)
+            }
+            try validateExport()
+            let data = try await BillingDocumentPreparation.readExported(url, validate: validateExport)
+            try validateExport()
+            adoptExport()
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = estimate.customer.id
             generatedCustomerDocumentServiceCallID = serviceCall?.id
             generatedCustomerDocumentInvoiceID = nil
             generatedCustomerDocumentEstimateID = estimate.id
             generatedCustomerDocumentKind = "estimate"
+            storeGeneratedDocumentOrigin(url, origin: origin)
             persistGeneratedBillingDocument(
                 url,
+                data: data,
                 customer: estimate.customer,
                 serviceCallID: serviceCall?.id,
                 invoiceID: nil,
@@ -8208,25 +8856,44 @@ GunnAire
                 successMessage: "Estimate PDF generated and saved to this customer."
             )
         } catch {
+            guard actionGeneration == documentExportGeneration else { return }
             actionMessage = "Could not generate estimate PDF: \(error.localizedDescription)"
         }
     }
 
-    private func generateInvoiceDocument(_ invoice: Invoice) {
+    private func generateInvoiceDocument(_ invoice: Invoice) async {
+        guard !isPreparingCustomerDocument else { return }
+        let actionGeneration = documentExportGeneration
+        isPreparingCustomerDocument = true
+        defer { if actionGeneration == documentExportGeneration { isPreparingCustomerDocument = false } }
         do {
-            let invoicePayments = payments.filter { $0.invoice.id == invoice.id }
+            try BillingDocumentPreparation.exportOperation?.check()
+            try QuickBooksBillingAccessPolicy.validate(context: modelContext, document: .invoice(invoice))
+            // `Payment.invoice` is implicitly unwrapped, so compare optionally
+            // rather than forcing it while CloudKit may still be resolving.
+            let invoicePayments = payments.filter { $0.invoice?.id == invoice.id }
             let serviceCall = serviceCall(for: invoice)
             if let serviceCall {
                 saveCurrentEquipmentProfile(for: serviceCall, announce: false)
             }
-            let url = try CustomerDocumentExporter.exportInvoice(
-                invoice,
-                serviceCall: serviceCall,
-                payments: invoicePayments,
-                attachments: attachments,
-                equipmentProfiles: equipmentProfiles,
-                serviceCalls: serviceCalls
-            )
+            let (url, origin, validateExport, adoptExport) = try await exportingCustomerDocument(
+                customerID: invoice.customer.id, serviceCallID: serviceCall?.id,
+                invoiceID: invoice.id, estimateID: linkedEstimate(for: serviceCall)?.id,
+                membershipIsIntact: { isCurrentRecord(invoice) && isCurrentRecord(invoice.customer) }
+            ) { authorize in
+                try await CustomerDocumentExporter.exportInvoiceOffMainActor(
+                    invoice,
+                    serviceCall: serviceCall,
+                    payments: invoicePayments,
+                    attachments: attachments,
+                    equipmentProfiles: equipmentProfiles,
+                    serviceCalls: serviceCalls,
+                    authorize: authorize)
+            }
+            try validateExport()
+            let data = try await BillingDocumentPreparation.readExported(url, validate: validateExport)
+            try validateExport()
+            adoptExport()
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = invoice.customer.id
             generatedCustomerDocumentServiceCallID = serviceCall?.id
@@ -8234,8 +8901,10 @@ GunnAire
             generatedCustomerDocumentEstimateID = linkedEstimate(for: serviceCall)?.id
             let documentLabel = CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments).lowercased()
             generatedCustomerDocumentKind = documentLabel
+            storeGeneratedDocumentOrigin(url, origin: origin)
             persistGeneratedBillingDocument(
                 url,
+                data: data,
                 customer: invoice.customer,
                 serviceCallID: serviceCall?.id,
                 invoiceID: invoice.id,
@@ -8245,6 +8914,7 @@ GunnAire
                 successMessage: "\(CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments)) PDF generated and saved to this customer."
             )
         } catch {
+            guard actionGeneration == documentExportGeneration else { return }
             actionMessage = "Could not generate invoice PDF: \(error.localizedDescription)"
         }
     }
@@ -8252,6 +8922,7 @@ GunnAire
     @discardableResult
     private func persistGeneratedBillingDocument(
         _ url: URL,
+        data: Data,
         customer: Customer,
         serviceCallID: UUID?,
         invoiceID: UUID?,
@@ -8261,7 +8932,6 @@ GunnAire
         successMessage: String
     ) -> ServiceDocumentAttachment? {
         do {
-            let data = try Data(contentsOf: url)
             let attachment: ServiceDocumentAttachment
             if let reusable = ServiceDocumentAttachment.reusableGeneratedBillingDocument(
                 in: attachments,
@@ -8303,7 +8973,7 @@ GunnAire
                 modelContext.insert(generated)
                 attachment = generated
             }
-            try? modelContext.save()
+            try modelContext.save()
             syncAttachmentIfPossible(attachment, data: data)
             actionMessage = successMessage
             return attachment
@@ -8314,6 +8984,8 @@ GunnAire
     }
 
     private func sendEstimateThroughQuickBooks(_ estimate: Estimate) {
+        guard !isPreparingCustomerDocument, !isCreatingDocument else { return }
+        guard isCurrentRecord(estimate), isCurrentRecord(estimate.customer) else { return }
         guard QuickBooksDataAPI.shared.isAuthenticated else {
             actionMessage = "Connect QuickBooks before sending the estimate."
             return
@@ -8323,35 +8995,67 @@ GunnAire
             actionMessage = "Create or sync this estimate to QuickBooks before sending it."
             return
         }
-        guard prepareEstimateDocumentationForQuickBooksSend(estimate) else {
-            return
-        }
-        let trimmedEmail = estimate.customer.email?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let email = trimmedEmail.flatMap { $0.isEmpty ? nil : $0 }
-        actionMessage = "Prepared estimate PDF and attachments. Sending estimate through QuickBooks..."
-        QuickBooksDataAPI.shared.sendEstimate(id: quickBooksID, to: email) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success:
-                    if estimate.status.caseInsensitiveCompare("accepted") != .orderedSame &&
-                        estimate.status.caseInsensitiveCompare("rejected") != .orderedSame {
-                        estimate.status = "sent"
+        let key = "document-preparation"
+        guard billingSyncLifecycles[key] == nil else { return }
+        let owner = QuickBooksSyncLifecycle()
+        billingSyncLifecycles[key] = owner
+        do {
+            let workflow = try QuickBooksCustomerEmailWorkflow(context: modelContext,
+                document: .estimate(estimate), recipient: estimate.customer?.email)
+            try workflow.checkEligibilityAndRecordSuppression()
+            let business = GmailBusinessContext(customerID: estimate.customer.id, serviceCallID: estimate.serviceCallID,
+                invoiceID: nil, estimateID: estimate.id, workflow: .customerDocument)
+            let source = try GmailDraftBusinessSnapshot.capture(business, context: modelContext)
+            let preparation = try BillingDocumentPreparation.capture(
+                isCurrent: { billingSyncLifecycles[key] === owner },
+                validate: workflow.checkEligibilityAndRecordSuppression)
+            isPreparingCustomerDocument = true
+            Task { @MainActor in
+                defer {
+                    if billingSyncLifecycles[key] === owner {
+                        billingSyncLifecycles.removeValue(forKey: key)
+                        isPreparingCustomerDocument = false
                     }
-                    try? modelContext.save()
-                    if let email {
-                        actionMessage = "Estimate sent through QuickBooks to \(email)."
-                    } else {
-                        actionMessage = "Estimate sent through QuickBooks."
+                }
+                var providerResult: Result<Void, Error>?
+                var validatePreparedDocuments: (() throws -> Void)?
+                do {
+                    let result: Result<Void, Error> = try await preparation.perform {
+                        try GmailDraftBusinessSnapshot.validate(source, business: business, context: modelContext)
+                        let validateDocuments = try await prepareEstimateDocumentationForQuickBooksSend(estimate, preparation: preparation)
+                        validatePreparedDocuments = validateDocuments
+                        try preparation.check()
+                        try validateDocuments()
+                        try workflow.prepare()
+                        actionMessage = "Checking the estimate email status in QuickBooks…"
+                        let result: Result<Void, Error> = await withCheckedContinuation { continuation in
+                            QuickBooksDataAPI.shared.sendEstimate(id: quickBooksID, to: workflow.recipient,
+                                expectedCustomerID: workflow.quickBooksCustomerID,
+                                validateSend: { try preparation.check(); try validateDocuments(); try workflow.validateSend() }) {
+                                continuation.resume(returning: $0.map { _ in () })
+                            }
+                        }
+                        providerResult = result
+                        return result
                     }
-                case .failure(let error):
-                    actionMessage = "QuickBooks estimate send failed: \(error.localizedDescription)"
+                    try preparation.check()
+                    try validatePreparedDocuments?()
+                    actionMessage = workflow.finish(result)
+                } catch {
+                    guard billingSyncLifecycles[key] === owner else { return }
+                    actionMessage = providerResult == nil ? error.localizedDescription
+                        : "QuickBooks returned an email result, but the original access or document changed. Review the original estimate's QuickBooks email status before retrying."
                 }
             }
+        } catch {
+            billingSyncLifecycles.removeValue(forKey: key)
+            actionMessage = error.localizedDescription
         }
     }
 
     private func sendInvoiceThroughQuickBooks(_ invoice: Invoice) {
+        guard !isPreparingCustomerDocument, !isCreatingDocument else { return }
+        guard isCurrentRecord(invoice), isCurrentRecord(invoice.customer) else { return }
         guard QuickBooksDataAPI.shared.isAuthenticated else {
             actionMessage = "Connect QuickBooks before sending the invoice."
             return
@@ -8361,31 +9065,61 @@ GunnAire
             actionMessage = "Create or sync this invoice to QuickBooks before sending it."
             return
         }
-        guard prepareInvoiceDocumentationForQuickBooksSend(invoice) else {
-            return
-        }
-        let trimmedEmail = invoice.customer.email?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let email = trimmedEmail.flatMap { $0.isEmpty ? nil : $0 }
-        actionMessage = "Prepared service report and invoice attachments. Sending invoice through QuickBooks..."
-        QuickBooksDataAPI.shared.sendInvoice(id: quickBooksID, to: email) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success:
-                    if !isInvoicePaid(invoice) &&
-                        invoice.status.caseInsensitiveCompare("partial") != .orderedSame {
-                        invoice.status = "sent"
+        let key = "document-preparation"
+        guard billingSyncLifecycles[key] == nil else { return }
+        let owner = QuickBooksSyncLifecycle()
+        billingSyncLifecycles[key] = owner
+        do {
+            let workflow = try QuickBooksCustomerEmailWorkflow(context: modelContext,
+                document: .invoice(invoice), recipient: invoice.customer?.email)
+            try workflow.checkEligibilityAndRecordSuppression()
+            let business = GmailBusinessContext(customerID: invoice.customer.id, serviceCallID: invoice.serviceCallID,
+                invoiceID: invoice.id, estimateID: nil, workflow: .customerDocument)
+            let source = try GmailDraftBusinessSnapshot.capture(business, context: modelContext)
+            let preparation = try BillingDocumentPreparation.capture(
+                isCurrent: { billingSyncLifecycles[key] === owner },
+                validate: workflow.checkEligibilityAndRecordSuppression)
+            isPreparingCustomerDocument = true
+            Task { @MainActor in
+                defer {
+                    if billingSyncLifecycles[key] === owner {
+                        billingSyncLifecycles.removeValue(forKey: key)
+                        isPreparingCustomerDocument = false
                     }
-                    try? modelContext.save()
-                    if let email {
-                        actionMessage = "Invoice sent through QuickBooks to \(email)."
-                    } else {
-                        actionMessage = "Invoice sent through QuickBooks."
+                }
+                var providerResult: Result<Void, Error>?
+                var validatePreparedDocuments: (() throws -> Void)?
+                do {
+                    let result: Result<Void, Error> = try await preparation.perform {
+                        try GmailDraftBusinessSnapshot.validate(source, business: business, context: modelContext)
+                        let validateDocuments = try await prepareInvoiceDocumentationForQuickBooksSend(invoice, preparation: preparation)
+                        validatePreparedDocuments = validateDocuments
+                        try preparation.check()
+                        try validateDocuments()
+                        try workflow.prepare()
+                        actionMessage = "Checking the invoice email status in QuickBooks…"
+                        let result: Result<Void, Error> = await withCheckedContinuation { continuation in
+                            QuickBooksDataAPI.shared.sendInvoice(id: quickBooksID, to: workflow.recipient,
+                                expectedCustomerID: workflow.quickBooksCustomerID,
+                                validateSend: { try preparation.check(); try validateDocuments(); try workflow.validateSend() }) {
+                                continuation.resume(returning: $0.map { _ in () })
+                            }
+                        }
+                        providerResult = result
+                        return result
                     }
-                case .failure(let error):
-                    actionMessage = "QuickBooks invoice send failed: \(error.localizedDescription)"
+                    try preparation.check()
+                    try validatePreparedDocuments?()
+                    actionMessage = workflow.finish(result)
+                } catch {
+                    guard billingSyncLifecycles[key] === owner else { return }
+                    actionMessage = providerResult == nil ? error.localizedDescription
+                        : "QuickBooks returned an email result, but the original access or document changed. Review the original invoice's QuickBooks email status before retrying."
                 }
             }
+        } catch {
+            billingSyncLifecycles.removeValue(forKey: key)
+            actionMessage = error.localizedDescription
         }
     }
 
@@ -9045,7 +9779,7 @@ GunnAire
     }
 
     private func createDocument() {
-        guard !isCreatingDocument, !selectedLineItems.isEmpty else { return }
+        guard !isCreatingDocument, !isPreparingCustomerDocument, !selectedLineItems.isEmpty else { return }
         guard loadedCatalogIssue == nil else { actionMessage = loadedCatalogIssue ?? ""; return }
         do {
             for root in selectedBundleSnapshots.values { try CatalogBundlePolicy.validate(root) }
@@ -9208,9 +9942,7 @@ GunnAire
                 activeServiceCall?.linkedInvoiceID = invoice.id
                 activeServiceCall?.markDocumentationCompleteIfReady()
                 activeServiceCall?.status = .invoiced
-                let reportErrorMessage = prepareLinkedOnsiteReportForInvoiceCreation(invoice, serviceCall: activeServiceCall)
-                let creationMessage = activeServiceCall == nil ? "Invoice saved locally." : "Invoice created locally with onsite report."
-                actionMessage = reportErrorMessage ?? (canAttemptSharedBilling ? "\(creationMessage) Syncing to QuickBooks..." : creationMessage)
+                actionMessage = "Invoice saved locally."
             }
             if startsNewDocument { completedNewDocument = .invoice(invoice) }
             guard saveBillingContext(failureMessage: isUpdatingExistingInvoice ? "Could not update invoice locally" : "Could not save invoice locally") else {
@@ -9219,7 +9951,11 @@ GunnAire
             }
             let shouldReturnToInvoiceOverview = isUpdatingExistingInvoice && selectedInvoiceForEditingID == invoice.id
             if startsNewDocument { newDocumentSaveConfirmed = true }
-            syncInvoiceIfNeeded(invoice, customer: customer, items: selectedLineItems)
+            let invoiceItems = selectedLineItems
+            let invoiceServiceCall = activeServiceCall
+            if isUpdatingExistingInvoice {
+                syncInvoiceIfNeeded(invoice, customer: customer, items: invoiceItems)
+            }
             if shouldReturnToInvoiceOverview {
                 finishInvoiceWorkspaceEditing()
             } else if !isUpdatingExistingInvoice {
@@ -9228,6 +9964,10 @@ GunnAire
                 selectedInvoicePaymentTerms = configuredDefaultInvoicePaymentTerms
                 invoiceCustomDueDate = configuredDefaultInvoicePaymentTerms.dueDate(from: Date())
                     ?? Calendar.current.startOfDay(for: Date())
+            }
+            if !isUpdatingExistingInvoice {
+                beginInvoiceReportPreparation(invoice, serviceCall: invoiceServiceCall, items: invoiceItems)
+                return
             }
         }
         isCreatingDocument = false
@@ -9383,7 +10123,7 @@ GunnAire
     }
 
     @discardableResult
-    private func convertEstimate(_ estimate: Estimate) -> (invoice: Invoice, reportErrorMessage: String?) {
+    private func convertEstimate(_ estimate: Estimate) -> (invoice: Invoice, serviceCall: ServiceCall?) {
         let createdAt = Date()
         let dueDate = configuredDefaultInvoicePaymentTerms.dueDate(from: createdAt)
             ?? Calendar.current.startOfDay(for: createdAt)
@@ -9401,8 +10141,7 @@ GunnAire
             ServiceCallActivity.record(for: call, action: "Invoice created", detail: "Estimate converted to invoice and job marked invoiced.", actorEmail: currentUserEmail, in: modelContext)
         }
         invoice.workType = InvoiceWorkType.inferred(from: linkedServiceCall)
-        let reportErrorMessage = prepareLinkedOnsiteReportForInvoiceCreation(invoice, serviceCall: linkedServiceCall)
-        return (invoice, reportErrorMessage)
+        return (invoice, linkedServiceCall)
     }
 
     @ViewBuilder

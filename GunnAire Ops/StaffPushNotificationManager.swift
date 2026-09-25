@@ -58,7 +58,7 @@ enum StaffPushNotificationState: Equatable {
     }
 }
 
-struct StaffPushNotificationPreference: Codable, Equatable {
+nonisolated struct StaffPushNotificationPreference: Codable, Equatable, Sendable {
     var installationID: UUID
     var ownerEmail: String?
     var isOptedIn: Bool
@@ -66,6 +66,13 @@ struct StaffPushNotificationPreference: Codable, Equatable {
     /// When the server last confirmed this installation's registration.
     /// Absent in preferences saved before it existed.
     var lastRegisteredAt: Date? = nil
+
+    func disablingDeliveryForSignOut() -> Self {
+        var saved = self
+        saved.isOptedIn = false
+        saved.pendingServerDeactivation = saved.ownerEmail != nil
+        return saved
+    }
 
     static func newInstallation() -> Self {
         Self(
@@ -103,16 +110,42 @@ final class StaffPushNotificationManager: NSObject, ObservableObject {
     private let notificationCenter = UNUserNotificationCenter.current()
     private let keychainAccount = "GunnAireStaffPushPreferenceV1"
     private var preference: StaffPushNotificationPreference
+    private var preferenceRestoreTask: Task<StaffPushNotificationPreference?, Never>?
+    private var hasRestoredPreference = false
+    private var signOutRequestedBeforeRestore = false
     private var registrationAttemptID = UUID()
 
     private override init() {
-        preference = (
-            try? KeychainStore.loadCodable(
-                StaffPushNotificationPreference.self,
-                account: keychainAccount
-            )
-        ) ?? .newInstallation()
+        preference = .newInstallation()
         super.init()
+    }
+
+    /// Resolve the saved installation identity before any staff workspace or
+    /// push registration uses it. Secure storage can stall, so read it away
+    /// from the UI actor and share one in-flight restore with launch callers.
+    func restoreStoredPreference() async {
+        guard !hasRestoredPreference else { return }
+        let task: Task<StaffPushNotificationPreference?, Never>
+        if let preferenceRestoreTask {
+            task = preferenceRestoreTask
+        } else {
+            let account = keychainAccount
+            task = Task.detached(priority: .userInitiated) {
+                try? KeychainStore.loadCodable(StaffPushNotificationPreference.self, account: account)
+            }
+            preferenceRestoreTask = task
+        }
+        let saved = await task.value
+        guard !hasRestoredPreference else { return }
+        if let saved { preference = saved }
+        hasRestoredPreference = true
+        preferenceRestoreTask = nil
+        if signOutRequestedBeforeRestore {
+            signOutRequestedBeforeRestore = false
+            preference = preference.disablingDeliveryForSignOut()
+            savePreference()
+            state = .off
+        }
     }
 
     var statusTitle: String { state.title }
@@ -125,11 +158,16 @@ final class StaffPushNotificationManager: NSObject, ObservableObject {
     var isEnabledForDisplay: Bool { state == .ready || preference.isOptedIn }
     /// Stable installation UUID for device fingerprints — read-only, no side effects.
     var installationID: UUID { preference.installationID }
+    /// A temporary installation must never become durable staff-workspace identity.
+    var restoredInstallationID: UUID? { hasRestoredPreference ? preference.installationID : nil }
 
     func configureAtLaunch() {
         notificationCenter.delegate = self
         if applyUITestStateIfRequested() { return }
-        Task { await refreshAndRegisterIfNeeded() }
+        Task {
+            await restoreStoredPreference()
+            await refreshAndRegisterIfNeeded()
+        }
     }
 
     /// Registration is repeated at launch and, on activation, at most this
@@ -137,20 +175,25 @@ final class StaffPushNotificationManager: NSObject, ObservableObject {
     static let activationRegistrationInterval: TimeInterval = 12 * 60 * 60
 
     func applicationDidBecomeActive() {
-        guard !applyUITestStateIfRequested() else { return }
-        if state == .ready, let last = preference.lastRegisteredAt,
-           Date().timeIntervalSince(last) < Self.activationRegistrationInterval {
-            return
+        Task {
+            await restoreStoredPreference()
+            guard !applyUITestStateIfRequested() else { return }
+            if state == .ready, let last = preference.lastRegisteredAt,
+               Date().timeIntervalSince(last) < Self.activationRegistrationInterval {
+                return
+            }
+            await refreshAndRegisterIfNeeded()
         }
-        Task { await refreshAndRegisterIfNeeded() }
     }
 
     func activateForCurrentSessionIfNeeded() async {
+        await restoreStoredPreference()
         guard !applyUITestStateIfRequested() else { return }
         await refreshAndRegisterIfNeeded()
     }
 
     func enableForCurrentAccount() async {
+        await restoreStoredPreference()
         guard !applyUITestStateIfRequested() else { return }
         guard let email = currentEmail, AppIdentity.hasAuthenticatedProvider else {
             state = .attention("Sign in with an approved Apple or Google business account before enabling staff alerts.")
@@ -177,6 +220,7 @@ final class StaffPushNotificationManager: NSObject, ObservableObject {
     }
 
     func retry() async {
+        await restoreStoredPreference()
         guard !applyUITestStateIfRequested() else { return }
         if preference.pendingServerDeactivation {
             await disableForCurrentAccount()
@@ -188,6 +232,7 @@ final class StaffPushNotificationManager: NSObject, ObservableObject {
     }
 
     func disableForCurrentAccount() async {
+        await restoreStoredPreference()
         guard !applyUITestStateIfRequested() else { return }
         let owner = preference.ownerEmail
         UIApplication.shared.unregisterForRemoteNotifications()
@@ -224,11 +269,18 @@ final class StaffPushNotificationManager: NSObject, ObservableObject {
         guard !applyUITestStateIfRequested() else { return }
         UIApplication.shared.unregisterForRemoteNotifications()
         registrationAttemptID = UUID()
+        guard hasRestoredPreference else {
+            // Do not overwrite the saved installation with the temporary launch
+            // UUID. Apply the sign-out intent when secure storage returns.
+            signOutRequestedBeforeRestore = true
+            state = .off
+            Task { await restoreStoredPreference() }
+            return
+        }
         let installationID = preference.installationID
         let owner = preference.ownerEmail
         let sessionToken = currentApplicationSessionToken
-        preference.isOptedIn = false
-        preference.pendingServerDeactivation = owner != nil
+        preference = preference.disablingDeliveryForSignOut()
         savePreference()
         state = .off
         guard let owner, let sessionToken, !sessionToken.isEmpty else { return }
@@ -467,6 +519,7 @@ final class GunnAireApplicationDelegate: NSObject, UIApplicationDelegate {
 
     func applicationDidBecomeActive(_ application: UIApplication) {
         StaffPushNotificationManager.shared.applicationDidBecomeActive()
+        Task { await CompanyWorkspaceAccessController.shared.revalidateSessionStorageOnForeground() }
     }
 
     func application(
