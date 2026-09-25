@@ -77,7 +77,7 @@ public enum EquipmentSelector {
         // grants a heat pump 125% of the cooling load in a heating-dominant climate,
         // against 115% elsewhere, so that the compressor can reach further into the
         // heating season without oversizing cooling outright.
-        let heatingDominant = load.heatingBtuh > load.coolingTotalBtuh
+        let heatingDominant = load.designConditions.isHeatingDominantClimate
         let coolingMaximum = limits.coolingMaximum(for: equipment.type, heatingDominant: heatingDominant)
         let totalRatio = equipment.totalCoolingCapacityBtuh / load.coolingTotalBtuh
         let lowerPercent = limits.coolingMinimumFraction * 100
@@ -229,12 +229,23 @@ public enum EquipmentSelector {
                                        equipment.heatingCapacityBtuh, ratio * 100, load.heatingBtuh,
                                        shortfall, stripKW),
                         reference: "Manual S §4-8 — supplemental heat from the balance point"))
+                } else if ratio > 1.5 {
+                    // No Manual S rule is broken here — heat pump heating carries no cap —
+                    // but 150% of the heating load means the machine was chosen for
+                    // something other than this building, and the cooling check is where
+                    // that shows up as a failure.
+                    checks.append(SelectionCheck(
+                        name: "Heating capacity",
+                        status: .caution,
+                        detail: String(format: "%.0f Btu/h is %.0f%% of the %.0f Btu/h heating load. Manual S sets no heating cap for a heat pump, so this is not a violation on its own — but a machine this far above the heating load is almost always oversized on cooling. Read the total cooling capacity check.",
+                                       equipment.heatingCapacityBtuh, ratio * 100, load.heatingBtuh),
+                        reference: "Manual S §4-8 — heating governed by the cooling selection"))
                 } else {
                     checks.append(SelectionCheck(
                         name: "Heating capacity",
                         status: .pass,
-                        detail: String(format: "%.0f Btu/h meets the full %.0f Btu/h heating load at design; no supplemental heat is required.",
-                                       equipment.heatingCapacityBtuh, load.heatingBtuh),
+                        detail: String(format: "%.0f Btu/h meets the full %.0f Btu/h heating load at design (%.0f%%); no supplemental heat is required.",
+                                       equipment.heatingCapacityBtuh, load.heatingBtuh, ratio * 100),
                         reference: "Manual S §4-8"))
                 }
 

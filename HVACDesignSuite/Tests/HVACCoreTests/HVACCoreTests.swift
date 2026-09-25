@@ -354,6 +354,42 @@ final class EquipmentSelectionTests: XCTestCase {
                         .checks.first { $0.name == "Heating capacity" }?.status, .fail)
     }
 
+    /// Climate dominance is a property of the climate, not of one building's load ratio.
+    /// The Triad has 52 °F of heating ΔT against 17 °F of cooling ΔT, so a heat pump gets
+    /// the 125% cooling allowance even in a house whose cooling load exceeds its heating
+    /// load — which a well-insulated, glassy house in the Piedmont routinely does.
+    func testHeatPumpAllowanceFollowsClimateNotBuildingLoads() throws {
+        XCTAssertTrue(DesignConditions.piedmontTriad.isHeatingDominantClimate)
+
+        // A cooling-heavy building in that heating-dominant climate.
+        let zone = ZoneLoad(id: UUID(), zoneID: UUID(), zoneName: "Z",
+                            coolingSensibleBtuh: 18_000, coolingLatentBtuh: 6_000,
+                            heatingBtuh: 9_000, coolingComponents: [], heatingComponents: [],
+                            warnings: [])
+        let coolingHeavy = ProjectLoad(zoneLoads: [zone],
+                                       designConditions: .piedmontTriad,
+                                       procedure: .residentialManualJ)
+        // 120% of the 24,000 load: over the 115% ceiling, inside the 125% one.
+        let equipment = EquipmentSpec(type: .heatPump, totalCoolingCapacityBtuh: 28_800,
+                                      sensibleCoolingCapacityBtuh: 19_000,
+                                      heatingCapacityBtuh: 9_000, maximumAirflowCFM: 1_200,
+                                      blowerExternalStaticPressure: 0.8)
+        let result = try EquipmentSelector.evaluate(load: coolingHeavy, equipment: equipment,
+                                                    limits: .standard, supplyAirDeltaTF: 20,
+                                                    altitudeFeet: 902)
+        let check = try XCTUnwrap(result.checks.first { $0.name == "Total cooling capacity" })
+        XCTAssertEqual(check.status, .pass, check.detail)
+        XCTAssertTrue(check.detail.contains("heating-dominant"), check.detail)
+
+        // The same machine as a plain air conditioner gets only 115% and fails.
+        var airConditioner = equipment
+        airConditioner.type = .airConditioner
+        let acResult = try EquipmentSelector.evaluate(load: coolingHeavy, equipment: airConditioner,
+                                                      limits: .standard, supplyAirDeltaTF: 20,
+                                                      altitudeFeet: 902)
+        XCTAssertEqual(acResult.checks.first { $0.name == "Total cooling capacity" }?.status, .fail)
+    }
+
     func testRequiredAirflowFollowsTheSensibleLoad() throws {
         let load = load(sensible: 21_600, latent: 6_000, heating: 30_000)
         let equipment = EquipmentSpec(type: .heatPump, totalCoolingCapacityBtuh: 29_000,

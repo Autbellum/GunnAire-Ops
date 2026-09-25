@@ -18,7 +18,7 @@ public struct ContentView: View {
     public var body: some View {
         NavigationSplitView {
             DesignConditionsSidebar(engine: engine)
-                .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 380)
+                .navigationSplitViewColumnWidth(min: 340, ideal: 380, max: 460)
         } content: {
             SpaceConfigurationPanel(engine: engine, selection: $centreSelection)
                 .navigationSplitViewColumnWidth(min: 420, ideal: 620)
@@ -138,14 +138,15 @@ struct LabeledNumberField: View {
     var body: some View {
         LabeledContent(label) {
             HStack(spacing: 6) {
-                TextField(label, value: $value, format: .number.precision(.fractionLength(0...2)))
+                TextField("", value: $value, format: .number.precision(.fractionLength(0...2)))
                     .textFieldStyle(.roundedBorder)
                     .multilineTextAlignment(.trailing)
-                    .frame(maxWidth: 90)
+                    .labelsHidden()
+                    .frame(width: 84)
                 Text(unit)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .frame(width: 26, alignment: .leading)
+                    .frame(width: 30, alignment: .leading)
             }
         }
     }

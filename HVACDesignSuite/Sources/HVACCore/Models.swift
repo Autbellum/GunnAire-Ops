@@ -71,6 +71,16 @@ public struct DesignConditions: Codable, Sendable, Equatable {
     /// Cooling design temperature difference, °F. ΔT = outdoor summer design − indoor target.
     public var coolingDeltaT: Double { summerOutdoorDryBulbF - indoorSummerDryBulbF }
 
+    /// Whether heating or cooling dominates this *climate*.
+    ///
+    /// Manual S grants a heat pump 125% of the cooling load in a heating-dominant climate
+    /// rather than 115%. That allowance is a property of the climate, not of the building
+    /// standing in it: a glassy, well-insulated house can carry a larger cooling load than
+    /// heating load in the Piedmont and still sit in a heating-dominant climate.
+    /// Comparing the two design temperature differences is the climate test — in the
+    /// Triad, 52 °F of heating ΔT against 17 °F of cooling ΔT is not a close call.
+    public var isHeatingDominantClimate: Bool { heatingDeltaT > coolingDeltaT }
+
     /// Manual J daily-range classification, which drives its temperature-swing corrections.
     public var dailyRangeClass: String {
         switch summerDailyRangeF {

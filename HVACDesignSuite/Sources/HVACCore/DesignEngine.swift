@@ -201,11 +201,11 @@ public extension Project {
         let equipment = EquipmentSpec(
             manufacturer: "—", modelNumber: "Entered from expanded performance data",
             type: .heatPump,
-            totalCoolingCapacityBtuh: 24_000,
-            sensibleCoolingCapacityBtuh: 18_000,
-            heatingCapacityBtuh: 22_000,
-            maximumAirflowCFM: 800,
-            blowerExternalStaticPressure: 0.50)
+            totalCoolingCapacityBtuh: 11_200,
+            sensibleCoolingCapacityBtuh: 8_400,
+            heatingCapacityBtuh: 10_500,
+            maximumAirflowCFM: 500,
+            blowerExternalStaticPressure: 0.60)
 
         let supplyTrunk = DuctRun(
             name: "Supply Trunk", role: .supplyTrunk, physicalLengthFeet: 30,
