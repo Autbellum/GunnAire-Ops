@@ -8535,7 +8535,11 @@ final class GunnAire_OpsUITests: XCTestCase {
         func requireKeyboardDismissed() {
             let dismissed = XCTNSPredicateExpectation(
                 predicate: NSPredicate(format: "exists == false"), object: app.keyboards.firstMatch)
-            let result = XCTWaiter.wait(for: [dismissed], timeout: 5)
+            // Keyboard teardown is the transition this suite has repeatedly
+            // measured running past a short bound on a loaded runner. Match the
+            // ten seconds waitForHittable already uses for the same reason; the
+            // wait still returns the moment the keyboard is gone.
+            let result = XCTWaiter.wait(for: [dismissed], timeout: 10)
             if result != .completed { retainNavigationFailure(app, name: "Catalog keyboard did not dismiss") }
             XCTAssertEqual(result, .completed, "Catalog controls must release the keyboard without losing the draft.")
         }
