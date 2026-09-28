@@ -216,3 +216,12 @@ at the start of every turn; append to it rather than rewriting it.
   (`CustomerSearch`, pinned by `CustomerSearchTests`). Same cap/visibility fix in
   `AddServiceCallView`; both sheets' customer `@Query` now sorted by name. Built and tested
   only by CI: the cloud container has no Xcode.
+- 2026-09-28 Claude (cloud, PR #28): iPad shards cancelled at the 90-minute limit on both the
+  first run and the one re-run, with no failed assertion except one 4-second hittability wait
+  at `SaveBundleMember`. Time went to 60 s "App animations complete notification not received"
+  waits in the catalog/inventory editor (`testAdministratorCreatesInventoryOfflineAndReopensExactSetup`
+  2036 s / 29 waits, `testCatalogEditingControlsStayInsideTheSheetAcrossRotation` 2092 s / 33).
+  Same on main at ef3299d (run 35533317609, iPad 2 cancelled in the largest-text catalog step).
+  Ported from PR #27's branch without its AGENTS.md: dc24005 (iPad job 90 -> 120 min),
+  1efcbe8 (default hittability wait after keyboard dismissal), c9ba60b (keyboard dismissal 5 -> 10 s).
+  The animation-idle cause itself is still undiagnosed; those commits only make room for it.
