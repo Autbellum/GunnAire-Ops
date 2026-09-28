@@ -207,3 +207,12 @@ at the start of every turn; append to it rather than rewriting it.
   and the rotation test passed twice at normal size on 0ebcd56. Full unit suite running on
   3120503 as the pre-merge bar: 2576 passed, 7 failed, all seven in the known-flaky
   `FieldCollectionNavigationTests` and none outside it. CI is running on the same commit.
+- 2026-09-28 Claude (cloud session; branch `claude/gunnaire-customer-search-populate-0dvowv`):
+  schedule Edit/Assign Customer could not find customers. Cause in `CustomerSelectionSection`:
+  a calendar-imported job opens with the calendar placeholder bound to `customer`, results
+  were drawn only while `customer == nil` (so typing showed nothing), and results were capped
+  at `prefix(8)`. Placeholder now counts as no selection, results show while the search text
+  differs from the selected name, every match is listed, and search is term-based
+  (`CustomerSearch`, pinned by `CustomerSearchTests`). Same cap/visibility fix in
+  `AddServiceCallView`; both sheets' customer `@Query` now sorted by name. Built and tested
+  only by CI: the cloud container has no Xcode.

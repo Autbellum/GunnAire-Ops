@@ -4187,7 +4187,7 @@ enum ServiceCalendarRouting {
 struct AddServiceCallView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
-    @Query private var customers: [Customer]
+    @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
     @Query private var technicians: [Technician]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query private var existingServiceCalls: [ServiceCall]
@@ -4259,14 +4259,15 @@ struct AddServiceCallView: View {
 
     private var filteredCustomers: [Customer] {
         let visibleCustomers = customers.filter { !CustomerDataMaintenance.isSystemCalendarCustomer($0) }
-        let query = customerSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return visibleCustomers }
-        return visibleCustomers.filter { customer in
-            customer.name.lowercased().contains(query) ||
-            (customer.email?.lowercased().contains(query) ?? false) ||
-            (customer.phone?.lowercased().contains(query) ?? false) ||
-            (customer.address?.lowercased().contains(query) ?? false)
-        }
+        return CustomerSearch.matches(in: visibleCustomers, query: customerSearchText)
+    }
+
+    /// Results stay visible while the user types something other than the
+    /// selected customer's name, so a wrong pick can be replaced without Clear.
+    private var showsCustomerResults: Bool {
+        guard let customer else { return true }
+        let query = customerSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !query.isEmpty && query.caseInsensitiveCompare(customer.name) != .orderedSame
     }
 
     private var canSaveNewCustomer: Bool {
@@ -4425,13 +4426,17 @@ struct AddServiceCallView: View {
                         }
                     }
 
-                    if customer == nil {
-                        if filteredCustomers.isEmpty {
+                    if showsCustomerResults {
+                        let matches = filteredCustomers
+                        if matches.isEmpty {
                             Text("No matching customers found.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         } else {
-                            ForEach(filteredCustomers.prefix(8)) { matchedCustomer in
+                            Text(matches.count == 1 ? "1 customer" : "\(matches.count) customers")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            ForEach(matches) { matchedCustomer in
                                 Button {
                                     customer = matchedCustomer
                                     customerSearchText = matchedCustomer.name
@@ -4977,7 +4982,7 @@ struct AddServiceCallView: View {
 struct EditServiceCallView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
-    @Query private var customers: [Customer]
+    @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
     @Query private var technicians: [Technician]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query private var existingServiceCalls: [ServiceCall]
