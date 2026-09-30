@@ -533,6 +533,15 @@ struct ContentView: View {
             }
         }
         .task {
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(5 * 60)) }
+                catch { return }
+                AutomaticOutboundSync.shared.recoverPending(context: modelContext, force: true)
+                AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
+                AutomaticGoogleDriveArchive.shared.recover(context: modelContext)
+            }
+        }
+        .task {
             // Restore credentials and maintain the store without blocking the
             // first interactive screen while secure storage or SQLite responds.
             NetworkConnectivityMonitor.shared.start()
@@ -541,6 +550,9 @@ struct ContentView: View {
             await GoogleAuthManager.shared.restoreStoredSession()
             isGoogleAuthenticated = GoogleAuthManager.shared.isAuthenticated
             refreshGoogleAccountIdentityIfNeeded()
+            AutomaticOutboundSync.shared.recoverPending(context: modelContext, force: true)
+            AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
+            AutomaticGoogleDriveArchive.shared.recover(context: modelContext)
             await runStartupDataMaintenance()
             retryPendingSharedCompanyDocumentUploadsIfNeeded()
             retryPendingCustomerCommunicationUploadsIfNeeded()
@@ -618,7 +630,10 @@ struct ContentView: View {
             Task { @MainActor in
                 await QuickBooksAuthAPI.shared.reloadStoredSession()
                 isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+                AutomaticOutboundSync.shared.recoverPending(context: modelContext)
             }
+            AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
+            AutomaticGoogleDriveArchive.shared.recover(context: modelContext)
             retryPendingSharedCompanyDocumentUploadsIfNeeded()
             retryPendingCustomerCommunicationUploadsIfNeeded()
             applyPendingAppRouteIfNeeded()
@@ -633,7 +648,18 @@ struct ContentView: View {
             Task { @MainActor in
                 await QuickBooksAuthAPI.shared.reloadStoredSession()
                 isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+                AutomaticOutboundSync.shared.recoverPending(context: modelContext, force: true)
             }
+        }
+        .onChange(of: isGoogleAuthenticated) { _, authenticated in
+            guard authenticated else { return }
+            AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
+            AutomaticGoogleDriveArchive.shared.recover(context: modelContext)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .gunnaireConnectivityRestored)) { _ in
+            AutomaticOutboundSync.shared.recoverPending(context: modelContext, force: true)
+            AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
+            AutomaticGoogleDriveArchive.shared.recover(context: modelContext)
         }
         .onReceive(NotificationCenter.default.publisher(for: .CKAccountChanged)) { _ in
             Task {
@@ -2092,23 +2118,40 @@ GunnAire
             jobActionStatus = CustomerOperationalAlertPolicy.bookingRestrictionMessage(for: blocker)
             return
         }
+        let previousFollowUpID = call.scheduledFollowUpServiceCallID
+        let previousFollowUpRequired = call.followUpRequired
+        let previousFollowUpAction = call.followUpAction
+        let previousFollowUpDueDate = call.followUpDueDate
         let followUpCall = call.makeFollowUpVisit()
         modelContext.insert(followUpCall)
         let sourceID = String(call.id.uuidString.prefix(8)).uppercased()
-        ServiceCallActivity.record(
+        let sourceActivity = ServiceCallActivity.record(
             for: call,
             action: call.isCorrectiveWorkClassification ? "Corrective visit scheduled" : "Follow-up visit scheduled",
             detail: "Linked follow-up for \(followUpCall.scheduledDate.formatted(date: .abbreviated, time: .shortened)).",
             actorEmail: currentActivityActor,
             in: modelContext
         )
-        ServiceCallActivity.record(
+        let followUpActivity = ServiceCallActivity.record(
             for: followUpCall,
             action: "Created from prior job",
             detail: "Linked to source job \(sourceID).",
             actorEmail: currentActivityActor,
             in: modelContext
         )
+        do {
+            try modelContext.save()
+            AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
+        } catch {
+            modelContext.delete(sourceActivity)
+            modelContext.delete(followUpActivity)
+            modelContext.delete(followUpCall)
+            call.scheduledFollowUpServiceCallID = previousFollowUpID
+            call.followUpRequired = previousFollowUpRequired
+            call.followUpAction = previousFollowUpAction
+            call.followUpDueDate = previousFollowUpDueDate
+            jobActionStatus = "Could not save the follow-up visit: \(error.localizedDescription)"
+        }
     }
 
     private func createMaintenanceAgreementFromJob(_ submission: MaintenanceAgreementOfferSubmission) {
@@ -2384,6 +2427,7 @@ GunnAire
                 in: modelContext
             )
             try modelContext.save()
+            AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
             selectedEstimateForScheduling = nil
             GunnAireAppIntentRouter.storeScheduleCallRoute(approvedWorkCall.id)
             return true

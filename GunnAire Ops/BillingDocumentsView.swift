@@ -2190,12 +2190,7 @@ GunnAire
         }
         .onReceive(NotificationCenter.default.publisher(for: .gunnaireConnectivityRestored)) { _ in
             guard canAttemptSharedBilling else { return }
-            // Reuses the exact same per-document publish path the manual
-            // "Sync Saved Document" button calls - no new sync logic, just an
-            // automatic trigger for what a human would otherwise have to tap.
-            for invoice in QuickBooksInvoicePublicationRecovery.queuedInvoices(from: invoices) {
-                publishBillingDocument(.invoice(invoice))
-            }
+            AutomaticOutboundSync.shared.recoverPending(context: modelContext, force: true)
         }
     }
 
@@ -5160,6 +5155,7 @@ GunnAire
         }
 
         let visit = ServiceCall(
+            googleEventManagedByApp: true,
             eventTitle: "\(call.customer.name) • \(milestone.title)",
             siteAddress: call.siteAddress,
             serviceLocationID: call.serviceLocationID,
@@ -5194,6 +5190,7 @@ GunnAire
         modelContext.insert(activity)
         do {
             try modelContext.save()
+            AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
             milestonePendingScheduling = nil
             actionMessage = "\(milestone.title) was added to the dispatch schedule."
         } catch {
@@ -9271,22 +9268,40 @@ GunnAire
             actionMessage = CustomerOperationalAlertPolicy.bookingRestrictionMessage(for: blocker)
             return
         }
+        let previousFollowUpID = sourceCall.scheduledFollowUpServiceCallID
+        let previousFollowUpRequired = sourceCall.followUpRequired
+        let previousFollowUpAction = sourceCall.followUpAction
+        let previousFollowUpDueDate = sourceCall.followUpDueDate
         let followUpCall = sourceCall.makeFollowUpVisit()
         modelContext.insert(followUpCall)
-        ServiceCallActivity.record(
+        let sourceActivity = ServiceCallActivity.record(
             for: sourceCall,
             action: sourceCall.isCorrectiveWorkClassification ? "Corrective visit scheduled" : "Follow-up visit scheduled",
             detail: "Linked follow-up for \(followUpCall.scheduledDate.formatted(date: .abbreviated, time: .shortened)).",
             actorEmail: currentUserEmail,
             in: modelContext
         )
-        ServiceCallActivity.record(
+        let followUpActivity = ServiceCallActivity.record(
             for: followUpCall,
             action: "Created from prior job",
             detail: "Linked to source job \(String(sourceCall.id.uuidString.prefix(8)).uppercased()).",
             actorEmail: currentUserEmail,
             in: modelContext
         )
+        do {
+            try modelContext.save()
+            AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
+        } catch {
+            modelContext.delete(sourceActivity)
+            modelContext.delete(followUpActivity)
+            modelContext.delete(followUpCall)
+            sourceCall.scheduledFollowUpServiceCallID = previousFollowUpID
+            sourceCall.followUpRequired = previousFollowUpRequired
+            sourceCall.followUpAction = previousFollowUpAction
+            sourceCall.followUpDueDate = previousFollowUpDueDate
+            actionMessage = "Could not save the follow-up visit: \(error.localizedDescription)"
+            return
+        }
         actionMessage = "Scheduled follow-up visit for \(followUpCall.scheduledDate.formatted(date: .abbreviated, time: .shortened))."
     }
 
@@ -9390,6 +9405,7 @@ GunnAire
                 )
             }
             try modelContext.save()
+            AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
             selectedEstimateForScheduling = nil
             actionMessage = "Approved work scheduled for \(scheduledDate.formatted(date: .abbreviated, time: .shortened)). Assign the crew from the Schedule workspace."
             GunnAireAppIntentRouter.storeScheduleCallRoute(approvedWorkCall.id)
@@ -10064,57 +10080,13 @@ GunnAire
 
     private func publishBillingDocument(_ document: QuickBooksBillingDocument) {
         guard canAttemptSharedBilling else { return }
-        let key = "\(document.label)-\(document.id)"
-        guard billingSyncLifecycles[key] == nil else {
-            actionMessage = QuickBooksBillingWorkflowError.busy.localizedDescription
-            return
-        }
-        let owner = QuickBooksSyncLifecycle()
-        billingSyncLifecycles[key] = owner
-        do {
-            // Capture synchronously, before Task scheduling can adopt another account.
-            let preparation = try SharedBillingPreparation(document: document, context: modelContext,
-                isCurrent: { billingSyncLifecycles[key] === owner })
-            actionMessage = document.label + " saved. Checking the business connection…"
-            Task { @MainActor in
-                var workflow: QuickBooksBillingWorkflow?
-                defer {
-                    owner.cancel()
-                    if billingSyncLifecycles[key] === owner { billingSyncLifecycles.removeValue(forKey: key) }
-                }
-                do {
-                    let prepared = try await preparation.makeWorkflow(lifecycle: owner)
-                    workflow = prepared
-                    let workflow = prepared
-                    try await workflow.run.perform {
-                        await accountingConfigurationStore.refresh(realmID: workflow.run.workflow.realmID,
-                            environment: workflow.run.workflow.environment, validate: workflow.check)
-                    }
-                    let configuration = accountingConfigurationStore.configuration(for: workflow.run.workflow.realmID,
-                        environment: workflow.run.workflow.environment)
-                    let outcome = try await workflow.execute(configuration: configuration)
-                    actionMessage = outcome.message
-                    do { try await workflow.uploadLinkedAttachments() }
-                    catch {
-                        actionMessage = outcome.message + " Supporting files remain pending: " + error.localizedDescription
-                    }
-                } catch {
-                    guard billingSyncLifecycles[key] === owner else { return }
-                    guard let workflow else {
-                        actionMessage = document.label + " saved locally. " + error.localizedDescription
-                        return
-                    }
-                    do { try workflow.recordFailure(error) }
-                    catch QuickBooksBillingWorkflowError.saveFailed {
-                        actionMessage = QuickBooksBillingWorkflowError.saveFailed.localizedDescription
-                        return
-                    } catch { /* A changed workspace/model must not receive a late failure. */ }
-                    actionMessage = workflow.failureMessage(error)
-                }
+        actionMessage = document.label + " saved. Checking the business connection…"
+        AutomaticOutboundSync.shared.publish(document, context: modelContext) { result in
+            switch result {
+            case .success(let message): actionMessage = message
+            case .failure(let error):
+                actionMessage = document.label + " is saved locally. " + error.localizedDescription
             }
-        } catch {
-            if billingSyncLifecycles[key] === owner { billingSyncLifecycles.removeValue(forKey: key) }
-            actionMessage = document.label + " saved locally. " + error.localizedDescription
         }
     }
 

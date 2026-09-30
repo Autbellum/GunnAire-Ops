@@ -52,6 +52,8 @@ at the start of every turn; append to it rather than rewriting it.
 
 ## Status log
 
+- 2026-09-30 Codex: automatic QBO customer/estimate/invoice recovery, app-owned Google Calendar reconciliation, and admin Google Drive archiving added with account/workspace fences and bounded scans. Follow-up visits save before Calendar export. Build 2026093001 passed zero-warning omni Debug, 131 focused unit tests, the full iPad unit suite (2,751 reported tests / 2,829 parameterized runs), and three estimate/billing/scheduling UI smokes, all with zero failures. Claude reviewed duplicate/retry/account-switch cases read-only; no live provider or physical-device confirmation is claimed. Source claim released for commit/push; TestFlight archive/upload remains separate.
+
 - 2026-09-19 14:05 Claude: owner-workspace staging (`StaffWorkspaceSourceStaging.prepareOffMain`,
   `StaffWorkspaceHistory.captureOffMain`) and the async publication fence are in the
   tree, uncommitted, building clean apart from Codex's in-progress `AppleAuthManager`.

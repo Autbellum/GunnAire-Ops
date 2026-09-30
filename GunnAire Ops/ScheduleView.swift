@@ -857,6 +857,7 @@ struct ScheduleView: View {
             intakeContext.append("Qualification: \(qualificationNotes)")
         }
         let call = ServiceCall(
+            googleEventManagedByApp: true,
             eventTitle: "\(request.requestedServiceType.displayName) request",
             siteAddress: serviceLocation?.address ?? request.address,
             serviceLocationID: serviceLocation?.id,
@@ -877,6 +878,7 @@ struct ScheduleView: View {
         )
         do {
             try modelContext.save()
+            AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: googleAuth)
             selectedDate = Calendar.current.startOfDay(for: scheduledDate)
             requestMessage = "Scheduled \(request.customerName). Assign a technician from the job card before dispatching."
             claimOnlineRequestIfNeeded(request)
@@ -2227,23 +2229,40 @@ GunnAire
             syncMessage = CustomerOperationalAlertPolicy.bookingRestrictionMessage(for: blocker)
             return
         }
+        let previousFollowUpID = sourceCall.scheduledFollowUpServiceCallID
+        let previousFollowUpRequired = sourceCall.followUpRequired
+        let previousFollowUpAction = sourceCall.followUpAction
+        let previousFollowUpDueDate = sourceCall.followUpDueDate
         let followUpCall = sourceCall.makeFollowUpVisit()
         modelContext.insert(followUpCall)
         let actorEmail = AppIdentity.currentEmail
-        ServiceCallActivity.record(
+        let sourceActivity = ServiceCallActivity.record(
             for: sourceCall,
             action: sourceCall.isCorrectiveWorkClassification ? "Corrective visit scheduled" : "Follow-up visit scheduled",
             detail: "Linked follow-up for \(followUpCall.scheduledDate.formatted(date: .abbreviated, time: .shortened)).",
             actorEmail: actorEmail,
             in: modelContext
         )
-        ServiceCallActivity.record(
+        let followUpActivity = ServiceCallActivity.record(
             for: followUpCall,
             action: "Created from prior job",
             detail: "Linked to source job \(String(sourceCall.id.uuidString.prefix(8)).uppercased()).",
             actorEmail: actorEmail,
             in: modelContext
         )
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.delete(sourceActivity)
+            modelContext.delete(followUpActivity)
+            modelContext.delete(followUpCall)
+            sourceCall.scheduledFollowUpServiceCallID = previousFollowUpID
+            sourceCall.followUpRequired = previousFollowUpRequired
+            sourceCall.followUpAction = previousFollowUpAction
+            sourceCall.followUpDueDate = previousFollowUpDueDate
+            syncMessage = "Could not save the follow-up visit: \(error.localizedDescription)"
+            return
+        }
         publishToGoogleCalendar(followUpCall)
         selectedDate = Calendar.current.startOfDay(for: followUpCall.scheduledDate)
         navigationPath.append(followUpCall)

@@ -386,11 +386,15 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
             // blocks a device build, but it is still recorded.
             // The App Store receipt's file name depends on the environment:
             // "receipt" for an App Store build but "sandboxReceipt" under
-            // TestFlight and sandbox. Hardcoding the production name read
-            // nothing on TestFlight, so the fallback below could never engage
-            // and the gate failed with the same message a build without the
-            // fallback produced. Always ask Bundle for the resolved URL.
-            let receiptData = Bundle.main.appStoreReceiptURL.flatMap { try? Data(contentsOf: $0) }
+            // TestFlight and sandbox. Inspect both names in the app bundle;
+            // Bundle.appStoreReceiptURL is deprecated on current iOS SDKs.
+            let receiptData = [
+                Bundle.main.bundleURL.appendingPathComponent("StoreKit/sandboxReceipt"),
+                Bundle.main.bundleURL.appendingPathComponent("StoreKit/receipt"),
+                Bundle.main.bundleURL.appendingPathComponent("Contents/_MASReceipt/receipt")
+            ]
+                .compactMap { try? Data(contentsOf: $0) }
+                .first { !$0.isEmpty }
             // Three different conditions make this check fail, and all three
             // previously surfaced as the single word "configuration". Record
             // which one actually failed; without it the device cannot say
@@ -438,14 +442,20 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
                     // sentence on the device, which is what hid this.
                     let receipt = receiptData.map { "\($0.count) bytes" } ?? "absent"
                     let transaction = await verdict.summary ?? "no transaction result"
-                    let source = hasStrippedDistributionProfile ? "stripped distribution profile" : "none"
+                    #if targetEnvironment(simulator)
+                    let source = "none"
+                    #else
+                    let source = "stripped distribution profile"
+                    #endif
                     let detail = "profileData=nil, AppTransaction: \(String(describing: error)), " +
                         "receipt: \(receipt), transaction: \(transaction), distribution: \(source)"
                     await MainActor.run { CompanyWorkspaceDiagnostics.lastConfigurationDetail = detail }
                     // A device build with no embedded profile is already
                     // distribution-signed. Only the Simulator, which cannot use
                     // that signal, still fails closed here.
-                    if !hasStrippedDistributionProfile { throw error }
+                    #if targetEnvironment(simulator)
+                    throw error
+                    #endif
                 }
             }
         } else {

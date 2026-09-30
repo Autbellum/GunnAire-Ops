@@ -332,14 +332,25 @@ struct CustomersView: View {
                             address: newCustomerAddress.nilIfBlank
                         )
                         modelContext.insert(customer)
+                        var location: CustomerServiceLocation?
                         if let address = customer.address {
-                            modelContext.insert(CustomerServiceLocation(
+                            location = CustomerServiceLocation(
                                 customer: customer,
                                 name: "Primary Service Location",
                                 address: address,
                                 isPrimary: true
-                            ))
+                            )
+                            if let location { modelContext.insert(location) }
                         }
+                        do {
+                            try modelContext.save()
+                        } catch {
+                            if let location { modelContext.delete(location) }
+                            modelContext.delete(customer)
+                            customerSyncMessage = "Could not save the customer: \(error.localizedDescription)"
+                            return
+                        }
+                        AutomaticOutboundSync.shared.recoverPending(context: modelContext, force: true)
                         newCustomerName = ""
                         newCustomerEmail = ""
                         newCustomerPhone = ""
@@ -1621,6 +1632,8 @@ struct SyncIntegrationsView: View {
     }
 
     private func archiveInGoogleDrive(_ attachment: ServiceDocumentAttachment) async -> Bool {
+        guard AutomaticGoogleDriveArchive.shared.claim(attachment.id) else { return false }
+        defer { AutomaticGoogleDriveArchive.shared.release(attachment.id) }
         do {
             guard canManageGoogleDriveArchive else {
                 throw GoogleDriveAPIError.authorizationChanged

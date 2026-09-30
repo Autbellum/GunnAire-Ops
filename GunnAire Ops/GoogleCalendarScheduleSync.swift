@@ -140,26 +140,37 @@ enum GoogleCalendarScheduleSync {
 
     static func synchronize(workflow: GoogleCalendarWorkflow) async throws -> String {
         try workflow.check()
-        let pending = try workflow.context.fetch(FetchDescriptor<ServiceCall>())
-            .filter { needsOutboundSync($0) }.sorted { $0.scheduledDate < $1.scheduledDate }
         var published = 0
         var reviewErrors: [String] = []
-        for call in pending {
-            // Keep the same company/provider operation throughout the batch.
-            // Any failed/uncertain write stops this run; its pending marker stays.
-            markCalendarCallLocallyEdited(call)
-            do {
-                if call.status == .cancelled { _ = try await cancel(call: call, workflow: workflow) }
-                else { _ = try await publish(call: call, workflow: workflow) }
-                published += 1
-            } catch {
-                // A stale route or legacy guest review must not starve unrelated
-                // pending jobs. Session changes and uncertain transport stop all.
-                try workflow.check()
-                let issue = error as? GoogleCalendarWorkflowError
-                guard error is GoogleCalendarStaffDeliveryError || issue == .readOnly || issue == .needsReview || issue == .invalidDates else { throw error }
-                reviewErrors.append(error.localizedDescription)
+        var offset = 0
+        while true {
+            try workflow.check()
+            var descriptor = FetchDescriptor<ServiceCall>(
+                predicate: #Predicate { $0.googleEventManagedByApp },
+                sortBy: [SortDescriptor(\.scheduledDate), SortDescriptor(\.id)])
+            descriptor.fetchLimit = 100
+            descriptor.fetchOffset = offset
+            let page = try workflow.context.fetch(descriptor)
+            guard !page.isEmpty else { break }
+            for call in page where needsOutboundSync(call) {
+                // Keep the same company/provider operation throughout the batch.
+                // Any failed/uncertain write stops this run; its pending marker stays.
+                markCalendarCallLocallyEdited(call)
+                do {
+                    if call.status == .cancelled { _ = try await cancel(call: call, workflow: workflow) }
+                    else { _ = try await publish(call: call, workflow: workflow) }
+                    published += 1
+                } catch {
+                    // A stale route or legacy guest review must not starve unrelated
+                    // pending jobs. Session changes and uncertain transport stop all.
+                    try workflow.check()
+                    let issue = error as? GoogleCalendarWorkflowError
+                    guard error is GoogleCalendarStaffDeliveryError || issue == .readOnly || issue == .needsReview || issue == .invalidDates else { throw error }
+                    reviewErrors.append(error.localizedDescription)
+                }
             }
+            offset += page.count
+            await Task.yield()
         }
         let imported = try await importSchedule(workflow: workflow)
         let review = reviewErrors.first.map { " \(reviewErrors.count) update(s) still need review. \($0)" } ?? ""
