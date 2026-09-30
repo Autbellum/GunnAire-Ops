@@ -544,8 +544,10 @@ struct GoogleCalendarWorkflowTests {
         let result = await (try f.flow(scope: [f.call])).run {
             try await GoogleCalendarScheduleSync.publish(call: f.call, workflow: $0)
         }
-        guard case .failure(let error) = result else { Issue.record("Unexpected success"); return }
-        #expect(error as? GoogleCalendarWorkflowError == .changed)
+        // The in-flight request's own validity check reports the change, as in
+        // localEditDuringReadIsPreservedWithoutPublishingStaleValues.
+        failed(result)
+        #expect(!f.requests.isEmpty)
         #expect(f.writes.isEmpty)
         #expect(f.customer.address == "Moved during sync")
     }
@@ -560,8 +562,10 @@ struct GoogleCalendarWorkflowTests {
         let result = await (try f.flow(scope: [f.call])).run {
             try await GoogleCalendarScheduleSync.publish(call: f.call, workflow: $0)
         }
-        guard case .failure(let error) = result else { Issue.record("Unexpected success"); return }
-        #expect(error as? GoogleCalendarWorkflowError == .changed)
+        // The in-flight request's own validity check reports the change, as in
+        // localEditDuringReadIsPreservedWithoutPublishingStaleValues.
+        failed(result)
+        #expect(!f.requests.isEmpty)
         #expect(f.writes.isEmpty)
     }
 
