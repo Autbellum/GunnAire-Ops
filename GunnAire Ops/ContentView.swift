@@ -4187,7 +4187,7 @@ enum ServiceCalendarRouting {
 struct AddServiceCallView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
-    @Query private var customers: [Customer]
+    @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
     @Query private var technicians: [Technician]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query private var existingServiceCalls: [ServiceCall]
@@ -4259,14 +4259,15 @@ struct AddServiceCallView: View {
 
     private var filteredCustomers: [Customer] {
         let visibleCustomers = customers.filter { !CustomerDataMaintenance.isSystemCalendarCustomer($0) }
-        let query = customerSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return visibleCustomers }
-        return visibleCustomers.filter { customer in
-            customer.name.lowercased().contains(query) ||
-            (customer.email?.lowercased().contains(query) ?? false) ||
-            (customer.phone?.lowercased().contains(query) ?? false) ||
-            (customer.address?.lowercased().contains(query) ?? false)
-        }
+        return CustomerSearch.matches(in: visibleCustomers, query: customerSearchText)
+    }
+
+    /// Results stay visible while the user types something other than the
+    /// selected customer's name, so a wrong pick can be replaced without Clear.
+    private var showsCustomerResults: Bool {
+        guard let customer else { return true }
+        let query = customerSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !query.isEmpty && query.caseInsensitiveCompare(customer.name) != .orderedSame
     }
 
     private var canSaveNewCustomer: Bool {
@@ -4425,13 +4426,17 @@ struct AddServiceCallView: View {
                         }
                     }
 
-                    if customer == nil {
-                        if filteredCustomers.isEmpty {
+                    if showsCustomerResults {
+                        let matches = filteredCustomers
+                        if matches.isEmpty {
                             Text("No matching customers found.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         } else {
-                            ForEach(filteredCustomers.prefix(8)) { matchedCustomer in
+                            Text(matches.count == 1 ? "1 customer" : "\(matches.count) customers")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            ForEach(matches) { matchedCustomer in
                                 Button {
                                     customer = matchedCustomer
                                     customerSearchText = matchedCustomer.name
@@ -4977,7 +4982,7 @@ struct AddServiceCallView: View {
 struct EditServiceCallView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
-    @Query private var customers: [Customer]
+    @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
     @Query private var technicians: [Technician]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query private var existingServiceCalls: [ServiceCall]
@@ -5216,7 +5221,7 @@ struct EditServiceCallView: View {
                         .textInputAutocapitalization(.words)
                         .disabled(isExternalGoogleCalendarEvent)
                     if isExternalGoogleCalendarEvent {
-                        Text("This event came from Google Calendar. Edit the title, location, and body in Google Calendar; GunnAire will only keep a local mirror.")
+                        Text("This event came from Google Calendar. Its title, location and notes stay as set in Google Calendar; time and staff changes saved here are sent to that Google event.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -5641,7 +5646,9 @@ struct EditServiceCallView: View {
         let originalStatus = call.status
         let originalDispatchUrgency = call.dispatchUrgency
         let originalTechnician = call.assignedTechnician?.name
+        let originalTechnicianID = call.assignedTechnician?.id
         let originalCrewIDs = call.additionalTechnicianIDs
+        let originalDuration = call.duration
         let preserveExternalCalendarDetails = GoogleCalendarScheduleSync.shouldPreserveExternalGoogleCalendarDetails(for: call)
         call.type = callType
         call.dispatchUrgency = dispatchUrgency
@@ -5733,7 +5740,13 @@ struct EditServiceCallView: View {
         if originalDispatchUrgency != dispatchUrgency {
             ServiceCallActivity.record(for: call, action: "Dispatch priority updated", detail: "Priority changed from \(originalDispatchUrgency.displayName) to \(dispatchUrgency.displayName).", actorEmail: actorEmail, in: modelContext)
         }
-        let shouldPublishCalendarChanges = GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call)
+        // An imported Google event only takes time and staff changes, so a
+        // customer-only edit leaves it Google-owned and still importing.
+        let changesGoogleEvent = call.googleEventManagedByApp ||
+            call.scheduledDate != originalStart || call.duration != originalDuration ||
+            call.assignedTechnician?.id != originalTechnicianID || call.additionalTechnicianIDs != originalCrewIDs
+        let shouldPublishCalendarChanges = changesGoogleEvent &&
+            GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call)
         billingEditRevision = JobBillingLocalRevision(call)
         do {
             try JobBillingDispatch.shared.save(call, original: originalBillingTarget, context: modelContext)

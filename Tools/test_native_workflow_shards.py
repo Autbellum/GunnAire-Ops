@@ -67,7 +67,7 @@ class NativeWorkflowShardTests(unittest.TestCase):
 
     def test_hosted_ipad_has_time_for_the_complete_unweakened_suite(self):
         text = WORKFLOW.read_text()
-        self.assertIn("timeout-minutes: ${{ matrix.platform == 'iPad' && 90 || 60 }}", text)
+        self.assertIn("timeout-minutes: ${{ matrix.platform == 'iPad' && 120 || 90 }}", text)
         self.assertIn("-parallel-testing-enabled NO", text)
         self.assertIn("python3 Tools/verify_native_test_execution.py", text)
         self.assertIn(".failedTests == 0 and .passedTests > 0", text)

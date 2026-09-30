@@ -207,3 +207,40 @@ at the start of every turn; append to it rather than rewriting it.
   and the rotation test passed twice at normal size on 0ebcd56. Full unit suite running on
   3120503 as the pre-merge bar: 2576 passed, 7 failed, all seven in the known-flaky
   `FieldCollectionNavigationTests` and none outside it. CI is running on the same commit.
+- 2026-09-28 Claude (cloud session; branch `claude/gunnaire-customer-search-populate-0dvowv`):
+  schedule Edit/Assign Customer could not find customers. Cause in `CustomerSelectionSection`:
+  a calendar-imported job opens with the calendar placeholder bound to `customer`, results
+  were drawn only while `customer == nil` (so typing showed nothing), and results were capped
+  at `prefix(8)`. Placeholder now counts as no selection, results show while the search text
+  differs from the selected name, every match is listed, and search is term-based
+  (`CustomerSearch`, pinned by `CustomerSearchTests`). Same cap/visibility fix in
+  `AddServiceCallView`; both sheets' customer `@Query` now sorted by name. Built and tested
+  only by CI: the cloud container has no Xcode.
+- 2026-09-28 Claude (cloud, PR #28): iPad shards cancelled at the 90-minute limit on both the
+  first run and the one re-run, with no failed assertion except one 4-second hittability wait
+  at `SaveBundleMember`. Time went to 60 s "App animations complete notification not received"
+  waits in the catalog/inventory editor (`testAdministratorCreatesInventoryOfflineAndReopensExactSetup`
+  2036 s / 29 waits, `testCatalogEditingControlsStayInsideTheSheetAcrossRotation` 2092 s / 33).
+  Same on main at ef3299d (run 35533317609, iPad 2 cancelled in the largest-text catalog step).
+  Ported from PR #27's branch without its AGENTS.md: dc24005 (iPad job 90 -> 120 min),
+  1efcbe8 (default hittability wait after keyboard dismissal), c9ba60b (keyboard dismissal 5 -> 10 s).
+  The animation-idle cause itself is still undiagnosed; those commits only make room for it.
+- 2026-09-30 Claude (cloud, PR #28): Eric's schedule shows "Calendar update is not confirmed ... The
+  appointment or related records changed during sync" after saving a job; nothing reaches Google.
+  `GoogleCalendarWorkflow` snapshotted every ServiceCall, Customer and Technician in the store and
+  failed on any difference after each await, so a CloudKit merge of any unrelated record during the
+  Google round trip aborted a single-job send. Single-job send/cancel/delete now guard only that job,
+  its customer and its assigned/crew technicians (`scope:` / `focus(on:)`); Sync Google guards each
+  pending job the same way, then the whole store again before import (import behaviour unchanged,
+  `lateImportAfterLocalChangeDoesNotApplyAnyCalendarRows` still pins it). Four new
+  `GoogleCalendarWorkflowTests`. Not verified on device. Imported (non-app-owned) Google events are
+  still never written back; that is policy, awaiting Eric's decision.
+- 2026-09-30 Claude (cloud, PR #28): Eric decided imported Google events must take app changes.
+  Time and staff changes to an imported job (edit sheet, dispatch board, assignment) now mark its
+  original event app-managed for that job (private markers only, If-Match, sendUpdates=none; title,
+  location, notes and guests untouched; never adopted if cancelled, missing or marked for another
+  job) and then use the existing schedule-only patch and staff delivery. A customer-only edit does
+  not adopt. Pending sends now retry automatically when Schedule opens and 30 s / 2 min / 10 min
+  after a failure (`retryPendingIfNeeded`, publish only, no import). Three tests that pinned the
+  old read-only rule were updated to the new rule; four write-back tests added. After adoption the
+  job is app-owned, so later edits made directly in Google no longer import over it.
