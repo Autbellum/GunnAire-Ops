@@ -35,6 +35,10 @@ final class GoogleCalendarWorkflow {
     private var validateRecords: () throws -> Void
     private var additionalValidation: (() throws -> Void)?
     private let containerKey: ObjectIdentifier
+    /// Jobs whose records must stay unchanged across awaits; nil guards the
+    /// whole store. A single-job send must not fail because an unrelated job,
+    /// customer or technician merged in from CloudKit while Google replied.
+    private var scopeIDs: Set<UUID>?
 
     lazy var operation = WorkspaceProviderOperation(parent: provider) { [weak self] in
         guard let self else { return false }
@@ -42,6 +46,7 @@ final class GoogleCalendarWorkflow {
     }
 
     init(auth: GoogleAuthManager, context: ModelContext, signedInEmail: String?,
+         scope: [ServiceCall]? = nil,
          validateAccess: (() throws -> Void)? = nil,
          save: @escaping (ModelContext) throws -> Void = { try $0.save() }) throws {
         self.auth = auth
@@ -54,7 +59,18 @@ final class GoogleCalendarWorkflow {
         }
         try self.validateAccess()
         provider = try auth.captureProviderOperation()
-        validateRecords = try Self.recordValidation(context: context)
+        scopeIDs = scope.map { Set($0.map(\.id)) }
+        validateRecords = try Self.recordValidation(context: context, scope: scopeIDs)
+    }
+
+    /// Re-baselines the guard on the given jobs (nil: the whole store) at their
+    /// current values. Only call this where no await separates the new
+    /// baseline from the reads it protects.
+    func focus(on calls: [ServiceCall]?) throws {
+        try provider.check()
+        try validateAccess()
+        scopeIDs = calls.map { Set($0.map(\.id)) }
+        validateRecords = try Self.recordValidation(context: context, scope: scopeIDs)
     }
 
     func run(_ action: (GoogleCalendarWorkflow) async throws -> String) async -> Result<String, Error> {
@@ -102,7 +118,7 @@ final class GoogleCalendarWorkflow {
     func saveChanges() throws {
         try provider.check()
         try validateAccess()
-        let nextValidation = try Self.recordValidation(context: context)
+        let nextValidation = try Self.recordValidation(context: context, scope: scopeIDs)
         do { try save(context) }
         catch { throw GoogleCalendarWorkflowError.saveFailed }
         validateRecords = nextValidation
@@ -130,7 +146,15 @@ final class GoogleCalendarWorkflow {
             matches.allSatisfy { $0.isActive && $0.role == verifiedRole }
     }
 
-    private static func recordValidation(context: ModelContext) throws -> () throws -> Void {
+    private static func recordValidation(context: ModelContext, scope: Set<UUID>?) throws -> () throws -> Void {
+        if let scope {
+            let baseline = try ScopedRevision(context: context, scope: scope)
+            return {
+                guard try ScopedRevision(context: context, scope: scope) == baseline else {
+                    throw GoogleCalendarWorkflowError.changed
+                }
+            }
+        }
         let calls = try context.fetch(FetchDescriptor<ServiceCall>())
         let customers = try context.fetch(FetchDescriptor<Customer>())
         let technicians = try context.fetch(FetchDescriptor<Technician>())
@@ -152,6 +176,31 @@ final class GoogleCalendarWorkflow {
                   currentTechnicians.allSatisfy({
                       technicianValues[ObjectIdentifier($0)] == [$0.id.uuidString, $0.name, $0.contactInfo ?? ""]
                   }) else { throw GoogleCalendarWorkflowError.changed }
+        }
+    }
+
+    /// The scoped jobs plus the customer and staff records their Google event
+    /// is built from. Membership and identity are compared, so a deleted or
+    /// replaced record is a change just like an edited one.
+    private struct ScopedRevision: Equatable {
+        let calls: [ObjectIdentifier: CallRevision]
+        let customers: [ObjectIdentifier: CustomerRevision]
+        let technicians: [ObjectIdentifier: [String]]
+
+        init(context: ModelContext, scope: Set<UUID>) throws {
+            let scoped = try context.fetch(FetchDescriptor<ServiceCall>()).filter { scope.contains($0.id) }
+            calls = Dictionary(uniqueKeysWithValues: scoped.map { (ObjectIdentifier($0), CallRevision($0)) })
+            let customerKeys = Set(scoped.compactMap { $0.customer.map(ObjectIdentifier.init) })
+            customers = Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<Customer>())
+                .filter { customerKeys.contains(ObjectIdentifier($0)) }
+                .map { (ObjectIdentifier($0), CustomerRevision($0)) })
+            let staffIDs = scoped.reduce(into: Set<UUID>()) { ids, call in
+                ids.formUnion(call.additionalTechnicianIDs)
+                if let assigned = call.assignedTechnician { ids.insert(assigned.id) }
+            }
+            technicians = Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<Technician>())
+                .filter { staffIDs.contains($0.id) }
+                .map { (ObjectIdentifier($0), [$0.id.uuidString, $0.name, $0.contactInfo ?? ""]) })
         }
     }
 

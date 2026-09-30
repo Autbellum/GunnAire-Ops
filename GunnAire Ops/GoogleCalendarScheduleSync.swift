@@ -78,7 +78,7 @@ enum GoogleCalendarScheduleSync {
             completion?(.failure(GoogleCalendarWorkflowError.changed)); return
         }
         markCalendarCallLocallyEdited(call)
-        startWorkflow(auth: auth, context: modelContext, email: signedInEmail, completion: completion) {
+        startWorkflow(auth: auth, context: modelContext, email: signedInEmail, scope: [call], completion: completion) {
             try await publish(call: call, workflow: $0)
         }
     }
@@ -91,13 +91,13 @@ enum GoogleCalendarScheduleSync {
             completion?(.failure(GoogleCalendarWorkflowError.changed)); return
         }
         markCalendarCallLocallyEdited(call)
-        startWorkflow(auth: auth, context: modelContext, email: AppIdentity.currentEmail, completion: completion) {
+        startWorkflow(auth: auth, context: modelContext, email: AppIdentity.currentEmail, scope: [call], completion: completion) {
             try await cancel(call: call, workflow: $0)
         }
     }
 
     private static func startWorkflow(
-        auth: GoogleAuthManager, context: ModelContext, email: String?,
+        auth: GoogleAuthManager, context: ModelContext, email: String?, scope: [ServiceCall]? = nil,
         completion: ((Result<String, Error>) -> Void)?,
         action: @escaping (GoogleCalendarWorkflow) async throws -> String
     ) {
@@ -119,7 +119,7 @@ enum GoogleCalendarScheduleSync {
         do {
             // Capture before Task scheduling; a later callback cannot capture a
             // replacement provider for an old retained job.
-            let workflow = try GoogleCalendarWorkflow(auth: auth, context: context, signedInEmail: email)
+            let workflow = try GoogleCalendarWorkflow(auth: auth, context: context, signedInEmail: email, scope: scope)
             Task { @MainActor in
                 let result = await workflow.run(action)
                 report(result)
@@ -149,6 +149,9 @@ enum GoogleCalendarScheduleSync {
             // Any failed/uncertain write stops this run; its pending marker stays.
             markCalendarCallLocallyEdited(call)
             do {
+                // Guard only this job's records while its requests are in flight;
+                // each job is re-baselined at its current values when its turn comes.
+                try workflow.focus(on: [call])
                 if call.status == .cancelled { _ = try await cancel(call: call, workflow: workflow) }
                 else { _ = try await publish(call: call, workflow: workflow) }
                 published += 1
@@ -161,6 +164,9 @@ enum GoogleCalendarScheduleSync {
                 reviewErrors.append(error.localizedDescription)
             }
         }
+        // Import merges into the whole store, so it keeps the whole-store guard
+        // from here through its fetches.
+        try workflow.focus(on: nil)
         let imported = try await importSchedule(workflow: workflow)
         let review = reviewErrors.first.map { " \(reviewErrors.count) update(s) still need review. \($0)" } ?? ""
         return "Published \(published) pending calendar update(s).\(review) \(imported)"
@@ -168,7 +174,7 @@ enum GoogleCalendarScheduleSync {
 
     static func deleteImmediately(call: ServiceCall, auth: GoogleAuthManager, modelContext: ModelContext,
                                   completion: @escaping (Result<String, Error>) -> Void) {
-        startWorkflow(auth: auth, context: modelContext, email: AppIdentity.currentEmail, completion: completion) {
+        startWorkflow(auth: auth, context: modelContext, email: AppIdentity.currentEmail, scope: [call], completion: completion) {
             try await remove(call: call, workflow: $0)
         }
     }

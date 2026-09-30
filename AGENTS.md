@@ -225,3 +225,13 @@ at the start of every turn; append to it rather than rewriting it.
   Ported from PR #27's branch without its AGENTS.md: dc24005 (iPad job 90 -> 120 min),
   1efcbe8 (default hittability wait after keyboard dismissal), c9ba60b (keyboard dismissal 5 -> 10 s).
   The animation-idle cause itself is still undiagnosed; those commits only make room for it.
+- 2026-09-30 Claude (cloud, PR #28): Eric's schedule shows "Calendar update is not confirmed ... The
+  appointment or related records changed during sync" after saving a job; nothing reaches Google.
+  `GoogleCalendarWorkflow` snapshotted every ServiceCall, Customer and Technician in the store and
+  failed on any difference after each await, so a CloudKit merge of any unrelated record during the
+  Google round trip aborted a single-job send. Single-job send/cancel/delete now guard only that job,
+  its customer and its assigned/crew technicians (`scope:` / `focus(on:)`); Sync Google guards each
+  pending job the same way, then the whole store again before import (import behaviour unchanged,
+  `lateImportAfterLocalChangeDoesNotApplyAnyCalendarRows` still pins it). Four new
+  `GoogleCalendarWorkflowTests`. Not verified on device. Imported (non-app-owned) Google events are
+  still never written back; that is policy, awaiting Eric's decision.
