@@ -283,6 +283,27 @@ struct GoogleCalendarWorkflowTests {
         #expect(!GoogleCalendarScheduleSync.needsOutboundSync(f.call))
     }
 
+    @Test func cancelledEventDeletionWithLostReplyReconcilesOnNextSync() async throws {
+        let f = try Fixture(linked: true)
+        f.call.status = .cancelled
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(f.call)
+        try f.context.save()
+        f.afterWrite = { _ in throw URLError(.networkConnectionLost) }
+        let first = await (try f.flow()).run { try await GoogleCalendarScheduleSync.cancel(call: f.call, workflow: $0) }
+        failed(first)
+        #expect(f.remote.isEmpty)
+        #expect(GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+
+        f.afterWrite = nil
+        _ = try await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.cancel(call: f.call, workflow: $0)
+        }.get()
+        #expect(f.writes.map(\.httpMethod) == ["DELETE"])
+        #expect(!GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+        #expect(GoogleCalendarScheduleSync.isCalendarEventDeleted(
+            calendarID: f.email, eventID: f.call.googleEventID))
+    }
+
     @Test func oneInvalidRouteDoesNotStarveOtherPendingJobs() async throws {
         let f = try Fixture()
         f.call.googleCalendarID = "not-shared@example.invalid"

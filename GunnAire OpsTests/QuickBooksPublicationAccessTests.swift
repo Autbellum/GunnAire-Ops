@@ -81,6 +81,96 @@ struct QuickBooksPublicationAccessTests {
         #expect(AutomaticOutboundSync.pendingCustomerKeys([unlinked, linked]).isEmpty)
     }
 
+    @Test func backendBillingRecoveryDoesNotRequireDeviceQuickBooksAuthentication() {
+        let fixture = Fixture()
+        let unlinked = Customer(name: "Saved local customer")
+        let withoutDeviceOAuth = AutomaticOutboundSync.pendingRecoveryKeys(
+            invoices: [fixture.invoice], estimates: [fixture.estimate],
+            customers: [unlinked], includeCustomers: false)
+        #expect(withoutDeviceOAuth == [.estimate(fixture.estimate.id), .invoice(fixture.invoice.id)])
+
+        let withAdministrativeDeviceOAuth = AutomaticOutboundSync.pendingRecoveryKeys(
+            invoices: [fixture.invoice], estimates: [fixture.estimate],
+            customers: [unlinked], includeCustomers: true)
+        #expect(withAdministrativeDeviceOAuth == [
+            .estimate(fixture.estimate.id), .invoice(fixture.invoice.id), .customer(unlinked.id)
+        ])
+    }
+
+    @Test func automaticBillingRealmFenceRejectsLegacyAndChangedCompanies() {
+        let companyID = UUID()
+        let documentID = UUID()
+        let customerID = UUID()
+        let createdAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let expected = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+            documentType: "estimate", documentID: documentID, customerID: customerID,
+            createdAt: createdAt, realmID: "realm-a", environment: "production")
+        let unattempted = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+            documentType: "estimate", documentID: documentID, customerID: customerID,
+            createdAt: createdAt, realmID: nil, environment: nil)
+        let otherRealm = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+            documentType: "estimate", documentID: documentID, customerID: customerID,
+            createdAt: createdAt, realmID: "realm-b", environment: "production")
+        let otherCustomer = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+            documentType: "estimate", documentID: documentID, customerID: UUID(),
+            createdAt: createdAt, realmID: nil, environment: nil)
+
+        #expect(AutomaticOutboundSync.realmDecision(stored: nil, expected: expected,
+            explicitReview: false) == .reviewRequired)
+        #expect(AutomaticOutboundSync.realmDecision(stored: nil, expected: expected,
+            explicitReview: true) == .bind)
+        #expect(AutomaticOutboundSync.realmDecision(stored: unattempted, expected: expected,
+            explicitReview: false) == .reviewRequired)
+        #expect(AutomaticOutboundSync.realmDecision(stored: unattempted, expected: expected,
+            explicitReview: true) == .bind)
+        #expect(AutomaticOutboundSync.realmDecision(stored: expected, expected: expected,
+            explicitReview: false) == .proceed)
+        #expect(AutomaticOutboundSync.realmDecision(stored: otherRealm, expected: expected,
+            explicitReview: true) == .wrongRealm)
+        #expect(AutomaticOutboundSync.realmDecision(stored: otherCustomer, expected: expected,
+            explicitReview: false) == .reviewRequired)
+    }
+
+    @Test func savedEstimateAndKeychainRealmProofSurviveContextRestart() throws {
+        let schema = GunnAireModelSchema.schema
+        let store = try ModelContainer(for: schema, configurations: [
+            ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+        ])
+        let writer = ModelContext(store)
+        let customer = Customer(name: "Restart fixture")
+        let createdAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let estimate = Estimate(customer: customer, amount: 190, createdAt: createdAt)
+        writer.insert(customer)
+        writer.insert(estimate)
+        try writer.save()
+
+        let companyID = UUID()
+        let unattempted = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+            documentType: "estimate", documentID: estimate.id, customerID: customer.id,
+            createdAt: estimate.createdAt, realmID: nil, environment: nil)
+        let account = unattempted.account
+        defer { try? KeychainStore.remove(account: account) }
+        try KeychainStore.saveCodable(unattempted, account: account)
+
+        let restarted = ModelContext(store)
+        let saved = try #require(restarted.fetch(FetchDescriptor<Estimate>()).first)
+        let savedCustomer = try #require(saved.customer)
+        let expected = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+            documentType: "estimate", documentID: saved.id, customerID: savedCustomer.id,
+            createdAt: saved.createdAt, realmID: "realm-a", environment: "production")
+        let marker = try #require(try KeychainStore.loadCodable(
+            AutomaticOutboundSync.RealmRecord.self, account: account))
+        #expect(marker.sameDocument(as: expected))
+        #expect(AutomaticOutboundSync.realmDecision(stored: marker, expected: expected,
+            explicitReview: false) == .reviewRequired)
+
+        try KeychainStore.saveCodable(expected, account: account)
+        let afterRestart = try #require(try KeychainStore.loadCodable(
+            AutomaticOutboundSync.RealmRecord.self, account: account))
+        #expect(AutomaticOutboundSync.realmDecision(stored: afterRestart, expected: expected,
+            explicitReview: false) == .proceed)
+    }
+
     @Test func oneRejectedDraftDoesNotPauseOtherAutomaticPublications() {
         #expect(!AutomaticOutboundSync.shouldPauseAfterFailure(QuickBooksBillingWorkflowError.changed))
         #expect(!AutomaticOutboundSync.shouldPauseAfterFailure(SharedBillingConnectionError.updateRequired))

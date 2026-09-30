@@ -337,6 +337,12 @@ enum GoogleAccountLinkPolicy {
         let google = AppAccess.normalizedEmail(googleEmail)
         return !primary.isEmpty && primary == google
     }
+
+    static func canAcceptOAuthProfile(primaryBusinessEmail: String?, googleEmail: String?,
+                                      forBusinessLogin: Bool) -> Bool {
+        forBusinessLogin || canUseIntegration(primaryBusinessEmail: primaryBusinessEmail,
+                                              googleEmail: googleEmail)
+    }
 }
 
 final class GoogleAuthManager: NSObject, ObservableObject {
@@ -382,7 +388,8 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     private struct AuthorizationOrigin {
         let workspace: CompanyWorkspaceOperationStamp?
         let session: CompanyWorkspaceSession?
-        var email: String? { workspace?.session.email ?? session?.email }
+        let forBusinessLogin: Bool
+        var email: String? { forBusinessLogin ? nil : (workspace?.session.email ?? session?.email) }
     }
     private var pendingAuthorizationOrigin: AuthorizationOrigin?
     private var connectionGeneration = UUID() {
@@ -622,8 +629,10 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         return response.user
     }
 
-    func startSignIn(presentationContext: ASWebAuthenticationPresentationContextProviding, completion: @escaping (Result<Void, Error>) -> Void) {
-        prepareAuthorization()
+    func startSignIn(presentationContext: ASWebAuthenticationPresentationContextProviding,
+                     forBusinessLogin: Bool = false,
+                     completion: @escaping (Result<Void, Error>) -> Void) {
+        prepareAuthorization(forBusinessLogin: forBusinessLogin)
         let generation = connectionGeneration
         guard !Config.Google.clientID.hasPrefix("YOUR_") else {
             completion(.failure(GoogleAuthError.missingConfiguration))
@@ -683,12 +692,14 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         }
     }
 
-    private func prepareAuthorization() {
+    private func prepareAuthorization(forBusinessLogin: Bool = false) {
         connectionGeneration = UUID()
         activeAuthSession?.cancel()
         pendingOAuthState = nil
         pendingCodeVerifier = nil
-        pendingAuthorizationOrigin = AuthorizationOrigin(workspace: workspaceStampProvider(), session: businessSessionProvider())
+        pendingAuthorizationOrigin = AuthorizationOrigin(workspace: workspaceStampProvider(),
+                                                         session: businessSessionProvider(),
+                                                         forBusinessLogin: forBusinessLogin)
     }
 
     private func authorizationIsCurrent(_ origin: AuthorizationOrigin, generation: UUID) -> Bool {
@@ -804,7 +815,9 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                 completion(.failure(GoogleAuthError.domainNotAllowed(Config.Google.allowedHostedDomain))); return
             }
             if let email = origin.email,
-               !GoogleAccountLinkPolicy.canUseIntegration(primaryBusinessEmail: email, googleEmail: profile.email) {
+               !GoogleAccountLinkPolicy.canAcceptOAuthProfile(primaryBusinessEmail: email,
+                                                                googleEmail: profile.email,
+                                                                forBusinessLogin: origin.forBusinessLogin) {
                 completion(.failure(GoogleAuthError.businessAccountMismatch)); return
             }
             // A refresh begun while the browser was open must not overwrite
@@ -977,10 +990,13 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         }
     }
 
-    func validateSignedInDomain(completion: @escaping (Result<GoogleUserProfile, Error>) -> Void) {
+    func validateSignedInDomain(forBusinessLogin: Bool = false,
+                                completion: @escaping (Result<GoogleUserProfile, Error>) -> Void) {
         let generation = connectionGeneration
-        let origin = AuthorizationOrigin(workspace: workspaceStampProvider(), session: businessSessionProvider())
-        let expectedBusinessEmail = origin.email ?? businessEmailProvider()
+        let origin = AuthorizationOrigin(workspace: workspaceStampProvider(),
+                                         session: businessSessionProvider(),
+                                         forBusinessLogin: forBusinessLogin)
+        let expectedBusinessEmail = forBusinessLogin ? nil : (origin.email ?? businessEmailProvider())
         fetchUserProfile(rememberIdentity: false) { result in
             DispatchQueue.main.async {
                 guard self.authorizationIsCurrent(origin, generation: generation) else {
@@ -994,9 +1010,10 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                         completion(.failure(GoogleAuthError.domainNotAllowed(Config.Google.allowedHostedDomain)))
                         return
                     }
-                    guard GoogleAccountLinkPolicy.canUseIntegration(
+                    guard GoogleAccountLinkPolicy.canAcceptOAuthProfile(
                         primaryBusinessEmail: expectedBusinessEmail,
-                        googleEmail: profile.email
+                        googleEmail: profile.email,
+                        forBusinessLogin: forBusinessLogin
                     ) else {
                         self.signOut()
                         completion(.failure(GoogleAuthError.businessAccountMismatch))

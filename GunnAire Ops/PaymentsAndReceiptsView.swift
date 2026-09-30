@@ -1424,6 +1424,16 @@ struct PaymentsAndReceiptsView: View {
     }
 
     private func queueFieldPaymentWithBackend(_ payment: Payment) async {
+        let originalStamp = CompanyWorkspaceAccessController.shared.operationStamp
+        defer {
+            if payment.modelContext?.container === modelContext.container,
+               CompanyWorkspaceAccessController.shared.operationStamp == originalStamp {
+                do { try modelContext.save() }
+                catch {
+                    backendUploadMessage += " The company queue outcome could not be saved locally: \(error.localizedDescription) Check the original payment before retrying."
+                }
+            }
+        }
         guard GunnAireBackendService.isConfigured else {
             payment.markSharedCompanyQueueUnavailable()
             backendUploadMessage = "Payment saved locally. Shared company queue is not configured."
@@ -1615,6 +1625,8 @@ struct PaymentsAndReceiptsView: View {
                     cardLast4 = String(masked)
                 }
                 authorizationReference = result.charge.authCode ?? authorizationReference
+                let previousBalance = invoice.quickBooksBalanceDue
+                let previousStatus = invoice.status
                 let payment = saveLocalPayment(
                     id: localPaymentID,
                     invoice: invoice,
@@ -1631,6 +1643,16 @@ struct PaymentsAndReceiptsView: View {
                     processorOverride: OnsitePaymentProcessor.quickBooksPayments.rawValue
                 )
                 updateInvoiceStatusAfterPayment(invoice)
+                do { try modelContext.save() }
+                catch {
+                    modelContext.delete(payment)
+                    invoice.quickBooksBalanceDue = previousBalance
+                    invoice.status = previousStatus
+                    actionMessage = "QuickBooks captured the card payment, but this device could not save its record: \(error.localizedDescription) Do not charge again. Open Payment review for this invoice and verify attempt \(localPaymentID.uuidString)."
+                    resetPaymentForm()
+                    showingRecordPaymentSheet = false
+                    return
+                }
                 await queueFieldPaymentWithBackend(payment)
                 if let accountingError = result.accountingError {
                     actionMessage = "Charge captured in QuickBooks Payments, but accounting sync still needs attention: \(accountingError)"
@@ -1668,6 +1690,8 @@ struct PaymentsAndReceiptsView: View {
                 )
                 try result.validateWorkspace()
                 authorizationReference = result.charge.authCode ?? authorizationReference
+                let previousBalance = invoice.quickBooksBalanceDue
+                let previousStatus = invoice.status
                 let payment = saveLocalPayment(
                     id: localPaymentID,
                     invoice: invoice,
@@ -1684,6 +1708,16 @@ struct PaymentsAndReceiptsView: View {
                     processorOverride: OnsitePaymentProcessor.quickBooksPayments.rawValue
                 )
                 updateInvoiceStatusAfterPayment(invoice)
+                do { try modelContext.save() }
+                catch {
+                    modelContext.delete(payment)
+                    invoice.quickBooksBalanceDue = previousBalance
+                    invoice.status = previousStatus
+                    actionMessage = "QuickBooks submitted the ACH payment, but this device could not save its record: \(error.localizedDescription) Do not submit again. Open Payment review for this invoice and verify attempt \(localPaymentID.uuidString)."
+                    resetPaymentForm()
+                    showingRecordPaymentSheet = false
+                    return
+                }
                 await queueFieldPaymentWithBackend(payment)
                 if let accountingError = result.accountingError {
                     actionMessage = "ACH payment submitted, but accounting sync still needs attention: \(accountingError)"
@@ -1698,15 +1732,34 @@ struct PaymentsAndReceiptsView: View {
             return
         }
 
+        let previousBalance = invoice.quickBooksBalanceDue
+        let previousStatus = invoice.status
         let payment = saveLocalPayment(
             invoice: invoice,
             amount: amount,
-            quickBooksAccountingSyncStatus: isQuickBooksConnected ? "pending" : nil,
+            quickBooksAccountingSyncStatus: "pending",
+            quickBooksAccountingSyncDetail: "Saved locally; QuickBooks accounting publication is pending.",
             processorSyncStatus: "recorded"
         )
         updateInvoiceStatusAfterPayment(invoice)
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.delete(payment)
+            invoice.quickBooksBalanceDue = previousBalance
+            invoice.status = previousStatus
+            actionMessage = "The payment could not be saved locally, so no company or QuickBooks request was sent: \(error.localizedDescription)"
+            return
+        }
+        let hasRealmProof = (try? await AutomaticPaymentSync.shared.recordRealmProof(
+            for: payment, context: modelContext)) == true
         await queueFieldPaymentWithBackend(payment)
-        actionMessage = "Payment recorded for \(invoice.customer.name)."
+        if hasRealmProof { AutomaticPaymentSync.shared.enqueue(payment, context: modelContext) }
+        if !hasRealmProof {
+            actionMessage = "Payment recorded for \(invoice.customer.name). The original QuickBooks company was not verified, so an administrator must review accounting sync after reconnecting."
+        } else {
+            actionMessage = "Payment recorded for \(invoice.customer.name). QuickBooks accounting is queued for its original company."
+        }
         resetPaymentForm()
         showingRecordPaymentSheet = false
     }
@@ -1899,8 +1952,8 @@ GunnAire
         syncingPaymentID = payment.id
         Task {
             do {
-                let result = try await QuickBooksPaymentsService.shared
-                    .syncAndRecordAccountingFollowUp(for: payment, manual: true)
+                let result = try await AutomaticPaymentSync.shared
+                    .perform(payment, context: modelContext, manual: true)
                 try await MainActor.run {
                     try result.validateWorkspace()
                     syncingPaymentID = nil
@@ -1924,7 +1977,8 @@ GunnAire
         syncingPaymentID = payment.id
         Task {
             do {
-                let result = try await QuickBooksPaymentsService.shared.syncAndRecordAccountingFollowUp(for: payment)
+                let result = try await AutomaticPaymentSync.shared
+                    .perform(payment, context: modelContext, manual: false)
                 try await MainActor.run {
                     try result.validateWorkspace()
                     syncingPaymentID = nil

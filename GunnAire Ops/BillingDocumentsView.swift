@@ -1860,7 +1860,7 @@ GunnAire
                                         .accessibilityIdentifier("ManagementBillingSavedItems")
                                 }
                                 BillingPublicationReviewLink(document: document, context: modelContext)
-                                Button("Sync Saved \(document.label)") { publishBillingDocument(document) }
+                                Button("Sync Saved \(document.label)") { publishBillingDocument(document, explicitReview: true) }
                                     .disabled(!canAttemptSharedBilling || billingSyncLifecycles["\(document.label)-\(document.id)"] != nil)
                                 if case .estimate(let estimate) = document {
                                     estimateDeliveryAction(estimate)
@@ -2217,7 +2217,7 @@ GunnAire
         guard saveBillingContext(failureMessage: "Could not save the original draft") else { return }
         newDocumentSaveConfirmed = true
         actionMessage = "\(document.label) saved locally."
-        publishBillingDocument(document)
+        recordNewlySavedBillingDocument(document, publishWhenAvailable: true)
     }
 
     @ViewBuilder
@@ -4037,7 +4037,7 @@ GunnAire
                                         BillingPublicationReviewLink(document: .invoice(invoice), context: modelContext)
                                             .buttonStyle(.plain)
                                         if invoice.quickBooksSyncState != "synced" {
-                                            Button("Sync Saved Invoice") { publishBillingDocument(.invoice(invoice)) }
+                                            Button("Sync Saved Invoice") { publishBillingDocument(.invoice(invoice), explicitReview: true) }
                                                 .buttonStyle(.bordered)
                                                 .disabled(!canAttemptSharedBilling || billingSyncLifecycles["Invoice-\(invoice.id)"] != nil)
                                                 .accessibilityIdentifier("SyncSavedInvoice-\(invoice.id.uuidString)")
@@ -5399,7 +5399,7 @@ GunnAire
         actionMessage = canAttemptSharedBilling
             ? "Agreement invoice created locally. Publishing its approved item and invoice to QuickBooks..."
             : "Agreement invoice created locally. QuickBooks publication is pending until the connection is available."
-        syncInvoiceIfNeeded(invoice, customer: agreement.customer, items: [billingItem])
+        recordNewlySavedBillingDocument(.invoice(invoice), publishWhenAvailable: true)
     }
 
     private func createProgressInvoice(for milestone: ProjectMilestone) {
@@ -5496,11 +5496,7 @@ GunnAire
                 actionMessage = canAttemptSharedBilling
                     ? "Progress invoice created locally. Syncing the approved milestone allocation to QuickBooks..."
                     : "Progress invoice created locally. QuickBooks publication is pending."
-                let restoredItems = restoredCatalogItems(
-                    snapshotJSON: invoice.catalogSnapshotJSON,
-                    lineItemSummary: invoice.lineItemSummary
-                )
-                syncInvoiceIfNeeded(invoice, customer: call.customer, items: restoredItems)
+                recordNewlySavedBillingDocument(.invoice(invoice), publishWhenAvailable: true)
             } catch {
                 milestone.invoiceID = nil
                 milestone.status = priorStatus
@@ -8344,6 +8340,13 @@ GunnAire
                         isPreparingCustomerDocument = false
                     }
                 }
+                let realmMarkerIssue: String?
+                do {
+                    let bound = try await AutomaticOutboundSync.shared.recordNewlySaved(.invoice(invoice), context: modelContext)
+                    realmMarkerIssue = bound ? nil : "The original QuickBooks company could not be verified when this invoice was saved. Open the saved invoice and choose Sync Saved Invoice after reviewing the business connection."
+                } catch {
+                    realmMarkerIssue = error.localizedDescription
+                }
                 do {
                     let validateReport = try await preparation.perform {
                         try GmailDraftBusinessSnapshot.validate(initiatingSource, business: initiatingBusiness, context: modelContext)
@@ -8352,7 +8355,9 @@ GunnAire
                     }
                     try preparation.check()
                     try validateReport?()
-                    if !items.isEmpty {
+                    if let realmMarkerIssue {
+                        actionMessage = "Invoice and documentation are saved locally. Automatic QuickBooks recovery needs review because its company binding could not be saved: \(realmMarkerIssue)"
+                    } else if !items.isEmpty {
                         syncInvoiceIfNeeded(invoice, customer: customer, items: items)
                         actionMessage = canAttemptSharedBilling
                             ? "Invoice saved with its documentation. Checking QuickBooks publication…"
@@ -9875,7 +9880,7 @@ GunnAire
                 return
             }
             if startsNewDocument { newDocumentSaveConfirmed = true }
-            syncEstimateIfNeeded(estimate, customer: customer, items: selectedLineItems)
+            recordNewlySavedBillingDocument(.estimate(estimate), publishWhenAvailable: true)
             if openInvoiceAfterEstimateCreation {
                 selectedDocumentKind = .invoice
                 actionMessage = "Estimate created. Review and create the invoice when ready."
@@ -10064,10 +10069,6 @@ GunnAire
         }
     }
 
-    private func syncEstimateIfNeeded(_ estimate: Estimate, customer: Customer, items: [Item]) {
-        publishBillingDocument(.estimate(estimate))
-    }
-
     private func syncInvoiceIfNeeded(_ invoice: Invoice, customer: Customer, items: [Item]) {
         guard canAttemptSharedBilling else {
             invoice.quickBooksSyncStatus = "pending"
@@ -10078,10 +10079,28 @@ GunnAire
         publishBillingDocument(.invoice(invoice))
     }
 
-    private func publishBillingDocument(_ document: QuickBooksBillingDocument) {
+    private func recordNewlySavedBillingDocument(_ document: QuickBooksBillingDocument,
+                                                 publishWhenAvailable: Bool) {
+        Task { @MainActor in
+            do {
+                let bound = try await AutomaticOutboundSync.shared.recordNewlySaved(document, context: modelContext)
+                if bound && publishWhenAvailable && canAttemptSharedBilling {
+                    publishBillingDocument(document)
+                } else if !bound {
+                    actionMessage = "\(document.label) is saved locally. Its original QuickBooks company could not be verified at save time. Review the saved document and choose Sync Saved \(document.label) when connected."
+                }
+            } catch {
+                actionMessage = "\(document.label) is saved locally. Automatic QuickBooks recovery needs review because its company binding could not be saved: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func publishBillingDocument(_ document: QuickBooksBillingDocument,
+                                        explicitReview: Bool = false) {
         guard canAttemptSharedBilling else { return }
         actionMessage = document.label + " saved. Checking the business connection…"
-        AutomaticOutboundSync.shared.publish(document, context: modelContext) { result in
+        AutomaticOutboundSync.shared.publish(document, context: modelContext,
+            explicitReview: explicitReview) { result in
             switch result {
             case .success(let message): actionMessage = message
             case .failure(let error):

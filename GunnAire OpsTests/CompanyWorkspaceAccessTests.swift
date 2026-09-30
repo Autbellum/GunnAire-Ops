@@ -523,7 +523,7 @@ struct CompanyWorkspaceAccessTests {
         }
     }
 
-    @Test func unavailableAccountRetiresCachedAndLateSiblingResolution() async throws {
+    @Test func overlappingAccountChecksShareOneResolutionAndCacheItsResult() async throws {
         let cache = CompanyCloudKitAccountCache(lifetime: 900)
         let probe = AccountResolutionProbe()
         let account = CompanyCloudKitAccount(environment: "development", accountHash: "approved")
@@ -532,27 +532,53 @@ struct CompanyWorkspaceAccessTests {
         let first = Task { try await cache.current { try await probe.resolve(started: signal) } }
         #expect(await starts.next() == 0)
         let second = Task { try await cache.current { try await probe.resolve(started: signal) } }
-        #expect(await starts.next() == 1)
         let late = Task { try await cache.current { try await probe.resolve(started: signal) } }
-        #expect(await starts.next() == 2)
-
         await probe.finish(0, result: .success(account))
         #expect(try await first.value.accountHash == "approved")
-        await probe.finish(1, result: .failure(CompanyCloudKitAccountTemporarilyUnavailable()))
-        do {
-            _ = try await second.value
-            Issue.record("Temporary account unavailability must be reported")
-        } catch { #expect(error is CompanyCloudKitAccountTemporarilyUnavailable) }
-        await probe.finish(2, result: .success(account))
-        do {
-            _ = try await late.value
-            Issue.record("An older overlapping success must not restore unavailable account proof")
-        } catch { #expect(error is CompanyCloudKitAccountVerificationSuperseded) }
+        #expect(try await second.value.accountHash == "approved")
+        #expect(try await late.value.accountHash == "approved")
+        #expect(await probe.reads == 1)
 
+        cache.invalidate()
         let reread = try await cache.current {
             CompanyCloudKitAccount(environment: "development", accountHash: "freshly-verified")
         }
         #expect(reread.accountHash == "freshly-verified")
+    }
+
+    @Test func freshForegroundProofDoesNotSupersedeStaffLookupOrRetainItsOlderResult() async throws {
+        let cache = CompanyCloudKitAccountCache(lifetime: 900)
+        let probe = AccountResolutionProbe()
+        let (started, signal) = AsyncStream<Int>.makeStream()
+        var starts = started.makeAsyncIterator()
+
+        let staff = Task { try await cache.current { try await probe.resolve(started: signal) } }
+        #expect(await starts.next() == 0)
+        let foreground = Task { try await cache.fresh { try await probe.resolve(started: signal) } }
+        #expect(await starts.next() == 1)
+
+        await probe.finish(1, result: .success(.init(environment: "production", accountHash: "current-account")))
+        #expect(try await foreground.value.accountHash == "current-account")
+        await probe.finish(0, result: .success(.init(environment: "production", accountHash: "older-account")))
+        #expect(try await staff.value.accountHash == "current-account")
+        #expect(await probe.reads == 2)
+
+        let cached = try await cache.current { throw CompanyWorkspaceFailure.configuration }
+        #expect(cached.accountHash == "current-account")
+    }
+
+    @Test func foregroundProofReadsAgainInsideTheCacheLifetime() async throws {
+        let cache = CompanyCloudKitAccountCache(lifetime: 900)
+        let first = try await cache.current {
+            CompanyCloudKitAccount(environment: "production", accountHash: "before-foreground")
+        }
+        #expect(first.accountHash == "before-foreground")
+        let fresh = try await cache.fresh {
+            CompanyCloudKitAccount(environment: "production", accountHash: "after-foreground")
+        }
+        #expect(fresh.accountHash == "after-foreground")
+        let cached = try await cache.current { throw CompanyWorkspaceFailure.configuration }
+        #expect(cached.accountHash == "after-foreground")
     }
 
     @Test func accountChangeInvalidationRejectsPendingResolutionAndItsLateFailure() async throws {
@@ -562,22 +588,17 @@ struct CompanyWorkspaceAccessTests {
         var starts = started.makeAsyncIterator()
         let lateSuccess = Task { try await cache.current { try await probe.resolve(started: signal) } }
         #expect(await starts.next() == 0)
-        let lateFailure = Task { try await cache.current { try await probe.resolve(started: signal) } }
-        #expect(await starts.next() == 1)
         cache.invalidate()
         let fresh = try await cache.current {
             CompanyCloudKitAccount(environment: "development", accountHash: "replacement")
         }
         #expect(fresh.accountHash == "replacement")
 
-        await probe.finish(0, result: .success(.init(environment: "development", accountHash: "old")))
+        await probe.finish(0, result: .failure(CompanyCloudKitAccountTemporarilyUnavailable()))
         do {
             _ = try await lateSuccess.value
             Issue.record("Account-change invalidation must reject old pending account evidence")
-        } catch { #expect(error is CompanyCloudKitAccountVerificationSuperseded) }
-        await probe.finish(1, result: .failure(CompanyCloudKitAccountTemporarilyUnavailable()))
-        do { _ = try await lateFailure.value }
-        catch {
+        } catch {
             let superseded = try #require(error as? CompanyCloudKitAccountVerificationSuperseded)
             // The retired failure is the only evidence of why verification is
             // not succeeding. A bare "superseded" hid it, so the gate and the
@@ -586,6 +607,7 @@ struct CompanyWorkspaceAccessTests {
             #expect(superseded.errorDescription?.contains("CompanyCloudKitAccountTemporarilyUnavailable") == true)
         }
 
+        #expect(await probe.reads == 1)
         // A failure from the old epoch must not erase the replacement's cache.
         let retained = try await cache.current { throw CompanyWorkspaceFailure.configuration }
         #expect(retained.accountHash == "replacement")
@@ -753,6 +775,27 @@ struct CompanyWorkspaceAccessTests {
         let second = other.controller()
         await second.refreshIfStale(maxAge: CompanyWorkspaceAccessController.verificationInterval)
         #expect(other.fetchCount == 1)
+    }
+
+    @Test func changedICloudAccountWhileAppWasClosedCannotOpenSavedWorkspace() async throws {
+        let h = try Harness(); h.register(); h.cache()
+        h.cloudAccountHash = String(repeating: "b", count: 64)
+        let controller = h.controller()
+        await controller.refreshIfStale(maxAge: CompanyWorkspaceAccessController.verificationInterval)
+        #expect(controller.authorizedContainer == nil)
+        #expect(h.openCount == 0)
+        #expect(controller.phase == .blocked(.differentWorkspace))
+    }
+
+    @Test func changedICloudAccountOnForegroundClosesMountedWorkspaceWithoutNotification() async throws {
+        let h = try Harness(); h.register()
+        let controller = h.controller()
+        await controller.refresh()
+        #expect(controller.phase == .ready)
+        h.cloudAccountHash = String(repeating: "b", count: 64)
+        await controller.refreshIfStale(maxAge: CompanyWorkspaceAccessController.verificationInterval)
+        #expect(controller.authorizedContainer == nil)
+        #expect(controller.phase == .blocked(.restartRequired))
     }
 
     /// The metadata lookup is allowed to take time, but a session removed

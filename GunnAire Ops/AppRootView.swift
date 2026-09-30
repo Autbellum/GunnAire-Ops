@@ -132,6 +132,7 @@ struct AppRootView: View {
             if !isAuthenticated {
                 StaffReplicaReceiveController.shared.stopRecovery()
                 CompanyWorkspaceAccessController.shared.invalidate()
+                BusinessLoginSelection.clear()
             }
         }
         .onContinueUserActivity(FieldPaymentHandoff.activityType) { activity in
@@ -170,14 +171,26 @@ struct AppRootView: View {
         async let googleRestored: Void = GoogleAuthManager.shared.restoreStoredSession()
         _ = await (appleRestored, googleRestored)
         guard hasAuthenticatedUser else { return }
-        if AppleAuthManager.shared.isAuthenticated {
+        let provider = BusinessLoginSelection.resolvedProvider(
+            selected: BusinessLoginSelection.selected,
+            appleBusinessSessionAvailable: AppleAuthManager.shared.isAuthenticated &&
+                AppleAuthManager.shared.workspaceSessionProof != nil,
+            googleBusinessSessionAvailable: GoogleAuthManager.shared.isAuthenticated &&
+                GoogleAuthManager.shared.workspaceSessionProof != nil
+        )
+        switch provider {
+        case .apple:
             if !(await AppleAuthManager.shared.validateCredentialState()) {
                 FieldPaymentHandoff.shared.end()
                 hasAuthenticatedUser = false
+            } else if BusinessLoginSelection.selected == nil {
+                BusinessLoginSelection.choose(.apple)
             }
-            return
-        }
-        if !GoogleAuthManager.shared.isAuthenticated {
+        case .google:
+            if BusinessLoginSelection.selected == nil {
+                BusinessLoginSelection.choose(.google)
+            }
+        case nil:
             FieldPaymentHandoff.shared.end()
             hasAuthenticatedUser = false
         }

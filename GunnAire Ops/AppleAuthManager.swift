@@ -284,12 +284,20 @@ enum AppIdentity {
         }
         #endif
 
-        let candidates = [
-            AppleAuthManager.shared.signedInEmail,
-            GoogleAuthManager.shared.signedInEmail,
-            UserDefaults.standard.string(forKey: "SignedInBusinessEmail"),
-            UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
-        ]
+        let candidates: [String?]
+        switch BusinessLoginSelection.selected {
+        case .apple:
+            candidates = [AppleAuthManager.shared.signedInEmail,
+                          UserDefaults.standard.string(forKey: "SignedInBusinessEmail")]
+        case .google:
+            candidates = [GoogleAuthManager.shared.signedInEmail,
+                          UserDefaults.standard.string(forKey: "SignedInGoogleEmail")]
+        case nil:
+            candidates = [AppleAuthManager.shared.signedInEmail,
+                          GoogleAuthManager.shared.signedInEmail,
+                          UserDefaults.standard.string(forKey: "SignedInBusinessEmail"),
+                          UserDefaults.standard.string(forKey: "SignedInGoogleEmail")]
+        }
         return candidates
             .compactMap { $0 }
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
@@ -297,6 +305,12 @@ enum AppIdentity {
     }
 
     static var hasAuthenticatedProvider: Bool {
-        AppleAuthManager.shared.isAuthenticated || GoogleAuthManager.shared.isAuthenticated
+        BusinessLoginSelection.resolvedProvider(
+            selected: BusinessLoginSelection.selected,
+            appleBusinessSessionAvailable: AppleAuthManager.shared.isAuthenticated &&
+                AppleAuthManager.shared.workspaceSessionProof != nil,
+            googleBusinessSessionAvailable: GoogleAuthManager.shared.isAuthenticated &&
+                GoogleAuthManager.shared.workspaceSessionProof != nil
+        ) != nil
     }
 }

@@ -1,12 +1,127 @@
 import Foundation
 import SwiftData
 
+private actor AutomaticOutboundRealmStore {
+    func markNew(_ record: AutomaticOutboundSync.RealmRecord) throws {
+        let account = record.account
+        if let existing = try KeychainStore.loadCodable(AutomaticOutboundSync.RealmRecord.self, account: account) {
+            guard existing.sameDocument(as: record) else { throw AutomaticOutboundSync.RealmError.reviewRequired }
+            return
+        }
+        try KeychainStore.saveCodable(record, account: account)
+    }
+
+    func cachedScope(companyID: UUID) throws -> AutomaticOutboundSync.RealmScope? {
+        let value = try KeychainStore.loadCodable(AutomaticOutboundSync.RealmScope.self,
+            account: AutomaticOutboundSync.RealmScope.account(companyID: companyID))
+        guard value?.companyID == companyID else { return nil }
+        return value
+    }
+
+    func bindSaved(_ expected: AutomaticOutboundSync.RealmRecord) throws {
+        guard let stored = try KeychainStore.loadCodable(AutomaticOutboundSync.RealmRecord.self,
+            account: expected.account), stored.sameDocument(as: expected) else {
+            throw AutomaticOutboundSync.RealmError.reviewRequired
+        }
+        guard stored.realmID == nil && stored.environment == nil || stored == expected else {
+            throw AutomaticOutboundSync.RealmError.wrongRealm
+        }
+        try KeychainStore.saveCodable(expected, account: expected.account)
+    }
+
+    func remember(_ scope: AutomaticOutboundSync.RealmScope) throws {
+        try KeychainStore.saveCodable(scope, account: AutomaticOutboundSync.RealmScope.account(companyID: scope.companyID))
+    }
+
+    func hasBoundProof(_ identity: AutomaticOutboundSync.RealmRecord) throws -> Bool {
+        guard let stored = try KeychainStore.loadCodable(AutomaticOutboundSync.RealmRecord.self,
+            account: identity.account), stored.sameDocument(as: identity),
+              let realmID = stored.realmID, !realmID.isEmpty,
+              let environment = stored.environment, ["sandbox", "production"].contains(environment) else {
+            return false
+        }
+        return true
+    }
+
+    func verifyOrBind(_ expected: AutomaticOutboundSync.RealmRecord, explicitReview: Bool) throws {
+        let stored = try KeychainStore.loadCodable(AutomaticOutboundSync.RealmRecord.self, account: expected.account)
+        switch AutomaticOutboundSync.realmDecision(stored: stored, expected: expected, explicitReview: explicitReview) {
+        case .proceed:
+            return
+        case .bind:
+            try KeychainStore.saveCodable(expected, account: expected.account)
+        case .reviewRequired:
+            throw AutomaticOutboundSync.RealmError.reviewRequired
+        case .wrongRealm:
+            throw AutomaticOutboundSync.RealmError.wrongRealm
+        }
+    }
+}
+
 /// Keeps provider publication alive after the editor that saved a record closes.
 /// The SwiftData context and every provider operation remain bound to the same
 /// verified workspace; pending records are rediscovered after a process restart.
 @MainActor
 final class AutomaticOutboundSync {
     static let shared = AutomaticOutboundSync()
+
+    nonisolated struct RealmRecord: Codable, Equatable, Sendable {
+        let companyID: UUID
+        let documentType: String
+        let documentID: UUID
+        let customerID: UUID
+        let createdAt: Date
+        let realmID: String?
+        let environment: String?
+
+        nonisolated var account: String {
+            "GunnAireBillingRealm.v1.\(companyID.uuidString.lowercased()).\(documentType).\(documentID.uuidString.lowercased())"
+        }
+
+        nonisolated func sameDocument(as other: Self) -> Bool {
+            companyID == other.companyID && documentType == other.documentType &&
+                documentID == other.documentID && customerID == other.customerID && createdAt == other.createdAt
+        }
+    }
+
+    nonisolated struct RealmScope: Codable, Equatable, Sendable {
+        let companyID: UUID
+        let realmID: String
+        let environment: String
+
+        nonisolated static func account(companyID: UUID) -> String {
+            "GunnAireBillingVerifiedRealm.v1.\(companyID.uuidString.lowercased())"
+        }
+    }
+
+    nonisolated enum RealmDecision: Equatable, Sendable {
+        case proceed, bind, reviewRequired, wrongRealm
+    }
+
+    nonisolated enum RealmError: LocalizedError {
+        case reviewRequired, wrongRealm
+
+        nonisolated var errorDescription: String? {
+            switch self {
+            case .reviewRequired:
+                "The original QuickBooks company for this saved document is not verified on this device. Review the document and choose Sync Saved Document before publishing it."
+            case .wrongRealm:
+                "This document was first prepared for a different QuickBooks company. Reconnect that company and review the original document before syncing."
+            }
+        }
+    }
+
+    nonisolated static func realmDecision(stored: RealmRecord?, expected: RealmRecord,
+                                          explicitReview: Bool) -> RealmDecision {
+        guard let stored else { return explicitReview ? .bind : .reviewRequired }
+        guard stored.sameDocument(as: expected) else { return .reviewRequired }
+        if stored.realmID == nil && stored.environment == nil {
+            return explicitReview ? .bind : .reviewRequired
+        }
+        guard let realmID = stored.realmID, let environment = stored.environment,
+              !realmID.isEmpty, !environment.isEmpty else { return .reviewRequired }
+        return realmID == expected.realmID && environment == expected.environment ? .proceed : .wrongRealm
+    }
 
     enum DocumentKey: Hashable {
         case customer(UUID)
@@ -27,6 +142,7 @@ final class AutomaticOutboundSync {
 
     private var pending: [DocumentKey] = []
     private var preparations: [DocumentKey: SharedBillingPreparation] = [:]
+    private var explicitReviewKeys: Set<DocumentKey> = []
     private var deferredUntil: [DocumentKey: Date] = [:]
     private var completions: [DocumentKey: [(Result<String, Error>) -> Void]] = [:]
     private var currentKey: DocumentKey?
@@ -43,8 +159,75 @@ final class AutomaticOutboundSync {
     private var calendarQueued = false
     private var lastRecoveryAt: Date?
     private let recoveryInterval: TimeInterval = 60
+    private let realmStore = AutomaticOutboundRealmStore()
 
     private init() {}
+
+    @discardableResult
+    func recordNewlySaved(_ document: QuickBooksBillingDocument, context: ModelContext) async throws -> Bool {
+        guard isAuthorized(context), let record = realmRecord(for: document, realmID: nil, environment: nil) else {
+            throw BillingPublicationError.accessRequired
+        }
+        let stamp = CompanyWorkspaceAccessController.shared.operationStamp
+        try await realmStore.markNew(record)
+        guard isAuthorized(context), CompanyWorkspaceAccessController.shared.operationStamp == stamp else {
+            throw BillingPublicationError.accessRequired
+        }
+        if let cached = try await realmStore.cachedScope(companyID: record.companyID) {
+            let bound = RealmRecord(companyID: record.companyID, documentType: record.documentType,
+                documentID: record.documentID, customerID: record.customerID, createdAt: record.createdAt,
+                realmID: cached.realmID, environment: cached.environment)
+            try await realmStore.bindSaved(bound)
+            guard isAuthorized(context), CompanyWorkspaceAccessController.shared.operationStamp == stamp else {
+                throw BillingPublicationError.accessRequired
+            }
+            return true
+        }
+        guard let customer = document.customer else { throw BillingPublicationError.accessRequired }
+        let identity = SharedBillingIdentity(companyID: record.companyID,
+            documentType: document.label == "Invoice" ? .invoice : .estimate,
+            localDocumentID: document.id, localCustomerID: customer.id,
+            serviceCallID: document.serviceCallID, projectMilestoneID: document.projectMilestoneID)
+        let connection: SharedBillingConnection
+        do {
+            let data = try await GunnAireBackendService.billingPublicationClient.transport(identity.path, "GET", nil)
+            guard data.count <= 16_384 else { return false }
+            connection = try await SharedBillingConnection.decodeAsync(data)
+            try connection.validate(identity)
+        } catch {
+            guard isAuthorized(context), CompanyWorkspaceAccessController.shared.operationStamp == stamp else {
+                throw BillingPublicationError.accessRequired
+            }
+            return false
+        }
+        guard isAuthorized(context), CompanyWorkspaceAccessController.shared.operationStamp == stamp else {
+            throw BillingPublicationError.accessRequired
+        }
+        let bound = RealmRecord(companyID: record.companyID, documentType: record.documentType,
+            documentID: record.documentID, customerID: record.customerID, createdAt: record.createdAt,
+            realmID: connection.realmID, environment: connection.environment)
+        try await realmStore.bindSaved(bound)
+        try await realmStore.remember(RealmScope(companyID: record.companyID,
+            realmID: connection.realmID, environment: connection.environment))
+        guard isAuthorized(context), CompanyWorkspaceAccessController.shared.operationStamp == stamp else {
+            throw BillingPublicationError.accessRequired
+        }
+        return true
+    }
+
+    private func realmRecord(for document: QuickBooksBillingDocument, realmID: String?,
+                             environment: String?) -> RealmRecord? {
+        guard let companyID = CompanyWorkspaceAccessController.shared.verifiedCompanyID,
+              let customer = document.customer else { return nil }
+        let createdAt: Date
+        switch document {
+        case .invoice(let value): createdAt = value.createdAt
+        case .estimate(let value): createdAt = value.createdAt
+        }
+        return RealmRecord(companyID: companyID, documentType: document.label.lowercased(),
+            documentID: document.id, customerID: customer.id, createdAt: createdAt,
+            realmID: realmID, environment: environment)
+    }
 
     static func pendingDocumentKeys(invoices: [Invoice], estimates: [Estimate]) -> [DocumentKey] {
         QuickBooksEstimatePublicationRecovery.queuedEstimates(from: estimates).map { .estimate($0.id) }
@@ -56,7 +239,14 @@ final class AutomaticOutboundSync {
             .map { .customer($0.id) }
     }
 
+    static func pendingRecoveryKeys(invoices: [Invoice], estimates: [Estimate],
+                                    customers: [Customer], includeCustomers: Bool) -> [DocumentKey] {
+        pendingDocumentKeys(invoices: invoices, estimates: estimates) +
+            (includeCustomers ? pendingCustomerKeys(customers) : [])
+    }
+
     func publish(_ document: QuickBooksBillingDocument, context: ModelContext,
+                 explicitReview: Bool = false,
                  completion: ((Result<String, Error>) -> Void)? = nil) {
         let key: DocumentKey = document.label == "Invoice" ? .invoice(document.id) : .estimate(document.id)
         guard isAuthorized(context) else {
@@ -65,6 +255,7 @@ final class AutomaticOutboundSync {
         }
         adopt(context)
         deferredUntil.removeValue(forKey: key)
+        if explicitReview { explicitReviewKeys.insert(key) }
         guard !pending.contains(key), currentKey != key else {
             if let completion { completions[key, default: []].append(completion) }
             return
@@ -88,7 +279,7 @@ final class AutomaticOutboundSync {
     }
 
     func recoverPending(context: ModelContext, force: Bool = false) {
-        guard isAuthorized(context), QuickBooksDataAPI.shared.isAuthenticated else { return }
+        guard isAuthorized(context) else { return }
         adopt(context)
         let now = Date()
         if !force, let lastRecoveryAt, now.timeIntervalSince(lastRecoveryAt) < recoveryInterval { return }
@@ -102,14 +293,30 @@ final class AutomaticOutboundSync {
             let estimateFetch = FetchDescriptor<Estimate>(predicate: #Predicate {
                 $0.quickBooksID == nil || $0.quickBooksID == ""
             }, sortBy: [SortDescriptor(\.createdAt, order: .reverse), SortDescriptor(\.id)])
-            let customerFetch = FetchDescriptor<Customer>(predicate: #Predicate {
-                $0.quickBooksID == nil || $0.quickBooksID == ""
-            }, sortBy: [SortDescriptor(\.name), SortDescriptor(\.id)])
             let invoices = try Self.nextPage(invoiceFetch, context: context, offset: &invoiceOffset)
             let estimates = try Self.nextPage(estimateFetch, context: context, offset: &estimateOffset)
-            let customers = try Self.nextPage(customerFetch, context: context, offset: &customerOffset)
-            let keys = Self.pendingDocumentKeys(invoices: invoices, estimates: estimates) +
-                Self.pendingCustomerKeys(customers)
+            let canRecoverCustomers: Bool
+            if QuickBooksDataAPI.shared.isAuthenticated {
+                do {
+                    try QuickBooksSyncAccessPolicy.validate(context: context)
+                    canRecoverCustomers = true
+                } catch {
+                    canRecoverCustomers = false
+                }
+            } else {
+                canRecoverCustomers = false
+            }
+            let customers: [Customer]
+            if canRecoverCustomers {
+                let customerFetch = FetchDescriptor<Customer>(predicate: #Predicate {
+                    $0.quickBooksID == nil || $0.quickBooksID == ""
+                }, sortBy: [SortDescriptor(\.name), SortDescriptor(\.id)])
+                customers = try Self.nextPage(customerFetch, context: context, offset: &customerOffset)
+            } else {
+                customers = []
+            }
+            let keys = Self.pendingRecoveryKeys(invoices: invoices, estimates: estimates,
+                customers: customers, includeCustomers: canRecoverCustomers)
             for key in keys where !pending.contains(key) && currentKey != key &&
                 (deferredUntil[key] ?? .distantPast) <= now {
                 pending.append(key)
@@ -171,6 +378,7 @@ final class AutomaticOutboundSync {
             customerOffset = 0
             pending.removeAll()
             preparations.removeAll()
+            explicitReviewKeys.removeAll()
             deferredUntil.removeAll()
             let callbacks = completions.values.flatMap { $0 }
             completions.removeAll()
@@ -220,6 +428,7 @@ final class AutomaticOutboundSync {
               queueGeneration == generation {
             let next = pending.removeFirst()
             currentKey = next
+            let explicitReview = explicitReviewKeys.remove(next) != nil
             processed += 1
             do {
                 if case .customer(let id) = next {
@@ -237,8 +446,23 @@ final class AutomaticOutboundSync {
                     currentKey = nil
                     continue
                 }
+                if !explicitReview {
+                    guard let identity = realmRecord(for: document, realmID: nil, environment: nil),
+                          try await realmStore.hasBoundProof(identity) else {
+                        // The proof can only be added through explicit review
+                        // or a new-document save on this device. Do not read
+                        // the same missing Keychain entry on every timer pass.
+                        deferredUntil[next] = .distantFuture
+                        let callbacks = completions.removeValue(forKey: next) ?? []
+                        callbacks.forEach { $0(.failure(RealmError.reviewRequired)) }
+                        currentKey = nil
+                        continue
+                    }
+                    guard queueGeneration == generation else { currentKey = nil; break }
+                }
                 let capturedPreparation = preparations.removeValue(forKey: next)
-                let result = try await publish(document, context: context, preparation: capturedPreparation)
+                let result = try await publish(document, context: context,
+                    preparation: capturedPreparation, explicitReview: explicitReview)
                 guard queueGeneration == generation else { currentKey = nil; break }
                 let callbacks = completions.removeValue(forKey: next) ?? []
                 callbacks.forEach { $0(.success(result)) }
@@ -273,7 +497,8 @@ final class AutomaticOutboundSync {
     }
 
     private func publish(_ document: QuickBooksBillingDocument, context: ModelContext,
-                         preparation capturedPreparation: SharedBillingPreparation?) async throws -> String {
+                         preparation capturedPreparation: SharedBillingPreparation?,
+                         explicitReview: Bool) async throws -> String {
         let lifecycle = QuickBooksSyncLifecycle()
         defer { lifecycle.cancel() }
         let stamp = CompanyWorkspaceAccessController.shared.operationStamp
@@ -290,6 +515,17 @@ final class AutomaticOutboundSync {
             throw PublicationFailure(underlying: error, mayHaveWritten: false)
         }
         do {
+            guard let realmID = workflow.run.workflow.realmID,
+                  let companyID = workflow.run.workflow.companyID,
+                  let record = realmRecord(for: document, realmID: realmID,
+                    environment: workflow.run.workflow.environment),
+                  record.companyID == companyID else { throw BillingPublicationError.accessRequired }
+            try await realmStore.verifyOrBind(record, explicitReview: explicitReview)
+            if explicitReview {
+                try await realmStore.remember(RealmScope(companyID: companyID,
+                    realmID: realmID, environment: workflow.run.workflow.environment))
+            }
+            try workflow.check()
             try await workflow.run.perform {
                 await QuickBooksAccountingConfigurationStore.shared.refresh(
                     realmID: workflow.run.workflow.realmID,

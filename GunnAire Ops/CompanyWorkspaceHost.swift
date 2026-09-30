@@ -153,13 +153,25 @@ enum CompanyWorkspaceDiagnostics {
     static var lastResolvedEnvironment: String = ""
 }
 
-/// Account lookups can overlap between workspace and staff operations. An
-/// explicit unavailable result retires successes from the same epoch, even
-/// when a sibling lookup finishes after that failure.
+/// Workspace and staff share ordinary account lookups. Foreground checks may
+/// request a newer proof without canceling either caller; the newest settled
+/// proof wins until an actual account-change notification invalidates it.
 @MainActor
 final class CompanyCloudKitAccountCache {
+    private struct Lookup {
+        let id: UUID
+        let generation: UUID
+        let sequence: UInt64
+        let task: Task<CompanyCloudKitAccount, Error>
+    }
+
     private var cached: (account: CompanyCloudKitAccount, resolvedAt: Date)?
+    private var inFlight: Lookup?
+    private var freshInFlight: Lookup?
     private var generation = UUID()
+    private var nextSequence: UInt64 = 0
+    private var settledSequence: UInt64 = 0
+    private var settledFailure: Error?
     private let lifetime: TimeInterval
 
     init(lifetime: TimeInterval) { self.lifetime = lifetime }
@@ -167,46 +179,94 @@ final class CompanyCloudKitAccountCache {
     func invalidate() {
         cached = nil
         generation = UUID()
+        inFlight?.task.cancel()
+        freshInFlight?.task.cancel()
+        inFlight = nil
+        freshInFlight = nil
+        nextSequence = 0
+        settledSequence = 0
+        settledFailure = nil
     }
 
     func current(
         resolve: @escaping @Sendable () async throws -> CompanyCloudKitAccount
     ) async throws -> CompanyCloudKitAccount {
         try Task.checkCancellation()
+        if let freshInFlight { return try await finish(freshInFlight) }
         let now = Date()
         if let cached, now >= cached.resolvedAt,
            now.timeIntervalSince(cached.resolvedAt) < lifetime {
             return cached.account
         }
-        let operation = generation
-        // Approachable concurrency makes nonisolated async work inherit its
-        // caller's executor. Profile I/O and parsing need an explicit hop.
-        let work = Task.detached(priority: .userInitiated) { try await resolve() }
+        if let inFlight { return try await finish(inFlight) }
+        let lookup = start(resolve)
+        inFlight = lookup
+        return try await finish(lookup)
+    }
+
+    /// Reads the account again on foreground without invalidating a concurrent
+    /// staff lookup. A fresh result takes precedence over any older lookup.
+    func fresh(
+        resolve: @escaping @Sendable () async throws -> CompanyCloudKitAccount
+    ) async throws -> CompanyCloudKitAccount {
+        try Task.checkCancellation()
+        if let freshInFlight { return try await finish(freshInFlight) }
+        let lookup = start(resolve)
+        freshInFlight = lookup
+        return try await finish(lookup)
+    }
+
+    private func start(_ resolve: @escaping @Sendable () async throws -> CompanyCloudKitAccount) -> Lookup {
+        nextSequence &+= 1
+        return Lookup(id: UUID(), generation: generation, sequence: nextSequence,
+                      task: Task.detached(priority: .userInitiated) { try await resolve() })
+    }
+
+    private func finish(_ lookup: Lookup) async throws -> CompanyCloudKitAccount {
         let account: CompanyCloudKitAccount
         do {
-            account = try await withTaskCancellationHandler {
-                try await work.value
-            } onCancel: { work.cancel() }
+            account = try await lookup.task.value
         } catch {
-            // Carry the retired failure's cause. Without it, a real
-            // configuration failure racing a sibling lookup reaches the gate
-            // as a bare "superseded", so the screen that names the actual
-            // problem and the screen that names the race disagree.
-            guard generation == operation else {
+            guard generation == lookup.generation else {
                 throw CompanyCloudKitAccountVerificationSuperseded(
                     retiredCause: CompanyWorkspaceAccessController.describeRawError(error))
             }
-            if error is CompanyCloudKitAccountTemporarilyUnavailable ||
-                (error as? CompanyWorkspaceFailure) == .accountUnavailable ||
-                (error as? CompanyWorkspaceFailure) == .configuration {
-                invalidate()
+            clearInFlight(lookup)
+            if lookup.sequence >= settledSequence {
+                settledSequence = lookup.sequence
+                settledFailure = error
+                cached = nil
+            }
+            if let freshInFlight, freshInFlight.sequence > lookup.sequence {
+                return try await finish(freshInFlight)
+            }
+            if lookup.sequence < settledSequence {
+                if let cached { return cached.account }
+                if let settledFailure { throw settledFailure }
             }
             throw error
         }
         try Task.checkCancellation()
-        guard generation == operation else { throw CompanyCloudKitAccountVerificationSuperseded() }
-        cached = (account, Date())
+        guard generation == lookup.generation else { throw CompanyCloudKitAccountVerificationSuperseded() }
+        clearInFlight(lookup)
+        if lookup.sequence >= settledSequence {
+            settledSequence = lookup.sequence
+            settledFailure = nil
+            cached = (account, Date())
+        }
+        if let freshInFlight, freshInFlight.sequence > lookup.sequence {
+            return try await finish(freshInFlight)
+        }
+        if lookup.sequence < settledSequence {
+            if let cached { return cached.account }
+            if let settledFailure { throw settledFailure }
+        }
         return account
+    }
+
+    private func clearInFlight(_ lookup: Lookup) {
+        if inFlight?.id == lookup.id { inFlight = nil }
+        if freshInFlight?.id == lookup.id { freshInFlight = nil }
     }
 }
 
@@ -275,6 +335,11 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
     static func current() async throws -> CompanyCloudKitAccount {
         guard !GunnAireCloudKit.usesTestDatabase else { throw CompanyWorkspaceFailure.configuration }
         return try await accountCache.current { try await resolve() }
+    }
+
+    static func fresh() async throws -> CompanyCloudKitAccount {
+        guard !GunnAireCloudKit.usesTestDatabase else { throw CompanyWorkspaceFailure.configuration }
+        return try await accountCache.fresh { try await resolve() }
     }
 
     /// Only transport failures retry. An unverified or mismatched transaction

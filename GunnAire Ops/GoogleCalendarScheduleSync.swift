@@ -443,17 +443,30 @@ enum GoogleCalendarScheduleSync {
         let list = try await calendars(workflow: workflow)
         let calendar = try canonicalCalendar(call.googleCalendarID, in: list, email: workflow.signedInEmail)
         guard calendar.isWritable else { throw GoogleCalendarWorkflowError.readOnly }
-        let remote: GoogleCalendarEvent = try await workflow.receive {
-            workflow.auth.fetchCalendarEvent(calendarID: calendar.id, eventID: id,
-                operation: workflow.operation, completion: $0)
+        let remote: GoogleCalendarEvent?
+        do {
+            remote = try await workflow.receive {
+                workflow.auth.fetchCalendarEvent(calendarID: calendar.id, eventID: id,
+                    operation: workflow.operation, completion: $0)
+            }
+        } catch GoogleAuthError.http(statusCode: 404) {
+            // A previous DELETE may have succeeded even when its reply was
+            // lost. This is the saved app-managed ID on its original route.
+            remote = nil
         }
         try requireCall(call, workflow: workflow)
-        try validateRemote(remote, id: id, call: call)
-        let version = try etag(remote)
-        let _: Void = try await workflow.receive {
-            workflow.auth.deleteCalendarEvent(calendarID: calendar.id, eventID: id,
-                ifMatch: version, notifyAttendees: canNotifyStaff(remote, workflow: workflow),
-                operation: workflow.operation, completion: $0)
+        if let remote {
+            try validateRemote(remote, id: id, call: call)
+            let version = try etag(remote)
+            do {
+                let _: Void = try await workflow.receive {
+                    workflow.auth.deleteCalendarEvent(calendarID: calendar.id, eventID: id,
+                        ifMatch: version, notifyAttendees: canNotifyStaff(remote, workflow: workflow),
+                        operation: workflow.operation, completion: $0)
+                }
+            } catch GoogleAuthError.http(statusCode: 404) {
+                // The exact validated event disappeared before deletion.
+            }
         }
         try requireCall(call, workflow: workflow)
         markCalendarEventDeleted(calendarID: calendar.id, eventID: id)

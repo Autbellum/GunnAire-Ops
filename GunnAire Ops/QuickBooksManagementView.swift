@@ -4601,6 +4601,8 @@ struct QuickBooksManagementView: View {
         let methodName = paymentMethodRef?.displayName
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let recordedMethod = methodName?.isEmpty == false ? methodName : nil
+        let previousBalance = localInvoice.quickBooksBalanceDue
+        let previousStatus = localInvoice.status
         let localPayment = Payment(
             invoice: localInvoice,
             quickBooksAccountingSyncStatus: "pending",
@@ -4617,6 +4619,8 @@ struct QuickBooksManagementView: View {
             try modelContext.save()
         } catch {
             modelContext.delete(localPayment)
+            localInvoice.quickBooksBalanceDue = previousBalance
+            localInvoice.status = previousStatus
             actionMessage = "The payment could not be saved locally, so no QuickBooks request was sent: \(error.localizedDescription)"
             return
         }
@@ -4624,8 +4628,12 @@ struct QuickBooksManagementView: View {
         performAction(message: "Payment saved locally. Publishing it to QuickBooks...") {
             Task {
                 do {
-                    let result = try await QuickBooksPaymentsService.shared
-                        .syncAndRecordAccountingFollowUp(for: localPayment, manual: true)
+                    guard try await AutomaticPaymentSync.shared.recordRealmProof(
+                        for: localPayment, context: modelContext) else {
+                        throw AutomaticPaymentSync.SyncError.unverifiedRealm
+                    }
+                    let result = try await AutomaticPaymentSync.shared
+                        .perform(localPayment, context: modelContext, manual: true)
                     try await MainActor.run {
                         try result.validateWorkspace()
                         actionMessage = result.accountingReviewMessage ?? "Payment saved locally and linked to QuickBooks: \(result.value)."
@@ -4849,7 +4857,8 @@ struct QuickBooksManagementView: View {
         performAction(message: "Retrying QuickBooks follow-up...") {
             Task {
                 do {
-                    let result = try await QuickBooksPaymentsService.shared.syncAndRecordAccountingFollowUp(for: payment)
+                    let result = try await AutomaticPaymentSync.shared
+                        .perform(payment, context: modelContext, manual: false)
                     try await MainActor.run {
                         try result.validateWorkspace()
                         actionMessage = result.accountingReviewMessage ?? "QuickBooks accounting follow-up completed."

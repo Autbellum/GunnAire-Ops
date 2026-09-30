@@ -20,15 +20,6 @@ at the start of every turn; append to it rather than rewriting it.
 
 ## Claims
 
-
-
-
-
-
-
-
-
-
 ## Shared rules
 
 1. The project sets `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`. A helper reached
@@ -51,6 +42,8 @@ at the start of every turn; append to it rather than rewriting it.
    pins the old behavior and the new one.
 
 ## Status log
+
+- 2026-09-30 Codex: business-login provider and backend bearer stay aligned across restart; foreground iCloud verification does not cancel staff lookup; pending QBO documents use the company backend connection and device-bound original-realm proof; manual payments retry automatically only with exact company/invoice/customer proof; a lost Google Calendar delete reply is reconciled. New/legacy documents without verified realm proof require explicit review. Combined zero-warning simulator build, 148 focused tests, final full iPad unit suite (2,769 reported / 2,847 parameterized), seven sign-in/billing/Google/payment UI smokes, and 23 release-preflight tests passed. Claude reviewed cross-realm and duplicate-posting risks; its in-flight claim finding was fixed and tested. Real-device iCloud login and live QBO/Google provider acceptance remain unverified because the paired iPad is locked. Claims released for commit/push; signed release follows.
 
 - 2026-09-30 Codex: automatic QBO customer/estimate/invoice recovery, app-owned Google Calendar reconciliation, and admin Google Drive archiving added with account/workspace fences and bounded scans. Follow-up visits save before Calendar export. Build 2026093001 passed zero-warning omni Debug, 131 focused unit tests, the full iPad unit suite (2,751 reported tests / 2,829 parameterized runs), and three estimate/billing/scheduling UI smokes, all with zero failures. Claude reviewed duplicate/retry/account-switch cases read-only; no live provider or physical-device confirmation is claimed. Source claim released for commit/push; TestFlight archive/upload remains separate.
 

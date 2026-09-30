@@ -2313,18 +2313,15 @@ enum GunnAireBackendService {
         }
         var request = try baseRequest(path: path, method: method, body: body)
         if Config.Backend.usesBusinessIdentity {
-            if let sessionToken = AppleAuthManager.shared.sessionToken,
-               !sessionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
-            } else if let sessionToken = GoogleAuthManager.shared.applicationSessionToken,
-                      !sessionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
-            } else if let idToken = GoogleAuthManager.shared.idToken,
-                      !idToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                request.setValue(idToken, forHTTPHeaderField: "X-GunnAire-Google-ID-Token")
-            } else {
+            guard let header = BusinessLoginSelection.authorizationHeader(
+                selected: BusinessLoginSelection.selected,
+                appleSessionToken: AppleAuthManager.shared.sessionToken,
+                googleSessionToken: GoogleAuthManager.shared.applicationSessionToken,
+                googleIdentityToken: GoogleAuthManager.shared.idToken
+            ) else {
                 throw GunnAireBackendError.missingBusinessIdentity
             }
+            request.setValue(header.value, forHTTPHeaderField: header.name)
         } else {
             request.setValue("Bearer \(Config.Backend.apiToken)", forHTTPHeaderField: "Authorization")
         }

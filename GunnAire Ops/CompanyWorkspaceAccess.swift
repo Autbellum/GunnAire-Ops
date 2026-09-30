@@ -32,17 +32,29 @@ nonisolated struct CompanyWorkspaceSession: Codable, Equatable, Sendable {
         guard Config.Backend.isProductionReady,
               let url = URL(string: Config.Backend.normalizedBaseURL),
               url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else { return nil }
-        let proof: Self?
         let apple = AppleAuthManager.shared
         let google = GoogleAuthManager.shared
-        if apple.isAuthenticated,
-           let stored = apple.businessApplicationSessionSnapshot,
-           stored.token == apple.sessionToken {
-            proof = apple.workspaceSessionProof
-        } else if let stored = google.businessApplicationSessionSnapshot,
-                  stored.token == google.applicationSessionToken {
-            proof = google.workspaceSessionProof
-        } else { return nil }
+        let appleProof: Self? = if apple.isAuthenticated,
+                                   let stored = apple.businessApplicationSessionSnapshot,
+                                   stored.token == apple.sessionToken {
+            apple.workspaceSessionProof
+        } else { nil }
+        let googleProof: Self? = if google.isAuthenticated,
+                                    let stored = google.businessApplicationSessionSnapshot,
+                                    stored.token == google.applicationSessionToken {
+            google.workspaceSessionProof
+        } else { nil }
+        let provider = BusinessLoginSelection.resolvedProvider(
+            selected: BusinessLoginSelection.selected,
+            appleBusinessSessionAvailable: appleProof != nil,
+            googleBusinessSessionAvailable: googleProof != nil
+        )
+        let proof: Self?
+        switch provider {
+        case .apple: proof = appleProof
+        case .google: proof = googleProof
+        case nil: return nil
+        }
         guard let proof, proof.backendOrigin == Config.Backend.normalizedBaseURL,
               proof.expiresAt > Date(),
               proof.email == AppAccess.normalizedEmail(AppIdentity.currentEmail) else { return nil }
@@ -59,6 +71,7 @@ nonisolated struct CompanyWorkspaceSession: Codable, Equatable, Sendable {
 enum CompanyWorkspaceSessionSignal {
     static var current: String {
         [
+            BusinessLoginSelection.selected?.rawValue ?? "",
             AppleAuthManager.shared.isAuthenticated ? "apple" : "",
             AppleAuthManager.shared.sessionToken ?? "",
             GoogleAuthManager.shared.applicationSessionToken ?? "",
@@ -258,6 +271,8 @@ nonisolated struct CompanyWorkspaceUnlockMaintenance: Sendable {
 struct CompanyWorkspaceDependencies {
     var session: () -> CompanyWorkspaceSession?
     var account: () async throws -> CompanyCloudKitAccount
+    /// Foreground and saved-lease checks bypass the short-lived account cache.
+    var accountFresh: (() async throws -> CompanyCloudKitAccount)? = nil
     var fetchWorkspace: () async throws -> BackendCompanyWorkspaceResponse
     var approve: (CompanyCloudKitApprovalRequest) async throws -> CompanyCloudKitBinding
     var readRegistration: () throws -> CompanyWorkspaceStoreRegistration?
@@ -290,6 +305,7 @@ struct CompanyWorkspaceDependencies {
         Self(
             session: { CompanyWorkspaceSession.current },
             account: { try await CompanyCloudKitRuntimeAccount.current() },
+            accountFresh: { try await CompanyCloudKitRuntimeAccount.fresh() },
             fetchWorkspace: { try await GunnAireBackendService.fetchCompanyWorkspace() },
             approve: { try await GunnAireBackendService.approveCompanyCloudKitWorkspace($0) },
             readRegistration: { throw CompanyWorkspaceFailure.storage },
@@ -615,14 +631,26 @@ final class CompanyWorkspaceAccessController: ObservableObject {
     static let verificationInterval: TimeInterval = 23 * 60 * 60
 
     /// Launch and foreground path: after the local deadline check, a workspace
-    /// whose lease was verified within `maxAge` stays open (or is opened from
-    /// the saved lease without a network round-trip); anything older, or a
-    /// lease that does not fit this session and store, runs a full `refresh()`.
+    /// whose lease was verified within `maxAge` stays open. A saved lease can
+    /// skip the server, but must first prove the device still uses the same
+    /// iCloud account; account-change notifications cannot cover changes made
+    /// while this process was terminated.
     func refreshIfStale(maxAge: TimeInterval) async {
         enforceAccessDeadline()
         let now = dependencies.now()
-        if authorizedContainer != nil, let lease = activeLease, now.timeIntervalSince(lease.verifiedAt) < maxAge {
-            return
+        if let lease = activeLease, authorizedContainer != nil {
+            do {
+                let account = try await (dependencies.accountFresh ?? dependencies.account)()
+                guard lease.binding.cloudAccountHash == account.accountHash,
+                      lease.binding.environment == account.environment else {
+                    invalidate(accountChanged: true)
+                    return
+                }
+                if now.timeIntervalSince(lease.verifiedAt) < maxAge { return }
+            } catch {
+                // Full refresh preserves a bounded offline lease only for a
+                // transport failure. Missing or changed accounts cannot use it.
+            }
         }
         let operation = generation
         if activeLease == nil, !mustRestart, !accountAvailabilityRequiresVerification,
@@ -631,6 +659,9 @@ final class CompanyWorkspaceAccessController: ObservableObject {
            now.timeIntervalSince(lease.verifiedAt) < maxAge,
            lease.isValid(for: session, accountHash: lease.binding.cloudAccountHash,
                          environment: lease.binding.environment, now: now),
+           let account = try? await (dependencies.accountFresh ?? dependencies.account)(),
+           account.accountHash == lease.binding.cloudAccountHash,
+           account.environment == lease.binding.environment,
            let registration = try? await readRegistration() {
             guard isCurrent(operation, session: session) else { return }
             do {

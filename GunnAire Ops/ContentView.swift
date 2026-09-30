@@ -537,6 +537,7 @@ struct ContentView: View {
                 do { try await Task.sleep(for: .seconds(5 * 60)) }
                 catch { return }
                 AutomaticOutboundSync.shared.recoverPending(context: modelContext, force: true)
+                AutomaticPaymentSync.shared.recoverPending(context: modelContext, force: true)
                 AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
                 AutomaticGoogleDriveArchive.shared.recover(context: modelContext)
             }
@@ -551,6 +552,7 @@ struct ContentView: View {
             isGoogleAuthenticated = GoogleAuthManager.shared.isAuthenticated
             refreshGoogleAccountIdentityIfNeeded()
             AutomaticOutboundSync.shared.recoverPending(context: modelContext, force: true)
+            AutomaticPaymentSync.shared.recoverPending(context: modelContext, force: true)
             AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
             AutomaticGoogleDriveArchive.shared.recover(context: modelContext)
             await runStartupDataMaintenance()
@@ -631,6 +633,7 @@ struct ContentView: View {
                 await QuickBooksAuthAPI.shared.reloadStoredSession()
                 isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
                 AutomaticOutboundSync.shared.recoverPending(context: modelContext)
+                AutomaticPaymentSync.shared.recoverPending(context: modelContext)
             }
             AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
             AutomaticGoogleDriveArchive.shared.recover(context: modelContext)
@@ -649,6 +652,7 @@ struct ContentView: View {
                 await QuickBooksAuthAPI.shared.reloadStoredSession()
                 isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
                 AutomaticOutboundSync.shared.recoverPending(context: modelContext, force: true)
+                AutomaticPaymentSync.shared.recoverPending(context: modelContext, force: true)
             }
         }
         .onChange(of: isGoogleAuthenticated) { _, authenticated in
@@ -658,6 +662,7 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .gunnaireConnectivityRestored)) { _ in
             AutomaticOutboundSync.shared.recoverPending(context: modelContext, force: true)
+            AutomaticPaymentSync.shared.recoverPending(context: modelContext, force: true)
             AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
             AutomaticGoogleDriveArchive.shared.recover(context: modelContext)
         }
