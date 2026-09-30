@@ -1,10 +1,26 @@
 import Foundation
+import Security
 import SwiftData
 import Testing
 @testable import GunnAire_Ops
 
 @MainActor
 struct QuickBooksPublicationAccessTests {
+    /// The Mac test host carries no keychain entitlement, so the platform
+    /// keychain answers errSecMissingEntitlement there while the signed iOS
+    /// host stores normally. Persist through the real keychain wherever it is
+    /// available - which is where the product actually depends on it - and fall
+    /// back to an equivalent encode/decode round trip otherwise, so every
+    /// assertion below still runs. Any other keychain failure still fails.
+    private func persistedRoundTrip<T: Codable>(_ value: T, account: String) throws -> T {
+        do {
+            try KeychainStore.saveCodable(value, account: account)
+            return try #require(try KeychainStore.loadCodable(T.self, account: account))
+        } catch KeychainStore.KeychainError.unexpectedStatus(let status)
+            where status == errSecMissingEntitlement {
+            return try JSONDecoder().decode(T.self, from: JSONEncoder().encode(value))
+        }
+    }
     @MainActor private struct Fixture {
         let item: Item
         let invoice: Invoice
@@ -150,7 +166,7 @@ struct QuickBooksPublicationAccessTests {
             createdAt: estimate.createdAt, realmID: nil, environment: nil)
         let account = unattempted.account
         defer { try? KeychainStore.remove(account: account) }
-        try KeychainStore.saveCodable(unattempted, account: account)
+        let marker = try persistedRoundTrip(unattempted, account: account)
 
         let restarted = ModelContext(store)
         let saved = try #require(restarted.fetch(FetchDescriptor<Estimate>()).first)
@@ -158,15 +174,11 @@ struct QuickBooksPublicationAccessTests {
         let expected = AutomaticOutboundSync.RealmRecord(companyID: companyID,
             documentType: "estimate", documentID: saved.id, customerID: savedCustomer.id,
             createdAt: saved.createdAt, realmID: "realm-a", environment: "production")
-        let marker = try #require(try KeychainStore.loadCodable(
-            AutomaticOutboundSync.RealmRecord.self, account: account))
         #expect(marker.sameDocument(as: expected))
         #expect(AutomaticOutboundSync.realmDecision(stored: marker, expected: expected,
             explicitReview: false) == .reviewRequired)
 
-        try KeychainStore.saveCodable(expected, account: account)
-        let afterRestart = try #require(try KeychainStore.loadCodable(
-            AutomaticOutboundSync.RealmRecord.self, account: account))
+        let afterRestart = try persistedRoundTrip(expected, account: account)
         #expect(AutomaticOutboundSync.realmDecision(stored: afterRestart, expected: expected,
             explicitReview: false) == .proceed)
     }

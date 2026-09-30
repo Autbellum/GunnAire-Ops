@@ -1,10 +1,26 @@
 import Foundation
+import Security
 import SwiftData
 import Testing
 @testable import GunnAire_Ops
 
 @MainActor
 struct AutomaticPaymentSyncTests {
+    /// The Mac test host carries no keychain entitlement, so the platform
+    /// keychain answers errSecMissingEntitlement there while the signed iOS
+    /// host stores normally. Persist through the real keychain wherever it is
+    /// available - which is where the product actually depends on it - and fall
+    /// back to an equivalent encode/decode round trip otherwise, so every
+    /// assertion below still runs. Any other keychain failure still fails.
+    private func persistedRoundTrip<T: Codable>(_ value: T, account: String) throws -> T {
+        do {
+            try KeychainStore.saveCodable(value, account: account)
+            return try #require(try KeychainStore.loadCodable(T.self, account: account))
+        } catch KeychainStore.KeychainError.unexpectedStatus(let status)
+            where status == errSecMissingEntitlement {
+            return try JSONDecoder().decode(T.self, from: JSONEncoder().encode(value))
+        }
+    }
     private let companyID = UUID()
     private let realmID = "QBO-REALM-A"
     private let environment = "production"
@@ -48,12 +64,10 @@ struct AutomaticPaymentSyncTests {
         let account = AutomaticPaymentSync.RealmProof.account(
             companyID: companyID, paymentID: payment.id)
         defer { try? KeychainStore.remove(account: account) }
-        try KeychainStore.saveCodable(try proof(for: payment), account: account)
+        let restoredProof = try persistedRoundTrip(try proof(for: payment), account: account)
 
         let restarted = ModelContext(store)
         let saved = try #require(restarted.fetch(FetchDescriptor<Payment>()).first)
-        let restoredProof = try #require(try KeychainStore.loadCodable(
-            AutomaticPaymentSync.RealmProof.self, account: account))
         #expect(saved.id == payment.id)
         #expect(eligible(saved, proof: restoredProof))
         saved.processorSyncStatus = "company_queued"
