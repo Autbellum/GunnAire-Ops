@@ -5221,7 +5221,7 @@ struct EditServiceCallView: View {
                         .textInputAutocapitalization(.words)
                         .disabled(isExternalGoogleCalendarEvent)
                     if isExternalGoogleCalendarEvent {
-                        Text("This event came from Google Calendar. Edit the title, location, and body in Google Calendar; GunnAire will only keep a local mirror.")
+                        Text("This event came from Google Calendar. Its title, location and notes stay as set in Google Calendar; time and staff changes saved here are sent to that Google event.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -5646,7 +5646,9 @@ struct EditServiceCallView: View {
         let originalStatus = call.status
         let originalDispatchUrgency = call.dispatchUrgency
         let originalTechnician = call.assignedTechnician?.name
+        let originalTechnicianID = call.assignedTechnician?.id
         let originalCrewIDs = call.additionalTechnicianIDs
+        let originalDuration = call.duration
         let preserveExternalCalendarDetails = GoogleCalendarScheduleSync.shouldPreserveExternalGoogleCalendarDetails(for: call)
         call.type = callType
         call.dispatchUrgency = dispatchUrgency
@@ -5738,7 +5740,13 @@ struct EditServiceCallView: View {
         if originalDispatchUrgency != dispatchUrgency {
             ServiceCallActivity.record(for: call, action: "Dispatch priority updated", detail: "Priority changed from \(originalDispatchUrgency.displayName) to \(dispatchUrgency.displayName).", actorEmail: actorEmail, in: modelContext)
         }
-        let shouldPublishCalendarChanges = GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call)
+        // An imported Google event only takes time and staff changes, so a
+        // customer-only edit leaves it Google-owned and still importing.
+        let changesGoogleEvent = call.googleEventManagedByApp ||
+            call.scheduledDate != originalStart || call.duration != originalDuration ||
+            call.assignedTechnician?.id != originalTechnicianID || call.additionalTechnicianIDs != originalCrewIDs
+        let shouldPublishCalendarChanges = changesGoogleEvent &&
+            GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call)
         billingEditRevision = JobBillingLocalRevision(call)
         do {
             try JobBillingDispatch.shared.save(call, original: originalBillingTarget, context: modelContext)

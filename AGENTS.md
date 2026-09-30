@@ -235,3 +235,12 @@ at the start of every turn; append to it rather than rewriting it.
   `lateImportAfterLocalChangeDoesNotApplyAnyCalendarRows` still pins it). Four new
   `GoogleCalendarWorkflowTests`. Not verified on device. Imported (non-app-owned) Google events are
   still never written back; that is policy, awaiting Eric's decision.
+- 2026-09-30 Claude (cloud, PR #28): Eric decided imported Google events must take app changes.
+  Time and staff changes to an imported job (edit sheet, dispatch board, assignment) now mark its
+  original event app-managed for that job (private markers only, If-Match, sendUpdates=none; title,
+  location, notes and guests untouched; never adopted if cancelled, missing or marked for another
+  job) and then use the existing schedule-only patch and staff delivery. A customer-only edit does
+  not adopt. Pending sends now retry automatically when Schedule opens and 30 s / 2 min / 10 min
+  after a failure (`retryPendingIfNeeded`, publish only, no import). Three tests that pinned the
+  old read-only rule were updated to the new rule; four write-back tests added. After adoption the
+  job is app-owned, so later edits made directly in Google no longer import over it.
