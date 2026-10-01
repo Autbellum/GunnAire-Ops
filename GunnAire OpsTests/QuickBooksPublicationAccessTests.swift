@@ -218,7 +218,7 @@ struct QuickBooksPublicationAccessTests {
 
         // Save-time intent is durable before the only local save. Provider
         // proof remains absent until an exact backend connection is checked.
-        #if os(iOS)
+        #if os(iOS) && !targetEnvironment(macCatalyst)
         try await QuickBooksDocumentRealmProofStore.shared.markNew(estimateMarker)
         try await QuickBooksDocumentRealmProofStore.shared.markNew(invoiceMarker)
         #endif
@@ -245,7 +245,7 @@ struct QuickBooksPublicationAccessTests {
             createdAt: estimate.createdAt, realmID: nil, environment: nil)
         #expect(!AutomaticOutboundSync.isNewMarker(storedEstimateMarker, for: foreignCustomer))
 
-        #if os(iOS)
+        #if os(iOS) && !targetEnvironment(macCatalyst)
         let proofStore = QuickBooksDocumentRealmProofStore.shared
         #expect(try await proofStore.hasNewMarker(estimateMarker))
         #expect(try await proofStore.hasNewMarker(invoiceMarker))
@@ -269,6 +269,22 @@ struct QuickBooksPublicationAccessTests {
         await #expect(throws: AutomaticOutboundSync.RealmError.self) {
             try await proofStore.bindNewMarker(otherRealm)
         }
+        #else
+        let bound = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+            documentType: "estimate", documentID: savedEstimate.id, customerID: customer.id,
+            createdAt: savedEstimate.createdAt, realmID: "realm-a", environment: "production")
+        let foreign = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+            documentType: "estimate", documentID: savedEstimate.id, customerID: customer.id,
+            createdAt: savedEstimate.createdAt, realmID: "realm-b", environment: "production")
+        #expect(AutomaticOutboundSync.realmDecision(stored: storedEstimateMarker,
+            expected: bound, explicitReview: false) == .reviewRequired)
+        #expect(AutomaticOutboundSync.realmDecision(stored: storedEstimateMarker,
+            expected: foreign, explicitReview: true) == .wrongRealm)
+        let serializedBound = try JSONDecoder().decode(AutomaticOutboundSync.RealmRecord.self,
+            from: JSONEncoder().encode(bound.boundWithIntent(from: storedEstimateMarker)))
+        #expect(serializedBound.intendedScope == storedEstimateMarker.intendedScope)
+        #expect(AutomaticOutboundSync.realmDecision(stored: serializedBound,
+            expected: bound, explicitReview: false) == .proceed)
         #endif
     }
 
@@ -293,7 +309,7 @@ struct QuickBooksPublicationAccessTests {
             intendedRealmID: "realm-b", intendedEnvironment: "production")
         defer { try? KeychainStore.remove(account: old.account) }
 
-        #if os(iOS)
+        #if os(iOS) && !targetEnvironment(macCatalyst)
         let proofStore = QuickBooksDocumentRealmProofStore.shared
         try await proofStore.markNew(old)
         await #expect(throws: AutomaticOutboundSync.RealmError.self) {
@@ -307,7 +323,13 @@ struct QuickBooksPublicationAccessTests {
         }
         #expect(try await proofStore.savedRecord(retry) == retry)
         #else
-        #expect(try persistedRoundTrip(old, account: old.account).sameDocument(as: retry) == false)
+        let serialized = try persistedRoundTrip(old, account: old.account)
+        #expect(serialized.sameDocumentKeyAndCustomer(as: retry))
+        #expect(!serialized.sameDocument(as: retry))
+        #expect(serialized.originalScope == retry.originalScope)
+        #expect(serialized.originalScope != foreignRetry.originalScope)
+        #expect(AutomaticOutboundSync.realmDecision(stored: serialized,
+            expected: retry, explicitReview: false) == .reviewRequired)
         #endif
     }
 
