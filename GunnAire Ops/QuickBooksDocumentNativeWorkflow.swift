@@ -221,6 +221,64 @@ import UniformTypeIdentifiers
         return (row, bytes)
     }
 
+    /// Archive-only read: Keychain access, encrypted journal enumeration,
+    /// decryption and hashing run in a private background task. The owner and
+    /// exact local original are checked again after the suspension point.
+    static func retainedDataForArchive(for attachment: ServiceDocumentAttachment,
+                                       context: ModelContext,
+                                       reader: QBODocumentRetainedMediaReader? = nil) async throws -> Data {
+        let controller = CompanyWorkspaceAccessController.shared
+        guard let stamp = controller.operationStamp, !context.hasChanges else { throw QBODocumentError.access }
+        let owner = try QBODocumentOwner.captureForBackgroundRead(context: context)
+        let attachmentID = attachment.id
+        let originalPath = attachment.localFilePath
+        let originalKind = attachment.kindRaw
+        let originalCustomerID = attachment.customer?.id
+        let originalInvoiceID = attachment.invoiceID
+        let originalEstimateID = attachment.estimateID
+        let originalCallID = attachment.serviceCallID
+        let originalFileSize = attachment.fileSizeBytes
+        let originalName = attachment.displayName
+        let originalType = attachment.contentType
+        guard let directory = FileManager.default.urls(for: .applicationSupportDirectory,
+                                                       in: .userDomainMask).first else { throw QBODocumentError.storage }
+        let reader = reader ?? QBODocumentRetainedMediaReader(
+            container: context.container,
+            directory: directory.appendingPathComponent("QBOOriginalFiles-v1", isDirectory: true))
+        let media = try await reader.read(ownerStorageKey: owner.storageKey,
+                                          actorEmail: owner.actorEmail,
+                                          attachmentID: attachmentID)
+        guard !Task.isCancelled, !context.hasChanges,
+              controller.operationStamp == stamp,
+              try QBODocumentOwner.captureForBackgroundRead(context: context) == owner else {
+            throw QBODocumentError.access
+        }
+        var fetch = FetchDescriptor<ServiceDocumentAttachment>(predicate: #Predicate { $0.id == attachmentID })
+        fetch.fetchLimit = 2
+        let matches = try context.fetch(fetch)
+        guard matches.count == 1, matches[0] === attachment,
+              attachment.localFilePath == originalPath,
+              attachment.kindRaw == originalKind,
+              attachment.customer?.id == originalCustomerID,
+              attachment.invoiceID == originalInvoiceID,
+              attachment.estimateID == originalEstimateID,
+              attachment.serviceCallID == originalCallID,
+              attachment.fileSizeBytes == originalFileSize,
+              attachment.displayName == originalName,
+              attachment.contentType == originalType else { throw QBODocumentError.changed }
+        let row = try JSONDecoder().decode(QBODocumentCapture.self, from: media.metadata)
+        try row.validate()
+        guard row.owner == owner,
+              (row.localAttachment?.attachmentID ?? row.jobDocument?.attachmentID) == attachmentID,
+              row.file.sha256 == media.sha256,
+              row.file.size == media.bytes.count else { throw QBODocumentError.changed }
+        guard controller.operationStamp == stamp,
+              try QBODocumentOwner.captureForBackgroundRead(context: context) == owner else {
+            throw QBODocumentError.access
+        }
+        return media.bytes
+    }
+
     static func previewURL(for attachment: ServiceDocumentAttachment, context: ModelContext,
                            dependencies: Dependencies? = nil, directory: URL? = nil) throws -> URL {
         let original = attachment.localFileURL

@@ -1,6 +1,52 @@
 import Foundation
 import SwiftData
 
+/// A private context owns each read. SwiftData models never cross back to the
+/// UI actor; recovery receives only stable attachment IDs and a policy result.
+nonisolated struct GoogleDriveArchiveReadStore: Sendable {
+    let container: ModelContainer
+
+    nonisolated struct AttachmentPage: Sendable {
+        let candidateIDs: [UUID]
+        let fetchedCount: Int
+    }
+
+    func hasUnambiguousActiveUser(email: String) async throws -> Bool {
+        let email = AppAccess.normalizedEmail(email)
+        return try await Task.detached(priority: .utility) {
+            let context = ModelContext(container)
+            context.autosaveEnabled = false
+            let users = try context.fetch(FetchDescriptor<AppUser>())
+            let matching = users.filter { AppAccess.normalizedEmail($0.email) == email }
+            guard !email.isEmpty, !matching.isEmpty,
+                  matching.allSatisfy({ $0.isActive && AppUserRole(rawValue: $0.roleRawValue) != nil }) else {
+                return false
+            }
+            return Set(matching.map(\.roleRawValue)).count == 1
+        }.value
+    }
+
+    func attachmentPage(offset: Int) async throws -> AttachmentPage {
+        try await Task.detached(priority: .utility) {
+            let context = ModelContext(container)
+            context.autosaveEnabled = false
+            var fetch = FetchDescriptor<ServiceDocumentAttachment>(
+                sortBy: [SortDescriptor(\.createdAt, order: .forward), SortDescriptor(\.id)])
+            fetch.fetchLimit = 100
+            fetch.fetchOffset = offset
+            let page = try context.fetch(fetch)
+            return AttachmentPage(
+                candidateIDs: page.compactMap { attachment in
+                    guard (attachment.customer != nil || attachment.fleetVehicleID != nil),
+                          attachment.needsGoogleDriveArchive else { return nil }
+                    return attachment.id
+                },
+                fetchedCount: page.count
+            )
+        }.value
+    }
+}
+
 /// Archives only app-owned pending attachments while an administrator has a
 /// matching Google account with per-file Drive permission. Saved reservations
 /// make a later launch/reconnect reconcile the original Drive file ID.
@@ -24,8 +70,9 @@ final class AutomaticGoogleDriveArchive {
     }
 
     func recover(context: ModelContext) {
-        guard canArchive(context: context),
-              let stamp = CompanyWorkspaceAccessController.shared.operationStamp else { return }
+        guard canArchiveFast(context: context),
+              let stamp = CompanyWorkspaceAccessController.shared.operationStamp,
+              let providerOperation = try? GoogleAuthManager.shared.captureProviderOperation() else { return }
         if running { queued = true; queuedContext = context; return }
         running = true
         Task { @MainActor in
@@ -39,23 +86,31 @@ final class AutomaticGoogleDriveArchive {
                 }
             }
             do {
+                let reader = GoogleDriveArchiveReadStore(container: context.container)
                 var offset = 0
                 while !Task.isCancelled {
-                    var fetch = FetchDescriptor<ServiceDocumentAttachment>(
-                        sortBy: [SortDescriptor(\.createdAt, order: .forward), SortDescriptor(\.id)])
-                    fetch.fetchLimit = 100
-                    fetch.fetchOffset = offset
-                    let page = try context.fetch(fetch)
-                    guard !page.isEmpty else { return }
-                    for attachment in page where
-                        (attachment.customer != nil || attachment.fleetVehicleID != nil) &&
-                            attachment.needsGoogleDriveArchive {
-                        guard canArchive(context: context),
+                    guard await canArchive(context: context, reader: reader),
+                          CompanyWorkspaceAccessController.shared.operationStamp == stamp,
+                          (try? providerOperation.check()) != nil else { return }
+                    let page = try await reader.attachmentPage(offset: offset)
+                    guard page.fetchedCount > 0 else { return }
+                    for id in page.candidateIDs {
+                        guard canArchiveFast(context: context),
                               CompanyWorkspaceAccessController.shared.operationStamp == stamp,
+                              (try? providerOperation.check()) != nil,
                               !Task.isCancelled else { return }
-                        await archive(attachment, context: context, stamp: stamp)
+                        var fetch = FetchDescriptor<ServiceDocumentAttachment>(predicate: #Predicate { $0.id == id })
+                        fetch.fetchLimit = 2
+                        let matches = try context.fetch(fetch)
+                        guard matches.count <= 1 else { return }
+                        if let attachment = matches.first,
+                           (attachment.customer != nil || attachment.fleetVehicleID != nil),
+                           attachment.needsGoogleDriveArchive {
+                            await archive(attachment, context: context, stamp: stamp,
+                                          providerOperation: providerOperation, reader: reader)
+                        }
                     }
-                    offset += page.count
+                    offset += page.fetchedCount
                     await Task.yield()
                 }
             } catch {
@@ -64,19 +119,38 @@ final class AutomaticGoogleDriveArchive {
         }
     }
 
-    private func canArchive(context: ModelContext) -> Bool {
+    private func canArchiveFast(context: ModelContext) -> Bool {
+        let access = CompanyWorkspaceAccessController.shared
+        let actorEmail = AppAccess.normalizedEmail(AppIdentity.currentEmail)
+        let hasUnsavedUserChange = context.insertedModelsArray.contains { $0 is AppUser } ||
+            context.changedModelsArray.contains { $0 is AppUser } ||
+            context.deletedModelsArray.contains { $0 is AppUser }
         guard !GunnAireCloudKit.usesTestDatabase,
-              CompanyWorkspaceAccessController.shared.authorizedContainer === context.container,
-              CompanyWorkspaceAccessController.shared.verifiedRole == .admin,
+              !hasUnsavedUserChange,
+              access.authorizedContainer === context.container,
+              let verifiedUser = access.verifiedUser, verifiedUser.isActive,
+              AppAccess.normalizedEmail(verifiedUser.email) == actorEmail,
+              access.verifiedRole == .admin,
               GoogleAuthManager.shared.googleDriveAuthorizationState == .ready,
-              let users = try? context.fetch(FetchDescriptor<AppUser>()),
-              AppAccess.canArchiveBusinessDocumentsToGoogleDrive(
-                email: AppIdentity.currentEmail, users: users) else { return false }
+              AppAccess.normalizedEmail(GoogleAuthManager.shared.signedInEmail) == actorEmail,
+              !actorEmail.isEmpty else { return false }
         return true
     }
 
+    private func canArchive(context: ModelContext, reader: GoogleDriveArchiveReadStore) async -> Bool {
+        guard canArchiveFast(context: context),
+              let stamp = CompanyWorkspaceAccessController.shared.operationStamp else { return false }
+        let actorEmail = AppAccess.normalizedEmail(AppIdentity.currentEmail)
+        guard (try? await reader.hasUnambiguousActiveUser(email: actorEmail)) == true else { return false }
+        return canArchiveFast(context: context) &&
+            CompanyWorkspaceAccessController.shared.operationStamp == stamp &&
+            AppAccess.normalizedEmail(AppIdentity.currentEmail) == actorEmail
+    }
+
     private func archive(_ attachment: ServiceDocumentAttachment, context: ModelContext,
-                         stamp: CompanyWorkspaceOperationStamp) async {
+                         stamp: CompanyWorkspaceOperationStamp,
+                         providerOperation: WorkspaceProviderOperation,
+                         reader: GoogleDriveArchiveReadStore) async {
         let originalID = attachment.id
         guard claim(originalID) else { return }
         defer { release(originalID) }
@@ -88,14 +162,12 @@ final class AutomaticGoogleDriveArchive {
         let originalCustomer = attachment.customer?.id
         let originalFleet = attachment.fleetVehicleID
         let actorEmail = AppIdentity.currentEmail
-        var operation: WorkspaceProviderOperation?
-
-        func check() throws {
-            guard canArchive(context: context),
+        func check() async throws {
+            guard await canArchive(context: context, reader: reader),
                   CompanyWorkspaceAccessController.shared.operationStamp == stamp else {
                 throw GoogleDriveAPIError.authorizationChanged
             }
-            try operation?.check()
+            try providerOperation.check()
             var fetch = FetchDescriptor<ServiceDocumentAttachment>(predicate: #Predicate { $0.id == originalID })
             fetch.fetchLimit = 2
             let matches = try context.fetch(fetch)
@@ -112,31 +184,30 @@ final class AutomaticGoogleDriveArchive {
         }
 
         do {
-            operation = try GoogleAuthManager.shared.captureProviderOperation()
-            try check()
+            try await check()
             let fileID: String
             if let reserved = attachment.googleDriveFileID?.trimmingCharacters(in: .whitespacesAndNewlines),
                !reserved.isEmpty {
                 fileID = reserved
             } else {
                 fileID = try await GoogleDriveAPI.shared.generateFileID()
-                try check()
+                try await check()
                 attachment.markGoogleDrivePreparing(fileID: fileID, actorEmail: actorEmail)
                 try context.save()
             }
             let data = try await fileData(for: attachment, context: context)
-            try check()
+            try await check()
             guard !data.isEmpty else { throw GoogleDriveAPIError.emptyFile }
             attachment.markGoogleDriveUploading()
             try context.save()
             let file = try await GoogleDriveAPI.shared.uploadFile(
                 fileID: fileID, displayName: originalName, mimeType: originalType,
                 attachmentID: originalID, documentKind: originalKind, data: data)
-            try check()
+            try await check()
             attachment.markGoogleDriveArchived(file, actorEmail: actorEmail)
             try context.save()
         } catch {
-            guard (try? check()) != nil else { return }
+            guard (try? await check()) != nil else { return }
             attachment.markGoogleDriveArchiveFailed(error.localizedDescription,
                 discardReservedID: (error as? GoogleDriveAPIError)?.discardsReservedFileIDBeforeRetry == true)
             try? context.save()
@@ -151,7 +222,8 @@ final class AutomaticGoogleDriveArchive {
                 try Data(contentsOf: localURL, options: .mappedIfSafe)
             }.value
         }
-        if let (_, retained) = try? QBODocumentNativeWorkflow.retainedData(for: attachment, context: context) {
+        if let retained = try? await QBODocumentNativeWorkflow.retainedDataForArchive(
+            for: attachment, context: context) {
             return retained
         }
         if let backendID = attachment.backendDocumentID?.trimmingCharacters(in: .whitespacesAndNewlines),

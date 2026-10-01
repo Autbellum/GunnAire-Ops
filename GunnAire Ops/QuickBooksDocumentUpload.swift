@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-enum QBODocumentError: LocalizedError, Equatable {
+nonisolated enum QBODocumentError: LocalizedError, Equatable {
     case access, invalid, unavailable, review, storage, changed, file, limit, jobDestination, photoRequired, syncPending
     var errorDescription: String? {
         switch self {
@@ -79,7 +79,7 @@ struct QBODocumentFileInfo: Codable, Equatable {
     let contentType: String
     let size: Int
     let sha256: String
-    static let maximum = 25 * 1024 * 1024
+    nonisolated static let maximum = 25 * 1024 * 1024
     static let mime: [String: Set<String>] = [
         "pdf": ["application/pdf"], "txt": ["text/plain"], "rtf": ["text/rtf", "application/rtf"],
         "jpg": ["image/jpeg", "image/jpg"], "jpeg": ["image/jpeg", "image/jpg"], "png": ["image/png"],

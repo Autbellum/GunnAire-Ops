@@ -3,6 +3,29 @@ import SwiftData
 import Testing
 @testable import GunnAire_Ops
 
+private actor RetainedMediaReadGate {
+    private var reached = false
+    private var reachWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+    func pause() async {
+        reached = true
+        for waiter in reachWaiters { waiter.resume() }
+        reachWaiters.removeAll()
+        await withCheckedContinuation { releaseWaiter = $0 }
+    }
+
+    func waitUntilReached() async {
+        if reached { return }
+        await withCheckedContinuation { reachWaiters.append($0) }
+    }
+
+    func release() {
+        releaseWaiter?.resume()
+        releaseWaiter = nil
+    }
+}
+
 @MainActor struct QuickBooksDocumentNativeWorkflowTests {
     func job(_ app: QuickBooksBillingWorkflowTests.Fixture) throws -> ServiceCall {
         let call = ServiceCall(type: .repair, scheduledDate: Date(), customer: app.customer,
@@ -280,5 +303,80 @@ import Testing
         #expect(attachment.quickBooksAttachableID == "A1" && files.sends == 1)
         var relabeled = recovery.record; relabeled.revision += 1; relabeled.localAttachment = nil
         #expect(throws: QBODocumentError.changed) { try files.store.write(relabeled, recovery.record.revision, nil) }
+    }
+
+    @Test func backgroundRetainedMediaReadKeepsOriginalOwnerAndBytes() async throws {
+        let app = try QuickBooksBillingWorkflowTests.Fixture(linkedInvoice: true)
+        let files = try QuickBooksDocumentWorkflowFixture(); defer { files.cleanup() }
+        let user = AppUser(email: files.owner.actorEmail, role: .admin)
+        app.context.insert(user)
+        try app.context.save()
+        let call = try job(app)
+        let url = try files.file()
+        let expected = try Data(contentsOf: url)
+        let row = try QBODocumentNativeWorkflow.captureManual(access: files.access(), url: url,
+            call: call, stage: "supporting", targets: targets, context: app.context,
+            store: files.store, directory: files.root)
+        let attachment = try #require(try app.context.fetch(FetchDescriptor<ServiceDocumentAttachment>()).first)
+        try FileManager.default.removeItem(at: attachment.localFileURL)
+        let secret = files.secret
+        let reader = QBODocumentRetainedMediaReader(container: app.context.container,
+            directory: files.root.appendingPathComponent("journal"), loadKey: { secret })
+        let media = try await reader.read(ownerStorageKey: files.owner.storageKey,
+                                          actorEmail: files.owner.actorEmail,
+                                          attachmentID: attachment.id)
+        #expect(media.bytes == expected)
+        #expect(media.sha256 == row.file.sha256)
+        await #expect(throws: QBODocumentError.review) {
+            try await reader.read(ownerStorageKey: String(repeating: "a", count: 64),
+                                  actorEmail: files.owner.actorEmail, attachmentID: attachment.id)
+        }
+    }
+
+    @Test func retainedMediaReadRejectsRoleAndDocumentRotationAcrossHandoff() async throws {
+        let app = try QuickBooksBillingWorkflowTests.Fixture(linkedInvoice: true)
+        let files = try QuickBooksDocumentWorkflowFixture(); defer { files.cleanup() }
+        let user = AppUser(email: files.owner.actorEmail, role: .admin)
+        app.context.insert(user)
+        try app.context.save()
+        let call = try job(app)
+        let url = try files.file()
+        _ = try QBODocumentNativeWorkflow.captureManual(access: files.access(), url: url,
+            call: call, stage: "supporting", targets: targets, context: app.context,
+            store: files.store, directory: files.root)
+        let attachment = try #require(try app.context.fetch(FetchDescriptor<ServiceDocumentAttachment>()).first)
+        try FileManager.default.removeItem(at: attachment.localFileURL)
+        let secret = files.secret
+        let directory = files.root.appendingPathComponent("journal")
+
+        let roleGate = RetainedMediaReadGate()
+        let roleReader = QBODocumentRetainedMediaReader(container: app.context.container,
+            directory: directory, loadKey: { secret }, afterSnapshot: { await roleGate.pause() })
+        let roleTask = Task {
+            try await roleReader.read(ownerStorageKey: files.owner.storageKey,
+                                      actorEmail: files.owner.actorEmail, attachmentID: attachment.id)
+        }
+        await roleGate.waitUntilReached()
+        user.role = .standard
+        try app.context.save()
+        await roleGate.release()
+        await #expect(throws: QBODocumentError.access) { try await roleTask.value }
+
+        user.role = .admin
+        try app.context.save()
+        let documentGate = RetainedMediaReadGate()
+        let documentReader = QBODocumentRetainedMediaReader(container: app.context.container,
+            directory: directory, loadKey: { secret }, afterSnapshot: { await documentGate.pause() })
+        let documentTask = Task {
+            try await documentReader.read(ownerStorageKey: files.owner.storageKey,
+                                          actorEmail: files.owner.actorEmail, attachmentID: attachment.id)
+        }
+        await documentGate.waitUntilReached()
+        let otherCustomer = Customer(quickBooksID: "C2", name: "Different customer")
+        app.context.insert(otherCustomer)
+        attachment.customer = otherCustomer
+        try app.context.save()
+        await documentGate.release()
+        await #expect(throws: QBODocumentError.changed) { try await documentTask.value }
     }
 }

@@ -17,6 +17,8 @@ enum GoogleCalendarScheduleSync {
         let calendarID: String
         let eventID: String
         let accountEmail: String
+        let scheduledDate: Date
+        let duration: Double
         let workflow: GoogleCalendarWorkflow
     }
 
@@ -72,6 +74,20 @@ enum GoogleCalendarScheduleSync {
         "\((calendarID ?? "primary").trimmingCharacters(in: .whitespacesAndNewlines))|\(eventID)"
     }
 
+    static func calendarRouteLabel(for call: ServiceCall, connectedEmail: String?) -> String {
+        let route = call.googleCalendarID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let connected = AppAccess.normalizedEmail(connectedEmail)
+        if route.isEmpty || route.caseInsensitiveCompare("primary") == .orderedSame ||
+            (!connected.isEmpty && AppAccess.normalizedEmail(route) == connected) {
+            return "Google calendar: Primary\(connected.isEmpty ? "" : " (\(connected))")"
+        }
+        if let technician = call.assignedTechnician,
+           AppAccess.normalizedEmail(technician.contactInfo) == AppAccess.normalizedEmail(route) {
+            return "Google calendar: \(technician.name) (\(route))"
+        }
+        return "Google calendar: \(route)"
+    }
+
     static func sync(
         auth: GoogleAuthManager, modelContext: ModelContext, signedInEmail: String?, isAdminUser: Bool,
         completion: @escaping (Result<String, Error>) -> Void
@@ -86,7 +102,7 @@ enum GoogleCalendarScheduleSync {
         signedInEmail: String?, isAdminUser: Bool,
         completion: ((Result<String, Error>) -> Void)? = nil
     ) {
-        guard (try? modelContext.fetch(FetchDescriptor<ServiceCall>()).contains(where: { $0 === call })) == true else {
+        guard (try? containsOriginalCall(call, in: modelContext)) == true else {
             completion?(.failure(GoogleCalendarWorkflowError.changed)); return
         }
         markCalendarCallLocallyEdited(call)
@@ -106,7 +122,9 @@ enum GoogleCalendarScheduleSync {
                     throw GoogleCalendarWorkflowError.identity
                 }
                 review = MissingEventReview(call: call, callID: call.id, calendarID: calendar.id,
-                                            eventID: id, accountEmail: accountEmail, workflow: current)
+                                            eventID: id, accountEmail: accountEmail,
+                                            scheduledDate: call.scheduledDate, duration: call.duration,
+                                            workflow: current)
             }
             return remote == nil ? "The saved Google event was not found. Review the original calendar before choosing Recreate Missing Event." :
                 "The original Google event is present. No new event was created."
@@ -118,7 +136,8 @@ enum GoogleCalendarScheduleSync {
         await review.workflow.run { workflow in
             let call = review.call
             guard AppAccess.normalizedEmail(workflow.auth.signedInEmail) ==
-                    AppAccess.normalizedEmail(review.accountEmail) else {
+                    AppAccess.normalizedEmail(review.accountEmail),
+                  call.scheduledDate == review.scheduledDate, call.duration == review.duration else {
                 throw GoogleCalendarWorkflowError.changed
             }
             let (calendar, id, remote) = try await inspectStoredEvent(call: call, workflow: workflow)
@@ -230,7 +249,7 @@ enum GoogleCalendarScheduleSync {
         for call: ServiceCall, auth: GoogleAuthManager, modelContext: ModelContext,
         completion: ((Result<String, Error>) -> Void)? = nil
     ) {
-        guard (try? modelContext.fetch(FetchDescriptor<ServiceCall>()).contains(where: { $0 === call })) == true else {
+        guard (try? containsOriginalCall(call, in: modelContext)) == true else {
             completion?(.failure(GoogleCalendarWorkflowError.changed)); return
         }
         markCalendarCallLocallyEdited(call)
@@ -438,6 +457,7 @@ enum GoogleCalendarScheduleSync {
     }
 
     static func importSchedule(workflow: GoogleCalendarWorkflow) async throws -> String {
+        try await workflow.beginImportFence()
         let calendars = try await calendars(workflow: workflow)
         let now = Date()
         let start = Calendar.current.date(byAdding: .day, value: -30, to: now) ?? now
@@ -462,14 +482,16 @@ enum GoogleCalendarScheduleSync {
     }
 
     private static func requireCall(_ call: ServiceCall, workflow: GoogleCalendarWorkflow) throws {
-        try workflow.check()
-        let calls = try workflow.context.fetch(FetchDescriptor<ServiceCall>())
-        guard calls.contains(where: { $0 === call }) else { throw GoogleCalendarWorkflowError.changed }
-        guard calls.filter({ $0.id == call.id }).count == 1,
-              let customer = call.customer,
-              try workflow.context.fetch(FetchDescriptor<Customer>()).contains(where: { $0 === customer }) else {
-            throw GoogleCalendarWorkflowError.identity
-        }
+        try workflow.track(call)
+        guard call.customer != nil else { throw GoogleCalendarWorkflowError.identity }
+    }
+
+    private static func containsOriginalCall(_ call: ServiceCall, in context: ModelContext) throws -> Bool {
+        let id = call.id
+        var descriptor = FetchDescriptor<ServiceCall>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 2
+        let matches = try context.fetch(descriptor)
+        return matches.count == 1 && matches.first === call
     }
 
     static func eventID(for callID: UUID) -> String {
@@ -638,12 +660,14 @@ enum GoogleCalendarScheduleSync {
     }
 
     private static func staffAttendees(for call: ServiceCall, workflow: GoogleCalendarWorkflow) throws -> [GoogleWritableCalendarAttendee] {
-        let technicians = try workflow.context.fetch(FetchDescriptor<Technician>())
         var ids = call.additionalTechnicianIDs
         if let assigned = call.assignedTechnician { ids.insert(assigned.id) }
+        guard ids.count <= 26 else { throw GoogleCalendarStaffDeliveryError.staffEmail }
         var emails = Set<String>()
         return try ids.sorted(by: { $0.uuidString < $1.uuidString }).map { id in
-            let matches = technicians.filter { $0.id == id }
+            var descriptor = FetchDescriptor<Technician>(predicate: #Predicate { $0.id == id })
+            descriptor.fetchLimit = 2
+            let matches = try workflow.context.fetch(descriptor)
             guard matches.count == 1, let technician = matches.first,
                   let email = GoogleCalendarStaffDelivery.email(technician.contactInfo), emails.insert(email).inserted else {
                 throw GoogleCalendarStaffDeliveryError.staffEmail
@@ -653,9 +677,9 @@ enum GoogleCalendarScheduleSync {
     }
 
     private static func knownStaff(workflow: GoogleCalendarWorkflow) -> Set<String> {
-        let technicians = (try? workflow.context.fetch(FetchDescriptor<Technician>())) ?? []
-        return Set(technicians.compactMap { GoogleCalendarStaffDelivery.email($0.contactInfo) } +
-                   [GoogleCalendarStaffDelivery.email(workflow.signedInEmail)].compactMap { $0 })
+        workflow.knownStaffForDelivery.union(
+            [GoogleCalendarStaffDelivery.email(workflow.signedInEmail)].compactMap { $0 }
+        )
     }
 
     private static func canNotifyStaff(_ remote: GoogleCalendarEvent, workflow: GoogleCalendarWorkflow) -> Bool {

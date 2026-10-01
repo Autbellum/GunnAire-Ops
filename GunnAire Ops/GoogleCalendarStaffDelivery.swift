@@ -33,7 +33,7 @@ enum GoogleCalendarStaffDeliveryError: LocalizedError {
 enum GoogleCalendarStaffDelivery {
     static let managedEmailsKey = "gunnaireStaffAttendees"
 
-    static func email(_ value: String?) -> String? {
+    nonisolated static func email(_ value: String?) -> String? {
         guard let value else { return nil }
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard normalized.range(of: #"^[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9.-]*[A-Z0-9])?\.[A-Z]{2,}$"#,

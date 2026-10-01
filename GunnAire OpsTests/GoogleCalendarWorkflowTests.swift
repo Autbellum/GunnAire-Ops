@@ -149,6 +149,17 @@ struct GoogleCalendarWorkflowTests {
         #expect(f.writes.count == 1)
     }
 
+    @Test func publishThenImportMaySaveAnUnrelatedCalendarShellInTheSameRun() async throws {
+        let f = try Fixture()
+        f.call.scheduledDate = Date().addingTimeInterval(3600)
+        try f.context.save()
+        f.remote[f.key(f.email, "external-visit")] = f.event(id: "external-visit", managed: false)
+        let result = await (try f.flow()).run { try await GoogleCalendarScheduleSync.synchronize(workflow: $0) }
+        #expect(try result.get().contains("Published 1"))
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+        #expect(try f.context.fetch(FetchDescriptor<ServiceCall>()).count == 2)
+    }
+
     @Test func fractionalSecondScheduleSurvivesCreateAndPatchConfirmation() async throws {
         let f = try Fixture()
         f.call.scheduledDate = Date(timeIntervalSince1970: 1_800_000_000.1234)
@@ -521,6 +532,15 @@ struct GoogleCalendarWorkflowTests {
         failed(await GoogleCalendarScheduleSync.repairMissingEvent(review))
         #expect(changed.writes.isEmpty)
         #expect(changed.call.googleEventID == "fixture-event")
+
+        let durationChanged = try Fixture(linked: true)
+        durationChanged.remote.removeValue(forKey: durationChanged.key(durationChanged.email, "fixture-event"))
+        let durationReview = try #require(try await GoogleCalendarScheduleSync.checkMissingEvent(
+            call: durationChanged.call, workflow: durationChanged.flow()).get())
+        durationChanged.call.duration += 900
+        try durationChanged.context.save()
+        failed(await GoogleCalendarScheduleSync.repairMissingEvent(durationReview))
+        #expect(durationChanged.writes.isEmpty)
     }
 
     @Test func missingLinkRepairReconcilesA409AndKeepsLostRepliesReserved() async throws {
@@ -640,6 +660,70 @@ struct GoogleCalendarWorkflowTests {
         failed(try await f.publish())
         #expect(f.writes.isEmpty)
         #expect(f.call.notes == "New technician findings during sync")
+    }
+
+    @Test func unrelatedSavedJobChangeDuringGoogleReadDoesNotDelayThisAppointment() async throws {
+        let f = try Fixture()
+        let unrelated = ServiceCall(type: .service, scheduledDate: f.call.scheduledDate,
+                                    customer: f.customer, notes: "Unrelated job")
+        f.context.insert(unrelated)
+        try f.context.save()
+        var changed = false
+        f.beforeReply = { request in
+            guard !changed, request.httpMethod == "GET", request.url?.path.contains("/events/") == true else { return }
+            changed = true
+            unrelated.notes = "Field update for another job"
+            try f.context.save()
+        }
+        _ = try await f.publish().get()
+        #expect(changed)
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+        #expect(unrelated.notes == "Field update for another job")
+    }
+
+    @Test func savedTargetChangeDuringGoogleReadCannotStartAWriteFromOldSnapshot() async throws {
+        let f = try Fixture()
+        var changed = false
+        f.beforeReply = { request in
+            guard !changed, request.httpMethod == "GET", request.url?.path.contains("/events/") == true else { return }
+            changed = true
+            f.call.notes = "New target findings"
+            try f.context.save()
+        }
+        failed(try await f.publish())
+        #expect(changed)
+        #expect(f.writes.isEmpty)
+        #expect(f.call.notes == "New target findings")
+    }
+
+    @Test func crewEmailChangeDuringGoogleReadCannotInviteThePreviousRecipient() async throws {
+        let f = try Fixture()
+        let crew = Technician(name: "Crew", contactInfo: "first-crew@example.invalid")
+        f.context.insert(crew)
+        f.call.additionalTechnicianIDs = [crew.id]
+        try f.context.save()
+        var changed = false
+        f.beforeReply = { request in
+            guard !changed, request.httpMethod == "GET", request.url?.path.contains("/events/") == true else { return }
+            changed = true
+            crew.contactInfo = "second-crew@example.invalid"
+            try f.context.save()
+        }
+        failed(try await f.publish())
+        #expect(changed)
+        #expect(f.writes.isEmpty)
+    }
+
+    @Test func savedGoogleRouteNamesPrimaryAndAssignedTechnicianCalendar() throws {
+        let f = try Fixture(linked: true)
+        #expect(GoogleCalendarScheduleSync.calendarRouteLabel(for: f.call, connectedEmail: f.email) ==
+                "Google calendar: Primary (\(f.email))")
+        let technician = Technician(name: "Riley", contactInfo: "riley@example.invalid")
+        f.context.insert(technician)
+        f.call.assignedTechnician = technician
+        f.call.googleCalendarID = "riley@example.invalid"
+        #expect(GoogleCalendarScheduleSync.calendarRouteLabel(for: f.call, connectedEmail: f.email) ==
+                "Google calendar: Riley (riley@example.invalid)")
     }
 
     @Test func deletedModelDuringReadCannotBeLinkedOrDereferencedForPublication() async throws {
@@ -855,6 +939,19 @@ struct GoogleCalendarWorkflowTests {
         failed(try await f.sync())
         #expect(try f.context.fetch(FetchDescriptor<ServiceCall>()).count == 1)
         #expect(f.customer.name == "Local edit while fetching")
+    }
+
+    @Test func savedCustomerChangeDuringCalendarFetchCannotImportFromStaleSnapshot() async throws {
+        let f = try Fixture()
+        f.remote[f.key(f.email, "new-event")] = f.event(id: "new-event", managed: false)
+        f.beforeReply = { request in
+            guard request.url?.path.hasSuffix("/events") == true else { return }
+            f.customer.name = "Saved during remote read"
+            try f.context.save()
+        }
+        failed(try await f.sync())
+        #expect(try f.context.fetch(FetchDescriptor<ServiceCall>()).count == 1)
+        #expect(f.customer.name == "Saved during remote read")
     }
 
     @Test func lostAuthorityOnAnotherCalendarRejectsTheWholeImport() async throws {

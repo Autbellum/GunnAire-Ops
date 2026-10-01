@@ -23,6 +23,27 @@ struct QBODocumentOwner: Codable, Equatable {
         let owner = Self(companyID: company, backendOrigin: session.backendOrigin, actorEmail: session.email)
         try owner.validate(); return owner
     }
+
+    /// Captures only the server-verified workspace identity. Callers that use
+    /// this for an asynchronous read must validate the local AppUser replica
+    /// in a private context and recapture this identity after suspension.
+    @MainActor static func captureForBackgroundRead(context: ModelContext) throws -> Self {
+        let controller = CompanyWorkspaceAccessController.shared
+        guard controller.authorizedContainer === context.container,
+              let company = controller.verifiedCompanyID,
+              let user = controller.verifiedUser, user.isActive,
+              controller.verifiedRole == .admin,
+              let session = CompanyWorkspaceSession.current,
+              AppAccess.normalizedEmail(user.email) == AppAccess.normalizedEmail(session.email),
+              !context.insertedModelsArray.contains(where: { $0 is AppUser }),
+              !context.changedModelsArray.contains(where: { $0 is AppUser }),
+              !context.deletedModelsArray.contains(where: { $0 is AppUser }) else {
+            throw QBODocumentError.access
+        }
+        let owner = Self(companyID: company, backendOrigin: session.backendOrigin, actorEmail: session.email)
+        try owner.validate()
+        return owner
+    }
 }
 
 /// Portable local identity, including invoices that have no operational job.

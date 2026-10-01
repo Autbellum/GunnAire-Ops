@@ -1,7 +1,7 @@
 import Foundation
 import SwiftData
 
-enum GoogleCalendarWorkflowError: LocalizedError, Equatable {
+nonisolated enum GoogleCalendarWorkflowError: LocalizedError, Equatable {
     case busy, accessDenied, changed, identity, readOnly, saveFailed, needsReview, invalidDates, hasJobHistory, remoteChanged, unconfirmedWrite
 
     var errorDescription: String? {
@@ -31,8 +31,14 @@ final class GoogleCalendarWorkflow {
     let signedInEmail: String?
     private let provider: WorkspaceProviderOperation
     private let validateAccess: () throws -> Void
+    private let validatesDispatchMirrorOffMain: Bool
     private let save: (ModelContext) throws -> Void
-    private var validateRecords: () throws -> Void
+    private var trackedCall: ServiceCall?
+    private var trackedRevision: TrackedRevision?
+    private var persistedRevision: TrackedRevision?
+    private var trackedAdditionalTechnicians: [Technician] = []
+    private var knownStaffBaseline: Set<String>?
+    private var importRevision: ImportRevision?
     private var additionalValidation: (() throws -> Void)?
     private let containerKey: ObjectIdentifier
 
@@ -49,12 +55,12 @@ final class GoogleCalendarWorkflow {
         self.signedInEmail = signedInEmail
         self.save = save
         containerKey = ObjectIdentifier(context.container)
+        validatesDispatchMirrorOffMain = validateAccess == nil
         self.validateAccess = validateAccess ?? {
-            try Self.requireDispatchAccess(context: context, email: signedInEmail)
+            try Self.requireDispatchSessionAccess(context: context, email: signedInEmail)
         }
         try self.validateAccess()
         provider = try auth.captureProviderOperation()
-        validateRecords = try Self.recordValidation(context: context)
     }
 
     func run(_ action: (GoogleCalendarWorkflow) async throws -> String) async -> Result<String, Error> {
@@ -63,9 +69,9 @@ final class GoogleCalendarWorkflow {
         }
         defer { Self.activeContainers.remove(containerKey) }
         do {
-            try check()
+            try await checkOffMain()
             let message = try await action(self)
-            try check()
+            try await checkOffMain()
             return .success(message)
         } catch {
             if case GoogleAuthError.http(statusCode: 412) = error { return .failure(GoogleCalendarWorkflowError.remoteChanged) }
@@ -82,18 +88,134 @@ final class GoogleCalendarWorkflow {
 
     private func validateCurrent() throws {
         try validateAccess()
-        try validateRecords()
+        if let trackedCall, let trackedRevision {
+            guard !context.deletedModelsArray.contains(where: { $0.persistentModelID == trackedRevision.persistentID }),
+                  trackedAdditionalTechnicians.allSatisfy({ technician in
+                      !context.deletedModelsArray.contains { $0.persistentModelID == technician.persistentModelID }
+                  }),
+                  Self.revision(of: trackedCall, additional: trackedAdditionalTechnicians) == trackedRevision else {
+                throw GoogleCalendarWorkflowError.changed
+            }
+        }
         try additionalValidation?()
+    }
+
+    /// Capture only the appointment that this operation may publish. The
+    /// provider callback still performs the cheap in-memory check; every
+    /// asynchronous boundary also compares a fresh private-context read.
+    func track(_ call: ServiceCall) throws {
+        try provider.check()
+        try validateAccess()
+        if let trackedCall, trackedCall === call {
+            try check()
+        } else {
+            let additional = try Self.fetchAdditionalTechnicians(for: call, in: context)
+            trackedCall = call
+            trackedAdditionalTechnicians = additional
+            trackedRevision = Self.revision(of: call, additional: additional)
+            persistedRevision = nil
+            knownStaffBaseline = nil
+        }
+    }
+
+    private func checkOffMain() async throws {
+        try check()
+        if importRevision != nil, context.hasChanges { throw GoogleCalendarWorkflowError.changed }
+        let expected = trackedRevision
+        let expectedImport = importRevision
+        let email = signedInEmail
+        let readMirror = validatesDispatchMirrorOffMain
+        let readStaff = expected != nil
+        let unsavedTargetBeforeRead = hasUnsavedTrackedDependency
+        let testDatabase = GunnAireCloudKit.usesTestDatabase
+        let current = try await Task.detached(priority: .userInitiated) { [container = context.container] in
+            let revision = try expected.map { try Self.readRevision(container: container, callID: $0.call.id) }
+            let mirror = readMirror ? try Self.readDispatchMirror(container: container, email: email) : nil
+            let knownStaff = readStaff ? try Self.readKnownStaff(container: container) : nil
+            let importState = expectedImport != nil ? try Self.readImportRevision(container: container) : nil
+            // The three reads use private contexts. A save landing while they
+            // run must not combine an old job with new recipient authority.
+            if let expected {
+                let stable = try Self.readRevision(container: container, callID: expected.call.id)
+                guard stable == revision else { throw GoogleCalendarWorkflowError.changed }
+                let stableStaff = try Self.readKnownStaff(container: container)
+                guard stableStaff == knownStaff else { throw GoogleCalendarWorkflowError.changed }
+            }
+            if readMirror {
+                let stableMirror = try Self.readDispatchMirror(container: container, email: email)
+                guard stableMirror == mirror else { throw GoogleCalendarWorkflowError.accessDenied }
+            }
+            if expectedImport != nil {
+                let stableImport = try Self.readImportRevision(container: container)
+                guard stableImport == importState else { throw GoogleCalendarWorkflowError.changed }
+            }
+            return (revision, mirror, knownStaff, importState)
+        }.value
+        try check()
+        if expectedImport != nil, context.hasChanges { throw GoogleCalendarWorkflowError.changed }
+        if let mirror = current.1 {
+            let role = testDatabase ? mirror.firstRole : CompanyWorkspaceAccessController.shared.verifiedRole
+            guard mirror.count > 0, mirror.allActiveAndRole == role,
+                  role == .admin || role == .dispatcher else {
+                throw GoogleCalendarWorkflowError.accessDenied
+            }
+        }
+        guard unsavedTargetBeforeRead == hasUnsavedTrackedDependency else {
+            throw GoogleCalendarWorkflowError.changed
+        }
+        if let persistedRevision {
+            guard current.0 == persistedRevision else { throw GoogleCalendarWorkflowError.changed }
+        } else {
+            guard current.0 == expected || unsavedTargetBeforeRead else {
+                throw GoogleCalendarWorkflowError.changed
+            }
+            persistedRevision = current.0
+        }
+        if let knownStaffBaseline {
+            guard current.2 == knownStaffBaseline else { throw GoogleCalendarWorkflowError.changed }
+        } else {
+            knownStaffBaseline = current.2
+        }
+        guard current.3 == expectedImport else { throw GoogleCalendarWorkflowError.changed }
+    }
+
+    func beginImportFence() async throws {
+        try check()
+        guard !context.hasChanges else { throw GoogleCalendarWorkflowError.changed }
+        let first = try await Task.detached(priority: .userInitiated) { [container = context.container] in
+            try Self.readImportRevision(container: container)
+        }.value
+        try check()
+        guard !context.hasChanges else { throw GoogleCalendarWorkflowError.changed }
+        let second = try await Task.detached(priority: .userInitiated) { [container = context.container] in
+            try Self.readImportRevision(container: container)
+        }.value
+        try check()
+        guard !context.hasChanges, first == second else { throw GoogleCalendarWorkflowError.changed }
+        importRevision = second
+    }
+
+    var knownStaffForDelivery: Set<String> {
+        knownStaffBaseline ?? []
+    }
+
+    private var hasUnsavedTrackedDependency: Bool {
+        guard let trackedRevision else { return false }
+        let identifiers = Set([trackedRevision.persistentID] +
+            [trackedRevision.customer?.1, trackedRevision.technician?.1].compactMap { $0 } +
+            trackedRevision.additional.map { $0.1 })
+        return (context.changedModelsArray + context.insertedModelsArray + context.deletedModelsArray)
+            .contains { identifiers.contains($0.persistentModelID) }
     }
 
     func setAdditionalValidation(_ validation: (() throws -> Void)?) { additionalValidation = validation }
 
     func receive<Value>(_ request: (@escaping (Result<Value, Error>) -> Void) -> Void) async throws -> Value {
-        try check()
+        try await checkOffMain()
         let value: Value = try await withCheckedThrowingContinuation { continuation in
             request { continuation.resume(with: $0) }
         }
-        try check()
+        try await checkOffMain()
         return value
     }
 
@@ -102,10 +224,33 @@ final class GoogleCalendarWorkflow {
     func saveChanges() throws {
         try provider.check()
         try validateAccess()
-        let nextValidation = try Self.recordValidation(context: context)
+        try additionalValidation?()
+        let removedTrackedCall = trackedCall.map { call in
+            context.deletedModelsArray.contains { $0.persistentModelID == call.persistentModelID }
+        } ?? false
+        let nextAdditional = try trackedCall.flatMap { call in
+            removedTrackedCall ? nil : try Self.fetchAdditionalTechnicians(for: call, in: context)
+        } ?? []
+        let nextRevision = trackedCall.flatMap { call in
+            removedTrackedCall ? nil : Self.revision(of: call, additional: nextAdditional)
+        }
+        let wroteTechnician = (context.changedModelsArray + context.insertedModelsArray + context.deletedModelsArray)
+            .contains { $0 is Technician }
         do { try save(context) }
         catch { throw GoogleCalendarWorkflowError.saveFailed }
-        validateRecords = nextValidation
+        importRevision = nil
+        if wroteTechnician { knownStaffBaseline = nil }
+        if removedTrackedCall {
+            trackedCall = nil
+            trackedRevision = nil
+            persistedRevision = nil
+            trackedAdditionalTechnicians = []
+            knownStaffBaseline = nil
+        } else {
+            trackedRevision = nextRevision
+            persistedRevision = nil
+            trackedAdditionalTechnicians = nextAdditional
+        }
     }
 
     static func requireDispatchAccess(context: ModelContext, email: String?) throws {
@@ -122,6 +267,40 @@ final class GoogleCalendarWorkflow {
         }
     }
 
+    private static func requireDispatchSessionAccess(context: ModelContext, email: String?) throws {
+        let selected = AppAccess.normalizedEmail(email)
+        let current = AppAccess.normalizedEmail(AppIdentity.currentEmail)
+        let controller = CompanyWorkspaceAccessController.shared
+        let pendingUserChange = (context.changedModelsArray + context.insertedModelsArray + context.deletedModelsArray)
+            .contains { $0 is AppUser }
+        guard !selected.isEmpty, selected == current,
+              !pendingUserChange,
+              GunnAireCloudKit.usesTestDatabase || controller.authorizedContainer === context.container,
+              GunnAireCloudKit.usesTestDatabase || controller.verifiedRole == .admin || controller.verifiedRole == .dispatcher else {
+            throw GoogleCalendarWorkflowError.accessDenied
+        }
+    }
+
+    nonisolated private struct DispatchMirror: Equatable, Sendable {
+        let count: Int
+        let firstRole: AppUserRole?
+        let allActiveAndRole: AppUserRole?
+    }
+
+    nonisolated private static func readDispatchMirror(container: ModelContainer, email: String?) throws -> DispatchMirror {
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let selected = AppAccess.normalizedEmail(email)
+        let matches = try context.fetch(FetchDescriptor<AppUser>()).filter {
+            AppAccess.normalizedEmail($0.email) == selected
+        }
+        let role = matches.first.map { AppUserRole(rawValue: $0.roleRawValue) ?? .standard }
+        let allMatch = role != nil && matches.allSatisfy {
+            $0.isActive && (AppUserRole(rawValue: $0.roleRawValue) ?? .standard) == role
+        }
+        return DispatchMirror(count: matches.count, firstRole: role, allActiveAndRole: allMatch ? role : nil)
+    }
+
     static func allowsDispatch(email: String?, currentEmail: String?, users: [AppUser], verifiedRole: AppUserRole?) -> Bool {
         let email = AppAccess.normalizedEmail(email)
         let matches = users.filter { AppAccess.normalizedEmail($0.email) == email }
@@ -130,32 +309,101 @@ final class GoogleCalendarWorkflow {
             matches.allSatisfy { $0.isActive && $0.role == verifiedRole }
     }
 
-    private static func recordValidation(context: ModelContext) throws -> () throws -> Void {
-        let calls = try context.fetch(FetchDescriptor<ServiceCall>())
-        let customers = try context.fetch(FetchDescriptor<Customer>())
-        let technicians = try context.fetch(FetchDescriptor<Technician>())
-        let callValues = Dictionary(uniqueKeysWithValues: calls.map { (ObjectIdentifier($0), CallRevision($0)) })
-        let customerValues = Dictionary(uniqueKeysWithValues: customers.map { (ObjectIdentifier($0), CustomerRevision($0)) })
-        let technicianValues = Dictionary(uniqueKeysWithValues: technicians.map {
-            (ObjectIdentifier($0), [$0.id.uuidString, $0.name, $0.contactInfo ?? ""])
-        })
-        return {
-            let currentCalls = try context.fetch(FetchDescriptor<ServiceCall>())
-            let currentCustomers = try context.fetch(FetchDescriptor<Customer>())
-            let currentTechnicians = try context.fetch(FetchDescriptor<Technician>())
-            // Membership is checked before reading retained/deleted model fields.
-            guard currentCalls.count == callValues.count,
-                  currentCustomers.count == customerValues.count,
-                  currentTechnicians.count == technicianValues.count,
-                  currentCalls.allSatisfy({ callValues[ObjectIdentifier($0)] == CallRevision($0) }),
-                  currentCustomers.allSatisfy({ customerValues[ObjectIdentifier($0)] == CustomerRevision($0) }),
-                  currentTechnicians.allSatisfy({
-                      technicianValues[ObjectIdentifier($0)] == [$0.id.uuidString, $0.name, $0.contactInfo ?? ""]
-                  }) else { throw GoogleCalendarWorkflowError.changed }
+    nonisolated private static func revision(of call: ServiceCall, additional: [Technician]) -> TrackedRevision {
+        TrackedRevision(persistentID: call.persistentModelID, call: CallRevision(call),
+                        customer: call.customer.map { (CustomerRevision($0), $0.persistentModelID) },
+                        technician: call.assignedTechnician.map { (TechnicianRevision($0), $0.persistentModelID) },
+                        additional: additional.map { (TechnicianRevision($0), $0.persistentModelID) })
+    }
+
+    nonisolated private static func fetchAdditionalTechnicians(for call: ServiceCall, in context: ModelContext) throws -> [Technician] {
+        let rawIDs = call.additionalTechnicianIDsJSON?.data(using: .utf8)
+        let values = rawIDs.flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? []
+        let ids = Set(values.compactMap(UUID.init(uuidString:))).sorted { $0.uuidString < $1.uuidString }
+        guard ids.count <= 25 else { throw GoogleCalendarWorkflowError.needsReview }
+        return try ids.map { id in
+            var descriptor = FetchDescriptor<Technician>(predicate: #Predicate { $0.id == id })
+            descriptor.fetchLimit = 2
+            let matches = try context.fetch(descriptor)
+            guard matches.count == 1, let technician = matches.first else { throw GoogleCalendarWorkflowError.changed }
+            return technician
         }
     }
 
-    private struct CustomerRevision: Equatable {
+    nonisolated private static func readRevision(container: ModelContainer, callID: UUID) throws -> TrackedRevision {
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        var descriptor = FetchDescriptor<ServiceCall>(predicate: #Predicate { $0.id == callID })
+        descriptor.fetchLimit = 2
+        let matches = try context.fetch(descriptor)
+        guard matches.count == 1, let call = matches.first else { throw GoogleCalendarWorkflowError.changed }
+        let snapshot = try revision(of: call, additional: fetchAdditionalTechnicians(for: call, in: context))
+        if let customer = snapshot.customer {
+            let customerID = customer.0.id
+            var match = FetchDescriptor<Customer>(predicate: #Predicate { $0.id == customerID })
+            match.fetchLimit = 2
+            let values = try context.fetch(match)
+            guard values.count == 1, values.first?.persistentModelID == customer.1 else {
+                throw GoogleCalendarWorkflowError.changed
+            }
+        }
+        if let technician = snapshot.technician {
+            let technicianID = technician.0.id
+            var match = FetchDescriptor<Technician>(predicate: #Predicate { $0.id == technicianID })
+            match.fetchLimit = 2
+            let values = try context.fetch(match)
+            guard values.count == 1, values.first?.persistentModelID == technician.1 else {
+                throw GoogleCalendarWorkflowError.changed
+            }
+        }
+        return snapshot
+    }
+
+    nonisolated private static func readKnownStaff(container: ModelContainer) throws -> Set<String> {
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        return Set(try context.fetch(FetchDescriptor<Technician>()).compactMap {
+            GoogleCalendarStaffDelivery.email($0.contactInfo)
+        })
+    }
+
+    nonisolated private struct ImportRevision: Equatable, Sendable {
+        let calls: [PersistentIdentifier: CallRevision]
+        let customers: [PersistentIdentifier: CustomerRevision]
+        let technicians: [PersistentIdentifier: TechnicianRevision]
+    }
+
+    nonisolated private static func readImportRevision(container: ModelContainer) throws -> ImportRevision {
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let calls = try context.fetch(FetchDescriptor<ServiceCall>())
+        let customers = try context.fetch(FetchDescriptor<Customer>())
+        let technicians = try context.fetch(FetchDescriptor<Technician>())
+        return ImportRevision(
+            calls: Dictionary(uniqueKeysWithValues: calls.map { ($0.persistentModelID, CallRevision($0)) }),
+            customers: Dictionary(uniqueKeysWithValues: customers.map { ($0.persistentModelID, CustomerRevision($0)) }),
+            technicians: Dictionary(uniqueKeysWithValues: technicians.map { ($0.persistentModelID, TechnicianRevision($0)) })
+        )
+    }
+
+    nonisolated private struct TrackedRevision: Equatable, Sendable {
+        let persistentID: PersistentIdentifier
+        let call: CallRevision
+        let customer: (CustomerRevision, PersistentIdentifier)?
+        let technician: (TechnicianRevision, PersistentIdentifier)?
+        let additional: [(TechnicianRevision, PersistentIdentifier)]
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.persistentID == rhs.persistentID && lhs.call == rhs.call &&
+                lhs.customer?.0 == rhs.customer?.0 && lhs.customer?.1 == rhs.customer?.1 &&
+                lhs.technician?.0 == rhs.technician?.0 && lhs.technician?.1 == rhs.technician?.1 &&
+                lhs.additional.count == rhs.additional.count && zip(lhs.additional, rhs.additional).allSatisfy {
+                    $0.0.0 == $0.1.0 && $0.0.1 == $0.1.1
+                }
+        }
+    }
+
+    nonisolated private struct CustomerRevision: Equatable, Sendable {
         let id: UUID
         let name: String
         let email: String?
@@ -163,14 +411,21 @@ final class GoogleCalendarWorkflow {
         init(_ value: Customer) { id = value.id; name = value.name; email = value.email; address = value.address }
     }
 
-    private struct CallRevision: Equatable {
+    nonisolated private struct TechnicianRevision: Equatable, Sendable {
+        let id: UUID
+        let name: String
+        let contactInfo: String?
+        init(_ value: Technician) { id = value.id; name = value.name; contactInfo = value.contactInfo }
+    }
+
+    nonisolated private struct CallRevision: Equatable, Sendable {
         let id: UUID
         let strings: [String?]
         let dates: [Date?]
         let duration: Double
         let managed: Bool
-        let customer: ObjectIdentifier?
-        let technician: ObjectIdentifier?
+        let customer: PersistentIdentifier?
+        let technician: PersistentIdentifier?
         init(_ value: ServiceCall) {
             id = value.id
             strings = [value.googleCalendarID, value.googleEventID, value.eventTitle, value.siteAddress,
@@ -179,8 +434,8 @@ final class GoogleCalendarWorkflow {
             dates = [value.scheduledDate, value.promisedArrivalWindowStart, value.promisedArrivalWindowEnd, value.cancelledAt]
             duration = value.duration
             managed = value.googleEventManagedByApp
-            customer = value.customer.map(ObjectIdentifier.init)
-            technician = value.assignedTechnician.map(ObjectIdentifier.init)
+            customer = value.customer?.persistentModelID
+            technician = value.assignedTechnician?.persistentModelID
         }
     }
 }

@@ -1742,6 +1742,15 @@ struct ScheduleView: View {
             }
             .font(.caption2)
             .foregroundColor(.secondary)
+            if call.googleEventID != nil {
+                Text(GoogleCalendarScheduleSync.calendarRouteLabel(
+                    for: call, connectedEmail: googleAuth.signedInEmail
+                ))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .accessibilityIdentifier("ScheduleGoogleCalendarRoute-\(call.id.uuidString)")
+            }
             if let closeoutAttention = closeoutAttentionText(for: call) {
                 Label(closeoutAttention, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption2.weight(.semibold))
