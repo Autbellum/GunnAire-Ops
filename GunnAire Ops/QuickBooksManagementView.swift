@@ -5213,6 +5213,10 @@ struct QuickBooksManagementView: View {
                 }
                 do {
                     let prepared = try await preparation.makeWorkflow(lifecycle: owner)
+                    // The operator's retry is an explicit review: bind or verify
+                    // the original company before any provider write. A wrong
+                    // company stops here and leaves the document unchanged.
+                    try await AutomaticOutboundSync.bindExplicitlyReviewed(prepared)
                     workflow = prepared
                     let workflow = prepared
                     try await workflow.run.perform {

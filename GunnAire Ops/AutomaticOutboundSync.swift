@@ -1,7 +1,12 @@
 import Foundation
 import SwiftData
 
-private actor AutomaticOutboundRealmStore {
+/// Device-bound proof of the QuickBooks company/environment each saved billing
+/// document was first prepared for. One shared actor serializes every Keychain
+/// read and write off the main actor for publication and file uploads alike.
+actor QuickBooksDocumentRealmProofStore {
+    static let shared = QuickBooksDocumentRealmProofStore()
+
     func markNew(_ record: AutomaticOutboundSync.RealmRecord) throws {
         let account = record.account
         if let existing = try KeychainStore.loadCodable(AutomaticOutboundSync.RealmRecord.self, account: account) {
@@ -54,6 +59,20 @@ private actor AutomaticOutboundRealmStore {
             throw AutomaticOutboundSync.RealmError.reviewRequired
         case .wrongRealm:
             throw AutomaticOutboundSync.RealmError.wrongRealm
+        }
+    }
+
+    /// File uploads never bind. Every saved document must already carry proof
+    /// for exactly this company and environment before a new provider write.
+    func requireProceed(_ expected: [AutomaticOutboundSync.RealmRecord]) throws {
+        guard !expected.isEmpty else { throw AutomaticOutboundSync.RealmError.reviewRequired }
+        for record in expected {
+            let stored = try KeychainStore.loadCodable(AutomaticOutboundSync.RealmRecord.self, account: record.account)
+            switch AutomaticOutboundSync.realmDecision(stored: stored, expected: record, explicitReview: false) {
+            case .proceed: continue
+            case .wrongRealm: throw AutomaticOutboundSync.RealmError.wrongRealm
+            case .bind, .reviewRequired: throw AutomaticOutboundSync.RealmError.reviewRequired
+            }
         }
     }
 }
@@ -173,7 +192,7 @@ final class AutomaticOutboundSync {
     private let calendarVerificationInterval: TimeInterval = 10 * 60
     private var lastRecoveryAt: Date?
     private let recoveryInterval: TimeInterval = 60
-    private let realmStore = AutomaticOutboundRealmStore()
+    private let realmStore = QuickBooksDocumentRealmProofStore.shared
 
     private init() {}
 
@@ -293,6 +312,46 @@ final class AutomaticOutboundSync {
         return RealmRecord(companyID: companyID, documentType: document.label.lowercased(),
             documentID: document.id, customerID: customer.id, createdAt: createdAt,
             realmID: realmID, environment: environment)
+    }
+
+    /// The saved-document proof expected for one prepared workflow. Every
+    /// field comes from the original local document and the workflow's own
+    /// captured company, realm and environment.
+    static func realmRecord(for workflow: QuickBooksBillingWorkflow) throws -> RealmRecord {
+        let document = workflow.document
+        guard let companyID = workflow.run.workflow.companyID,
+              let realmID = workflow.run.workflow.realmID, !realmID.isEmpty,
+              let customer = document.customer else { throw BillingPublicationError.accessRequired }
+        let createdAt: Date
+        switch document {
+        case .invoice(let value): createdAt = value.createdAt
+        case .estimate(let value): createdAt = value.createdAt
+        }
+        return RealmRecord(companyID: companyID, documentType: document.label.lowercased(),
+            documentID: document.id, customerID: customer.id, createdAt: createdAt,
+            realmID: realmID, environment: workflow.run.workflow.environment)
+    }
+
+    /// Operator-started publication (manual retry or the review page) binds or
+    /// verifies the original company before any provider write, exactly as an
+    /// explicit Sync Saved Document does. A document first prepared for another
+    /// company stops here with nothing sent.
+    static func bindExplicitlyReviewed(
+        _ workflow: QuickBooksBillingWorkflow,
+        bind: ((RealmRecord) async throws -> Void)? = nil
+    ) async throws {
+        try workflow.check()
+        let record = try realmRecord(for: workflow)
+        if let bind { try await bind(record) } else { try await bindInDeviceProofStore(record) }
+        try workflow.check()
+    }
+
+    private static func bindInDeviceProofStore(_ record: RealmRecord) async throws {
+        let store = QuickBooksDocumentRealmProofStore.shared
+        try await store.verifyOrBind(record, explicitReview: true)
+        if let realmID = record.realmID, let environment = record.environment {
+            try await store.remember(RealmScope(companyID: record.companyID, realmID: realmID, environment: environment))
+        }
     }
 
     static func pendingDocumentKeys(invoices: [Invoice], estimates: [Estimate]) -> [DocumentKey] {

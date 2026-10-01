@@ -1800,7 +1800,7 @@ struct SyncIntegrationsView: View {
             }
         }
 
-        if let (_, retained) = try? QBODocumentNativeWorkflow.retainedData(for: attachment, context: modelContext) {
+        if let (_, retained) = try? await QBODocumentNativeWorkflow.retainedData(for: attachment, context: modelContext) {
             return retained
         }
 
@@ -6124,10 +6124,13 @@ private struct CustomerEditorView: View {
     }
 
     private func previewCustomerAttachment(_ attachment: ServiceDocumentAttachment) {
-        do {
-            customerAttachmentPreviewURL = try QBODocumentNativeWorkflow.previewURL(for: attachment, context: modelContext)
-            customerAttachmentMessage = nil
-        } catch { customerAttachmentMessage = QBODocumentNativeWorkflow.message(error) }
+        // A retained original is read, verified and staged off the main actor.
+        Task { @MainActor in
+            do {
+                customerAttachmentPreviewURL = try await QBODocumentNativeWorkflow.previewURL(for: attachment, context: modelContext)
+                customerAttachmentMessage = nil
+            } catch { customerAttachmentMessage = QBODocumentNativeWorkflow.message(error) }
+        }
     }
 
     @ViewBuilder

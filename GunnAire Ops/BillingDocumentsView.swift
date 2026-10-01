@@ -7103,10 +7103,13 @@ GunnAire
     }
 
     private func previewJobAttachment(_ attachment: ServiceDocumentAttachment) {
-        do {
-            let url = try QBODocumentNativeWorkflow.previewURL(for: attachment, context: modelContext)
-            attachmentPendingMarkup = nil; attachmentPreviewURL = url; attachmentMessage = nil
-        } catch { attachmentMessage = QBODocumentNativeWorkflow.message(error) }
+        // A retained original is read, verified and staged off the main actor.
+        Task { @MainActor in
+            do {
+                let url = try await QBODocumentNativeWorkflow.previewURL(for: attachment, context: modelContext)
+                attachmentPendingMarkup = nil; attachmentPreviewURL = url; attachmentMessage = nil
+            } catch { attachmentMessage = QBODocumentNativeWorkflow.message(error) }
+        }
     }
 
     private func annotateJobAttachment(_ attachment: ServiceDocumentAttachment) {
@@ -7118,10 +7121,17 @@ GunnAire
             attachmentMessage = "Open the attachment's current job before annotating it."
             return
         }
-        do {
-            let url = try QBODocumentNativeWorkflow.previewURL(for: attachment, context: modelContext)
-            attachmentPendingMarkup = attachment; attachmentPreviewURL = url; attachmentMessage = nil
-        } catch { attachmentMessage = QBODocumentNativeWorkflow.message(error) }
+        Task { @MainActor in
+            do {
+                let url = try await QBODocumentNativeWorkflow.previewURL(for: attachment, context: modelContext)
+                // The job may have changed while the original was staged.
+                guard attachment.serviceCallID == activeServiceCall?.id else {
+                    attachmentMessage = "Open the attachment's current job before annotating it."
+                    return
+                }
+                attachmentPendingMarkup = attachment; attachmentPreviewURL = url; attachmentMessage = nil
+            } catch { attachmentMessage = QBODocumentNativeWorkflow.message(error) }
+        }
     }
 
     private func saveAnnotatedAttachmentCopy(

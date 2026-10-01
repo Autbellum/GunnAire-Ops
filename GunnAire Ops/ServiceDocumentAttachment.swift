@@ -1,7 +1,7 @@
 import Foundation
 import SwiftData
 
-enum ServiceDocumentAttachmentKind: String, Codable, CaseIterable, Identifiable {
+nonisolated enum ServiceDocumentAttachmentKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case serviceReport = "service_report"
     case beforePhoto = "before_photo"
     case afterPhoto = "after_photo"

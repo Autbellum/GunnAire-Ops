@@ -111,7 +111,7 @@ struct QBODocumentSharedRecoveryView: View {
                 var saved = try await model.restore(row)
                 // Missing/pending local records leave the original attention
                 // item intact. The parent detail owns subsequent reconciliation.
-                if saved.needsLocalApplication, let applied = try? model.apply(saved, context: context) { saved = applied }
+                if saved.needsLocalApplication, let applied = try? await model.apply(saved, context: context) { saved = applied }
                 try model.access.check()
                 restored(saved); dismiss()
             } catch { message = QBODocumentNativeWorkflow.message(error) }

@@ -266,6 +266,10 @@ import SwiftData
         guard !busy, let flow else { return }; let visit = visitID
         busy = true; defer { if visit == visitID { busy = false } }
         do {
+            // Sending from review is the operator's explicit decision; the
+            // original company is bound or verified before the provider write.
+            try await AutomaticOutboundSync.bindExplicitlyReviewed(flow)
+            guard visit == visitID else { return }
             let result = try await flow.resumeOriginalFromReview()
             guard visit == visitID else { return }
             message = result.message

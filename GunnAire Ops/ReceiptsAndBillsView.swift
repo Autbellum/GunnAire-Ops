@@ -3743,30 +3743,41 @@ private extension ReceiptsAndBillsView {
             let call = selectedServiceCall
             guard selectedServiceCallID == nil || call != nil else { throw QBODocumentError.jobDestination }
             let stage = selectedJobDocumentStage == .before ? "before" : selectedJobDocumentStage == .after ? "after" : "supporting"
-            let captured = try urls.map {
-                try QBODocumentNativeWorkflow.captureManual(access: access, url: $0, call: call, stage: stage, targets: targets, context: modelContext)
-            }
-            var seen = Set<UUID>()
-            let records = captured.filter { seen.insert($0.id).inserted }
-            isSyncing = true; syncMessage = "Original files saved. Checking QuickBooks…"
+            isSyncing = true; syncMessage = "Saving original files…"
             Task { @MainActor in
                 defer { isSyncing = false }
+                // Capture reads, hashes and lists the encrypted journal off the
+                // main actor; each file is captured against a fresh listing.
+                var captured: [QBODocumentCapture] = []
+                do {
+                    for url in urls {
+                        captured.append(try await QBODocumentNativeWorkflow.captureManual(access: access, url: url,
+                            call: call, stage: stage, targets: targets, context: modelContext))
+                    }
+                } catch {
+                    syncMessage = QBODocumentNativeWorkflow.message(error)
+                    return
+                }
+                var seen = Set<UUID>()
+                let records = captured.filter { seen.insert($0.id).inserted }
+                syncMessage = "Original files saved. Checking QuickBooks…"
                 var confirmed = 0, needsReview = 0
                 for row in records {
                     do {
-                        let check = {
+                        // The business and the exact local original, re-read off
+                        // the main actor and re-checked after that suspension.
+                        let check: () async throws -> Void = {
                             try access.check()
-                            try QBODocumentNativeWorkflow.checkLocalOriginal(row, context: modelContext)
+                            try await QBODocumentNativeWorkflow.checkLocalOriginal(row, context: modelContext)
+                            try access.check()
                         }
-                        let session = try QBODocumentCaptureSession(record: row, store: .device, check: check)
-                        let client = GunnAireBackendService.documentUploadClient(check: check)
-                        if row.dispatchStarted || (row.server.map { [.sending, .uncertain, .confirmed].contains($0.state) } ?? false) {
-                            try await session.recover(client: client)
-                        } else { try await session.send(client: client) }
-                        try check()
-                        guard session.record.server?.state == .confirmed else { throw QBODocumentError.review }
-                        try QBODocumentNativeWorkflow.applyConfirmed(session.record, context: modelContext)
-                        try session.markLocalApplied()
+                        // A saved job invoice/estimate needs its original-company
+                        // proof before a new send; dispatched rows only reconcile.
+                        let live = QBODocumentNativeWorkflow.Dependencies.live
+                        let session = try await QBODocumentNativeWorkflow.deliverCaptured(row, context: modelContext,
+                            store: live.store, transport: live.transport, check: check, realmProof: live.realmProof)
+                        try await QBODocumentNativeWorkflow.applyConfirmed(session.record, context: modelContext)
+                        try await session.markLocalApplied()
                         confirmed += 1
                     } catch {
                         needsReview += 1

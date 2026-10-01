@@ -924,10 +924,26 @@ final class QuickBooksBillingWorkflow {
             case .invoice(let value): invoiceList = [value]; estimateList = []
             case .estimate(let value): invoiceList = []; estimateList = [value]
             }
-            let candidates = try self.context.fetch(FetchDescriptor<ServiceDocumentAttachment>()).map { ($0.id, $0) }
-            for (identifier, attachment) in candidates {
-                let current = try self.context.fetch(FetchDescriptor<ServiceDocumentAttachment>()).filter { $0.id == identifier }
-                guard current.count == 1, current.first === attachment else { throw QuickBooksBillingWorkflowError.changed }
+            // Only files saved against this document can need its reference.
+            // Their identities are read off the main actor by exact link; each
+            // is resolved through this context by model identity.
+            let container = self.context.container, documentID = self.document.id
+            let isInvoice: Bool
+            if case .invoice = self.document { isInvoice = true } else { isInvoice = false }
+            let candidates = try await Task.detached(priority: .userInitiated) { () throws -> [(PersistentIdentifier, UUID)] in
+                let reader = ModelContext(container)
+                reader.autosaveEnabled = false
+                let fetch = isInvoice
+                    ? FetchDescriptor<ServiceDocumentAttachment>(predicate: #Predicate { $0.invoiceID == documentID })
+                    : FetchDescriptor<ServiceDocumentAttachment>(predicate: #Predicate { $0.estimateID == documentID })
+                return try reader.fetch(fetch).map { ($0.persistentModelID, $0.id) }
+            }.value
+            try self.check()
+            for (model, identifier) in candidates {
+                let attachment: ServiceDocumentAttachment
+                do { attachment = try QBODocumentNativeWorkflow.exactAttachment(model, id: identifier, context: self.context) }
+                catch { throw QuickBooksBillingWorkflowError.changed }
+                guard attachment.modelContext === self.context else { throw QuickBooksBillingWorkflowError.changed }
                 let references = QuickBooksInvoiceAttachmentSync.missingQuickBooksAttachableReferences(
                     for: attachment, estimates: estimateList, invoices: invoiceList)
                 guard !references.isEmpty else { continue }
@@ -936,16 +952,17 @@ final class QuickBooksBillingWorkflow {
                 let path = attachment.localFilePath, caption = attachment.caption, kind = attachment.kindRaw
                 let oldID = attachment.quickBooksAttachableID, oldKeys = attachment.quickBooksAttachedEntityKeysRaw
                 let oldError = attachment.quickBooksSyncError
-                let bytes = try QBODocumentNativeWorkflow.fileData(attachment.localFileURL)
+                // In-memory identity and labels only: no fetch, no file read.
+                // The upload's own fence re-reads and re-hashes the original
+                // off the main actor before every step.
                 let validate = {
                     try self.check()
-                    let matches = try self.context.fetch(FetchDescriptor<ServiceDocumentAttachment>()).filter { $0.id == identifier }
-                    guard matches.count == 1, matches.first === attachment, attachment.customer === customer,
+                    guard attachment.modelContext === self.context, !attachment.isDeleted, attachment.id == identifier,
+                          attachment.persistentModelID == model, attachment.customer === customer,
                           attachment.invoiceID == invoiceID, attachment.estimateID == estimateID,
                           attachment.localFilePath == path, attachment.caption == caption, attachment.kindRaw == kind,
                           attachment.quickBooksAttachableID == oldID, attachment.quickBooksAttachedEntityKeysRaw == oldKeys,
-                          attachment.quickBooksSyncError == oldError,
-                          try QBODocumentNativeWorkflow.fileData(attachment.localFileURL) == bytes else {
+                          attachment.quickBooksSyncError == oldError else {
                         throw QuickBooksBillingWorkflowError.changed
                     }
                 }

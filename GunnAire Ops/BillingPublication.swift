@@ -19,14 +19,14 @@ nonisolated enum BillingPublicationDocumentKind: String, Codable, Sendable { cas
 enum BillingPublicationOperation: String, Codable { case create, update }
 enum BillingPublicationState: String, Codable { case reserved, sending, unknown, confirmed, cancelled }
 
-struct BillingDocumentScope: Codable, Equatable {
+nonisolated struct BillingDocumentScope: Codable, Equatable, Sendable {
     let companyID: UUID
     let realmID: String
     let environment: String
     let documentType: BillingPublicationDocumentKind
     let localDocumentID: UUID
 
-    func validate(_ workflow: QuickBooksDataAPI.CapturedWorkspaceWorkflow) throws {
+    @MainActor func validate(_ workflow: QuickBooksDataAPI.CapturedWorkspaceWorkflow) throws {
         try workflow.check()
         guard companyID == workflow.companyID, realmID == workflow.realmID, !realmID.isEmpty,
               environment == workflow.environment, ["sandbox", "production"].contains(environment) else {
