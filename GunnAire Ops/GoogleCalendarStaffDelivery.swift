@@ -61,7 +61,12 @@ enum GoogleCalendarStaffDelivery {
         }
         let existingEmails = Set(existing.compactMap { email($0.email) })
         let properties = remote.extendedProperties?.privateProperties ?? [:]
-        let previouslyManaged = Set((properties[managedEmailsKey] ?? "").split(separator: ",").map(String.init))
+        let managedEntries = (properties[managedEmailsKey] ?? "").split(separator: ",").map(String.init)
+        let previouslyManaged = Set(managedEntries)
+        guard previouslyManaged.count == managedEntries.count,
+              previouslyManaged.allSatisfy({ email($0) == $0 }) else {
+            throw GoogleCalendarStaffDeliveryError.guestReview
+        }
         let remove = previouslyManaged.subtracting(desiredEmails).intersection(existingEmails)
         let add = desiredEmails.subtracting(existingEmails)
         var patch = GoogleCalendarStaffDeliveryPatch()
@@ -69,7 +74,7 @@ enum GoogleCalendarStaffDelivery {
             // PATCH replaces the guest array. Never act on an omitted guest list,
             // invite customers, or remove guests the app did not originally add.
             guard remote.attendeesOmitted != true,
-                  existing.isEmpty || canNotify(remote, knownStaff: knownStaff) else {
+                  existing.isEmpty || canNotify(remote, knownStaff: knownStaff.union(previouslyManaged)) else {
                 throw GoogleCalendarStaffDeliveryError.guestReview
             }
             patch.attendees = existing.filter { !remove.contains(email($0.email) ?? "") }

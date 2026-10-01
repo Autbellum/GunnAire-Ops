@@ -1728,13 +1728,15 @@ struct ScheduleView: View {
                     Label("Google event missing", systemImage: "calendar.badge.exclamationmark")
                 } else if canManageDispatch, GoogleCalendarScheduleSync.staffInvitationsNeedAttention(for: call,
                     connectedGoogleEmail: googleAuth.signedInEmail, workspaceEmail: AppIdentity.currentEmail) {
-                    Label("Google event saved • fix staff email, then Sync Google", systemImage: "person.crop.circle.badge.exclamationmark")
+                    Label("Google schedule saved • staff invitations pending", systemImage: "person.crop.circle.badge.exclamationmark")
                 } else if canManageDispatch, GoogleCalendarScheduleSync.needsOutboundSync(call) {
-                    Label(call.googleEventID == nil ? "Google pending" : "Google link unconfirmed — check link",
+                    Label(call.googleEventID == nil ? "Google schedule pending" :
+                          (call.googleCalendarPendingAt == nil ? "Google link unconfirmed — check link" :
+                           "Google update pending • Sync Google"),
                           systemImage: "calendar.badge.exclamationmark")
                 } else if call.googleEventID != nil {
                     Label(canManageDispatch
-                          ? (call.googleEventConfirmedAt == nil ? "Google link unconfirmed — check link" : "Google event confirmed")
+                          ? (call.googleEventConfirmedAt == nil ? "Google link unconfirmed — check link" : "Google schedule confirmed")
                           : "Google event linked",
                           systemImage: canManageDispatch && call.googleEventConfirmedAt == nil
                               ? "calendar.badge.exclamationmark" : "calendar")

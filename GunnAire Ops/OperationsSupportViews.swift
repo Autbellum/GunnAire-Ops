@@ -852,6 +852,38 @@ private enum GoogleDriveArchivePreparationError: Error, LocalizedError {
     }
 }
 
+@MainActor
+enum TechnicianCalendarInvitationRecovery {
+    static func save(
+        email: String?,
+        for technician: Technician,
+        calls: [ServiceCall],
+        context: ModelContext
+    ) throws -> Int {
+        let previousEmail = technician.contactInfo
+        let normalized = AppAccess.normalizedEmail(email).nilIfBlank
+        let changed = AppAccess.normalizedEmail(previousEmail) != AppAccess.normalizedEmail(normalized)
+        let affected = changed ? calls.filter {
+            $0.googleEventManagedByApp &&
+                ($0.status == .scheduled || $0.status == .inProgress) &&
+                ($0.assignedTechnician?.id == technician.id || $0.additionalTechnicianIDs.contains(technician.id))
+        } : []
+        let previousProofs = affected.map { ($0, $0.googleEventConfirmedAt, $0.googleCalendarPendingAt) }
+        technician.contactInfo = normalized
+        for call in affected { GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(call) }
+        do { try context.save() }
+        catch {
+            technician.contactInfo = previousEmail
+            for (call, confirmedAt, pendingAt) in previousProofs {
+                call.googleEventConfirmedAt = confirmedAt
+                call.googleCalendarPendingAt = pendingAt
+            }
+            throw error
+        }
+        return affected.count
+    }
+}
+
 struct SyncIntegrationsView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openURL) private var openURL
@@ -1390,7 +1422,8 @@ struct SyncIntegrationsView: View {
             .sheet(item: $selectedTechnician) { technician in
                 TechnicianEditorView(
                     technician: technician,
-                    reviewerEmail: AppIdentity.currentEmail ?? ""
+                    reviewerEmail: AppIdentity.currentEmail ?? "",
+                    serviceCalls: serviceCalls
                 )
             }
         }
@@ -1913,8 +1946,18 @@ struct SyncIntegrationsView: View {
                 return value.isEmpty ? "" : value
             },
             set: { newValue in
-                technician.contactInfo = newValue.isEmpty ? nil : newValue
-                technicianMessage = newValue.isEmpty ? "Calendar assignment removed for \(technician.name)." : "Calendar assignment updated for \(technician.name)."
+                do {
+                    let affected = try TechnicianCalendarInvitationRecovery.save(
+                        email: newValue, for: technician, calls: serviceCalls, context: modelContext)
+                    technicianMessage = newValue.isEmpty
+                        ? "Calendar assignment removed for \(technician.name)."
+                        : "Calendar assignment updated for \(technician.name)."
+                    if affected > 0 {
+                        AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: googleAuth)
+                    }
+                } catch {
+                    technicianMessage = "Calendar assignment could not be saved. Try again."
+                }
             }
         )
     }
@@ -6434,8 +6477,10 @@ private struct CustomerAttachmentCameraPicker: UIViewControllerRepresentable {
 
 private struct TechnicianEditorView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
 
     let technician: Technician
+    let serviceCalls: [ServiceCall]
 
     @State private var name: String
     @State private var calendarEmail: String
@@ -6447,13 +6492,15 @@ private struct TechnicianEditorView: View {
     @State private var qualificationReviewedByEmail: String
     @State private var serviceAreas: String
     @State private var laborCostPerHour: String
+    @State private var saveError: String?
 
     private let reviewerEmail: String
 
-    init(technician: Technician, reviewerEmail: String) {
+    init(technician: Technician, reviewerEmail: String, serviceCalls: [ServiceCall]) {
         let review = technician.qualificationReview
         let today = Calendar.current.startOfDay(for: Date())
         self.technician = technician
+        self.serviceCalls = serviceCalls
         self.reviewerEmail = AppAccess.normalizedEmail(reviewerEmail)
         _name = State(initialValue: technician.name)
         _calendarEmail = State(initialValue: technician.contactInfo ?? "")
@@ -6467,6 +6514,7 @@ private struct TechnicianEditorView: View {
         _qualificationReviewedByEmail = State(initialValue: review.reviewedByEmail ?? AppAccess.normalizedEmail(reviewerEmail))
         _serviceAreas = State(initialValue: technician.serviceAreas.joined(separator: ", "))
         _laborCostPerHour = State(initialValue: technician.laborCostPerHour.map { String(format: "%.2f", $0) } ?? "")
+        _saveError = State(initialValue: nil)
     }
 
     var body: some View {
@@ -6567,6 +6615,13 @@ private struct TechnicianEditorView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                if let saveError {
+                    Section {
+                        Text(saveError)
+                            .foregroundStyle(.orange)
+                            .accessibilityIdentifier("TechnicianSaveError")
+                    }
+                }
             }
             .navigationTitle("Edit Technician")
             .toolbar {
@@ -6575,8 +6630,13 @@ private struct TechnicianEditorView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
+                        let previousName = technician.name
+                        let previousEquipmentTypes = technician.supportedEquipmentTypes
+                        let previousReview = technician.qualificationReview
+                        let previousNotes = technician.qualificationNotes
+                        let previousServiceAreas = technician.serviceAreas
+                        let previousLaborCost = technician.laborCostPerHour
                         technician.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-                        technician.contactInfo = AppAccess.normalizedEmail(calendarEmail).nilIfBlank
                         technician.updateEquipmentQualifications(
                             supportedEquipmentTypes,
                             reviewedAt: tracksQualificationReview ? qualificationReviewedAt : nil,
@@ -6586,7 +6646,32 @@ private struct TechnicianEditorView: View {
                         technician.qualificationNotes = qualificationNotes.nilIfBlank
                         technician.serviceAreas = Technician.serviceAreas(from: serviceAreas)
                         technician.laborCostPerHour = Double(laborCostPerHour.trimmingCharacters(in: .whitespacesAndNewlines))
-                        dismiss()
+                        do {
+                            let affected = try TechnicianCalendarInvitationRecovery.save(
+                                email: calendarEmail,
+                                for: technician,
+                                calls: serviceCalls,
+                                context: modelContext
+                            )
+                            saveError = nil
+                            if affected > 0 {
+                                AutomaticOutboundSync.shared.recoverCalendar(
+                                    context: modelContext, auth: GoogleAuthManager.shared)
+                            }
+                            dismiss()
+                        } catch {
+                            technician.name = previousName
+                            technician.updateEquipmentQualifications(
+                                previousEquipmentTypes,
+                                reviewedAt: previousReview.reviewedAt,
+                                reviewDueAt: previousReview.reviewDueAt,
+                                reviewedByEmail: previousReview.reviewedByEmail
+                            )
+                            technician.qualificationNotes = previousNotes
+                            technician.serviceAreas = previousServiceAreas
+                            technician.laborCostPerHour = previousLaborCost
+                            saveError = "Technician changes could not be saved. Try again."
+                        }
                     }
                     .disabled(
                         name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||

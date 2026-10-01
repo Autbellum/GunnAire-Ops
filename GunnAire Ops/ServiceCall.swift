@@ -1280,6 +1280,9 @@ final class ServiceCall {
     /// An event ID is reserved before Google's create request. This remains nil
     /// until the original event and its staff delivery are confirmed.
     var googleEventConfirmedAt: Date?
+    /// Owner-only outbox state for edits and invitations. A confirmed older
+    /// appointment can still need delivery after device-local defaults vanish.
+    var googleCalendarPendingAt: Date?
     var googleEventManagedByApp: Bool = false
     var eventTitle: String?
     var siteAddress: String?
@@ -1372,6 +1375,7 @@ final class ServiceCall {
         googleCalendarID: String? = nil,
         googleEventID: String? = nil,
         googleEventConfirmedAt: Date? = nil,
+        googleCalendarPendingAt: Date? = nil,
         googleEventManagedByApp: Bool = false,
         eventTitle: String? = nil,
         siteAddress: String? = nil,
@@ -1444,6 +1448,7 @@ final class ServiceCall {
         self.googleCalendarID = googleCalendarID
         self.googleEventID = googleEventID
         self.googleEventConfirmedAt = googleEventConfirmedAt
+        self.googleCalendarPendingAt = googleCalendarPendingAt
         self.googleEventManagedByApp = googleEventManagedByApp
         self.eventTitle = eventTitle
         self.siteAddress = siteAddress

@@ -69,6 +69,10 @@ struct GoogleCalendarWorkflowTests {
             GoogleCalendarScheduleSync.staffInvitationsNeedAttention(for: call,
                 connectedGoogleEmail: auth.signedInEmail, workspaceEmail: email)
         }
+        func loseDeviceLocalCalendarMarkers() {
+            UserDefaults.standard.removeObject(forKey: "GunnAireLocallyEditedGoogleCalendarCallIDs")
+            UserDefaults.standard.removeObject(forKey: "GunnAireGoogleCalendarStaffInvitationReview")
+        }
         func event(id: String, start: Date? = nil, managed: Bool = true) -> [String: Any] {
             let start = start ?? call.scheduledDate
             var value: [String: Any] = [
@@ -322,7 +326,11 @@ struct GoogleCalendarWorkflowTests {
         }
         #expect(error as? GoogleCalendarStaffDeliveryError == .unsafeScheduleUpdate)
         #expect(f.writes.isEmpty)
-        #expect(GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+        f.loseDeviceLocalCalendarMarkers()
+        let restarted = ModelContext(f.context.container)
+        let retained = try #require(restarted.fetch(FetchDescriptor<ServiceCall>()).first { $0.id == f.call.id })
+        #expect(retained.googleCalendarPendingAt != nil)
+        #expect(GoogleCalendarScheduleSync.needsOutboundSync(retained))
         let unchanged = try #require(f.remote[f.key(f.email, "fixture-event")])
         let start = try #require(unchanged["start"] as? [String: String])
         #expect(start["dateTime"] == ISO8601DateFormatter().string(from: oldStart))
@@ -389,6 +397,106 @@ struct GoogleCalendarWorkflowTests {
         #expect(f.remote.count == 1)
     }
 
+    @Test func changedTechnicianEmailReplacesItsManagedInvitationAfterLocalMarkersAreLost() async throws {
+        let f = try Fixture()
+        let technician = Technician(name: "Assigned", contactInfo: "old@example.invalid")
+        f.context.insert(technician)
+        f.call.assignedTechnician = technician
+        try f.context.save()
+        _ = try await f.publish().get()
+        let eventID = try #require(f.call.googleEventID)
+
+        let affected = try TechnicianCalendarInvitationRecovery.save(
+            email: "new@example.invalid", for: technician, calls: [f.call], context: f.context)
+        #expect(affected == 1)
+        f.loseDeviceLocalCalendarMarkers()
+        #expect(GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+
+        _ = try await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.synchronize(workflow: $0)
+        }.get()
+        #expect(f.call.googleEventID == eventID)
+        #expect(f.writes.map(\.httpMethod) == ["POST", "PATCH"])
+        let patch = try #require(f.writes.last)
+        #expect(patch.url?.query == "sendUpdates=all")
+        let event = try #require(f.remote[f.key(f.email, eventID)])
+        let guests = try #require(event["attendees"] as? [[String: Any]])
+        #expect(guests.compactMap { $0["email"] as? String } == ["new@example.invalid"])
+        let properties = try #require(event["extendedProperties"] as? [String: [String: String]])
+        #expect(properties["private"]?[GoogleCalendarStaffDelivery.managedEmailsKey] == "new@example.invalid")
+        #expect(f.call.googleEventConfirmedAt != nil && f.call.googleCalendarPendingAt == nil)
+    }
+
+    @Test(arguments: [false, true])
+    func savedScheduleEditRetriesAfterDeviceLocalMarkersAreLost(past: Bool) async throws {
+        let f = try Fixture(linked: true)
+        let originalID = try #require(f.call.googleEventID)
+        if past {
+            let originalStart = Date().addingTimeInterval(-7 * 86_400)
+            f.remote[f.key(f.email, originalID)] = f.event(id: originalID, start: originalStart)
+            f.call.scheduledDate = originalStart
+            try f.context.save()
+        }
+        f.remote[f.key(f.email, originalID)]?["reminders"] = [
+            "useDefault": false, "overrides": [["method": "popup", "minutes": 30]]
+        ]
+        f.call.scheduledDate = f.call.scheduledDate.addingTimeInterval(900)
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(f.call)
+        try f.context.save()
+        f.loseDeviceLocalCalendarMarkers()
+
+        #expect(f.call.googleEventConfirmedAt == nil)
+        #expect(GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+        _ = try await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.synchronize(workflow: $0)
+        }.get()
+        #expect(f.call.googleEventID == originalID)
+        #expect(f.writes.map(\.httpMethod) == ["PATCH"])
+        #expect(f.call.googleEventConfirmedAt != nil)
+        #expect(!GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+    }
+
+    @Test func failedStaffInvitationStaysPendingAfterDeviceLocalMarkersAreLost() async throws {
+        let f = try Fixture(linked: true)
+        let technician = Technician(name: "Missing calendar email", contactInfo: "555-0100")
+        f.context.insert(technician)
+        f.call.assignedTechnician = technician
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(f.call)
+        try f.context.save()
+        let message = try await f.publish().get()
+        #expect(message.contains("Staff invitations need attention"))
+        #expect(f.call.googleEventConfirmedAt == nil)
+        #expect(f.writes.isEmpty)
+
+        f.loseDeviceLocalCalendarMarkers()
+        #expect(GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+        technician.contactInfo = "staff@example.invalid"
+        try f.context.save()
+        _ = try await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.synchronize(workflow: $0)
+        }.get()
+        #expect(f.writes.map(\.httpMethod) == ["PATCH"])
+        #expect(f.call.googleEventConfirmedAt != nil)
+        #expect(!GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+    }
+
+    @Test func detailOnlyJobEditConfirmsScheduleWithoutOverwritingGoogleDetails() async throws {
+        let f = try Fixture(linked: true)
+        f.remote[f.key(f.email, "fixture-event")]?["reminders"] = [
+            "useDefault": false, "overrides": [["method": "popup", "minutes": 30]]
+        ]
+        f.call.notes = "Updated internal field notes"
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(f.call)
+        try f.context.save()
+
+        let message = try await f.publish().get()
+        #expect(message.contains("Schedule confirmed"))
+        #expect(f.writes.isEmpty)
+        #expect(f.remote[f.key(f.email, "fixture-event")]?["description"] as? String == "Google notes")
+        #expect(f.call.googleCalendarPendingAt == nil)
+        #expect(f.call.googleEventConfirmedAt != nil)
+    }
+
     @Test func externalGuestReviewNeverEmailsCustomerOrClearsPending() async throws {
         let f = try Fixture(linked: true)
         let technician = Technician(name: "Staff", contactInfo: "staff@example.invalid")
@@ -453,6 +561,29 @@ struct GoogleCalendarWorkflowTests {
         #expect(!GoogleCalendarScheduleSync.needsOutboundSync(f.call))
         #expect(GoogleCalendarScheduleSync.isCalendarEventDeleted(
             calendarID: f.email, eventID: f.call.googleEventID))
+    }
+
+    @Test func cancellationDoesNotTreatAnEventMovedToAnotherCalendarAsDeleted() async throws {
+        let f = try Fixture(linked: true)
+        f.call.status = .cancelled
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(f.call)
+        try f.context.save()
+        f.remote.removeValue(forKey: f.key(f.email, "fixture-event"))
+        let otherCalendar = "other-calendar@example.invalid"
+        f.calendarList.append(["id": otherCalendar, "primary": false, "accessRole": "writer"])
+        f.remote[f.key(otherCalendar, "fixture-event")] = f.event(id: "fixture-event")
+
+        let result = await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.cancel(call: f.call, workflow: $0)
+        }
+        guard case .failure(let error) = result else {
+            Issue.record("A moved Google event must require review before cancellation")
+            return
+        }
+        #expect(error as? GoogleCalendarWorkflowError == .needsReview)
+        #expect(f.writes.isEmpty)
+        #expect(f.call.googleCalendarPendingAt != nil)
+        #expect(f.remote[f.key(otherCalendar, "fixture-event")] != nil)
     }
 
     @Test func oneInvalidRouteDoesNotStarveOtherPendingJobs() async throws {
@@ -1187,6 +1318,24 @@ struct GoogleCalendarWorkflowTests {
         #expect(try f.context.fetch(FetchDescriptor<ServiceCall>()).contains { $0 === f.call })
         #expect(f.call.googleEventID == "fixture-event")
         #expect(f.remote.count == 1)
+    }
+
+    @Test func removalKeepsLocalJobWhenOriginalIDMovedToAnotherCalendar() async throws {
+        let f = try Fixture(linked: true)
+        f.remote.removeValue(forKey: f.key(f.email, "fixture-event"))
+        let otherCalendar = "other-calendar@example.invalid"
+        f.calendarList.append(["id": otherCalendar, "primary": false, "accessRole": "writer"])
+        f.remote[f.key(otherCalendar, "fixture-event")] = f.event(id: "fixture-event")
+
+        let result = await (try f.flow()).run { try await GoogleCalendarScheduleSync.remove(call: f.call, workflow: $0) }
+        guard case .failure(let error) = result else {
+            Issue.record("A moved event must not allow local job removal")
+            return
+        }
+        #expect(error as? GoogleCalendarWorkflowError == .needsReview)
+        #expect(f.writes.isEmpty)
+        #expect(f.call.googleEventID == "fixture-event")
+        #expect(try f.context.fetch(FetchDescriptor<ServiceCall>()).contains { $0 === f.call })
     }
 
     @Test func lostDeleteResponseIsReconciledByReadWithoutAnotherDelete() async throws {

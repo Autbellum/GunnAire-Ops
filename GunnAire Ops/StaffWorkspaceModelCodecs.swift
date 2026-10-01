@@ -180,7 +180,8 @@ nonisolated enum StaffWorkspaceModelCodecs {
             .reference("customer", \.customer, id: \Customer.id, kind: "customer", required: true),
             .reference("assignedTechnician", \.assignedTechnician, id: \Technician.id, kind: "technician", required: false),
         ], excludedAttributes: [
-            "googleEventConfirmedAt": "Owner-only proof of Google publication; staff cannot publish company events."
+            "googleEventConfirmedAt": "Owner-only proof of Google publication; staff cannot publish company events.",
+            "googleCalendarPendingAt": "Owner-only Google publication outbox; staff cannot publish company events."
         ], inverseRelationships: ["storedTimeEntries"], make: { record, resolver in
             return ServiceCall(id: record.id, type: .service, scheduledDate: Date(timeIntervalSinceReferenceDate: 0), customer: try resolver.parent(Customer.self, kind: "customer", field: "customer", record: record))
         })
