@@ -1168,6 +1168,64 @@ struct GoogleCalendarWorkflowTests {
         #expect(f.writes.count == 1, "A later sync must reconcile, not create twice.")
     }
 
+    @Test func verifiedProviderLinkOpensOnlyTheUnchangedOriginalGoogleEvent() async throws {
+        let f = try Fixture(linked: true)
+        let url = "https://www.google.com/calendar/event?eid=verified-fixture"
+        f.remote[f.key(f.email, "fixture-event")]?["htmlLink"] = url
+        let session = CompanyWorkspaceSession(backendOrigin: "https://backend.example.invalid",
+            email: f.email, tokenFingerprint: "fixture", expiresAt: .distantFuture)
+        let stamp = CompanyWorkspaceOperationStamp(generation: UUID(), session: session)
+        let noWorkspaceCheck = try await GoogleCalendarScheduleSync.checkGoogleLink(
+            call: f.call, workflow: f.flow(), workspaceStamp: nil).get()
+        #expect(noWorkspaceCheck.verifiedLink == nil)
+        let check = try await GoogleCalendarScheduleSync.checkGoogleLink(
+            call: f.call, workflow: f.flow(), workspaceStamp: stamp).get()
+        #expect(check.missingEventReview == nil)
+        let link = try #require(check.verifiedLink)
+        #expect(link.url.absoluteString == url)
+        #expect(link.matches(call: f.call, connectedEmail: f.email, workspaceStamp: stamp))
+        #expect(!link.matches(call: f.call, connectedEmail: "other@gunnaire.com", workspaceStamp: stamp))
+        #expect(!link.matches(call: f.call, connectedEmail: f.email, workspaceStamp: nil))
+        let changedWorkspace = CompanyWorkspaceOperationStamp(generation: UUID(), session: session)
+        #expect(!link.matches(call: f.call, connectedEmail: f.email, workspaceStamp: changedWorkspace))
+        f.call.scheduledDate.addTimeInterval(60)
+        #expect(!link.matches(call: f.call, connectedEmail: f.email, workspaceStamp: stamp))
+        #expect(f.writes.isEmpty)
+    }
+
+    @Test func unsafeOrUnverifiedProviderLinksAreNeverOffered() async throws {
+        #expect(GoogleCalendarScheduleSync.VerifiedGoogleEventLink.safeProviderURL(
+            "https://calendar.google.com/calendar/event?eid=valid") != nil)
+        for raw in [
+            "http://www.google.com/calendar/event?eid=unsafe",
+            "https://evil.example/calendar/event?eid=unsafe",
+            "https://user:pass@www.google.com/calendar/event?eid=unsafe",
+            "https://www.google.com/redirect?to=calendar",
+            "https://www.google.com:8443/calendar/event?eid=unsafe"
+        ] {
+            #expect(GoogleCalendarScheduleSync.VerifiedGoogleEventLink.safeProviderURL(raw) == nil)
+        }
+        let missing = try Fixture(linked: true)
+        missing.remote.removeValue(forKey: missing.key(missing.email, "fixture-event"))
+        let missingCheck = try await GoogleCalendarScheduleSync.checkGoogleLink(
+            call: missing.call, workflow: missing.flow()).get()
+        #expect(missingCheck.missingEventReview != nil)
+        #expect(missingCheck.verifiedLink == nil)
+
+        let changed = try Fixture(linked: true)
+        changed.remote[changed.key(changed.email, "fixture-event")]?["htmlLink"] =
+            "https://www.google.com/calendar/event?eid=old-slot"
+        changed.remote[changed.key(changed.email, "fixture-event")]?["start"] = [
+            "dateTime": ISO8601DateFormatter().string(from: changed.call.scheduledDate.addingTimeInterval(3600)),
+            "timeZone": "UTC"
+        ]
+        let mismatched = await GoogleCalendarScheduleSync.checkGoogleLink(
+            call: changed.call, workflow: try changed.flow())
+        if case .success = mismatched {
+            Issue.record("A mismatched remote event must not expose its provider link.")
+        }
+    }
+
     @Test func explicitMissingLinkRepairPublishesOwnerEventWhenStaffEmailIsInvalid() async throws {
         let f = try Fixture(linked: true)
         f.remote.removeValue(forKey: f.key(f.email, "fixture-event"))

@@ -20,6 +20,7 @@ at the start of every turn; append to it rather than rewriting it.
 
 ## Claims
 
+
 ## Shared rules
 
 1. The project sets `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`. A helper reached
@@ -42,6 +43,12 @@ at the start of every turn; append to it rather than rewriting it.
    pins the old behavior and the new one.
 
 ## Status log
+
+- 2026-10-01 Codex root: build 2026100117 combines the verified Google event web link and converted-estimate QuickBooks reconciliation warning. Final source passed zero-warning `generated/omni_runner.py`; signed iPad Calendar and QBO focused suites passed 119/119 and 20/20; signed full iPad units passed 2,887/2,887 with zero failures, skips, or compiler warnings; Tools Python passed 94/94. Current-build iPad and iPhone screenshot UI tests passed 1/1 each, and all twelve exported PNGs matched required dimensions and SHA-256 digests in `AppStoreAssets/ScreenshotManifest.json`. Live user-specific Calendar notification, physical-device sign-in, and QBO/Drive provider publication remain separate checks; exact-source archive and upload follow this commit.
+
+- 2026-10-01 Codex qbo_auto_delivery_audit: A locally invoiced estimate without a confirmed QuickBooks ID remains excluded from automatic publication because a late QuickBooks estimate create has no converted-status field and could expose a fresh open proposal. It is now visible in a distinct QuickBooks Management reconciliation section and an orange estimate-row/Billing Review warning; neither weakens original-realm proof or sends customer email automatically. The new focused regression failed against the old behavior (19/20 passed, one expected failed test) and passed after the visibility change (20/20 passed, zero failures/skips), both signed iPad simulator runs. Final-source `python3 generated/omni_runner.py` passed zero warnings. Evidence retained under `build-2026100117/QBO converted estimate *`. Live provider/customer delivery remains unverified. Source/test claims released to root for combined validation, commit, push, and upload.
+
+- 2026-10-01 Codex calendar_delivery_recheck: Schedule now offers Open in Google Calendar only after Check Google Link verifies the original provider event and receives Google's HTTPS Calendar `htmlLink`. The ephemeral link is bound to exact appointment revision, connected Google email, and a non-nil verified company workspace stamp; display and tap recheck those facts, while tap also rechecks current Calendar authorization and dispatch access. Missing/mismatched events or unsafe links never produce the button. The check message names the connected account and saved calendar route. Final-source `python3 generated/omni_runner.py` passed with zero compiler warnings; signed iPad Pro 13-inch M5 `GoogleCalendarWorkflowTests` passed 119/119, zero failures (`/tmp/gunnaire-calendar-link-final-20261001.xcresult`). This does not prove a device notification or the user's exact missing appointment. Source/test claims released to root; no commit, push, archive, or upload by this agent.
 
 - 2026-10-01 Codex root: build 2026100116 integrates the fleet-only Google Drive recovery queue and saved-estimate QuickBooks review/Sync Saved action without changing CloudKit schema or bypassing realm proof. Final `generated/omni_runner.py` passed zero compiler warnings; signed full iPad units passed 2,884/2,884 with zero failures/skips; 94 Tools Python tests passed under the bundled runtime; current-build iPad/iPhone screenshot UI tests passed 1/1 each, with twelve PNGs dimension- and SHA-256-verified in `AppStoreAssets/ScreenshotManifest.json`. Focused Drive 5/5 and QBO 19/19 result bundles and pre-fix failure evidence are retained under `build-2026100116`. Exact-source archive, TestFlight upload, current physical-iPad sign-in, user-specific Google Calendar delivery, and live QBO/Drive publication remain separate checks.
 

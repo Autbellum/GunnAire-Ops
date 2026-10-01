@@ -96,6 +96,7 @@ struct ScheduleView: View {
     @State private var checkingGoogleLinkID: UUID?
     @State private var repairingGoogleLinkID: UUID?
     @State private var googleLinkCheckMessages: [UUID: String] = [:]
+    @State private var verifiedGoogleEventLinks: [UUID: GoogleCalendarScheduleSync.VerifiedGoogleEventLink] = [:]
     @State private var googleLinkCheckAlertMessage: String?
     @State private var missingGoogleEventIDs: [UUID: String] = [:]
     @State private var missingGoogleEventReview: GoogleCalendarScheduleSync.MissingEventReview?
@@ -503,6 +504,7 @@ struct ScheduleView: View {
                     if phase == .active { wakePendingCalendarIfReady() }
                 }
                 .onChange(of: googleAuth.googleCalendarAuthorizationState) { _, authorization in
+                    if authorization != .ready { verifiedGoogleEventLinks.removeAll() }
                     if authorization == .ready { wakePendingCalendarIfReady() }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
@@ -522,12 +524,14 @@ struct ScheduleView: View {
                     missingGoogleEventReview = nil
                     missingGoogleEventIDs.removeAll()
                     googleLinkCheckMessages.removeAll()
+                    verifiedGoogleEventLinks.removeAll()
                     googleLinkCheckAlertMessage = nil
                 }
                 .onChange(of: googleAuth.signedInEmail) { _, _ in
                     missingGoogleEventReview = nil
                     missingGoogleEventIDs.removeAll()
                     googleLinkCheckMessages.removeAll()
+                    verifiedGoogleEventLinks.removeAll()
                     googleLinkCheckAlertMessage = nil
                 }
                 .sheet(isPresented: $showingAddCallSheet) {
@@ -1685,6 +1689,7 @@ struct ScheduleView: View {
                         .foregroundStyle(.secondary)
                         .accessibilityIdentifier("GoogleLinkCheckResult-\(call.id.uuidString)")
                 }
+                verifiedGoogleEventButton(for: call)
             }
         }
         .padding(14)
@@ -1911,6 +1916,12 @@ struct ScheduleView: View {
     }
 
     private func wakePendingCalendarIfReady() {
+        let currentWorkspace = CompanyWorkspaceAccessController.shared.operationStamp
+        verifiedGoogleEventLinks = verifiedGoogleEventLinks.filter { callID, link in
+            guard let call = serviceCalls.first(where: { $0.id == callID }) else { return false }
+            return link.matches(call: call, connectedEmail: googleAuth.signedInEmail,
+                workspaceStamp: currentWorkspace)
+        }
         guard ScheduleGoogleLinkStatus.shouldWakePendingCalendar(
             canManageDispatch: canManageDispatch,
             sceneIsActive: scenePhase == .active,
@@ -1989,6 +2000,7 @@ struct ScheduleView: View {
     private func checkGoogleLink(for call: ServiceCall) {
         guard canManageDispatch, checkingGoogleLinkID == nil, repairingGoogleLinkID == nil else { return }
         googleLinkCheckMessages.removeValue(forKey: call.id)
+        verifiedGoogleEventLinks.removeValue(forKey: call.id)
         guard googleAuth.googleCalendarAuthorizationState == .ready else {
             reportGoogleLinkCheck(googleAuth.googleCalendarAuthorizationState.detail, for: call.id)
             return
@@ -2004,23 +2016,60 @@ struct ScheduleView: View {
         checkingGoogleLinkID = call.id
         missingGoogleEventReview = nil
         Task { @MainActor in
-            let result = await GoogleCalendarScheduleSync.checkMissingEvent(call: call, workflow: workflow)
+            let result = await GoogleCalendarScheduleSync.checkGoogleLink(call: call, workflow: workflow)
             guard checkingGoogleLinkID == call.id else { return }
             checkingGoogleLinkID = nil
             switch result {
-            case .success(let review):
-                if let review {
+            case .success(let check):
+                if let review = check.missingEventReview {
                     missingGoogleEventIDs[call.id] = review.eventID
                     missingGoogleEventReview = review
                     reportGoogleLinkCheck("The saved Google event ID was not found for \(review.accountEmail). Review that account's original calendar before choosing Recreate Missing Event.", for: call.id)
                 } else {
                     missingGoogleEventIDs.removeValue(forKey: call.id)
-                    reportGoogleLinkCheck("The original Google event is present. No new event was created.", for: call.id)
+                    if let link = check.verifiedLink,
+                       link.matches(call: call, connectedEmail: googleAuth.signedInEmail,
+                           workspaceStamp: CompanyWorkspaceAccessController.shared.operationStamp) {
+                        verifiedGoogleEventLinks[call.id] = link
+                    }
+                    let account = googleAuth.signedInEmail ?? "the connected Google account"
+                    let route = GoogleCalendarScheduleSync.calendarRouteLabel(
+                        for: call, connectedEmail: googleAuth.signedInEmail)
+                    let linkDetail = verifiedGoogleEventLinks[call.id] == nil
+                        ? " Google did not provide a direct web link for this event."
+                        : " Use Open in Google Calendar to view it outside the app."
+                    reportGoogleLinkCheck("The original event is present for \(account). \(route).\(linkDetail) No new event was created.", for: call.id)
                 }
             case .failure(let error):
                 reportGoogleLinkCheck("Google link check needs review: \(error.localizedDescription) No event was created.", for: call.id)
             }
         }
+    }
+
+    @ViewBuilder
+    private func verifiedGoogleEventButton(for call: ServiceCall) -> some View {
+        if let link = verifiedGoogleEventLinks[call.id],
+           link.matches(call: call, connectedEmail: googleAuth.signedInEmail,
+               workspaceStamp: CompanyWorkspaceAccessController.shared.operationStamp) {
+            Button("Open in Google Calendar") { openVerifiedGoogleEvent(for: call, displayedLink: link) }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("OpenVerifiedGoogleEvent-\(call.id.uuidString)")
+        }
+    }
+
+    private func openVerifiedGoogleEvent(for call: ServiceCall,
+                                         displayedLink: GoogleCalendarScheduleSync.VerifiedGoogleEventLink) {
+        guard canManageDispatch,
+              googleAuth.googleCalendarAuthorizationState == .ready,
+              let current = verifiedGoogleEventLinks[call.id],
+              current.url == displayedLink.url,
+              current.matches(call: call, connectedEmail: googleAuth.signedInEmail,
+                  workspaceStamp: CompanyWorkspaceAccessController.shared.operationStamp) else {
+            verifiedGoogleEventLinks.removeValue(forKey: call.id)
+            syncMessage = "The Google account, workspace or appointment changed. Check Google Link again before opening it."
+            return
+        }
+        openURL(current.url)
     }
 
     private func reportGoogleLinkCheck(_ message: String, for callID: UUID) {

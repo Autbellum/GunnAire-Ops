@@ -465,6 +465,20 @@ enum QuickBooksEstimatePublicationRecovery {
             }
     }
 
+    /// A converted estimate with no saved provider ID may have been accepted
+    /// remotely before the local confirmation failed. Creating it now could
+    /// expose an open proposal after its invoice already exists, so present
+    /// the original for reconciliation instead of automatic publication.
+    static func convertedEstimatesNeedingReview(from estimates: [Estimate]) -> [Estimate] {
+        estimates.filter {
+            $0.status.lowercased() == "invoiced" &&
+                $0.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
+        }.sorted {
+            if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+    }
+
     static func publicationInputs(
         for estimate: Estimate,
         catalogItems: [Item]
@@ -1666,6 +1680,10 @@ struct QuickBooksManagementView: View {
         QuickBooksEstimatePublicationRecovery.queuedEstimates(from: localEstimates)
     }
 
+    private var convertedEstimateReviewQueue: [Estimate] {
+        QuickBooksEstimatePublicationRecovery.convertedEstimatesNeedingReview(from: localEstimates)
+    }
+
     private var locallyKnownVendors: [Vendor] {
         let queriedIDs = Set(localVendors.map(\.id))
         let sameSessionVendors = newlyCreatedLocalVendors.filter { !queriedIDs.contains($0.id) }
@@ -2139,6 +2157,26 @@ struct QuickBooksManagementView: View {
                         }
                     }
                     .accessibilityIdentifier("QuickBooksLocalEstimatePublicationQueue")
+
+                    if !convertedEstimateReviewQueue.isEmpty {
+                        Section(header: Text("Converted Estimate Review").foregroundColor(Color.brandGold)) {
+                            Text("These estimates were invoiced before their QuickBooks link was confirmed. Review the original request and invoice before publishing or sending another proposal.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            ForEach(convertedEstimateReviewQueue) { estimate in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(estimate.customer?.name ?? "Customer unavailable")
+                                        .font(.headline)
+                                    Text(estimate.lineItemSummary.isEmpty
+                                         ? "Estimate \(estimate.id.uuidString.prefix(8))"
+                                         : estimate.lineItemSummary)
+                                        .font(.caption)
+                                    BillingPublicationReviewLink(document: .estimate(estimate), context: modelContext)
+                                }
+                            }
+                        }
+                        .accessibilityIdentifier("QuickBooksConvertedEstimateReviewQueue")
+                    }
 
                     Section(header: Text("Local Invoice Publication").foregroundColor(Color.brandGold)) {
                         if localInvoicePublicationQueue.isEmpty {

@@ -47,6 +47,97 @@ enum GoogleCalendarScheduleSync {
         let workflow: GoogleCalendarWorkflow
     }
 
+    /// A provider-supplied web link is usable only for the exact event just
+    /// checked under the same connected account, workspace and local revision.
+    /// It is kept in view state, never persisted as publication evidence.
+    struct VerifiedGoogleEventLink {
+        let url: URL
+        private let revision: LinkRevision
+        private let connectedEmail: String
+        private let workspaceStamp: CompanyWorkspaceOperationStamp
+
+        init?(remote: GoogleCalendarEvent, call: ServiceCall, connectedEmail: String?,
+              workspaceStamp: CompanyWorkspaceOperationStamp?) {
+            guard let raw = remote.htmlLink,
+                  let url = Self.safeProviderURL(raw),
+                  let connectedEmail = GoogleCalendarStaffDelivery.email(connectedEmail),
+                  let workspaceStamp else { return nil }
+            self.url = url
+            revision = LinkRevision(call)
+            self.connectedEmail = connectedEmail
+            self.workspaceStamp = workspaceStamp
+        }
+
+        func matches(call: ServiceCall, connectedEmail: String?,
+                     workspaceStamp: CompanyWorkspaceOperationStamp?) -> Bool {
+            guard let workspaceStamp else { return false }
+            return revision == LinkRevision(call) &&
+                self.connectedEmail == GoogleCalendarStaffDelivery.email(connectedEmail) &&
+                self.workspaceStamp == workspaceStamp
+        }
+
+        static func safeProviderURL(_ raw: String) -> URL? {
+            guard let components = URLComponents(string: raw),
+                  components.scheme?.lowercased() == "https",
+                  let host = components.host?.lowercased(),
+                  ["www.google.com", "calendar.google.com"].contains(host),
+                  components.user == nil, components.password == nil,
+                  components.port == nil,
+                  components.path.hasPrefix("/calendar/"),
+                  let url = components.url else { return nil }
+            return url
+        }
+    }
+
+    struct GoogleLinkCheck {
+        let missingEventReview: MissingEventReview?
+        let verifiedLink: VerifiedGoogleEventLink?
+    }
+
+    private struct LinkRevision: Equatable {
+        let id: UUID
+        let calendarID: String?
+        let eventID: String?
+        let managedByApp: Bool
+        let confirmedAt: Date?
+        let pendingAt: Date?
+        let scheduledDate: Date
+        let duration: TimeInterval
+        let title: String?
+        let siteAddress: String?
+        let notes: String?
+        let type: ServiceCallType
+        let status: JobStatus
+        let technicianID: UUID?
+        let technicianEmail: String?
+        let additionalTechnicianIDsJSON: String?
+        let customerID: UUID?
+        let customerName: String?
+        let customerAddress: String?
+
+        init(_ call: ServiceCall) {
+            id = call.id
+            calendarID = call.googleCalendarID
+            eventID = call.googleEventID
+            managedByApp = call.googleEventManagedByApp
+            confirmedAt = call.googleEventConfirmedAt
+            pendingAt = call.googleCalendarPendingAt
+            scheduledDate = call.scheduledDate
+            duration = call.duration
+            title = call.eventTitle
+            siteAddress = call.siteAddress
+            notes = call.notes
+            type = call.type
+            status = call.status
+            technicianID = call.assignedTechnician?.id
+            technicianEmail = call.assignedTechnician?.contactInfo
+            additionalTechnicianIDsJSON = call.additionalTechnicianIDsJSON
+            customerID = call.customer?.id
+            customerName = call.customer?.name
+            customerAddress = call.customer?.address
+        }
+    }
+
     private static let deletedCalendarEventKeysStorageKey = "GunnAireDeletedGoogleCalendarEventKeys"
     private static let locallyEditedCalendarCallIDsStorageKey = "GunnAireLocallyEditedGoogleCalendarCallIDs"
     private static let staffInvitationReviewStorageKey = "GunnAireGoogleCalendarStaffInvitationReview"
@@ -271,9 +362,17 @@ enum GoogleCalendarScheduleSync {
         return (try? context.fetch(descriptor).isEmpty) == false
     }
 
-    static func checkMissingEvent(call: ServiceCall, workflow: GoogleCalendarWorkflow) async
-        -> Result<MissingEventReview?, Error> {
+    static func checkGoogleLink(call: ServiceCall, workflow: GoogleCalendarWorkflow) async
+        -> Result<GoogleLinkCheck, Error> {
+        await checkGoogleLink(call: call, workflow: workflow,
+            workspaceStamp: CompanyWorkspaceAccessController.shared.operationStamp)
+    }
+
+    static func checkGoogleLink(call: ServiceCall, workflow: GoogleCalendarWorkflow,
+                                workspaceStamp: CompanyWorkspaceOperationStamp?) async
+        -> Result<GoogleLinkCheck, Error> {
         var review: MissingEventReview?
+        var verifiedRemote: GoogleCalendarEvent?
         let result = await workflow.run { current in
             let (calendar, id, remote) = try await inspectStoredEvent(call: call, workflow: current)
             if remote == nil {
@@ -285,11 +384,25 @@ enum GoogleCalendarScheduleSync {
                                             eventID: id, accountEmail: accountEmail,
                                             scheduledDate: call.scheduledDate, duration: call.duration,
                                             workflow: current)
+            } else {
+                verifiedRemote = remote
             }
             return remote == nil ? "The saved Google event was not found. Review the original calendar before choosing Recreate Missing Event." :
                 "The original Google event is present. No new event was created."
         }
-        return result.map { _ in review }
+        return result.map { _ in
+            GoogleLinkCheck(missingEventReview: review,
+                verifiedLink: verifiedRemote.flatMap {
+                    VerifiedGoogleEventLink(remote: $0, call: call,
+                        connectedEmail: workflow.auth.signedInEmail,
+                        workspaceStamp: workspaceStamp)
+                })
+        }
+    }
+
+    static func checkMissingEvent(call: ServiceCall, workflow: GoogleCalendarWorkflow) async
+        -> Result<MissingEventReview?, Error> {
+        (await checkGoogleLink(call: call, workflow: workflow)).map(\.missingEventReview)
     }
 
     static func repairMissingEvent(_ review: MissingEventReview) async -> Result<String, Error> {

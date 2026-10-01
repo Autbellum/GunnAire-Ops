@@ -89,6 +89,26 @@ struct QuickBooksPublicationAccessTests {
             invoices: [fixture.invoice], estimates: [fixture.estimate]).isEmpty)
     }
 
+    @Test func convertedEstimateRequiresVisibleReconciliationInsteadOfASecondAutomaticProposal() {
+        let customer = Customer(name: "Converted estimate customer")
+        let estimate = Estimate(customer: customer, amount: 190)
+        let invoice = Invoice(customer: customer, amount: 190)
+        estimate.status = "invoiced"
+
+        #expect(QuickBooksEstimatePublicationRecovery.queuedEstimates(from: [estimate]).isEmpty)
+        #expect(AutomaticOutboundSync.pendingDocumentKeys(invoices: [invoice], estimates: [estimate]) == [.invoice(invoice.id)])
+        #expect(QuickBooksEstimatePublicationRecovery.convertedEstimatesNeedingReview(from: [estimate]).map(\.id) == [estimate.id])
+
+        let rejected = Estimate(customer: customer, amount: 90, status: "rejected")
+        let notSelected = Estimate(customer: customer, amount: 95, status: "not-selected")
+        #expect(QuickBooksEstimatePublicationRecovery.convertedEstimatesNeedingReview(
+            from: [rejected, notSelected, estimate]).map(\.id) == [estimate.id])
+
+        estimate.quickBooksID = "EST-1"
+        #expect(QuickBooksEstimatePublicationRecovery.queuedEstimates(from: [estimate]).isEmpty)
+        #expect(QuickBooksEstimatePublicationRecovery.convertedEstimatesNeedingReview(from: [estimate]).isEmpty)
+    }
+
     @Test func automaticRecoveryIncludesUnlinkedCustomerWithoutRepublishingLinkedCustomer() {
         let unlinked = Customer(name: "Saved local customer")
         let linked = Customer(quickBooksID: "C2", name: "Already linked")

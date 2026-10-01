@@ -511,7 +511,14 @@ import SwiftData
 
     var body: some View {
         Group {
-            if isOpenForPublication {
+            if !QuickBooksEstimatePublicationRecovery.convertedEstimatesNeedingReview(from: [estimate]).isEmpty {
+                Label("Converted estimate needs QuickBooks review", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("EstimateQuickBooksConvertedReview-\(estimate.id.uuidString)")
+                Text("The invoice was created before this estimate's QuickBooks link was confirmed. Check the original request in Billing Review before sending another proposal.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else if isOpenForPublication {
                 switch state {
                 case .reviewRequired:
                     Label("QuickBooks review required", systemImage: "exclamationmark.triangle.fill")
