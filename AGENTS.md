@@ -47,10 +47,13 @@ at the start of every turn; append to it rather than rewriting it.
 - 2026-10-01 Codex root and Claude PR #28 integration: scoped Calendar sends no longer
   fail on unrelated saved job/customer changes; imported events accept explicit
   time/staff write-back on their original ID, with a durable pending marker,
-  guarded adoption and retry. Customer search in schedule Add/Edit lists all
+  guarded adoption and retry. The Schedule retry probe fetches at most one
+  candidate instead of decoding every saved job on the UI actor. Customer
+  search in schedule Add/Edit lists all
   matches and works with a calendar placeholder. Isolated signed iPad focused
-  Calendar/customer tests passed 120/120; exact build 2026100112 full units
-  passed 2,874/2,874 with zero failures/skips. Final `generated/omni_runner.py`
+  Calendar/customer tests passed 120/120; the bounded retry Calendar suite
+  passed 115/115; exact build 2026100112 full units passed 2,875/2,875 with
+  zero failures/skips. Final `generated/omni_runner.py`
   clean build passed with zero compiler warnings, 31 release workflow Python
   checks passed, Swift parse and diff checks passed. These are simulator/source
   results; the user's exact installed build, Google event/notification,

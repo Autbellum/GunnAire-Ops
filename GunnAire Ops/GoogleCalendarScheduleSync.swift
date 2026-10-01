@@ -227,8 +227,7 @@ enum GoogleCalendarScheduleSync {
     static func retryPendingIfNeeded(auth: GoogleAuthManager, modelContext: ModelContext,
                                      signedInEmail: String?, attempt: Int = 0) {
         guard auth.isAuthenticated,
-              (try? modelContext.fetch(FetchDescriptor<ServiceCall>())
-                .contains(where: { needsOutboundSync($0) })) == true else { return }
+              hasPotentialOutboundSync(in: modelContext) else { return }
         retryTask?.cancel()
         retryTask = nil
         startWorkflow(auth: auth, context: modelContext, email: signedInEmail, completion: { result in
@@ -245,8 +244,7 @@ enum GoogleCalendarScheduleSync {
     private static func scheduleRetry(auth: GoogleAuthManager, modelContext: ModelContext,
                                       signedInEmail: String?, attempt: Int) {
         guard retryDelays.indices.contains(attempt),
-              (try? modelContext.fetch(FetchDescriptor<ServiceCall>())
-                .contains(where: { needsOutboundSync($0) })) == true else { return }
+              hasPotentialOutboundSync(in: modelContext) else { return }
         let delay = retryDelays[attempt]
         retryTask?.cancel()
         retryTask = Task { @MainActor in
@@ -256,6 +254,21 @@ enum GoogleCalendarScheduleSync {
             retryPendingIfNeeded(auth: auth, modelContext: modelContext,
                                  signedInEmail: signedInEmail, attempt: attempt)
         }
+    }
+
+    /// The Schedule entry and retry timer need only know whether a durable
+    /// outbound candidate exists. Decode at most one row here; the publication
+    /// pass applies the exact eligibility and provider checks.
+    static func hasPotentialOutboundSync(in context: ModelContext, now: Date = Date()) -> Bool {
+        let today = Calendar.current.startOfDay(for: now)
+        var descriptor = FetchDescriptor<ServiceCall>(
+            predicate: #Predicate {
+                $0.googleCalendarPendingAt != nil ||
+                    ($0.googleEventManagedByApp && $0.googleEventConfirmedAt == nil &&
+                     $0.scheduledDate >= today)
+            })
+        descriptor.fetchLimit = 1
+        return (try? context.fetch(descriptor).isEmpty) == false
     }
 
     static func checkMissingEvent(call: ServiceCall, workflow: GoogleCalendarWorkflow) async

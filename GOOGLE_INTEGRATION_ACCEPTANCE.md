@@ -49,7 +49,8 @@ granting broad Drive browsing.
   Calendar list resources:
   <https://developers.google.com/workspace/calendar/api/guides/pagination>.
 - On 2026-10-01, build 2026100112 passed 120 focused signed iPad simulator
-  Calendar/customer tests and the full 2,874-test iPad unit suite, with zero
+  Calendar/customer tests, 115 Calendar retry tests after a bounded-query
+  correction, and the full 2,875-test iPad unit suite, with zero
   failures or skips. The clean simulator app build had zero compiler warnings.
   These tests cover scoped appointment revisions, imported-event write-back,
   and pending retries; they do not prove that a user's event reached Google.

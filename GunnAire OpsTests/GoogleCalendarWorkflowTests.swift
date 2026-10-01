@@ -203,6 +203,26 @@ struct GoogleCalendarWorkflowTests {
         #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
     }
 
+    @Test func retryProbeFindsSavedPendingAndUpcomingUnconfirmedJobs() throws {
+        let f = try Fixture(linked: true)
+        #expect(!GoogleCalendarScheduleSync.hasPotentialOutboundSync(in: f.context))
+
+        f.call.googleEventManagedByApp = false
+        f.call.googleCalendarPendingAt = Date()
+        try f.context.save()
+        #expect(GoogleCalendarScheduleSync.hasPotentialOutboundSync(in: f.context))
+
+        f.call.googleCalendarPendingAt = nil
+        f.call.googleEventManagedByApp = true
+        f.call.googleEventConfirmedAt = nil
+        try f.context.save()
+        #expect(GoogleCalendarScheduleSync.hasPotentialOutboundSync(in: f.context))
+
+        f.call.googleEventConfirmedAt = Date()
+        try f.context.save()
+        #expect(!GoogleCalendarScheduleSync.hasPotentialOutboundSync(in: f.context))
+    }
+
     @Test func firstLocalSaveRetainsLinkedEditAfterContextRestart() async throws {
         let f = try Fixture(linked: true)
         let originalID = try #require(f.call.googleEventID)
