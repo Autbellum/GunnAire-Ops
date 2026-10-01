@@ -24219,7 +24219,8 @@ struct GunnAire_OpsTests {
 
     @MainActor
     @Test func businessReportingHidesProfitWhenMaterialOrLaborCostCoverageIsIncomplete() {
-        let now = Date()
+        // Keep the one-hour-old fixtures inside the reporting month in every time zone.
+        let now = Date(timeIntervalSince1970: 1_787_745_600)
         let customer = Customer(name: "Incomplete Cost Customer")
         let technician = Technician(name: "Uncosted Technician", contactInfo: "uncosted@gunnaire.com")
         let call = ServiceCall(
@@ -24855,7 +24856,8 @@ struct GunnAire_OpsTests {
     }
 
     @Test func businessReportingAggregatesProjectContractProgressBacklogAndReadyWork() {
-        let now = Date()
+        // This month's project must not drift into the prior month at midnight.
+        let now = Date(timeIntervalSince1970: 1_787_745_600)
         let customer = Customer(name: "Project Reporting Customer")
         let call = ServiceCall(
             type: .install,
