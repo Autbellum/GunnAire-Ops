@@ -109,6 +109,64 @@ struct QuickBooksPublicationAccessTests {
             invoices: [fixture.invoice], estimates: [fixture.estimate]).isEmpty)
     }
 
+    @Test func automaticRecoveryDiscoversApprovedSavedCatalogOnlyWithAdministratorAccess() {
+        let fixture = Fixture()
+        let pending = Item(name: "Offline approved line", unitPrice: 190)
+        let review = Item(pricebookReviewStatus: .needsReview, name: "Field draft", unitPrice: 45)
+        let archived = Item(pricebookReviewStatus: .archived, name: "Old line", unitPrice: 30)
+        let linked = Item(quickBooksID: "I2", name: "Published line", unitPrice: 60)
+        let whitespaceID = Item(quickBooksID: "  ", name: "Legacy unlinked line", unitPrice: 70)
+        let items = [pending, review, archived, linked, whitespaceID]
+
+        let staffKeys = AutomaticOutboundSync.pendingRecoveryKeys(
+            invoices: [fixture.invoice], estimates: [fixture.estimate], customers: [],
+            includeCustomers: false, catalogItems: items, includeCatalog: false)
+        #expect(staffKeys == [.estimate(fixture.estimate.id), .invoice(fixture.invoice.id)])
+
+        let adminKeys = AutomaticOutboundSync.pendingRecoveryKeys(
+            invoices: [fixture.invoice], estimates: [fixture.estimate], customers: [],
+            includeCustomers: false, catalogItems: items, includeCatalog: true)
+        #expect(adminKeys == [.catalog(pending.id), .catalog(whitespaceID.id),
+                              .estimate(fixture.estimate.id), .invoice(fixture.invoice.id)])
+
+        pending.quickBooksID = "I3"
+        #expect(AutomaticOutboundSync.pendingCatalogKeys(items) == [.catalog(whitespaceID.id)])
+        whitespaceID.quickBooksID = "I4"
+        #expect(AutomaticOutboundSync.pendingCatalogKeys(items).isEmpty)
+    }
+
+    @Test func catalogAutomaticRetryBacksOffUncertainAttemptsAndStopsInvalidProposals() {
+        #expect(AutomaticOutboundSync.catalogRetryDelay(after: CatalogPublicationError.needsReview) == 600.0)
+        #expect(AutomaticOutboundSync.catalogRetryDelay(after: CatalogPublicationError.invalidProposal) == nil)
+        #expect(AutomaticOutboundSync.catalogRetryDelay(after: QuickBooksCatalogWorkflowError.remoteIdentity) == nil)
+        #expect(AutomaticOutboundSync.catalogRetryDelay(after: QuickBooksCatalogWorkflowError.saveFailed) == 300.0)
+        #expect(AutomaticOutboundSync.catalogRetryDelay(after: CatalogPublicationError.unavailable) == 300.0)
+        #expect(AutomaticOutboundSync.catalogRetryDelay(after: URLError(.notConnectedToInternet)) == 300.0)
+    }
+
+    @Test func catalogRecoveryFindsWhitespaceIdentityBeyondFirstBoundedPage() throws {
+        let schema = GunnAireModelSchema.schema
+        let context = ModelContext(try ModelContainer(for: schema, configurations: [
+            ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+        ]))
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        for index in 0..<250 {
+            context.insert(Item(quickBooksID: "I\(index)", name: "Linked \(index)",
+                unitPrice: 1, createdAt: start.addingTimeInterval(Double(index))))
+        }
+        let unlinked = Item(quickBooksID: "   ", name: "Late offline line", unitPrice: 190,
+            createdAt: start.addingTimeInterval(250))
+        context.insert(unlinked)
+        try context.save()
+
+        var offset = 0
+        let first = try AutomaticOutboundSync.nextCatalogPage(context: context, offset: &offset)
+        let second = try AutomaticOutboundSync.nextCatalogPage(context: context, offset: &offset)
+        #expect(first.count == 250)
+        #expect(AutomaticOutboundSync.pendingCatalogKeys(first).isEmpty)
+        #expect(AutomaticOutboundSync.pendingCatalogKeys(second) == [.catalog(unlinked.id)])
+    }
+
     @Test func convertedEstimateRequiresVisibleReconciliationInsteadOfASecondAutomaticProposal() {
         let customer = Customer(name: "Converted estimate customer")
         let estimate = Estimate(customer: customer, amount: 190)

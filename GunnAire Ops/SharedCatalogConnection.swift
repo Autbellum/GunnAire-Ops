@@ -165,7 +165,8 @@ final class SharedCatalogPreparation {
 
     func check() throws {
         try operation.check(); try validateAccess()
-        let matches = try context.fetch(FetchDescriptor<Item>()).filter { $0.id == identity.localItemID }
+        let id = identity.localItemID
+        let matches = try context.fetch(FetchDescriptor<Item>(predicate: #Predicate { $0.id == id }))
         guard matches.count == 1, matches.first === item, QuickBooksCatalogItemRevision(item) == revision else {
             throw QuickBooksCatalogWorkflowError.itemChanged
         }
