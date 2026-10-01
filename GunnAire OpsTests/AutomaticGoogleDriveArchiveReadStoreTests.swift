@@ -111,6 +111,37 @@ struct AutomaticGoogleDriveArchiveReadStoreTests {
         #expect(wakeCount == 2)
     }
 
+    @Test func fleetOnlyArchiveFailureStaysInVisibleRecoveryQueue() throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let customer = Customer(name: "Drive queue fixture")
+        let customerPending = ServiceDocumentAttachment(customer: customer, serviceCallID: nil,
+            kind: .serviceReport, displayName: "customer.pdf", localFilePath: "/tmp/customer.pdf",
+            contentType: "application/pdf", fileSizeBytes: 12)
+        let fleetPending = ServiceDocumentAttachment(customer: nil, serviceCallID: nil,
+            fleetVehicleID: UUID(), kind: .fleetService, displayName: "fleet.pdf",
+            localFilePath: "/tmp/fleet.pdf", contentType: "application/pdf", fileSizeBytes: 12)
+        fleetPending.markGoogleDriveArchiveFailed("Connection interrupted")
+        let unowned = ServiceDocumentAttachment(customer: nil, serviceCallID: nil,
+            kind: .other, displayName: "unowned.pdf", localFilePath: "/tmp/unowned.pdf",
+            contentType: "application/pdf", fileSizeBytes: 12)
+        let archived = ServiceDocumentAttachment(customer: customer, serviceCallID: nil,
+            kind: .customerDocument, displayName: "archived.pdf", localFilePath: "/tmp/archived.pdf",
+            contentType: "application/pdf", fileSizeBytes: 12,
+            googleDriveFileID: "confirmed", googleDriveWebViewLink: "https://drive.google.com/file/d/confirmed/view",
+            googleDriveSyncStatus: GoogleDriveDocumentSyncState.archived.rawValue)
+        context.insert(customer)
+        for attachment in [customerPending, fleetPending, unowned, archived] {
+            context.insert(attachment)
+        }
+        try context.save()
+
+        let pending = GoogleDriveArchiveQueue.pending(from: [customerPending, fleetPending, unowned, archived])
+        #expect(Set(pending.map(\.id)) == Set([customerPending.id, fleetPending.id]))
+        #expect(pending.filter { $0.googleDriveSyncState == .needsAttention }.map(\.id) == [fleetPending.id])
+        #expect(GoogleDriveArchiveQueue.pending(from: [fleetPending]).count == 1)
+    }
+
     @Test func retainedReservationReconcilesOneConfirmedUploadAfterReconnect() async throws {
         let container = try makeContainer()
         let firstContext = ModelContext(container)

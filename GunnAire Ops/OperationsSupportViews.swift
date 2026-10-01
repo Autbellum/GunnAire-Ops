@@ -893,6 +893,14 @@ enum TechnicianCalendarInvitationRecovery {
     }
 }
 
+enum GoogleDriveArchiveQueue {
+    static func pending(from attachments: [ServiceDocumentAttachment]) -> [ServiceDocumentAttachment] {
+        attachments.filter {
+            ($0.customer != nil || $0.fleetVehicleID != nil) && $0.needsGoogleDriveArchive
+        }
+    }
+}
+
 struct SyncIntegrationsView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openURL) private var openURL
@@ -957,8 +965,7 @@ struct SyncIntegrationsView: View {
     }
 
     private var googleDriveQueue: [ServiceDocumentAttachment] {
-        documentAttachments
-            .filter { $0.customer != nil && $0.needsGoogleDriveArchive }
+        GoogleDriveArchiveQueue.pending(from: documentAttachments)
             .sorted { lhs, rhs in
                 if lhs.googleDriveSyncState == .needsAttention && rhs.googleDriveSyncState != .needsAttention {
                     return true

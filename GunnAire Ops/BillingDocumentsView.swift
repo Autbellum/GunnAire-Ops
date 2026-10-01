@@ -3910,6 +3910,14 @@ GunnAire
                                                 .foregroundColor(.secondary)
                                         }
                                         BillingPublicationReviewLink(document: .estimate(estimate), context: modelContext)
+                                        if !QuickBooksEstimatePublicationRecovery.queuedEstimates(from: [estimate]).isEmpty {
+                                            Button("Sync Saved Estimate") {
+                                                publishBillingDocument(.estimate(estimate), explicitReview: true)
+                                            }
+                                            .buttonStyle(.bordered)
+                                            .disabled(!canAttemptSharedBilling)
+                                            .accessibilityIdentifier("SyncSavedEstimate-\(estimate.id.uuidString)")
+                                        }
                                         estimateDeliveryAction(estimate)
                                         estimateQuickBooksDeliveryAction(estimate)
                                         Button("Create Invoice") {
@@ -3937,6 +3945,7 @@ GunnAire
                                             Text(estimateListDetail(estimate))
                                                 .font(.caption)
                                                 .foregroundColor(.secondary)
+                                            EstimateQuickBooksReviewStatus(estimate: estimate, context: modelContext)
                                             if let documentationStatus {
                                                 Text(documentationStatus.sendReadinessLabel)
                                                     .font(.caption2)
@@ -4551,6 +4560,13 @@ GunnAire
                                 BillingPublicationReviewLink(document: .invoice(invoice), context: modelContext)
                             } else if let estimate = currentJobEstimate {
                                 BillingPublicationReviewLink(document: .estimate(estimate), context: modelContext)
+                                if !QuickBooksEstimatePublicationRecovery.queuedEstimates(from: [estimate]).isEmpty {
+                                    Button("Sync Saved Estimate") {
+                                        publishBillingDocument(.estimate(estimate), explicitReview: true)
+                                    }
+                                    .disabled(!canAttemptSharedBilling)
+                                    .accessibilityIdentifier("SyncSavedEstimate-\(estimate.id.uuidString)")
+                                }
                             }
                         }
                         jobMaterialsSection(for: call)
@@ -8769,7 +8785,10 @@ GunnAire
             return "Connect QuickBooks in Settings to send this estimate through QuickBooks. The email draft option above remains available."
         }
         guard estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
-            return "Publish this estimate to QuickBooks using Billing Review, then return here to send it."
+            if QuickBooksEstimatePublicationRecovery.queuedEstimates(from: [estimate]).isEmpty {
+                return "This estimate is closed for QuickBooks publication and cannot be sent through QuickBooks."
+            }
+            return "This saved estimate is not in QuickBooks yet. Check its publication status and use Sync Saved Estimate to verify the company and publish before sending."
         }
         guard let customer = estimate.customer else {
             return "This estimate's customer is unavailable. Reopen the estimate after customer access recovers."

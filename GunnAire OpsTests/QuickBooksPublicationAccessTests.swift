@@ -425,6 +425,51 @@ struct QuickBooksPublicationAccessTests {
             checkingProof: false) == .ignore)
     }
 
+    @Test func offlineSavedEstimateNeedsVisibleReviewUntilOriginalRealmIsExplicitlyBound() throws {
+        let schema = GunnAireModelSchema.schema
+        let store = try ModelContainer(for: schema, configurations: [
+            ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+        ])
+        let writer = ModelContext(store)
+        let customer = Customer(name: "Offline estimate customer")
+        let estimate = Estimate(customer: customer, amount: 190)
+        writer.insert(customer)
+        writer.insert(estimate)
+        try writer.save()
+
+        let reopened = ModelContext(store)
+        let saved = try #require(reopened.fetch(FetchDescriptor<Estimate>()).first)
+        let savedCustomer = try #require(saved.customer)
+        #expect(QuickBooksEstimatePublicationRecovery.queuedEstimates(from: [saved]).map(\.id) == [saved.id])
+        #expect(AutomaticOutboundSync.pendingDocumentKeys(invoices: [], estimates: [saved]) == [.estimate(saved.id)])
+        let identity = AutomaticOutboundSync.RealmRecord(companyID: UUID(),
+            documentType: "estimate", documentID: saved.id, customerID: savedCustomer.id,
+            createdAt: saved.createdAt, realmID: nil, environment: nil)
+        #expect(AutomaticOutboundSync.estimateReviewState(quickBooksID: saved.quickBooksID,
+            stored: nil, identity: identity, activeScope: nil) == .reviewRequired)
+
+        let connected = AutomaticOutboundSync.RealmScope(companyID: identity.companyID,
+            realmID: "realm-a", environment: "production")
+        #expect(AutomaticOutboundSync.estimateReviewState(quickBooksID: saved.quickBooksID,
+            stored: nil, identity: identity, activeScope: connected) == .reviewRequired)
+        let reviewed = AutomaticOutboundSync.RealmRecord(companyID: identity.companyID,
+            documentType: identity.documentType, documentID: identity.documentID,
+            customerID: identity.customerID, createdAt: identity.createdAt,
+            realmID: connected.realmID, environment: connected.environment)
+        #expect(AutomaticOutboundSync.realmDecision(stored: nil,
+            expected: reviewed, explicitReview: true) == .bind)
+        #expect(AutomaticOutboundSync.estimateReviewState(quickBooksID: saved.quickBooksID,
+            stored: reviewed, identity: identity, activeScope: connected) == .automaticPending)
+        saved.quickBooksID = "EST-1"
+        #expect(AutomaticOutboundSync.estimateReviewState(quickBooksID: saved.quickBooksID,
+            stored: reviewed, identity: identity, activeScope: connected) == .published)
+        let foreign = AutomaticOutboundSync.RealmScope(companyID: identity.companyID,
+            realmID: "realm-b", environment: "production")
+        saved.quickBooksID = nil
+        #expect(AutomaticOutboundSync.estimateReviewState(quickBooksID: saved.quickBooksID,
+            stored: reviewed, identity: identity, activeScope: foreign) == .reviewRequired)
+    }
+
     @Test func explicitReviewDuringProofCheckRequeuesTheSavedDocumentOnlyOnce() {
         let key = AutomaticOutboundSync.DocumentKey.estimate(UUID())
         var pending: [AutomaticOutboundSync.DocumentKey] = []

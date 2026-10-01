@@ -131,6 +131,7 @@ actor QuickBooksDocumentRealmProofStore {
 @MainActor
 final class AutomaticOutboundSync {
     static let shared = AutomaticOutboundSync()
+    static let estimateProofDidChange = Notification.Name("GunnAireEstimateQuickBooksProofDidChange")
 
     nonisolated struct RealmRecord: Codable, Equatable, Sendable {
         let companyID: UUID
@@ -262,6 +263,30 @@ final class AutomaticOutboundSync {
         guard let stored else { return false }
         return stored.sameDocument(as: identity) && stored.hasValidIntent &&
             stored.realmID == nil && stored.environment == nil
+    }
+
+    nonisolated enum EstimateReviewState: Equatable, Sendable {
+        case published
+        case automaticPending
+        case reviewRequired
+        case unavailable
+    }
+
+    /// A missing or mismatched device proof cannot be promoted by a later
+    /// connection. This is the same fail-closed decision the automatic queue
+    /// makes before publishing, exposed for saved-estimate review.
+    nonisolated static func estimateReviewState(quickBooksID: String?, stored: RealmRecord?,
+                                                identity: RealmRecord, activeScope: RealmScope?) -> EstimateReviewState {
+        if quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            return .published
+        }
+        guard let stored, stored.sameDocument(as: identity) else { return .reviewRequired }
+        let bound = stored.boundScope
+        let hasBoundProof = bound != nil && (stored.intendedScope == nil || stored.intendedScope == bound)
+        let hasFirstSaveMarker = isNewMarker(stored, for: identity)
+        guard hasBoundProof || hasFirstSaveMarker else { return .reviewRequired }
+        if let activeScope, stored.originalScope != activeScope { return .reviewRequired }
+        return .automaticPending
     }
 
     enum DocumentKey: Hashable {
@@ -417,6 +442,38 @@ final class AutomaticOutboundSync {
         return RealmScope(companyID: companyID, realmID: realmID, environment: api.currentEnvironment)
     }
 
+    func estimateReviewState(for estimate: Estimate, context: ModelContext) async -> EstimateReviewState {
+        let originalQuickBooksID = estimate.quickBooksID
+        if originalQuickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            return .published
+        }
+        guard isAuthorized(context), estimate.modelContext === context, !estimate.isDeleted,
+              let identity = realmRecord(for: .estimate(estimate), realmID: nil, environment: nil),
+              let stamp = CompanyWorkspaceAccessController.shared.operationStamp else {
+            return .unavailable
+        }
+        let originalRealmID = QuickBooksDataAPI.shared.realmID
+        let activeScope = currentActiveRealmScope(companyID: identity.companyID)
+        let stored: RealmRecord?
+        do {
+            // The proof store actor performs the Keychain read away from the UI actor.
+            stored = try await realmStore.savedRecord(identity)
+        } catch {
+            return .unavailable
+        }
+        guard isAuthorized(context), CompanyWorkspaceAccessController.shared.operationStamp == stamp,
+              CompanyWorkspaceAccessController.shared.verifiedCompanyID == identity.companyID,
+              QuickBooksDataAPI.shared.realmID == originalRealmID,
+              currentActiveRealmScope(companyID: identity.companyID) == activeScope,
+              estimate.modelContext === context, !estimate.isDeleted,
+              estimate.quickBooksID == originalQuickBooksID,
+              realmRecord(for: .estimate(estimate), realmID: nil, environment: nil)?.sameDocument(as: identity) == true else {
+            return .unavailable
+        }
+        return Self.estimateReviewState(quickBooksID: originalQuickBooksID, stored: stored,
+            identity: identity, activeScope: activeScope)
+    }
+
     /// A fresh context sees only committed records, so inserted drafts cannot
     /// hide a persisted collision with the same deterministic document ID.
     static func hasPersistedDocument(for document: QuickBooksBillingDocument,
@@ -561,6 +618,9 @@ final class AutomaticOutboundSync {
         let record = try realmRecord(for: workflow)
         if let bind { try await bind(record) } else { try await bindInDeviceProofStore(record) }
         try workflow.check()
+        if case .estimate = workflow.document {
+            NotificationCenter.default.post(name: estimateProofDidChange, object: workflow.document.id)
+        }
     }
 
     private static func bindInDeviceProofStore(_ record: RealmRecord) async throws {
@@ -1004,6 +1064,9 @@ final class AutomaticOutboundSync {
             if explicitReview {
                 try await realmStore.remember(RealmScope(companyID: companyID,
                     realmID: realmID, environment: workflow.run.workflow.environment))
+                if case .estimate = document {
+                    NotificationCenter.default.post(name: Self.estimateProofDidChange, object: document.id)
+                }
             }
             try workflow.check()
             try await workflow.run.perform {

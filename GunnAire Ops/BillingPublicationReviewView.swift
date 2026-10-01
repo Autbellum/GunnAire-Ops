@@ -487,13 +487,78 @@ import SwiftData
     }
 }
 
+@MainActor struct EstimateQuickBooksReviewStatus: View {
+    let estimate: Estimate
+    let context: ModelContext
+    @State private var state: AutomaticOutboundSync.EstimateReviewState?
+    @State private var refreshRevision = 0
+
+    private var isOpenForPublication: Bool {
+        !QuickBooksEstimatePublicationRecovery.queuedEstimates(from: [estimate]).isEmpty
+    }
+
+    private var refreshKey: String {
+        let workspace = CompanyWorkspaceAccessController.shared
+        return [estimate.id.uuidString, estimate.customer?.id.uuidString ?? "missing-customer",
+                String(estimate.createdAt.timeIntervalSinceReferenceDate), estimate.quickBooksID ?? "unsynced",
+                estimate.status,
+                workspace.verifiedCompanyID?.uuidString ?? "unverified",
+                String(describing: workspace.operationStamp), QuickBooksDataAPI.shared.realmID ?? "disconnected",
+                QuickBooksDataAPI.shared.currentEnvironment,
+                QuickBooksDataAPI.shared.isAuthenticated ? "authenticated" : "disconnected",
+                String(refreshRevision)].joined(separator: "|")
+    }
+
+    var body: some View {
+        Group {
+            if isOpenForPublication {
+                switch state {
+                case .reviewRequired:
+                    Label("QuickBooks review required", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .accessibilityIdentifier("EstimateQuickBooksReviewRequired-\(estimate.id.uuidString)")
+                    Text("Automatic publication has no usable proof for this saved estimate. Use Sync Saved Estimate to verify the company and publish the original.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                case .automaticPending:
+                    Label("QuickBooks publication pending", systemImage: "arrow.triangle.2.circlepath")
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("EstimateQuickBooksPublicationPending-\(estimate.id.uuidString)")
+                case .unavailable:
+                    Label("QuickBooks status needs review", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                        .accessibilityIdentifier("EstimateQuickBooksStatusUnavailable-\(estimate.id.uuidString)")
+                case .published, .none:
+                    EmptyView()
+                }
+            }
+        }
+        .task(id: refreshKey) {
+            state = nil
+            let result = await AutomaticOutboundSync.shared.estimateReviewState(for: estimate, context: context)
+            guard !Task.isCancelled else { return }
+            state = result
+        }
+        .onAppear { refreshRevision &+= 1 }
+        .onReceive(NotificationCenter.default.publisher(for: AutomaticOutboundSync.estimateProofDidChange)) { notification in
+            guard let documentID = notification.object as? UUID, documentID == estimate.id else { return }
+            refreshRevision &+= 1
+        }
+    }
+}
+
 @MainActor struct BillingPublicationReviewLink: View {
     let document: QuickBooksBillingDocument
     let context: ModelContext
     var body: some View {
-        NavigationLink {
-            BillingPublicationReviewView(document: document, context: context)
-        } label: { Label("Billing Review", systemImage: "doc.text.magnifyingglass") }
-        .accessibilityIdentifier("BillingReview-\(document.id.uuidString)")
+        VStack(alignment: .leading, spacing: 6) {
+            if case .estimate(let estimate) = document {
+                EstimateQuickBooksReviewStatus(estimate: estimate, context: context)
+            }
+            NavigationLink {
+                BillingPublicationReviewView(document: document, context: context)
+            } label: { Label("Billing Review", systemImage: "doc.text.magnifyingglass") }
+            .accessibilityIdentifier("BillingReview-\(document.id.uuidString)")
+        }
     }
 }
