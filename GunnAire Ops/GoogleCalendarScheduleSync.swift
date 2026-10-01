@@ -230,6 +230,13 @@ enum GoogleCalendarScheduleSync {
                 markStaffInvitationReview(for: call, workflow: workflow)
                 return "Google event confirmed. Staff invitations need attention: assign every technician and crew member a unique valid calendar email, then use Sync Google."
             }
+            let previousConfirmation = call.googleEventConfirmedAt
+            call.googleEventConfirmedAt = Date()
+            do { try workflow.saveChanges() }
+            catch {
+                call.googleEventConfirmedAt = previousConfirmation
+                throw error
+            }
             clearStaffInvitationReview(for: call)
             clearCalendarCallLocallyEdited(call)
             return "Saved the original appointment ID in Google Calendar. Assigned staff invitations, if any, use each recipient's Google Calendar notification settings."
@@ -344,7 +351,7 @@ enum GoogleCalendarScheduleSync {
         if call.status == .cancelled { return isCalendarCallLocallyEdited(call) }
         guard call.status == .scheduled || call.status == .inProgress else { return false }
         return isCalendarCallLocallyEdited(call) ||
-            (normalizedOptional(call.googleEventID) == nil && call.scheduledDate >= Calendar.current.startOfDay(for: now))
+            (call.googleEventConfirmedAt == nil && call.scheduledDate >= Calendar.current.startOfDay(for: now))
     }
 
     static func synchronize(workflow: GoogleCalendarWorkflow) async throws -> String {
@@ -632,10 +639,17 @@ enum GoogleCalendarScheduleSync {
             // Persist the exact route/identity before POST. Restart, a lost
             // response or local confirmation failure retains the original ID.
             let previousCalendar = call.googleCalendarID
+            let previousConfirmation = call.googleEventConfirmedAt
             call.googleCalendarID = calendar.id
             call.googleEventID = id
+            call.googleEventConfirmedAt = nil
             do { try workflow.saveChanges() }
-            catch { call.googleCalendarID = previousCalendar; call.googleEventID = originalID; throw error }
+            catch {
+                call.googleCalendarID = previousCalendar
+                call.googleEventID = originalID
+                call.googleEventConfirmedAt = previousConfirmation
+                throw error
+            }
             var proposal = makeCalendarCreateEvent(for: call)
             proposal.attendees = recipients?.filter {
                 $0.email != GoogleCalendarStaffDelivery.email(calendar.id)
@@ -660,10 +674,12 @@ enum GoogleCalendarScheduleSync {
                 }
                 call.googleCalendarID = previousCalendar
                 call.googleEventID = originalID
+                call.googleEventConfirmedAt = previousConfirmation
                 do { try workflow.saveChanges() }
                 catch {
                     call.googleCalendarID = calendar.id
                     call.googleEventID = id
+                    call.googleEventConfirmedAt = nil
                     throw error
                 }
                 throw GoogleAuthError.http(statusCode: code)
@@ -679,10 +695,17 @@ enum GoogleCalendarScheduleSync {
         }
         try requireCall(call, workflow: workflow)
         let previousCalendar = call.googleCalendarID, previousID = call.googleEventID
+        let previousConfirmation = call.googleEventConfirmedAt
         call.googleCalendarID = calendar.id
         call.googleEventID = id
+        if recipients != nil { call.googleEventConfirmedAt = Date() }
         do { try workflow.saveChanges() }
-        catch { call.googleCalendarID = previousCalendar; call.googleEventID = previousID; throw error }
+        catch {
+            call.googleCalendarID = previousCalendar
+            call.googleEventID = previousID
+            call.googleEventConfirmedAt = previousConfirmation
+            throw error
+        }
         if recipients == nil {
             markCalendarCallLocallyEdited(call)
             markStaffInvitationReview(for: call, workflow: workflow)

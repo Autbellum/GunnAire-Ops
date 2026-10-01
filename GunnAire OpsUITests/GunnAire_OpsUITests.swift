@@ -3139,7 +3139,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         let checkLink = app.buttons["CheckGoogleLink-\(screenshotServiceCallID)"]
         for _ in 0..<12 where !checkLink.exists || !checkLink.isHittable { app.swipeUp() }
         XCTAssertTrue(waitForHittable(checkLink))
-        XCTAssertTrue(app.staticTexts["Google ID saved"].exists)
+        XCTAssertTrue(app.staticTexts["Google link unconfirmed — check link"].exists)
         checkLink.tap()
 
         let localResult = app.descendants(matching: .any)

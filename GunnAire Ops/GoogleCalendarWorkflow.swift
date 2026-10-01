@@ -431,7 +431,8 @@ final class GoogleCalendarWorkflow {
             strings = [value.googleCalendarID, value.googleEventID, value.eventTitle, value.siteAddress,
                        value.type.rawValue, value.status.rawValue, value.notes, value.additionalTechnicianIDsJSON,
                        value.serviceLocationID?.uuidString, value.cancellationReason]
-            dates = [value.scheduledDate, value.promisedArrivalWindowStart, value.promisedArrivalWindowEnd, value.cancelledAt]
+            dates = [value.scheduledDate, value.promisedArrivalWindowStart, value.promisedArrivalWindowEnd,
+                     value.cancelledAt, value.googleEventConfirmedAt]
             duration = value.duration
             managed = value.googleEventManagedByApp
             customer = value.customer?.persistentModelID

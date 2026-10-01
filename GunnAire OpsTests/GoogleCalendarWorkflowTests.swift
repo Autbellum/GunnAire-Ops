@@ -4,6 +4,7 @@ import Testing
 @testable import GunnAire_Ops
 
 @MainActor
+@Suite(.serialized)
 struct GoogleCalendarWorkflowTests {
     @MainActor private final class Fixture {
         let email = "calendar-fixture@gunnaire.com"
@@ -39,6 +40,7 @@ struct GoogleCalendarWorkflowTests {
             ]))
             customer = Customer(name: "Fixture customer", email: "customer@example.invalid", address: "Local service address")
             call = ServiceCall(googleCalendarID: "primary", googleEventID: linked ? "fixture-event" : nil,
+                googleEventConfirmedAt: linked ? Date(timeIntervalSince1970: 1_799_000_000) : nil,
                 googleEventManagedByApp: true, eventTitle: "Repair visit", type: .repair,
                 scheduledDate: Date(timeIntervalSince1970: 1_800_000_000), duration: 3600,
                 customer: customer, notes: "Saved field observations")
@@ -587,7 +589,37 @@ struct GoogleCalendarWorkflowTests {
         failed(try await f.publish())
         #expect(f.writes.count == 1)
         #expect(f.call.googleEventID != nil)
+        #expect(f.call.googleEventConfirmedAt == nil)
         #expect(f.remote.isEmpty)
+    }
+
+    @Test func unconfirmedLinkedEventIsRecoveredAfterLocalRetryMarkerLoss() async throws {
+        let f = try Fixture(linked: true)
+        f.call.googleEventConfirmedAt = nil
+        try f.context.save()
+        #expect(GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+        _ = try await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.synchronize(workflow: $0)
+        }.get()
+        #expect(f.call.googleEventConfirmedAt != nil)
+        #expect(!f.writes.contains { $0.httpMethod == "POST" },
+                "A confirmed original event must not be posted again.")
+        #expect(!GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+    }
+
+    @Test func unconfirmedMissingLinkStaysForExplicitSameIDReview() async throws {
+        let f = try Fixture(linked: true)
+        f.call.googleEventConfirmedAt = nil
+        try f.context.save()
+        f.remote.removeValue(forKey: f.key(f.email, "fixture-event"))
+        #expect(GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+        let message = try await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.synchronize(workflow: $0)
+        }.get()
+        #expect(message.contains("need review"))
+        #expect(f.call.googleEventConfirmedAt == nil)
+        #expect(f.call.googleEventID == "fixture-event")
+        #expect(f.writes.isEmpty, "A missing reserved link requires the guarded repair action.")
     }
 
     @Test func legacyMissingLinkNeedsExplicitReviewAndKeepsItsOriginalID() async throws {

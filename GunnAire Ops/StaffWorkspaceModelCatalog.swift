@@ -63,11 +63,16 @@ nonisolated struct StaffWorkspaceAnyModelCodec {
             let matches = models.filter { $0[keyPath: codec.id] == id }
             guard matches.count == 1, let model = matches.first else { throw StaffOwnerFieldEditError.missing }
             let original = try codec.encode(model)
+            let originalGoogleConfirmation = (model as? ServiceCall)?.googleEventConfirmedAt
             return .init(title: StaffOwnerFieldEditModels.title(model, record: original), value: { field.read(model) }, write: { value in
                 try field.validate(value)
                 try field.write(model, value, StaffWorkspaceModelResolver())
             }, ownsPendingWrite: { value in
-                guard codec.excludedAttributes.isEmpty,
+                let excludedProofUnchanged = codec.excludedAttributes.isEmpty ||
+                    (codec.kind == "job" &&
+                     Set(codec.excludedAttributes.keys) == Set(["googleEventConfirmedAt"]) &&
+                     (model as? ServiceCall)?.googleEventConfirmedAt == originalGoogleConfirmation)
+                guard excludedProofUnchanged,
                       context.insertedModelsArray.isEmpty, context.deletedModelsArray.isEmpty,
                       context.changedModelsArray.allSatisfy({ $0.persistentModelID == model.persistentModelID }),
                       let changed = try? codec.encode(model) else { return false }

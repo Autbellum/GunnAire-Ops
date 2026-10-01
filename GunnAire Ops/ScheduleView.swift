@@ -1723,15 +1723,21 @@ struct ScheduleView: View {
                 if !call.additionalTechnicianIDs.isEmpty {
                     Label("+\(call.additionalTechnicianIDs.count) crew", systemImage: "person.2.fill")
                 }
-                if missingGoogleEventIDs[call.id] == call.googleEventID {
+                if canManageDispatch, let missingID = missingGoogleEventIDs[call.id],
+                   missingID == call.googleEventID {
                     Label("Google event missing", systemImage: "calendar.badge.exclamationmark")
-                } else if GoogleCalendarScheduleSync.staffInvitationsNeedAttention(for: call,
+                } else if canManageDispatch, GoogleCalendarScheduleSync.staffInvitationsNeedAttention(for: call,
                     connectedGoogleEmail: googleAuth.signedInEmail, workspaceEmail: AppIdentity.currentEmail) {
                     Label("Google event saved • fix staff email, then Sync Google", systemImage: "person.crop.circle.badge.exclamationmark")
-                } else if GoogleCalendarScheduleSync.needsOutboundSync(call) {
-                    Label("Google pending", systemImage: "calendar.badge.exclamationmark")
+                } else if canManageDispatch, GoogleCalendarScheduleSync.needsOutboundSync(call) {
+                    Label(call.googleEventID == nil ? "Google pending" : "Google link unconfirmed — check link",
+                          systemImage: "calendar.badge.exclamationmark")
                 } else if call.googleEventID != nil {
-                    Label("Google ID saved", systemImage: "calendar")
+                    Label(canManageDispatch
+                          ? (call.googleEventConfirmedAt == nil ? "Google link unconfirmed — check link" : "Google event confirmed")
+                          : "Google event linked",
+                          systemImage: canManageDispatch && call.googleEventConfirmedAt == nil
+                              ? "calendar.badge.exclamationmark" : "calendar")
                 }
                 if call.documentationStartedAt != nil {
                     Label("Started", systemImage: "doc.text")
