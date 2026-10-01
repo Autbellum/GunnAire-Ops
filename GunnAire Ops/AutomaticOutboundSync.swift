@@ -157,6 +157,9 @@ final class AutomaticOutboundSync {
     private var invoiceOffset = 0
     private var estimateOffset = 0
     private var customerOffset = 0
+    private var attachmentOffset = 0
+    private var attachmentTasks: [UUID: Task<Void, Never>] = [:]
+    private var attachmentDeferredUntil: [UUID: Date] = [:]
     private var calendarRunning = false
     private var calendarQueued = false
     private var lastRecoveryAt: Date?
@@ -376,6 +379,64 @@ final class AutomaticOutboundSync {
                 pending.append(key)
             }
             Task { await drain(context: context) }
+            if canRecoverCustomers {
+                do {
+                    let workflow = try QuickBooksDataAPI.shared.captureWorkspaceWorkflow()
+                    guard let realmID = workflow.realmID,
+                          let companyID = workflow.companyID,
+                          companyID == CompanyWorkspaceAccessController.shared.verifiedCompanyID else { return }
+                    let uploads = try QuickBooksInvoiceAttachmentSync.pendingLinkedUploadPage(
+                        context: context, offset: &attachmentOffset)
+                    let generation = queueGeneration
+                    let stamp = queueStamp
+                    for upload in uploads {
+                        let id = upload.attachment.id
+                        guard attachmentTasks[id] == nil,
+                              (attachmentDeferredUntil[id] ?? .distantPast) <= now else { continue }
+                        let records = upload.documents.compactMap {
+                            realmRecord(for: $0, realmID: realmID, environment: workflow.environment)
+                        }
+                        guard records.count == upload.documents.count,
+                              records.allSatisfy({ $0.companyID == companyID }) else { continue }
+                        attachmentDeferredUntil[id] = now.addingTimeInterval(300)
+                        attachmentTasks[id] = Task { [weak self] in
+                            guard let self else { return }
+                            defer {
+                                if self.queueGeneration == generation { self.attachmentTasks.removeValue(forKey: id) }
+                            }
+                            do {
+                                for record in records {
+                                    try await self.realmStore.verifyOrBind(record, explicitReview: false)
+                                }
+                                try workflow.check()
+                                guard self.queueGeneration == generation,
+                                      self.queueStamp == stamp,
+                                      self.queueRealmID == realmID,
+                                      self.isAuthorized(context) else { return }
+                                if let uploadTask = QBODocumentNativeWorkflow.enqueue(upload.attachment,
+                                    references: upload.references, context: context) {
+                                    await uploadTask.value
+                                }
+                            } catch {
+                                guard self.queueGeneration == generation,
+                                      self.queueStamp == stamp,
+                                      self.isAuthorized(context) else { return }
+                                let message = (error as? RealmError)?.localizedDescription ??
+                                    "The saved QuickBooks company for this file could not be verified. Review the original billing document before uploading its file."
+                                if upload.attachment.quickBooksSyncError != message {
+                                    let previous = upload.attachment.quickBooksSyncError
+                                    upload.attachment.quickBooksSyncError = message
+                                    do { try context.save() }
+                                    catch { upload.attachment.quickBooksSyncError = previous }
+                                }
+                            }
+                        }
+                    }
+                } catch {
+                    // Billing documents already queued above still drain; files
+                    // remain local and are reconsidered on the next pass.
+                }
+            }
         } catch {
             // The original records remain local and are reconsidered on the
             // next foreground or connectivity transition.
@@ -383,10 +444,11 @@ final class AutomaticOutboundSync {
     }
 
     static func nextPage<Model: PersistentModel>(
-        _ descriptor: FetchDescriptor<Model>, context: ModelContext, offset: inout Int
+        _ descriptor: FetchDescriptor<Model>, context: ModelContext, offset: inout Int, pageSize: Int = 100
     ) throws -> [Model] {
+        guard pageSize > 0 else { return [] }
         var page = descriptor
-        page.fetchLimit = 100
+        page.fetchLimit = pageSize
         page.fetchOffset = offset
         var values = try context.fetch(page)
         if values.isEmpty, offset > 0 {
@@ -394,7 +456,7 @@ final class AutomaticOutboundSync {
             page.fetchOffset = 0
             values = try context.fetch(page)
         }
-        offset = values.count < 100 ? 0 : offset + values.count
+        offset = values.count < pageSize ? 0 : offset + values.count
         return values
     }
 
@@ -437,6 +499,9 @@ final class AutomaticOutboundSync {
             invoiceOffset = 0
             estimateOffset = 0
             customerOffset = 0
+            attachmentOffset = 0
+            attachmentTasks.removeAll()
+            attachmentDeferredUntil.removeAll()
             pending.removeAll()
             preparations.removeAll()
             explicitReviewKeys.removeAll()

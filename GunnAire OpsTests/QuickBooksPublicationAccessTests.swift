@@ -305,4 +305,108 @@ struct QuickBooksPublicationAccessTests {
         #expect(Set(first.map(\.id)).isDisjoint(with: Set(second.map(\.id))))
         #expect(offset == 0)
     }
+
+    @Test func syncedBillingDocumentsStillRecoverTheirMissingSupportingFilesAfterRestart() throws {
+        let schema = GunnAireModelSchema.schema
+        let store = try ModelContainer(for: schema, configurations: [
+            ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+        ])
+        let writer = ModelContext(store)
+        let customer = Customer(quickBooksID: "C1", name: "Attachment recovery fixture")
+        let invoice = Invoice(customer: customer, quickBooksID: "I1", amount: 190)
+        invoice.quickBooksSyncStatus = "synced"
+        let estimate = Estimate(customer: customer, quickBooksID: "E1", amount: 190)
+        let invoiceURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let estimateURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data("invoice file".utf8).write(to: invoiceURL)
+        try Data("estimate file".utf8).write(to: estimateURL)
+        defer {
+            try? FileManager.default.removeItem(at: invoiceURL)
+            try? FileManager.default.removeItem(at: estimateURL)
+        }
+        let invoiceFile = ServiceDocumentAttachment(customer: customer, serviceCallID: nil,
+            invoiceID: invoice.id, kind: .invoiceSupport, displayName: "invoice.pdf",
+            localFilePath: invoiceURL.path, contentType: "application/pdf", fileSizeBytes: 12)
+        let estimateFile = ServiceDocumentAttachment(customer: customer, serviceCallID: nil,
+            estimateID: estimate.id, kind: .estimateSupport, displayName: "estimate.pdf",
+            localFilePath: estimateURL.path, contentType: "application/pdf", fileSizeBytes: 13)
+        writer.insert(customer)
+        writer.insert(invoice)
+        writer.insert(estimate)
+        writer.insert(invoiceFile)
+        writer.insert(estimateFile)
+        try writer.save()
+        let restarted = ModelContext(store)
+        #expect(AutomaticOutboundSync.pendingDocumentKeys(invoices: [invoice], estimates: [estimate]).isEmpty)
+        var offset = 0
+        let pending = try QuickBooksInvoiceAttachmentSync.pendingLinkedUploadPage(context: restarted, offset: &offset)
+        #expect(Set(pending.map { $0.attachment.id }) == Set([invoiceFile.id, estimateFile.id]))
+        #expect(Set(pending.flatMap { $0.references.map { $0.EntityRef.type } }) == Set(["Invoice", "Estimate"]))
+
+        let invoiceReference = try #require(pending.first { $0.attachment.id == invoiceFile.id }?.references.first)
+        let savedInvoiceFile = try #require(restarted.fetch(FetchDescriptor<ServiceDocumentAttachment>()).first { $0.id == invoiceFile.id })
+        savedInvoiceFile.quickBooksAttachableID = "A1"
+        savedInvoiceFile.markQuickBooksAttached(to: [invoiceReference])
+        try restarted.save()
+        let afterReceipt = try QuickBooksInvoiceAttachmentSync.pendingLinkedUploadPage(context: restarted, offset: &offset)
+        #expect(afterReceipt.map { $0.attachment.id } == [estimateFile.id])
+        #expect(AutomaticOutboundSync.pendingDocumentKeys(invoices: [invoice], estimates: [estimate]).isEmpty)
+    }
+
+    @Test func reportSavedBeforeQuickBooksConnectionLinksToItsExplicitJobInvoice() throws {
+        let schema = GunnAireModelSchema.schema
+        let store = try ModelContainer(for: schema, configurations: [
+            ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+        ])
+        let writer = ModelContext(store)
+        let customer = Customer(quickBooksID: "C1", name: "Disconnected report fixture")
+        let call = ServiceCall(type: .service, scheduledDate: Date(), customer: customer)
+        let invoice = Invoice(serviceCallID: call.id, customer: customer, quickBooksID: "I1", amount: 190)
+        invoice.quickBooksSyncStatus = "synced"
+        call.linkedInvoiceID = invoice.id
+        let reportURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data("report file".utf8).write(to: reportURL)
+        defer { try? FileManager.default.removeItem(at: reportURL) }
+        let report = ServiceDocumentAttachment(customer: customer, serviceCallID: call.id,
+            kind: .serviceReport, displayName: "report.pdf", localFilePath: reportURL.path,
+            contentType: "application/pdf", fileSizeBytes: 11)
+        writer.insert(customer)
+        writer.insert(call)
+        writer.insert(invoice)
+        writer.insert(report)
+        try writer.save()
+
+        let restarted = ModelContext(store)
+        var offset = 0
+        let pending = try QuickBooksInvoiceAttachmentSync.pendingLinkedUploadPage(context: restarted, offset: &offset)
+        #expect(pending.count == 1)
+        #expect(pending.first?.attachment.id == report.id)
+        #expect(pending.first?.references.first?.EntityRef.value == "I1")
+        let saved = try #require(restarted.fetch(FetchDescriptor<ServiceDocumentAttachment>()).first)
+        #expect(saved.invoiceID == invoice.id)
+        #expect(saved.quickBooksAttachableID == nil)
+        #expect(AutomaticOutboundSync.pendingDocumentKeys(invoices: [invoice], estimates: []).isEmpty)
+    }
+
+    @Test func anotherDevicesMissingLocalFileIsNotAutomaticallyQueuedOrMarkedFailed() throws {
+        let schema = GunnAireModelSchema.schema
+        let store = try ModelContainer(for: schema, configurations: [
+            ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+        ])
+        let context = ModelContext(store)
+        let customer = Customer(quickBooksID: "C1", name: "Other device fixture")
+        let invoice = Invoice(customer: customer, quickBooksID: "I1", amount: 190)
+        invoice.quickBooksSyncStatus = "synced"
+        let file = ServiceDocumentAttachment(customer: customer, serviceCallID: nil,
+            invoiceID: invoice.id, kind: .invoiceSupport, displayName: "invoice.pdf",
+            localFilePath: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).path,
+            contentType: "application/pdf", fileSizeBytes: 12)
+        context.insert(customer)
+        context.insert(invoice)
+        context.insert(file)
+        try context.save()
+        var offset = 0
+        #expect(try QuickBooksInvoiceAttachmentSync.pendingLinkedUploadPage(context: context, offset: &offset).isEmpty)
+        #expect(file.quickBooksSyncError == nil)
+    }
 }
