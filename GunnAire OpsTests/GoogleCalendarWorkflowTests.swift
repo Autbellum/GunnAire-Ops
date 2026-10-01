@@ -163,6 +163,59 @@ struct GoogleCalendarWorkflowTests {
         #expect(f.writes.count == 1)
     }
 
+    @Test func durablePendingMarkerPublishesBackdatedRequestOnce() async throws {
+        let f = try Fixture()
+        f.call.scheduledDate = try #require(Calendar.current.date(
+            byAdding: .day, value: -1, to: Calendar.current.startOfDay(for: Date())))
+        f.call.googleCalendarPendingAt = Date()
+        try f.context.save()
+
+        #expect(GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+        #expect(!ScheduleGoogleLinkStatus.needsUnlinkedReview(f.call))
+        let first = await (try f.flow()).run { try await GoogleCalendarScheduleSync.synchronize(workflow: $0) }
+        #expect(try first.get().contains("Published 1"))
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+        #expect(f.call.googleEventID != nil)
+        #expect(f.call.googleEventConfirmedAt != nil)
+        #expect(f.call.googleCalendarPendingAt == nil)
+
+        _ = try await (try f.flow()).run { try await GoogleCalendarScheduleSync.synchronize(workflow: $0) }.get()
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+    }
+
+    @Test func backdatedUnmarkedJobIsNotAutomaticallyPublished() async throws {
+        let f = try Fixture()
+        f.call.scheduledDate = try #require(Calendar.current.date(
+            byAdding: .day, value: -1, to: Calendar.current.startOfDay(for: Date())))
+        try f.context.save()
+
+        #expect(!GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+        #expect(ScheduleGoogleLinkStatus.needsUnlinkedReview(f.call))
+        _ = try await (try f.flow()).run { try await GoogleCalendarScheduleSync.synchronize(workflow: $0) }.get()
+        #expect(f.writes.isEmpty)
+        f.call.googleEventManagedByApp = false
+        #expect(!ScheduleGoogleLinkStatus.needsUnlinkedReview(f.call))
+    }
+
+    @Test func immediateExportReportsMissingSavedCallBeforeProviderAccess() throws {
+        let f = try Fixture()
+        let detachedCustomer = Customer(name: "Detached fixture customer")
+        let unsaved = ServiceCall(googleCalendarID: "primary", googleEventManagedByApp: true,
+            type: .repair, scheduledDate: Date(), customer: detachedCustomer)
+        var reported: Result<String, Error>?
+
+        GoogleCalendarScheduleSync.exportImmediately(call: unsaved, auth: f.auth,
+            modelContext: f.context, signedInEmail: f.email, isAdminUser: true) { reported = $0 }
+
+        if case .some(.failure(let error)) = reported {
+            #expect(error as? GoogleCalendarWorkflowError == .changed)
+        } else {
+            Issue.record("A missing saved call must report a Calendar failure.")
+        }
+        #expect(f.auth.calendarSyncMessage?.contains("Calendar update is not confirmed") == true)
+        #expect(f.requests.isEmpty)
+    }
+
     @Test func publishThenImportMaySaveAnUnrelatedCalendarShellInTheSameRun() async throws {
         let f = try Fixture()
         f.call.scheduledDate = Date().addingTimeInterval(3600)

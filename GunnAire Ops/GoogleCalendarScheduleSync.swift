@@ -168,13 +168,15 @@ enum GoogleCalendarScheduleSync {
         signedInEmail: String?, isAdminUser: Bool,
         completion: ((Result<String, Error>) -> Void)? = nil
     ) {
-        guard (try? containsOriginalCall(call, in: modelContext)) == true else {
-            completion?(.failure(GoogleCalendarWorkflowError.changed)); return
-        }
-        markCalendarCallLocallyEdited(call)
-        do { try modelContext.save() }
-        catch { completion?(.failure(GoogleCalendarWorkflowError.saveFailed)); return }
-        startWorkflow(auth: auth, context: modelContext, email: signedInEmail, completion: completion) {
+        startWorkflow(auth: auth, context: modelContext, email: signedInEmail, completion: completion,
+                      prepare: {
+            guard (try? containsOriginalCall(call, in: modelContext)) == true else {
+                throw GoogleCalendarWorkflowError.changed
+            }
+            markCalendarCallLocallyEdited(call)
+            do { try modelContext.save() }
+            catch { throw GoogleCalendarWorkflowError.saveFailed }
+        }) {
             try await publish(call: call, workflow: $0)
         }
     }
@@ -352,6 +354,7 @@ enum GoogleCalendarScheduleSync {
     private static func startWorkflow(
         auth: GoogleAuthManager, context: ModelContext, email: String?,
         completion: ((Result<String, Error>) -> Void)?,
+        prepare: () throws -> Void = {},
         action: @escaping (GoogleCalendarWorkflow) async throws -> String
     ) {
         let requestID = UUID()
@@ -370,6 +373,7 @@ enum GoogleCalendarScheduleSync {
             completion?(result)
         }
         do {
+            try prepare()
             // Capture before Task scheduling; a later callback cannot capture a
             // replacement provider for an old retained job.
             let workflow = try GoogleCalendarWorkflow(auth: auth, context: context, signedInEmail: email)

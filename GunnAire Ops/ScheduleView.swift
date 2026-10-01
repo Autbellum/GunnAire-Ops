@@ -16,6 +16,15 @@ private struct ScheduleDocumentationPresentation: Identifiable {
 }
 
 enum ScheduleGoogleLinkStatus {
+    static func needsUnlinkedReview(_ call: ServiceCall, now: Date = Date()) -> Bool {
+        guard call.googleEventManagedByApp,
+              call.status == .scheduled || call.status == .inProgress,
+              call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false else {
+            return false
+        }
+        return !GoogleCalendarScheduleSync.needsOutboundSync(call, now: now)
+    }
+
     static func verificationCalls(selectedDay: [ServiceCall], upcoming: [ServiceCall]) -> [ServiceCall] {
         var seen: Set<UUID> = []
         return (selectedDay + upcoming).filter { seen.insert($0.id).inserted }
@@ -322,13 +331,20 @@ struct ScheduleView: View {
                 List {
                     scheduleCardRow { snapshotSection }
 
-                    if let message = googleAuth.calendarSyncMessage ?? syncMessage {
+                    if let message = syncMessage ?? googleAuth.calendarSyncMessage {
                         scheduleCardRow {
                             VStack(alignment: .leading, spacing: 5) {
                                 Label("Google Calendar status", systemImage: "calendar.badge.exclamationmark")
                                     .font(.subheadline.weight(.semibold))
                                 Text(message)
                                     .font(.caption)
+                                if syncMessage != nil,
+                                   let background = googleAuth.calendarSyncMessage,
+                                   background != message {
+                                    Text("Background Calendar status: \(background)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                             .accessibilityIdentifier("ScheduleSyncStatus")
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -928,6 +944,7 @@ struct ScheduleView: View {
             intakeContext.append("Qualification: \(qualificationNotes)")
         }
         let call = ServiceCall(
+            googleCalendarPendingAt: Date(),
             googleEventManagedByApp: true,
             eventTitle: "\(request.requestedServiceType.displayName) request",
             siteAddress: serviceLocation?.address ?? request.address,
@@ -1756,6 +1773,8 @@ struct ScheduleView: View {
                           (call.googleCalendarPendingAt == nil ? "Google link unconfirmed — check link" :
                            "Google update pending • Sync Google"),
                           systemImage: "calendar.badge.exclamationmark")
+                } else if canManageDispatch, ScheduleGoogleLinkStatus.needsUnlinkedReview(call) {
+                    Label("Google not linked • open and save to publish", systemImage: "calendar.badge.exclamationmark")
                 } else if call.googleEventID != nil {
                     Label(canManageDispatch
                           ? (call.googleEventConfirmedAt == nil ? "Google link unconfirmed — check link" : "Google schedule last confirmed")
