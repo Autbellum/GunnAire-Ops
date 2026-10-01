@@ -1417,7 +1417,7 @@ struct GunnAire_OpsTests {
         )
     }
 
-    @Test func dispatchWeekBoardProtectsFinishedAndGoogleOwnedEvents() {
+    @Test func dispatchWeekBoardProtectsFinishedJobsAndMovesImportedGoogleEvents() {
         let customer = Customer(name: "Protected Schedule Customer")
         let completed = ServiceCall(type: .service, scheduledDate: Date(), customer: customer, status: .completed)
         let externalGoogleEvent = ServiceCall(
@@ -1436,7 +1436,8 @@ struct GunnAire_OpsTests {
         )
 
         #expect(!DispatchBoardScheduling.canMove(completed))
-        #expect(!DispatchBoardScheduling.canMove(externalGoogleEvent))
+        // Moving an imported event writes the new time back to Google.
+        #expect(DispatchBoardScheduling.canMove(externalGoogleEvent))
         #expect(DispatchBoardScheduling.canMove(managedGoogleEvent))
     }
 
@@ -9268,7 +9269,7 @@ struct GunnAire_OpsTests {
         #expect(GoogleCalendarScheduleSync.isImportedEventManagedByApp(oldManagedEvent) == false)
     }
 
-    @Test func importedGoogleCalendarEventsRemainReadOnlyAfterLocalEdits() async throws {
+    @Test func importedGoogleCalendarEventsKeepGoogleDetailsAndTakeScheduleChanges() async throws {
         let customer = Customer(name: "Calendar Customer", address: "123 Main St")
         let call = ServiceCall(
             googleCalendarID: "primary",
@@ -9286,7 +9287,8 @@ struct GunnAire_OpsTests {
         #expect(GoogleCalendarScheduleSync.isExternalGoogleCalendarEvent(call) == true)
         #expect(GoogleCalendarScheduleSync.shouldPreserveExternalGoogleCalendarDetails(for: call) == true)
         #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: call) == false)
-        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call) == false)
+        // Time and staff changes are written back to the original event.
+        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call) == true)
         #expect(GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call) == false)
         #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: nil) == false)
     }
@@ -17578,7 +17580,7 @@ struct GunnAire_OpsTests {
             notes: "New details"
         )
 
-        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: importedCall) == false)
+        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: importedCall) == true)
         #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: appOwnedCall) == true)
         #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: newAppCall) == true)
         #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: importedCall) == false)
@@ -17641,7 +17643,7 @@ struct GunnAire_OpsTests {
     }
 
     @MainActor
-    @Test func googleCalendarExternalEventsRemainReadOnlyAfterLocalFieldChanges() async throws {
+    @Test func googleCalendarExternalEventsKeepGoogleDetailsAfterLocalFieldChanges() async throws {
         let customer = Customer(name: "Calendar Customer")
         let importedCall = ServiceCall(
             googleCalendarID: "primary",
@@ -17658,8 +17660,10 @@ struct GunnAire_OpsTests {
 
         #expect(GoogleCalendarScheduleSync.isExternalGoogleCalendarEvent(importedCall) == true)
         #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: importedCall) == false)
-        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: importedCall) == false)
+        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: importedCall) == true)
         #expect(GoogleCalendarScheduleSync.shouldPreserveExternalGoogleCalendarDetails(for: importedCall) == true)
+        importedCall.status = .cancelled
+        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: importedCall) == false)
     }
 
     @Test func googleCalendarDeletedExternalEventsAreRememberedLocally() async throws {
@@ -17811,7 +17815,7 @@ struct GunnAire_OpsTests {
     }
 
     @MainActor
-    @Test func googleCalendarLinkedEventsCannotCreateOrPatchScrubPayloads() async throws {
+    @Test func googleCalendarLinkedEventsCannotCreateAndPatchOnlyTheirSchedule() async throws {
         let customer = Customer(name: "Calendar Customer")
         let linkedCall = ServiceCall(
             googleCalendarID: "shared-calendar@example.com",
@@ -17827,7 +17831,8 @@ struct GunnAire_OpsTests {
         )
 
         #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: linkedCall) == false)
-        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: linkedCall) == false)
+        // Time and staff changes are written back to the original event.
+        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: linkedCall) == true)
         #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: linkedCall) == false)
         #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: linkedCall, remoteEvent: nil) == false)
 
@@ -17843,7 +17848,7 @@ struct GunnAire_OpsTests {
     }
 
     @MainActor
-    @Test func googleCalendarLinkedEventsDoNotExportEvenIfMarkedLocallyEdited() async throws {
+    @Test func googleCalendarLinkedEventsQueueWriteBackWithoutBeingCreatedOrExported() async throws {
         let customer = Customer(name: "Calendar Customer")
         let linkedCall = ServiceCall(
             googleCalendarID: "shared-calendar@example.com",
@@ -17861,7 +17866,8 @@ struct GunnAire_OpsTests {
         GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(linkedCall)
 
         #expect(GoogleCalendarScheduleSync.shouldExportDuringCalendarSync(linkedCall) == false)
-        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: linkedCall) == false)
+        #expect(GoogleCalendarScheduleSync.isWriteBackRequested(linkedCall) == true)
+        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: linkedCall) == true)
         #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: linkedCall) == false)
     }
 

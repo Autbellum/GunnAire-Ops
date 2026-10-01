@@ -50,6 +50,9 @@ enum GoogleCalendarScheduleSync {
     private static let deletedCalendarEventKeysStorageKey = "GunnAireDeletedGoogleCalendarEventKeys"
     private static let locallyEditedCalendarCallIDsStorageKey = "GunnAireLocallyEditedGoogleCalendarCallIDs"
     private static let staffInvitationReviewStorageKey = "GunnAireGoogleCalendarStaffInvitationReview"
+    private static let writeBackCalendarCallIDsStorageKey = "GunnAireGoogleCalendarWriteBackCallIDs"
+    private static var retryTask: Task<Void, Never>?
+    private static let retryDelays: [Duration] = [.seconds(30), .seconds(120), .seconds(600)]
 
     static func shouldQuarantineImportedCalendarEvent(
         existingCallFound: Bool,
@@ -79,7 +82,12 @@ enum GoogleCalendarScheduleSync {
     }
 
     static func markCalendarCallLocallyEdited(_ call: ServiceCall) {
-        guard shouldAllowGoogleCalendarWrite(for: call) else { return }
+        guard shouldPublishAfterLocalSave(for: call) else { return }
+        if !call.googleEventManagedByApp {
+            var writeBack = Set(UserDefaults.standard.stringArray(forKey: writeBackCalendarCallIDsStorageKey) ?? [])
+            writeBack.insert(call.id.uuidString)
+            UserDefaults.standard.set(Array(writeBack), forKey: writeBackCalendarCallIDsStorageKey)
+        }
         // Confirmation describes the exact local appointment and staff delivery.
         // A later edit must remain pending even if device-local defaults vanish.
         call.googleEventConfirmedAt = nil
@@ -130,6 +138,24 @@ enum GoogleCalendarScheduleSync {
         return callIDs.contains(call.id.uuidString)
     }
 
+    static func isWriteBackRequested(_ call: ServiceCall) -> Bool {
+        guard canWriteBackImportedEvent(call) else { return false }
+        let marked = Set(UserDefaults.standard.stringArray(forKey: writeBackCalendarCallIDsStorageKey) ?? [])
+            .contains(call.id.uuidString)
+        return marked || call.googleCalendarPendingAt != nil
+    }
+
+    private static func clearWriteBackRequest(_ call: ServiceCall) {
+        var callIDs = Set(UserDefaults.standard.stringArray(forKey: writeBackCalendarCallIDsStorageKey) ?? [])
+        guard callIDs.remove(call.id.uuidString) != nil else { return }
+        UserDefaults.standard.set(Array(callIDs), forKey: writeBackCalendarCallIDsStorageKey)
+    }
+
+    static func canWriteBackImportedEvent(_ call: ServiceCall) -> Bool {
+        !call.googleEventManagedByApp && isExternalGoogleCalendarEvent(call) &&
+            (call.status == .scheduled || call.status == .inProgress)
+    }
+
     private static func clearCalendarCallLocallyEdited(_ call: ServiceCall) {
         var callIDs = Set(UserDefaults.standard.stringArray(forKey: locallyEditedCalendarCallIDsStorageKey) ?? [])
         guard callIDs.remove(call.id.uuidString) != nil else { return }
@@ -177,7 +203,13 @@ enum GoogleCalendarScheduleSync {
         signedInEmail: String?, isAdminUser: Bool,
         completion: ((Result<String, Error>) -> Void)? = nil
     ) {
-        startWorkflow(auth: auth, context: modelContext, email: signedInEmail, completion: completion,
+        startWorkflow(auth: auth, context: modelContext, email: signedInEmail, scope: [call],
+                      completion: { result in
+            if case .failure = result {
+                scheduleRetry(auth: auth, modelContext: modelContext, signedInEmail: signedInEmail, attempt: 0)
+            }
+            completion?(result)
+        },
                       prepare: {
             guard (try? containsOriginalCall(call, in: modelContext)) == true else {
                 throw GoogleCalendarWorkflowError.changed
@@ -187,6 +219,42 @@ enum GoogleCalendarScheduleSync {
             catch { throw GoogleCalendarWorkflowError.saveFailed }
         }) {
             try await publish(call: call, workflow: $0)
+        }
+    }
+
+    /// Recover saved outbound intents on Schedule entry and after a failed
+    /// immediate send. This publishes only; it never imports unrelated events.
+    static func retryPendingIfNeeded(auth: GoogleAuthManager, modelContext: ModelContext,
+                                     signedInEmail: String?, attempt: Int = 0) {
+        guard auth.isAuthenticated,
+              (try? modelContext.fetch(FetchDescriptor<ServiceCall>())
+                .contains(where: { needsOutboundSync($0) })) == true else { return }
+        retryTask?.cancel()
+        retryTask = nil
+        startWorkflow(auth: auth, context: modelContext, email: signedInEmail, completion: { result in
+            if case .failure = result {
+                scheduleRetry(auth: auth, modelContext: modelContext,
+                              signedInEmail: signedInEmail, attempt: attempt + 1)
+            }
+        }) { workflow in
+            let outcome = try await publishPending(workflow: workflow)
+            return "Sent \(outcome.published) pending calendar update(s) to Google.\(outcome.reviewSummary)"
+        }
+    }
+
+    private static func scheduleRetry(auth: GoogleAuthManager, modelContext: ModelContext,
+                                      signedInEmail: String?, attempt: Int) {
+        guard retryDelays.indices.contains(attempt),
+              (try? modelContext.fetch(FetchDescriptor<ServiceCall>())
+                .contains(where: { needsOutboundSync($0) })) == true else { return }
+        let delay = retryDelays[attempt]
+        retryTask?.cancel()
+        retryTask = Task { @MainActor in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            retryTask = nil
+            retryPendingIfNeeded(auth: auth, modelContext: modelContext,
+                                 signedInEmail: signedInEmail, attempt: attempt)
         }
     }
 
@@ -355,13 +423,14 @@ enum GoogleCalendarScheduleSync {
         markCalendarCallLocallyEdited(call)
         do { try modelContext.save() }
         catch { completion?(.failure(GoogleCalendarWorkflowError.saveFailed)); return }
-        startWorkflow(auth: auth, context: modelContext, email: AppIdentity.currentEmail, completion: completion) {
+        startWorkflow(auth: auth, context: modelContext, email: AppIdentity.currentEmail,
+                      scope: [call], completion: completion) {
             try await cancel(call: call, workflow: $0)
         }
     }
 
     private static func startWorkflow(
-        auth: GoogleAuthManager, context: ModelContext, email: String?,
+        auth: GoogleAuthManager, context: ModelContext, email: String?, scope: [ServiceCall]? = nil,
         completion: ((Result<String, Error>) -> Void)?,
         prepare: () throws -> Void = {},
         action: @escaping (GoogleCalendarWorkflow) async throws -> String
@@ -385,7 +454,8 @@ enum GoogleCalendarScheduleSync {
             try prepare()
             // Capture before Task scheduling; a later callback cannot capture a
             // replacement provider for an old retained job.
-            let workflow = try GoogleCalendarWorkflow(auth: auth, context: context, signedInEmail: email)
+            let workflow = try GoogleCalendarWorkflow(auth: auth, context: context,
+                signedInEmail: email, scope: scope)
             runQueued(workflow: workflow, container: context.container, action: action, completion: report)
         } catch { report(.failure(error)) }
     }
@@ -422,7 +492,7 @@ enum GoogleCalendarScheduleSync {
     /// Retry only explicitly edited app-owned jobs and upcoming never-linked
     /// app-owned appointments. Imports and completed history are not an outbox.
     static func needsOutboundSync(_ call: ServiceCall, now: Date = Date()) -> Bool {
-        guard call.googleEventManagedByApp,
+        guard call.googleEventManagedByApp || isWriteBackRequested(call),
               !isCalendarEventDeleted(calendarID: call.googleCalendarID, eventID: call.googleEventID) else { return false }
         if call.status == .cancelled {
             return isCalendarCallLocallyEdited(call) ||
@@ -473,21 +543,80 @@ enum GoogleCalendarScheduleSync {
     static func synchronize(workflow: GoogleCalendarWorkflow,
                             verifyConfirmedCalls: [ServiceCall] = [],
                             verifiedNotFound: ((UUID, String) -> Void)? = nil) async throws -> String {
+        let outcome = try await publishPending(workflow: workflow)
+        var reviewErrors = outcome.reviewErrors
+        try workflow.focus(on: nil)
+        // Foreground recovery and explicit Sync Google check selected confirmed
+        // links before an unrelated import can fail. Confirmation is historical.
+        let confirmed = verifyConfirmedCalls.filter {
+            $0.googleEventManagedByApp && $0.googleEventConfirmedAt != nil &&
+            $0.googleCalendarPendingAt == nil && $0.googleEventID != nil &&
+            ($0.status == .scheduled || $0.status == .inProgress)
+        }
+        var checked = 0
+        let confirmationCalendars = confirmed.isEmpty ? [] : try await calendars(workflow: workflow)
+        for call in confirmed.prefix(25) {
+            do {
+                try workflow.focus(on: [call])
+                let exists = try await verifyConfirmedLink(call: call, calendars: confirmationCalendars,
+                                                           workflow: workflow)
+                checked += 1
+                if !exists {
+                    guard let originalID = normalizedOptional(call.googleEventID) else {
+                        throw GoogleCalendarWorkflowError.identity
+                    }
+                    markCalendarCallLocallyEdited(call)
+                    try workflow.saveChanges()
+                    verifiedNotFound?(call.id, originalID)
+                    reviewErrors.append("A saved Google link was not found in this connected account's accessible calendars. Use Check Google Link before any repair.")
+                }
+            } catch {
+                try workflow.check()
+                if error is CancellationError { throw error }
+                if let issue = error as? GoogleCalendarWorkflowError,
+                   issue == .accessDenied || issue == .changed || issue == .busy ||
+                   issue == .saveFailed || issue == .unconfirmedWrite { throw error }
+                if case GoogleAuthError.http(statusCode: let status) = error,
+                   status == 401 || status == 403 { throw error }
+                reviewErrors.append("A confirmed Google link could not be verified (\(error.localizedDescription)). Use Check Google Link on its appointment.")
+            }
+        }
+        try workflow.focus(on: nil)
+        let imported = try await importSchedule(workflow: workflow)
+        let review = reviewErrors.first.map { " \(reviewErrors.count) update(s) still need review. \($0)" } ?? ""
+        let linkCheck = verifyConfirmedCalls.isEmpty ? "" :
+            " Checked \(checked) confirmed selected-day/upcoming Google link(s) (up to 25 per sync)." +
+            (confirmed.count > 25 ? " \(confirmed.count - 25) more link(s) were not checked; use Check Google Link on those appointments." : "")
+        return "Published \(outcome.published) pending calendar update(s).\(review)\(linkCheck) \(imported)"
+    }
+
+    struct PendingOutcome {
+        let published: Int
+        let reviewErrors: [String]
+        var reviewSummary: String {
+            reviewErrors.first.map { " \(reviewErrors.count) update(s) still need review. \($0)" } ?? ""
+        }
+    }
+
+    static func publishPending(workflow: GoogleCalendarWorkflow) async throws -> PendingOutcome {
+        try workflow.focus(on: nil)
         try workflow.check()
         guard !workflow.context.hasChanges else { throw GoogleCalendarWorkflowError.changed }
         var published = 0
         var reviewErrors: [String] = []
         var offset = 0
         while true {
+            try workflow.focus(on: nil)
             try workflow.check()
             var descriptor = FetchDescriptor<ServiceCall>(
-                predicate: #Predicate { $0.googleEventManagedByApp },
+                predicate: #Predicate { $0.googleEventManagedByApp || $0.googleCalendarPendingAt != nil },
                 sortBy: [SortDescriptor(\.scheduledDate), SortDescriptor(\.id)])
             descriptor.fetchLimit = 100
             descriptor.fetchOffset = offset
             let page = try workflow.context.fetch(descriptor)
             guard !page.isEmpty else { break }
             for call in page where needsOutboundSync(call) {
+                try workflow.focus(on: [call])
                 // Keep the same company/provider operation throughout the batch.
                 // Any failed/uncertain write stops this run; its pending marker stays.
                 markCalendarCallLocallyEdited(call)
@@ -514,50 +643,7 @@ enum GoogleCalendarScheduleSync {
             offset += page.count
             await Task.yield()
         }
-        // Foreground recovery and explicit Sync Google check a small set of
-        // confirmed links by their original IDs before a separate import can
-        // fail on an unrelated calendar row. A saved confirmation is historical
-        // proof, not proof that someone has not since removed the event.
-        let confirmed = verifyConfirmedCalls.filter {
-            $0.googleEventManagedByApp && $0.googleEventConfirmedAt != nil &&
-            $0.googleCalendarPendingAt == nil && $0.googleEventID != nil &&
-            ($0.status == .scheduled || $0.status == .inProgress)
-        }
-        var checked = 0
-        let confirmationCalendars = confirmed.isEmpty ? [] : try await calendars(workflow: workflow)
-        for call in confirmed.prefix(25) {
-            do {
-                let exists = try await verifyConfirmedLink(call: call, calendars: confirmationCalendars,
-                                                           workflow: workflow)
-                checked += 1
-                if !exists {
-                    guard let originalID = normalizedOptional(call.googleEventID) else {
-                        throw GoogleCalendarWorkflowError.identity
-                    }
-                    markCalendarCallLocallyEdited(call)
-                    try workflow.saveChanges()
-                    verifiedNotFound?(call.id, originalID)
-                    reviewErrors.append("A saved Google link was not found in this connected account's accessible calendars. Use Check Google Link before any repair.")
-                }
-            } catch {
-                try workflow.check()
-                if error is CancellationError { throw error }
-                if let issue = error as? GoogleCalendarWorkflowError,
-                   issue == .accessDenied || issue == .changed || issue == .busy ||
-                   issue == .saveFailed || issue == .unconfirmedWrite {
-                    throw error
-                }
-                if case GoogleAuthError.http(statusCode: let status) = error,
-                   status == 401 || status == 403 { throw error }
-                reviewErrors.append("A confirmed Google link could not be verified (\(error.localizedDescription)). Use Check Google Link on its appointment.")
-            }
-        }
-        let imported = try await importSchedule(workflow: workflow)
-        let review = reviewErrors.first.map { " \(reviewErrors.count) update(s) still need review. \($0)" } ?? ""
-        let linkCheck = verifyConfirmedCalls.isEmpty ? "" :
-            " Checked \(checked) confirmed selected-day/upcoming Google link(s) (up to 25 per sync)." +
-            (confirmed.count > 25 ? " \(confirmed.count - 25) more link(s) were not checked; use Check Google Link on those appointments." : "")
-        return "Published \(published) pending calendar update(s).\(review)\(linkCheck) \(imported)"
+        return PendingOutcome(published: published, reviewErrors: reviewErrors)
     }
 
     /// Read the saved route first. Only its 404 triggers a bounded same-ID
@@ -794,7 +880,12 @@ enum GoogleCalendarScheduleSync {
 
     static func publish(call: ServiceCall, workflow: GoogleCalendarWorkflow) async throws -> String {
         try requireCall(call, workflow: workflow)
-        guard shouldAllowGoogleCalendarWrite(for: call) else { return "Skipped externally managed Google event." }
+        if !call.googleEventManagedByApp {
+            guard isWriteBackRequested(call), canWriteBackImportedEvent(call) else {
+                return "Skipped externally managed Google event."
+            }
+            try await adoptImportedEvent(call: call, workflow: workflow)
+        }
         guard call.status == .scheduled || call.status == .inProgress,
               call.scheduledDate.timeIntervalSince1970.isFinite, call.duration.isFinite, call.duration > 0,
               call.scheduledDate.addingTimeInterval(call.duration).timeIntervalSince1970.isFinite else {
@@ -942,6 +1033,58 @@ enum GoogleCalendarScheduleSync {
         clearStaffInvitationReview(for: call)
         clearCalendarCallLocallyEdited(call)
         return "Schedule confirmed in Google Calendar. Assigned staff invitations, if any, use each recipient's Google Calendar notification settings; enable this calendar and alerts in your calendar app."
+    }
+
+    /// Adopt only the original, explicitly edited imported event. A marker
+    /// patch keeps Google's title, notes, location and existing guests intact.
+    /// A lost reply can be retried against the same event ID and job marker.
+    private static func adoptImportedEvent(call: ServiceCall, workflow: GoogleCalendarWorkflow) async throws {
+        guard let id = normalizedOptional(call.googleEventID) else { throw GoogleCalendarWorkflowError.identity }
+        let list = try await calendars(workflow: workflow)
+        let calendar = try canonicalCalendar(call.googleCalendarID, in: list, email: workflow.signedInEmail)
+        guard calendar.isWritable else { throw GoogleCalendarWorkflowError.readOnly }
+        let remote: GoogleCalendarEvent
+        do {
+            remote = try await workflow.receive {
+                workflow.auth.fetchCalendarEvent(calendarID: calendar.id, eventID: id,
+                    operation: workflow.operation, completion: $0)
+            }
+        } catch GoogleAuthError.http(statusCode: 404) {
+            throw GoogleCalendarWorkflowError.needsReview
+        }
+        try requireCall(call, workflow: workflow)
+        guard remote.id == id, remote.status != "cancelled" else { throw GoogleCalendarWorkflowError.needsReview }
+        var properties = remote.extendedProperties?.privateProperties ?? [:]
+        if let marker = properties["gunnaireServiceCallID"] {
+            guard marker == call.id.uuidString else { throw GoogleCalendarWorkflowError.identity }
+        } else if remote.isManagedByGunnAire {
+            throw GoogleCalendarWorkflowError.identity
+        }
+        if !(remote.isManagedByGunnAire && properties["gunnaireServiceCallID"] == call.id.uuidString) {
+            properties["gunnaireManaged"] = "true"
+            properties["gunnaireManagedVersion"] = "4"
+            properties["gunnaireOrigin"] = "ios-app"
+            properties["gunnaireServiceCallID"] = call.id.uuidString
+            var patch = GoogleCalendarStaffDeliveryPatch()
+            patch.extendedProperties = .init(privateProperties: properties)
+            let version = try etag(remote)
+            let updated: GoogleCalendarEvent = try await workflow.receive {
+                workflow.auth.patchCalendarStaffDelivery(calendarID: calendar.id, eventID: id,
+                    patch: patch, ifMatch: version, operation: workflow.operation, completion: $0)
+            }
+            try requireCall(call, workflow: workflow)
+            try validateRemote(updated, id: id, call: call)
+        }
+        let previousCalendar = call.googleCalendarID
+        call.googleCalendarID = calendar.id
+        call.googleEventManagedByApp = true
+        do { try workflow.saveChanges() }
+        catch {
+            call.googleCalendarID = previousCalendar
+            call.googleEventManagedByApp = false
+            throw error
+        }
+        clearWriteBackRequest(call)
     }
 
     static func cancel(call: ServiceCall, workflow: GoogleCalendarWorkflow) async throws -> String {
@@ -1232,7 +1375,7 @@ enum GoogleCalendarScheduleSync {
     }
 
     static func shouldPublishAfterLocalSave(for call: ServiceCall) -> Bool {
-        shouldAllowGoogleCalendarWrite(for: call)
+        shouldAllowGoogleCalendarWrite(for: call) || canWriteBackImportedEvent(call)
     }
 
     static func shouldCreateGoogleCalendarEvent(for call: ServiceCall) -> Bool {

@@ -44,6 +44,18 @@ at the start of every turn; append to it rather than rewriting it.
 
 ## Status log
 
+- 2026-10-01 Codex root and Claude PR #28 integration: scoped Calendar sends no longer
+  fail on unrelated saved job/customer changes; imported events accept explicit
+  time/staff write-back on their original ID, with a durable pending marker,
+  guarded adoption and retry. Customer search in schedule Add/Edit lists all
+  matches and works with a calendar placeholder. Isolated signed iPad focused
+  Calendar/customer tests passed 120/120; exact build 2026100112 full units
+  passed 2,874/2,874 with zero failures/skips. Final `generated/omni_runner.py`
+  clean build passed with zero compiler warnings, 31 release workflow Python
+  checks passed, Swift parse and diff checks passed. These are simulator/source
+  results; the user's exact installed build, Google event/notification,
+  CloudKit Production schema and live QBO/Drive delivery remain unverified.
+
 - 2026-10-01 Codex ci_ui_stability: PR #27 commit `3aa7733` iPad shard 1 schedule-deletion failure was an ambiguous `ScheduleSyncStatus` XCUI lookup: CI hierarchy showed three StaticTexts inheriting that identifier, including the expected `Cancel Job` warning. The UI test now selects the warning text. Shard 2 catalog-rotation failure timed out waiting 5 seconds for editing controls to disappear after the Done tap; the same focused-field assertion remains with the suite's 10-second readiness bound. A maintenance-invoice UI diagnostic was added without relaxing its due-queue assertion; it exposed first-save and raw JSON re-encode guards, which root corrected in production source. On final shared source, signed serial iPad Pro 13-inch M5 UI targets passed 2/2 with zero failures/warnings (`/tmp/ci-ui-pr27-final-two-targets.xcresult`); the maintenance target passed 1/1 (`/tmp/ci-ui-maintenance-semantic-snapshot.xcresult`). Swift parse and `git diff --check` passed. No production or QBO files edited by this agent; no commit or push. UI-test claim and simulator released to root.
 
 - 2026-10-01 Codex calendar_delivery_check: Calendar start workflows now queue per SwiftData container in save order, preserving each captured provider/workspace operation; an unrelated direct Calendar lock collision gets a bounded nonblocking busy retry. A two-saved-appointment regression test checks both events post once and clear both durable pending markers. `swiftc -frontend -parse` and `git diff --check` passed. No native build, simulator test, live Google request, commit, push, or upload by this agent; source frozen for root validation. Calendar source/test claims released.
@@ -1328,3 +1340,40 @@ at the start of every turn; append to it rather than rewriting it.
 
 - 2026-09-30 Codex root: frozen post-2026093004 Calendar/Drive/QBO background recovery candidate for build 2026093005. Combined `python3 generated/omni_runner.py` passed zero warnings; full signed iPad unit suite passed 2,792 reported / 2,871 parameterized runs, zero failures/skips (`/tmp/gunnaire-3005-final-ipad.xcresult`); Calendar focused 77/78, QBO/Drive focused 19/19, Calendar-link UI smoke 1/1, and release preflight 23/23 passed. Claude read-only review found a mixed publish/import staff-baseline issue, corrected and covered in the final Calendar suite. Source and project claims released for commit/push; archive/upload and exact App Store Connect verification remain pending. The paired iPad is locked, so the installed build, app-connected account/calendar and user-specific Google event remain unverified.
 - 2026-10-01 Codex root: build 2026093006 delivery-integrity candidate frozen after Claude read-only review and team corrections. Final `python3 generated/omni_runner.py` clean iOS simulator build passed with zero warnings; release preflight 23/23; full signed iPad unit target 2,804 reported / 2,883 parameterized runs, zero failures/skips (`/tmp/gunnaire-3006-final-unit.xcresult`); Calendar focused 82/82, StoreKit workspace focused 66/66, Drive/QBO review focused 5/5, and saved Calendar/estimate UI 2/2. Calendar organizer creation survives invalid staff email while prior guest notification is blocked on unsafe reassignment; regenerated PDFs requeue Drive without false first-time alerts; uncertain QBO email remains reviewable with no automatic resend; StoreKit signed-rejection fallbacks fail closed. No physical-device installed-build, user-specific Google event, live QBO email/estimate send, or live Drive archive is verified. Source claims released for exact-commit archive/upload.
+- 2026-09-28 Claude (cloud session; branch `claude/gunnaire-customer-search-populate-0dvowv`):
+  schedule Edit/Assign Customer could not find customers. Cause in `CustomerSelectionSection`:
+  a calendar-imported job opens with the calendar placeholder bound to `customer`, results
+  were drawn only while `customer == nil` (so typing showed nothing), and results were capped
+  at `prefix(8)`. Placeholder now counts as no selection, results show while the search text
+  differs from the selected name, every match is listed, and search is term-based
+  (`CustomerSearch`, pinned by `CustomerSearchTests`). Same cap/visibility fix in
+  `AddServiceCallView`; both sheets' customer `@Query` now sorted by name. Built and tested
+  only by CI: the cloud container has no Xcode.
+- 2026-09-28 Claude (cloud, PR #28): iPad shards cancelled at the 90-minute limit on both the
+  first run and the one re-run, with no failed assertion except one 4-second hittability wait
+  at `SaveBundleMember`. Time went to 60 s "App animations complete notification not received"
+  waits in the catalog/inventory editor (`testAdministratorCreatesInventoryOfflineAndReopensExactSetup`
+  2036 s / 29 waits, `testCatalogEditingControlsStayInsideTheSheetAcrossRotation` 2092 s / 33).
+  Same on main at ef3299d (run 35533317609, iPad 2 cancelled in the largest-text catalog step).
+  Ported from PR #27's branch without its AGENTS.md: dc24005 (iPad job 90 -> 120 min),
+  1efcbe8 (default hittability wait after keyboard dismissal), c9ba60b (keyboard dismissal 5 -> 10 s).
+  The animation-idle cause itself is still undiagnosed; those commits only make room for it.
+- 2026-09-30 Claude (cloud, PR #28): Eric's schedule shows "Calendar update is not confirmed ... The
+  appointment or related records changed during sync" after saving a job; nothing reaches Google.
+  `GoogleCalendarWorkflow` snapshotted every ServiceCall, Customer and Technician in the store and
+  failed on any difference after each await, so a CloudKit merge of any unrelated record during the
+  Google round trip aborted a single-job send. Single-job send/cancel/delete now guard only that job,
+  its customer and its assigned/crew technicians (`scope:` / `focus(on:)`); Sync Google guards each
+  pending job the same way, then the whole store again before import (import behaviour unchanged,
+  `lateImportAfterLocalChangeDoesNotApplyAnyCalendarRows` still pins it). Four new
+  `GoogleCalendarWorkflowTests`. Not verified on device. Imported (non-app-owned) Google events are
+  still never written back; that is policy, awaiting Eric's decision.
+- 2026-09-30 Claude (cloud, PR #28): Eric decided imported Google events must take app changes.
+  Time and staff changes to an imported job (edit sheet, dispatch board, assignment) now mark its
+  original event app-managed for that job (private markers only, If-Match, sendUpdates=none; title,
+  location, notes and guests untouched; never adopted if cancelled, missing or marked for another
+  job) and then use the existing schedule-only patch and staff delivery. A customer-only edit does
+  not adopt. Pending sends now retry automatically when Schedule opens and 30 s / 2 min / 10 min
+  after a failure (`retryPendingIfNeeded`, publish only, no import). Three tests that pinned the
+  old read-only rule were updated to the new rule; four write-back tests added. After adoption the
+  job is app-owned, so later edits made directly in Google no longer import over it.

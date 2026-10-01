@@ -41,6 +41,7 @@ final class GoogleCalendarWorkflow {
     private var importRevision: ImportRevision?
     private var additionalValidation: (() throws -> Void)?
     private let containerKey: ObjectIdentifier
+    private var scopeIDs: Set<UUID>?
 
     lazy var operation = WorkspaceProviderOperation(parent: provider) { [weak self] in
         guard let self else { return false }
@@ -48,6 +49,7 @@ final class GoogleCalendarWorkflow {
     }
 
     init(auth: GoogleAuthManager, context: ModelContext, signedInEmail: String?,
+         scope: [ServiceCall]? = nil,
          validateAccess: (() throws -> Void)? = nil,
          save: @escaping (ModelContext) throws -> Void = { try $0.save() }) throws {
         self.auth = auth
@@ -61,6 +63,22 @@ final class GoogleCalendarWorkflow {
         }
         try self.validateAccess()
         provider = try auth.captureProviderOperation()
+        scopeIDs = scope.map { Set($0.map(\.id)) }
+    }
+
+    /// Re-baseline each job when its turn arrives in a batch. The individual
+    /// appointment and recipient fence is established by track(_:) before its
+    /// first provider request; unrelated CloudKit merges cannot stale it.
+    func focus(on calls: [ServiceCall]?) throws {
+        try provider.check()
+        try validateAccess()
+        guard !context.hasChanges else { throw GoogleCalendarWorkflowError.changed }
+        scopeIDs = calls.map { Set($0.map(\.id)) }
+        trackedCall = nil
+        trackedRevision = nil
+        persistedRevision = nil
+        trackedAdditionalTechnicians = []
+        knownStaffBaseline = nil
     }
 
     func run(_ action: (GoogleCalendarWorkflow) async throws -> String) async -> Result<String, Error> {
@@ -106,6 +124,7 @@ final class GoogleCalendarWorkflow {
     func track(_ call: ServiceCall) throws {
         try provider.check()
         try validateAccess()
+        if let scopeIDs, !scopeIDs.contains(call.id) { throw GoogleCalendarWorkflowError.changed }
         if let trackedCall, trackedCall === call {
             try check()
         } else {
