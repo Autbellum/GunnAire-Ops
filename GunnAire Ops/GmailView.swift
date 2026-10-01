@@ -23,17 +23,17 @@ enum GmailAutomaticRefreshPolicy {
         !usesMailUITestFixture || usesServerMailFixture
     }
 
-    /// Every condition for an unattended wake, in one pure decision, so the
-    /// view keeps no second copy of it and a new trigger cannot acquire its own
-    /// rules by accident.
-    static func wakes(usesMailUITestFixture: Bool, usesServerMailFixture: Bool,
-                      isSceneActive: Bool, showingDrafts: Bool, hasComposeDraft: Bool,
+    /// Every condition for a refresh, in one pure decision, so the view keeps no
+    /// second copy of it and a new trigger cannot acquire its own rules by
+    /// accident. This governs entry, foreground return and the unattended wakes
+    /// alike; whether a synthetic fixture mailbox may be woken *unattended* is a
+    /// separate question, answered by `refreshesUnattended`, because entry is
+    /// also how such a mailbox is seeded in the first place.
+    static func wakes(isSceneActive: Bool, showingDrafts: Bool, hasComposeDraft: Bool,
                       canUseGoogleIntegration: Bool, connectingMail: Bool,
                       isLoading: Bool, hasBusyMessages: Bool,
                       lastAttempt: Date?, now: Date) -> Bool {
-        refreshesUnattended(usesMailUITestFixture: usesMailUITestFixture,
-                            usesServerMailFixture: usesServerMailFixture)
-            && isSceneActive && !showingDrafts && !hasComposeDraft
+        isSceneActive && !showingDrafts && !hasComposeDraft
             && canUseGoogleIntegration && !connectingMail && !isLoading && !hasBusyMessages
             && isDue(lastAttempt: lastAttempt, now: now)
     }
@@ -390,7 +390,7 @@ struct GmailView: View {
                 while !Task.isCancelled {
                     do { try await Task.sleep(for: .seconds(GmailAutomaticRefreshPolicy.interval)) }
                     catch { return }
-                    automaticRefreshIfDue()
+                    unattendedRefreshIfDue()
                 }
             }
             .onChange(of: scenePhase) { _, phase in
@@ -398,7 +398,7 @@ struct GmailView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .gunnaireConnectivityRestored)) { _ in
                 lastAutomaticRefreshAt = nil
-                automaticRefreshIfDue()
+                unattendedRefreshIfDue()
             }
             .onSubmit(of: .search) {
                 if showingDrafts { loadDrafts() } else { loadMessages() }
@@ -444,27 +444,38 @@ struct GmailView: View {
                 if mailbox.provider?.serverMail == nil { clearMailbox() }
                 if googleAuth.isAuthenticated {
                     lastAutomaticRefreshAt = nil
-                    automaticRefreshIfDue()
+                    unattendedRefreshIfDue()
                 }
             }
             .onChange(of: googleAuth.isAuthenticated) { _, connected in
                 if mailbox.provider?.serverMail == nil { clearMailbox() }
                 if connected {
                     lastAutomaticRefreshAt = nil
-                    automaticRefreshIfDue()
+                    unattendedRefreshIfDue()
                 }
             }
             .onChange(of: workspace.operationStamp) { _, _ in
                 if !usesMailUITestFixture { clearMailbox() }
-                automaticRefreshIfDue()
+                unattendedRefreshIfDue()
             }
         }
     }
 
+    /// The wakes nobody asked for: the repeating task, restored connectivity, a
+    /// restored Google session and a workspace stamp change. A synthetic UI-test
+    /// mailbox has no server behind them, so reloading it there can only replace
+    /// the messages under an open message and take its attachments with it.
+    /// Entry, foreground return and explicit refresh do not come through here,
+    /// because entry is how such a mailbox is seeded.
+    private func unattendedRefreshIfDue() {
+        guard GmailAutomaticRefreshPolicy.refreshesUnattended(
+                  usesMailUITestFixture: usesMailUITestFixture,
+                  usesServerMailFixture: usesServerMailFixture) else { return }
+        automaticRefreshIfDue()
+    }
+
     private func automaticRefreshIfDue(now: Date = Date()) {
         guard GmailAutomaticRefreshPolicy.wakes(
-                  usesMailUITestFixture: usesMailUITestFixture,
-                  usesServerMailFixture: usesServerMailFixture,
                   isSceneActive: scenePhase == .active,
                   showingDrafts: showingDrafts,
                   hasComposeDraft: composeDraft != nil,

@@ -5,75 +5,63 @@ import Testing
 /// Mail gained four unattended refresh triggers - a repeating task, restored
 /// connectivity, a restored Google session and a workspace stamp change - and
 /// they reached the UI-test fixture mailbox, where a reload replaces the loaded
-/// messages underneath an open message and takes that message's attachments
-/// with it. These pin the one decision every trigger now goes through.
+/// messages underneath an open message and takes its attachments with it.
+///
+/// The fixture rule belongs to those four triggers alone. Entry and foreground
+/// return share the same condition set but must not be gated by it, because
+/// entry is also how a fixture mailbox is seeded - gating them emptied the
+/// inbox and took every Mail test with it.
 struct GmailAutomaticRefreshPolicyTests {
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
 
-    /// Every condition satisfied and a refresh long overdue, which is the state
-    /// each trigger creates. This is the case that regressed: the synthetic
-    /// fixture mailbox used to wake here.
-    private func wakes(usesMailUITestFixture: Bool, usesServerMailFixture: Bool = false,
-                       lastAttempt: Date? = nil) -> Bool {
+    private func wakes(lastAttempt: Date? = nil, isSceneActive: Bool = true,
+                       showingDrafts: Bool = false, hasComposeDraft: Bool = false,
+                       canUseGoogleIntegration: Bool = true, connectingMail: Bool = false,
+                       isLoading: Bool = false, hasBusyMessages: Bool = false) -> Bool {
         GmailAutomaticRefreshPolicy.wakes(
-            usesMailUITestFixture: usesMailUITestFixture,
-            usesServerMailFixture: usesServerMailFixture,
-            isSceneActive: true, showingDrafts: false, hasComposeDraft: false,
-            canUseGoogleIntegration: true, connectingMail: false,
-            isLoading: false, hasBusyMessages: false,
-            lastAttempt: lastAttempt, now: now)
+            isSceneActive: isSceneActive, showingDrafts: showingDrafts,
+            hasComposeDraft: hasComposeDraft, canUseGoogleIntegration: canUseGoogleIntegration,
+            connectingMail: connectingMail, isLoading: isLoading,
+            hasBusyMessages: hasBusyMessages, lastAttempt: lastAttempt, now: now)
     }
 
-    @Test func aSyntheticFixtureMailboxNeverWakesOnItsOwn() {
-        #expect(!wakes(usesMailUITestFixture: true))
-        // Not merely "not yet": no elapsed time makes it due.
-        #expect(!wakes(usesMailUITestFixture: true, lastAttempt: now.addingTimeInterval(-86_400)))
+    /// The regression that emptied the fixture inbox: the condition set carries
+    /// no fixture term, so entry still seeds a synthetic mailbox.
+    @Test func theConditionSetDoesNotKnowAboutFixtures() {
+        #expect(wakes())
+        #expect(wakes(lastAttempt: now.addingTimeInterval(-GmailAutomaticRefreshPolicy.interval)))
+    }
+
+    /// Only the unattended triggers consult this, and only they are suppressed.
+    @Test func onlyUnattendedWakesAreKeptFromASyntheticMailbox() {
         #expect(!GmailAutomaticRefreshPolicy.refreshesUnattended(
             usesMailUITestFixture: true, usesServerMailFixture: false))
-    }
-
-    @Test func aRealMailboxStillWakesWhenEveryConditionHolds() {
-        #expect(wakes(usesMailUITestFixture: false))
-        #expect(wakes(usesMailUITestFixture: false,
-                      lastAttempt: now.addingTimeInterval(-GmailAutomaticRefreshPolicy.interval)))
-        #expect(GmailAutomaticRefreshPolicy.refreshesUnattended(
-            usesMailUITestFixture: false, usesServerMailFixture: false))
-    }
-
-    @Test func theServerMailFixtureKeepsItsBoundedRecovery() {
-        #expect(wakes(usesMailUITestFixture: true, usesServerMailFixture: true))
+        // The server-mail fixture models a server, so it keeps its recovery.
         #expect(GmailAutomaticRefreshPolicy.refreshesUnattended(
             usesMailUITestFixture: true, usesServerMailFixture: true))
+        // A real mailbox, and a release build, are never affected.
+        #expect(GmailAutomaticRefreshPolicy.refreshesUnattended(
+            usesMailUITestFixture: false, usesServerMailFixture: false))
+        #expect(GmailAutomaticRefreshPolicy.refreshesUnattended(
+            usesMailUITestFixture: false, usesServerMailFixture: true))
     }
 
-    /// The fixture rule is an addition, not a replacement: a real mailbox still
-    /// answers to each pre-existing condition exactly as it did before.
-    @Test func everyPreexistingConditionStillStopsARealMailbox() {
-        func wakesWith(_ change: (inout (Bool, Bool, Bool, Bool, Bool, Bool, Bool)) -> Void) -> Bool {
-            var c = (true, false, false, true, false, false, false)
-            change(&c)
-            return GmailAutomaticRefreshPolicy.wakes(
-                usesMailUITestFixture: false, usesServerMailFixture: false,
-                isSceneActive: c.0, showingDrafts: c.1, hasComposeDraft: c.2,
-                canUseGoogleIntegration: c.3, connectingMail: c.4,
-                isLoading: c.5, hasBusyMessages: c.6,
-                lastAttempt: nil, now: now)
-        }
-        #expect(wakesWith { _ in })
-        #expect(!wakesWith { $0.0 = false })
-        #expect(!wakesWith { $0.1 = true })
-        #expect(!wakesWith { $0.2 = true })
-        #expect(!wakesWith { $0.3 = false })
-        #expect(!wakesWith { $0.4 = true })
-        #expect(!wakesWith { $0.5 = true })
-        #expect(!wakesWith { $0.6 = true })
+    @Test func everyPreexistingConditionStillStopsARefresh() {
+        #expect(!wakes(isSceneActive: false))
+        #expect(!wakes(showingDrafts: true))
+        #expect(!wakes(hasComposeDraft: true))
+        #expect(!wakes(canUseGoogleIntegration: false))
+        #expect(!wakes(connectingMail: true))
+        #expect(!wakes(isLoading: true))
+        #expect(!wakes(hasBusyMessages: true))
     }
 
-    @Test func theIntervalStillBoundsARealMailbox() {
-        #expect(!wakes(usesMailUITestFixture: false, lastAttempt: now))
-        #expect(!wakes(usesMailUITestFixture: false,
-                       lastAttempt: now.addingTimeInterval(1 - GmailAutomaticRefreshPolicy.interval)))
+    @Test func theIntervalStillBoundsARefresh() {
+        #expect(!wakes(lastAttempt: now))
+        #expect(!wakes(lastAttempt: now.addingTimeInterval(1 - GmailAutomaticRefreshPolicy.interval)))
+        #expect(wakes(lastAttempt: now.addingTimeInterval(-GmailAutomaticRefreshPolicy.interval)))
         // A clock that moved backwards must not strand the mailbox.
-        #expect(wakes(usesMailUITestFixture: false, lastAttempt: now.addingTimeInterval(1)))
+        #expect(wakes(lastAttempt: now.addingTimeInterval(1)))
+        #expect(GmailAutomaticRefreshPolicy.isDue(lastAttempt: nil, now: now))
     }
 }

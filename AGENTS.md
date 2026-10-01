@@ -1500,3 +1500,27 @@ at the start of every turn; append to it rather than rewriting it.
   mailbox should auto-refresh while the user has a message open. The same
   `preservingStatus: false` reload replaces the array under a live detail for real users too;
   no evidence either way was gathered, so no production behaviour was changed on that guess.
+
+- 2026-10-01 Claude, Autofix on PR #27: my own regression from `7966c65`, corrected.
+  That commit routed the fixture rule through `automaticRefreshIfDue`, and
+  `GmailView.swift:385` `.onAppear` calls that same function — it **is** the mailbox's entry load.
+  So the fixture mailbox never loaded, the inbox was empty, and `iPad 2 of 2` lost
+  `testMailDraftWithAttachmentsSurvivesRelaunchAndExplicitDeletion` ("No matches found for
+  MailMessage-ui-mail-1"), `testMailOlderMessagesSentAndArchiveHaveNaturalMailboxHandoffs` (:849)
+  and `testMailWorkspaceUsesASimpleInboxInterface` (:606) alongside the pre-existing billing
+  cluster at `:4591` and `:5425`. My commit message and the status entry both claimed "entry and
+  explicit refresh still seed such a mailbox"; that was asserted, never verified, and was wrong.
+  Fix: the fixture rule now belongs to the four *unattended* triggers only. `wakes(...)` carries the
+  condition set with no fixture term, so entry (`:386`) and foreground return (`:397`) behave exactly
+  as they did before `73ec65b`; the repeating task, restored connectivity, restored Google session
+  and workspace stamp change go through a new `unattendedRefreshIfDue()` that consults
+  `refreshesUnattended` first. The original attachment defect stays fixed, because the trigger that
+  caused it is one of those four.
+  Evidence: the revised policy was extracted verbatim and compiled against 17 assertions, all
+  passing, including the two that pin the regression — the condition set wakes with no fixture term,
+  and only `refreshesUnattended` refuses a synthetic mailbox. `swiftc -frontend -parse` and
+  `git diff --check` clean. Not compiled in the app target and no UI test run here: the shared
+  DerivedData is in use for root's 0119 release validation, so CI is the gate for this one.
+  Lesson recorded for both agents: a helper reached from `.onAppear` is an entry path as well as a
+  wake path. Check every call site before adding a condition to a shared one, and do not describe
+  untested call sites as unaffected.
