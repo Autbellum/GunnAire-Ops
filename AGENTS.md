@@ -1502,3 +1502,51 @@ at the start of every turn; append to it rather than rewriting it.
   mailbox should auto-refresh while the user has a message open. The same
   `preservingStatus: false` reload replaces the array under a live detail for real users too;
   no evidence either way was gathered, so no production behaviour was changed on that guess.
+
+- 2026-10-01 Claude, bounded task: the two progress-invoice CI failures at
+  `GunnAire_OpsUITests.swift:4591`. Branch `fix/progress-invoice-visible-failure-20261001` off
+  `b070b23`; the shared 0119 checkout was never touched, and `Item.swift` was restored to
+  `b070b23` immediately after the reproduction experiment.
+  **Failed guard term, reproduced not guessed: clause 14, the approved milestone allocation.**
+  `git diff 146cc25..b070b23` showed the only additions to `createProgressInvoice` are
+  `await prepareNewBillingDocument(...)`, a silent `guard firstSave.ready else { return }`, and a
+  new 14-clause post-await revalidation. The silent `ready` return is not the cause:
+  `operationStamp` needs both `authorizedContainer` and `activeLease`
+  (`CompanyWorkspaceAccess.swift:491`), these fixtures establish no lease, so `stamp == nil`,
+  `markFirstSave` throws into `markerIssue`, and the guard passes via its `|| stamp == nil` clause.
+  The refusal was invisible because the only `actionMessage` surface on this route
+  (`BillingDocumentsView.swift:2329`) sits behind `!isJobDocumentationMode` (`:2249`) and these
+  tests run in job documentation. Instrumenting the refusal to name its first failed clause, then
+  reverting only `CatalogLineItemSnapshot.encoded`'s `.sortedKeys` to match `d9aa3f3`, printed:
+  "The approved milestone or job changed while preparing this invoice (the approved milestone
+  allocation)." Clause 14 re-derives the allocation and compared it to the pre-await capture as raw
+  bytes, and the producers disagreed on key order - `BillingTaxAddressContext.attaching` has always
+  sorted (`BillingTaxAddresses.swift:71`), `encoded` did not before 0119.
+  **Fix.** `CatalogSnapshotCanonicalJSON.describesSameSnapshot` compares the two documents
+  re-serialized with `JSONSerialization` `.sortedKeys`, so key order is forgiven and nothing else
+  is: every key is still compared, including snapshot metadata this build does not decode, and an
+  absent or malformed snapshot has no canonical form and matches nothing, so it fails closed. This
+  is deliberately stronger than comparing the decoded lines, discount and tax addresses, which
+  would have ignored forward-compatible metadata. No guard weakened: all 14 clauses are preserved
+  verbatim and in their original order (machine-compared clause by clause against `b070b23`), and
+  `ProgressInvoiceChangeAudit` keeps the original short-circuit, which matters because the later
+  clauses read properties only the earlier identity clauses make safe to touch. 0119's sorted-key
+  encoder also happens to mask this, but raw-byte comparison would make every such revalidation
+  depend on the encoders never diverging again, so the fix stands on its own.
+  **Red/green, signed-off-source focused runs on simulator F4ECDEC1 (iPad Pro 13-inch M5), reusing
+  root's `/tmp/gunnaire-estimate-mail-current-dd`, `CODE_SIGNING_ALLOWED=NO` to match CI.**
+  RED: with `encoded`'s sorted keys reverted to the `d9aa3f3` form and no semantic comparison, the
+  progress test failed in 40.6 s naming clause 14 (`noSorted-ui.log`); the bundle variant passed.
+  GREEN on final source: `CatalogSnapshotCanonicalJSONTests`, `ProgressInvoiceChangeAuditTests`,
+  `CatalogSnapshotIntegrityTests` and `BillingMilestoneIdentityTests` all passed, and both UI cases
+  passed (45.4 s, 51.6 s), zero failures, zero compile errors, zero warnings
+  (`green-sorted.log`). Root asked for no further unsorted UI rerun so the DerivedData could go to
+  the Calendar patch, so the green case is proven on current source and the red case on the
+  reproduction; a green UI case under the old unsorted encoder is not claimed.
+  **Not covered:** this is the progress-invoice route only. The three management-billing failures
+  on PR #31 wait on `ManagementBillingSavedCustomer` through `createDocument`, whose own
+  `selectedCatalogSnapshotJSON == estimate.catalogSnapshotJSON` comparisons
+  (`BillingDocumentsView.swift:10087`, `:10223`) are raw-byte in exactly the same way; 0119's
+  sorted-key encoder masks them, and the durable fix there is the same canonical comparison. That
+  belongs to the QBO agent's task, not this one. `createMaintenanceAgreementInvoice` and
+  `createInvoiceFromEstimate` also still return silently with no rendered status.
