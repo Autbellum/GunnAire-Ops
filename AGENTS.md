@@ -1421,3 +1421,48 @@ at the start of every turn; append to it rather than rewriting it.
   after a failure (`retryPendingIfNeeded`, publish only, no import). Three tests that pinned the
   old read-only rule were updated to the new rule; four write-back tests added. After adoption the
   job is app-owned, so later edits made directly in Google no longer import over it.
+
+- 2026-10-01 Claude, Autofix on PR #27 (both iPad shards failed at head `d9aa3f3`).
+  Ten failures, three distinct causes; only the first is mine and only it is fixed here.
+  **(1) Fixed — unsigned-host keychain, test-only.**
+  `QuickBooksPublicationAccessTests.firstSaveMarkersRecoverBothDocumentsAfterRestartAndRejectForeignRealm`
+  and `.abortedDeterministicInvoiceSaveCanReplaceOnlySameRealmOrphan` failed with
+  `.unexpectedStatus(-34018)` = `errSecMissingEntitlement`. Cause verified, not guessed:
+  `9097cbe` added `#if os(iOS) && !targetEnvironment(macCatalyst)` blocks that call the real
+  keychain-backed `QuickBooksDocumentRealmProofStore`, and the workflow builds every iPad job
+  with `CODE_SIGNING_ALLOWED=NO` (`.github/workflows/native-app-regression.yml:168,207,224`),
+  so the unsigned host carries no `application-identifier` entitlement and the platform
+  keychain refuses. The platform was the wrong discriminator: the real one is whether the host
+  has a keychain entitlement, which is why Codex's *signed* local runs passed 20/20 while CI
+  failed. The three blocks now branch on a runtime probe (`platformKeychainIsAvailable()`,
+  same `errSecMissingEntitlement`-only tolerance as the existing `persistedRoundTrip`, any
+  other keychain error still fails). A signed host — local simulator and device, where the
+  product actually depends on the keychain — still runs the full proof-store path; an unsigned
+  host runs the equivalent serialized assertions that the Mac job already runs today. Nothing
+  skipped, excluded, or accepted as an expected failure, and no product source touched.
+  Parse-checked (`swiftc -frontend -parse`, iOS simulator target) and `git diff --check` clean;
+  **not compiled** — a full build here would put Codex's concurrent 0118 validation at risk with
+  ~6 GiB free, and the simulator is unavailable to this session, so root's run is the compile gate.
+  **(2) Reported, not touched — billing save never reaches confirmation.** Six UI failures at
+  `GunnAire_OpsUITests.swift:4591`, `:5078`, `:5252`, `:5425` (×3), all "tap SaveBillingDocument,
+  `ManagementBillingSavedCustomer` never appears". These passed at `3aa7733` and `146cc25`;
+  `73ec65b` put `await prepareNewBillingDocument(...)` ahead of the insert at every billing
+  creation entry point with `guard firstSave.ready, isCreatingDocument else { return }`, a silent
+  return. `BillingDocumentsView.swift:10282-10319` is the only thing that can clear `ready`.
+  Codex root says an isolated QBO agent owns this screen from `976de66`, so this agent did not
+  edit it. Candidate conditions, none proven without a run: `currentCustomer.modelContext ===
+  modelContext` (the document is not yet inserted), `authorizedContainer === modelContext.container`,
+  and `isCreatingDocument` surviving a suspension that did not exist before.
+  **(3) Reported, UNCLAIMED — Mail attachment disappears.**
+  `testMailAttachmentPreviewAndForwardRetainTheOriginalFile` passed at `3aa7733` in 34.5 s and
+  now fails at 17.1 s: the message detail opens, then `MailAttachment-0.0` never appears.
+  `73ec65b` added four new `automaticRefreshIfDue()` triggers to `GmailView`. One is provably
+  reachable in UI-test fixture mode and was previously a no-op there:
+  `GunnAire Ops/GmailView.swift:430-433` calls `automaticRefreshIfDue()` on every
+  `workspace.operationStamp` change while leaving `clearMailbox()` behind its original
+  `!usesMailUITestFixture` guard. `automaticRefreshIfDue` ends in
+  `loadMessages(preservingStatus: false, recoverPendingActions: true)`, which in fixture mode
+  reaches `mailbox.refresh(..., preservingStatus: false)` and replaces the message list under the
+  open detail. `:419-428` compound this by setting `lastAutomaticRefreshAt = nil`, which makes a
+  refresh immediately due regardless of the 120-second interval. Whoever owns Mail should decide
+  whether a fixture mailbox should refresh at all; this agent made no product edit on a hypothesis.
