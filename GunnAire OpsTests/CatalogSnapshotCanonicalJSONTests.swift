@@ -132,7 +132,7 @@ struct CatalogSnapshotCanonicalJSONTests {
             declarationOrder, #"{"version":1,"lines":[{"name":"Labor","quantity":3}]}"#))
         #expect(!CatalogSnapshotCanonicalJSON.describesSameSnapshot(
             declarationOrder, #"{"version":1,"lines":[{"name":"Labor","quantity":2}],"taxAddresses":{}}"#))
-        #expect(!CatalogSnapshotCanonicalJSON.describesSameSnapshot("{not json", "{not json"))
+        #expect(!CatalogSnapshotCanonicalJSON.describesSameSnapshot("{not json", "{still not json"))
     }
 
     /// The bounded parser refuses input past 1 MiB, the same bound
