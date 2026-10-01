@@ -145,6 +145,7 @@ struct CompanyWorkspaceAccessTests {
         var sessionReads = 0
         var sessionSignal = "signal-a"
         var accountError: Error?
+        var accountDiagnostic: String?
         let modelContainer: ModelContainer
 
         init() throws {
@@ -169,7 +170,13 @@ struct CompanyWorkspaceAccessTests {
             CompanyWorkspaceAccessController(dependencies: CompanyWorkspaceDependencies(
                 session: { self.sessionReads += 1; return self.session },
                 account: {
+                    let check = self.accountDiagnostic.map { detail in
+                        let check = CompanyWorkspaceDiagnostics.beginAccountCheck()
+                        CompanyWorkspaceDiagnostics.recordConfigurationDetail(detail, for: check)
+                        return check
+                    }
                     if let error = self.accountError { throw error }
+                    if let check { CompanyWorkspaceDiagnostics.clearAccountCheckDetail(check) }
                     return CompanyCloudKitAccount(environment: self.environment, accountHash: self.cloudAccountHash)
                 },
                 fetchWorkspace: {
@@ -1096,6 +1103,89 @@ struct CompanyWorkspaceAccessTests {
             hasStrippedDistributionProfile: false))
         #expect(!CompanyCloudKitRuntimeAccount.permitsStrippedProfileFallback(
             error: URLError(.notConnectedToInternet), hasStrippedDistributionProfile: true))
+    }
+
+    @Test func configurationDetailBelongsOnlyToTheCurrentFailedAccountCheck() async throws {
+        let prior = CompanyWorkspaceDiagnostics.lastConfigurationDetail
+        defer { CompanyWorkspaceDiagnostics.lastConfigurationDetail = prior }
+        let storeKitDetail = "profileData=nil, AppTransaction: configuration"
+
+        let recovered = try Harness()
+        recovered.register()
+        recovered.accountDiagnostic = storeKitDetail
+        recovered.fetchError = CompanyWorkspaceFailure.configuration
+        let recoveredController = recovered.controller()
+        await recoveredController.refresh()
+        #expect(recoveredController.phase == .blocked(.configuration))
+        #expect(recovered.fetchCount == 1)
+        #expect(CompanyWorkspaceDiagnostics.lastConfigurationDetail.isEmpty)
+
+        let rejected = try Harness()
+        rejected.register()
+        rejected.accountDiagnostic = storeKitDetail
+        rejected.accountError = CompanyWorkspaceFailure.configuration
+        let rejectedController = rejected.controller()
+        await rejectedController.refresh()
+        #expect(rejectedController.phase == .blocked(.configuration))
+        #expect(rejected.fetchCount == 0)
+        #expect(CompanyWorkspaceDiagnostics.lastConfigurationDetail == storeKitDetail)
+
+        let retired = CompanyWorkspaceDiagnostics.beginAccountCheck()
+        let latest = CompanyWorkspaceDiagnostics.beginAccountCheck()
+        CompanyWorkspaceDiagnostics.recordConfigurationDetail("late retired failure", for: retired)
+        #expect(CompanyWorkspaceDiagnostics.lastConfigurationDetail.isEmpty)
+        CompanyWorkspaceDiagnostics.recordConfigurationDetail("current failure", for: latest)
+        CompanyWorkspaceDiagnostics.clearAccountCheckDetail(retired)
+        #expect(CompanyWorkspaceDiagnostics.lastConfigurationDetail == "current failure")
+        CompanyWorkspaceDiagnostics.clearAccountCheckDetail(latest)
+        CompanyWorkspaceDiagnostics.recordConfigurationDetail("late completion", for: latest)
+        #expect(CompanyWorkspaceDiagnostics.lastConfigurationDetail.isEmpty)
+    }
+
+    @Test func laterAccountLookupKeepsItsDiagnosticWhenAnOlderLookupFinishesLate() async throws {
+        let prior = CompanyWorkspaceDiagnostics.lastConfigurationDetail
+        defer { CompanyWorkspaceDiagnostics.lastConfigurationDetail = prior }
+        let cache = CompanyCloudKitAccountCache(lifetime: 900, reportsConfigurationDetail: true)
+        let probe = AccountResolutionProbe()
+        let (started, signal) = AsyncStream<Int>.makeStream()
+        var starts = started.makeAsyncIterator()
+
+        let older = Task {
+            try await cache.current { check in
+                do { return try await probe.resolve(started: signal) }
+                catch {
+                    await MainActor.run {
+                        CompanyWorkspaceDiagnostics.recordConfigurationDetail("retired error", for: check)
+                    }
+                    throw error
+                }
+            }
+        }
+        #expect(await starts.next() == 0)
+        let newer = Task {
+            try await cache.fresh { check in
+                do { return try await probe.resolve(started: signal) }
+                catch {
+                    await MainActor.run {
+                        CompanyWorkspaceDiagnostics.recordConfigurationDetail("current error", for: check)
+                    }
+                    throw error
+                }
+            }
+        }
+        #expect(await starts.next() == 1)
+
+        await probe.finish(1, result: .failure(CompanyWorkspaceFailure.configuration))
+        do { _ = try await newer.value; Issue.record("The newer account check must reject its failed proof") }
+        catch { #expect(error as? CompanyWorkspaceFailure == .configuration) }
+        #expect(CompanyWorkspaceDiagnostics.lastConfigurationDetail == "current error")
+
+        await probe.finish(0, result: .failure(CompanyWorkspaceFailure.configuration))
+        do { _ = try await older.value; Issue.record("The retired account check must not authorize access") }
+        catch { #expect(error as? CompanyWorkspaceFailure == .configuration) }
+        #expect(CompanyWorkspaceDiagnostics.lastConfigurationDetail == "current error")
+        cache.invalidate()
+        #expect(CompanyWorkspaceDiagnostics.lastConfigurationDetail.isEmpty)
     }
 
     /// Real device provisioning profiles (confirmed on-device) encode this

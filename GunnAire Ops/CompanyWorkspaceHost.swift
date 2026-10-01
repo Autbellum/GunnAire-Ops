@@ -150,6 +150,27 @@ nonisolated func withCloudKitTimeout<T: Sendable>(
 @MainActor
 enum CompanyWorkspaceDiagnostics {
     static var lastConfigurationDetail: String = ""
+    // Only the newest account lookup may explain a configuration failure.
+    // An older CloudKit/StoreKit task can finish after its result is retired.
+    private static var activeAccountCheck: UUID?
+
+    static func beginAccountCheck() -> UUID {
+        let check = UUID()
+        activeAccountCheck = check
+        lastConfigurationDetail = ""
+        return check
+    }
+
+    static func recordConfigurationDetail(_ detail: String, for check: UUID) {
+        guard activeAccountCheck == check else { return }
+        lastConfigurationDetail = detail
+    }
+
+    static func clearAccountCheckDetail(_ check: UUID? = nil) {
+        guard check == nil || activeAccountCheck == check else { return }
+        activeAccountCheck = nil
+        lastConfigurationDetail = ""
+    }
     /// The raw CKAccountStatus (or empty-record-ID condition) behind the most
     /// recent accountUnavailable failure. That failure collapses several
     /// distinct device-side conditions (.noAccount, .restricted,
@@ -187,12 +208,17 @@ final class CompanyCloudKitAccountCache {
     private var settledSequence: UInt64 = 0
     private var settledFailure: Error?
     private let lifetime: TimeInterval
+    private let reportsConfigurationDetail: Bool
 
-    init(lifetime: TimeInterval) { self.lifetime = lifetime }
+    init(lifetime: TimeInterval, reportsConfigurationDetail: Bool = false) {
+        self.lifetime = lifetime
+        self.reportsConfigurationDetail = reportsConfigurationDetail
+    }
 
     func invalidate() {
         cached = nil
         generation = UUID()
+        if reportsConfigurationDetail { CompanyWorkspaceDiagnostics.clearAccountCheckDetail() }
         inFlight?.task.cancel()
         freshInFlight?.task.cancel()
         inFlight = nil
@@ -204,6 +230,12 @@ final class CompanyCloudKitAccountCache {
 
     func current(
         resolve: @escaping @Sendable () async throws -> CompanyCloudKitAccount
+    ) async throws -> CompanyCloudKitAccount {
+        try await current { (_: UUID) in try await resolve() }
+    }
+
+    func current(
+        resolve: @escaping @Sendable (UUID) async throws -> CompanyCloudKitAccount
     ) async throws -> CompanyCloudKitAccount {
         try Task.checkCancellation()
         if let freshInFlight { return try await finish(freshInFlight) }
@@ -223,6 +255,12 @@ final class CompanyCloudKitAccountCache {
     func fresh(
         resolve: @escaping @Sendable () async throws -> CompanyCloudKitAccount
     ) async throws -> CompanyCloudKitAccount {
+        try await fresh { (_: UUID) in try await resolve() }
+    }
+
+    func fresh(
+        resolve: @escaping @Sendable (UUID) async throws -> CompanyCloudKitAccount
+    ) async throws -> CompanyCloudKitAccount {
         try Task.checkCancellation()
         if let freshInFlight { return try await finish(freshInFlight) }
         let lookup = start(resolve)
@@ -230,10 +268,13 @@ final class CompanyCloudKitAccountCache {
         return try await finish(lookup)
     }
 
-    private func start(_ resolve: @escaping @Sendable () async throws -> CompanyCloudKitAccount) -> Lookup {
+    private func start(_ resolve: @escaping @Sendable (UUID) async throws -> CompanyCloudKitAccount) -> Lookup {
         nextSequence &+= 1
+        // Issue the diagnostic token in lookup order, before a detached task
+        // can run out of order relative to a newer foreground check.
+        let check = reportsConfigurationDetail ? CompanyWorkspaceDiagnostics.beginAccountCheck() : UUID()
         return Lookup(id: UUID(), generation: generation, sequence: nextSequence,
-                      task: Task.detached(priority: .userInitiated) { try await resolve() })
+                      task: Task.detached(priority: .userInitiated) { try await resolve(check) })
     }
 
     private func finish(_ lookup: Lookup) async throws -> CompanyCloudKitAccount {
@@ -340,7 +381,8 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
     /// publication pass and staff delivery repeats it. A successful result is
     /// reused briefly; CloudKit's account-change notification drops it.
     static let cacheLifetime: TimeInterval = 15 * 60
-    @MainActor private static let accountCache = CompanyCloudKitAccountCache(lifetime: cacheLifetime)
+    @MainActor private static let accountCache = CompanyCloudKitAccountCache(
+        lifetime: cacheLifetime, reportsConfigurationDetail: true)
 
     @MainActor static func invalidateCache() {
         accountCache.invalidate()
@@ -348,12 +390,12 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
 
     static func current() async throws -> CompanyCloudKitAccount {
         guard !GunnAireCloudKit.usesTestDatabase else { throw CompanyWorkspaceFailure.configuration }
-        return try await accountCache.current { try await resolve() }
+        return try await accountCache.current { check in try await resolve(diagnosticCheck: check) }
     }
 
     static func fresh() async throws -> CompanyCloudKitAccount {
         guard !GunnAireCloudKit.usesTestDatabase else { throw CompanyWorkspaceFailure.configuration }
-        return try await accountCache.fresh { try await resolve() }
+        return try await accountCache.fresh { check in try await resolve(diagnosticCheck: check) }
     }
 
     /// Only transport failures retry. An unverified or mismatched transaction
@@ -467,7 +509,7 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
         }
     }
 
-    private static func resolve() async throws -> CompanyCloudKitAccount {
+    private static func resolve(diagnosticCheck: UUID) async throws -> CompanyCloudKitAccount {
         let profileURLs = [
             Bundle.main.bundleURL.appendingPathComponent("embedded.mobileprovision"),
             Bundle.main.bundleURL.appendingPathComponent("Contents/embedded.provisionprofile")
@@ -548,12 +590,12 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
                 }
                 hasVerifiedDistribution = true
                 let detail = "profileData=nil, AppTransaction verified"
-                await MainActor.run { CompanyWorkspaceDiagnostics.lastConfigurationDetail = detail }
+                await MainActor.run { CompanyWorkspaceDiagnostics.recordConfigurationDetail(detail, for: diagnosticCheck) }
             } catch {
                 if Self.permitsStoreReceiptFallback(error: error, receiptData: receiptData) {
                     hasStoreReceipt = true
                     let detail = "profileData=nil, AppTransaction configuration; nonempty store receipt present"
-                    await MainActor.run { CompanyWorkspaceDiagnostics.lastConfigurationDetail = detail }
+                    await MainActor.run { CompanyWorkspaceDiagnostics.recordConfigurationDetail(detail, for: diagnosticCheck) }
                 } else {
                     // Name the receipt as well as the transaction. Without it a
                     // missing receipt and a rejected transaction are the same
@@ -567,7 +609,7 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
                     #endif
                     let detail = "profileData=nil, AppTransaction: \(String(describing: error)), " +
                         "receipt: \(receipt), transaction: \(transaction), distribution: \(source)"
-                    await MainActor.run { CompanyWorkspaceDiagnostics.lastConfigurationDetail = detail }
+                    await MainActor.run { CompanyWorkspaceDiagnostics.recordConfigurationDetail(detail, for: diagnosticCheck) }
                     // A missing embedded profile may substitute for an
                     // unavailable transaction on device, never for a signed
                     // answer that rejects this app or a transport failure.
@@ -580,7 +622,10 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
                 }
             }
         } else {
-            await MainActor.run { CompanyWorkspaceDiagnostics.lastConfigurationDetail = "profileData present, \(profileData?.count ?? -1) bytes" }
+            await MainActor.run {
+                CompanyWorkspaceDiagnostics.recordConfigurationDetail(
+                    "profileData present, \(profileData?.count ?? -1) bytes", for: diagnosticCheck)
+            }
         }
         guard let environment = environment(
             profileData: profileData,
@@ -611,6 +656,7 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
         let hash = CompanyWorkspaceSession.digest(
             "gunnaire-cloudkit-account-v1\n\(GunnAireCloudKit.containerIdentifier)\n\(environment)\n\(identifier.recordName)"
         )
+        await MainActor.run { CompanyWorkspaceDiagnostics.clearAccountCheckDetail(diagnosticCheck) }
         return CompanyCloudKitAccount(environment: environment, accountHash: hash, recordName: identifier.recordName)
     }
 
