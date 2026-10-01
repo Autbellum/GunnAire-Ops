@@ -66,6 +66,31 @@ struct CatalogSnapshotCanonicalJSONTests {
         #expect(!CatalogSnapshotCanonicalJSON.describesSameSnapshot(a, #"[{"name":"Labor","quantity":2},{}]"#))
     }
 
+    /// The composer's own comparison, now strict. `createDocument` already
+    /// requires lines, so an absent snapshot means the encoding or the
+    /// tax-address attachment failed, and it refuses before touching a customer
+    /// rather than saving a billing document with no line provenance. These pin
+    /// that absence is never mistaken for "unchanged" at either end.
+    @Test func theComposerComparisonForgivesOnlyKeyOrder() {
+        let declarationOrder = #"{"version":1,"lines":[{"name":"Labor","quantity":2}]}"#
+        let sortedOrder = #"{"lines":[{"quantity":2,"name":"Labor"}],"version":1}"#
+        #expect(declarationOrder != sortedOrder)
+        #expect(CatalogSnapshotCanonicalJSON.describesSameSnapshot(declarationOrder, sortedOrder))
+
+        // Absence is a refusal at either end, and absence on both ends too:
+        // nothing may stand in for a snapshot that was never built.
+        #expect(!CatalogSnapshotCanonicalJSON.describesSameSnapshot(nil, nil))
+        #expect(!CatalogSnapshotCanonicalJSON.describesSameSnapshot(nil, declarationOrder))
+        #expect(!CatalogSnapshotCanonicalJSON.describesSameSnapshot(declarationOrder, nil))
+
+        // Content and metadata keep their original strictness.
+        #expect(!CatalogSnapshotCanonicalJSON.describesSameSnapshot(
+            declarationOrder, #"{"version":1,"lines":[{"name":"Labor","quantity":3}]}"#))
+        #expect(!CatalogSnapshotCanonicalJSON.describesSameSnapshot(
+            declarationOrder, #"{"version":1,"lines":[{"name":"Labor","quantity":2}],"taxAddresses":{}}"#))
+        #expect(!CatalogSnapshotCanonicalJSON.describesSameSnapshot("{not json", "{not json"))
+    }
+
     /// The real producer, as the app calls it: whatever key order the current
     /// encoder happens to use, an identical re-encode matches and a changed
     /// quantity does not.

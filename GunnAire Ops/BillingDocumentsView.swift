@@ -10046,6 +10046,15 @@ GunnAire
             actionMessage = documentDiscountValidationMessage
             return
         }
+        // Lines are already required above, so an absent snapshot means the
+        // encoding or the tax-address attachment failed. Refuse here, before any
+        // customer or job is touched, rather than saving a billing document with
+        // no line provenance to audit or publish.
+        guard selectedCatalogSnapshotJSON != nil else {
+            actionMessage = "The catalog lines for this document could not be recorded. "
+                + "Reopen the lines, confirm the service address, and save again."
+            return
+        }
 
         isCreatingDocument = true
         let customer = resolveCustomerForDocument()
@@ -10117,7 +10126,8 @@ GunnAire
                   sourceCall?.customer === customer || sourceCall == nil,
                   (sourceCall?.serviceLocationID ?? selectedServiceLocationID) == estimate.serviceLocationID,
                   selectedLineItems.map(\.id) == sourceLineItemIDs,
-                  selectedCatalogSnapshotJSON == estimate.catalogSnapshotJSON,
+                  CatalogSnapshotCanonicalJSON.describesSameSnapshot(
+                    selectedCatalogSnapshotJSON, estimate.catalogSnapshotJSON),
                   selectedSummary == estimate.lineItemSummary,
                   selectedTotal == estimate.amount,
                   selectedSiteAddressSnapshot == estimate.siteAddress,
@@ -10253,7 +10263,8 @@ GunnAire
                       currentJobInvoice == nil,
                       sourceCall?.canCreateInvoiceDocument ?? true,
                       selectedLineItems.map(\.id) == sourceLineItemIDs,
-                      selectedCatalogSnapshotJSON == invoice.catalogSnapshotJSON,
+                      CatalogSnapshotCanonicalJSON.describesSameSnapshot(
+                    selectedCatalogSnapshotJSON, invoice.catalogSnapshotJSON),
                       selectedSummary == invoice.lineItemSummary,
                       selectedTotal == invoice.amount,
                       selectedSiteAddressSnapshot == invoice.siteAddress,
