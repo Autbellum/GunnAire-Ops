@@ -110,4 +110,135 @@ struct AutomaticGoogleDriveArchiveReadStoreTests {
         AutomaticGoogleDriveArchive.shared.wakeAfterSave(fleet, context: context, recovery: recovery)
         #expect(wakeCount == 2)
     }
+
+    @Test func retainedReservationReconcilesOneConfirmedUploadAfterReconnect() async throws {
+        let container = try makeContainer()
+        let firstContext = ModelContext(container)
+        let customer = Customer(name: "Drive reconnect fixture")
+        let localURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("drive-reconnect-\(UUID().uuidString).txt")
+        let bytes = Data("fictional service report".utf8)
+        try bytes.write(to: localURL)
+        defer { try? FileManager.default.removeItem(at: localURL) }
+        let attachment = ServiceDocumentAttachment(
+            customer: customer, serviceCallID: nil, kind: .serviceReport,
+            displayName: "report.txt", localFilePath: localURL.path,
+            contentType: "text/plain", fileSizeBytes: bytes.count)
+        firstContext.insert(customer)
+        firstContext.insert(attachment)
+        try firstContext.save()
+
+        let email = "drive-fixture@gunnaire.com"
+        let fileID = "reserved-drive-reconnect"
+        let metadata = GoogleDriveUploadMetadata.document(
+            fileID: fileID, displayName: attachment.displayName,
+            mimeType: attachment.contentType, attachmentID: attachment.id,
+            documentKind: attachment.kindRaw)
+        let file = GoogleDriveFile(
+            id: fileID, name: metadata.name, mimeType: metadata.mimeType,
+            webViewLink: "https://drive.google.com/file/d/\(fileID)/view",
+            trashed: false, appProperties: metadata.appProperties)
+        var remoteFile: GoogleDriveFile?
+        var acceptedWrites = 0
+        var reservations = 0
+        var uploadCalls = 0
+        var requests: [URLRequest] = []
+        let auth = GoogleAuthManager(
+            testTokens: GoogleOAuthTokens(
+                accessToken: "fixture-bearer", refreshToken: "fixture-refresh", idToken: nil,
+                expiration: .distantFuture,
+                scopeSignature: Config.Google.scopeSignature(for: [Config.Google.driveFileScope])),
+            email: email, businessEmail: { email },
+            transport: { _ in throw URLError(.unsupportedURL) })
+        let drive = GoogleDriveAPI(authManager: auth, transport: { request in
+            requests.append(request)
+            guard let url = request.url,
+                  let response = HTTPURLResponse(
+                    url: url, statusCode: 200, httpVersion: nil, headerFields: nil) else {
+                throw GoogleDriveAPIError.invalidResponse
+            }
+            if url.path == "/drive/v3/files/generateIds" {
+                reservations += 1
+                return (Data(#"{"ids":["reserved-drive-reconnect"]}"#.utf8), response)
+            }
+            if request.httpMethod == "GET", url.path == "/drive/v3/files/\(fileID)" {
+                if let remoteFile {
+                    return (try JSONEncoder().encode(remoteFile), response)
+                }
+                guard let missing = HTTPURLResponse(
+                    url: url, statusCode: 404, httpVersion: nil, headerFields: nil) else {
+                    throw GoogleDriveAPIError.invalidResponse
+                }
+                return (Data(), missing)
+            }
+            if request.httpMethod == "POST", url.path == "/upload/drive/v3/files" {
+                guard let started = HTTPURLResponse(
+                    url: url, statusCode: 200, httpVersion: nil,
+                    headerFields: ["Location": "https://www.googleapis.com/upload/drive/v3/files?upload_id=fixture"]) else {
+                    throw GoogleDriveAPIError.invalidResponse
+                }
+                return (Data(), started)
+            }
+            if request.httpMethod == "PUT", request.httpBody == bytes {
+                acceptedWrites += 1
+                remoteFile = file
+                throw URLError(.networkConnectionLost)
+            }
+            if request.httpMethod == "PUT",
+               request.value(forHTTPHeaderField: "Content-Range") == "bytes */\(bytes.count)" {
+                throw URLError(.networkConnectionLost)
+            }
+            Issue.record("Unexpected Drive request during recovery: \(request.httpMethod ?? "unknown") \(url.path)")
+            throw GoogleDriveAPIError.invalidResponse
+        })
+
+        func publish(_ saved: ServiceDocumentAttachment, in context: ModelContext) async {
+            await GoogleDriveArchivePublication.run(
+                attachment: saved, context: context, actorEmail: email,
+                check: {
+                    guard saved.needsGoogleDriveArchive else {
+                        throw GoogleDriveAPIError.authorizationChanged
+                    }
+                },
+                reserveFileID: { try await drive.generateFileID() },
+                readFile: { try Data(contentsOf: saved.localFileURL) },
+                upload: { reservedID, body in
+                    uploadCalls += 1
+                    return try await drive.uploadFile(
+                        fileID: reservedID, displayName: saved.displayName,
+                        mimeType: saved.contentType, attachmentID: saved.id,
+                        documentKind: saved.kindRaw, data: body)
+                })
+        }
+
+        await publish(attachment, in: firstContext)
+        #expect(attachment.googleDriveFileID == fileID)
+        #expect(attachment.googleDriveSyncState == .needsAttention)
+        #expect(attachment.needsGoogleDriveArchive)
+        #expect(reservations == 1)
+        #expect(acceptedWrites == 1)
+
+        let restoredContext = ModelContext(container)
+        let attachmentID = attachment.id
+        let pendingPage = try await GoogleDriveArchiveReadStore(container: container).attachmentPage(offset: 0)
+        #expect(pendingPage.candidateIDs == [attachmentID])
+        var fetch = FetchDescriptor<ServiceDocumentAttachment>(predicate: #Predicate { $0.id == attachmentID })
+        fetch.fetchLimit = 2
+        let restoredMatches = try restoredContext.fetch(fetch)
+        #expect(restoredMatches.count == 1)
+        let restored = try #require(restoredMatches.first)
+        #expect(restored.googleDriveFileID == fileID)
+        await publish(restored, in: restoredContext)
+        #expect(restored.googleDriveSyncState == .archived)
+        #expect(restored.googleDriveFileID == fileID)
+        #expect(restored.googleDriveWebURL?.host == "drive.google.com")
+        #expect(!restored.needsGoogleDriveArchive)
+        #expect(reservations == 1)
+        #expect(acceptedWrites == 1)
+        #expect(uploadCalls == 2)
+
+        let requestCount = requests.count
+        await publish(restored, in: restoredContext)
+        #expect(requests.count == requestCount)
+    }
 }

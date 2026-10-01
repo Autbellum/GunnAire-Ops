@@ -260,7 +260,7 @@ enum QuickBooksBillingAccessPolicy {
 }
 
 struct QuickBooksBillingPaymentRevision: Equatable {
-    let object: ObjectIdentifier
+    let recordID: PersistentIdentifier
     let id: UUID
     let amount: Double
     let refund: Bool
@@ -268,7 +268,7 @@ struct QuickBooksBillingPaymentRevision: Equatable {
     let accountingID: String?
     let chargeID: String?
     init(_ value: Payment) {
-        object = ObjectIdentifier(value); id = value.id; amount = value.amount; refund = value.isRefund
+        recordID = value.persistentModelID; id = value.id; amount = value.amount; refund = value.isRefund
         providerState = value.providerPaymentStatus; accountingID = value.quickBooksID; chargeID = value.quickBooksChargeID
     }
 }
@@ -296,7 +296,9 @@ final class QuickBooksBillingWorkflow {
     private var customerID: String?
     private let items: [Item]
     private let lineEvidence: QuickBooksSavedLineEvidence
-    private var itemRevisions: [ObjectIdentifier: QuickBooksCatalogItemRevision]
+    private var itemRevisions: [UUID: QuickBooksCatalogItemRevision]
+    private var itemRecordIDs: [UUID: PersistentIdentifier]
+    private var newlyInsertedItemIDs: Set<UUID>
     private var validateDocument: () throws -> Void
     private let paymentRevisions: [QuickBooksBillingPaymentRevision]
     private let validateCatalogAccess: () throws -> Void
@@ -343,7 +345,12 @@ final class QuickBooksBillingWorkflow {
         lineEvidence = evidence
         let allItems = try context.fetch(FetchDescriptor<Item>())
         items = allItems.filter { evidence.selectedItemIDs.contains($0.id) }
-        itemRevisions = Dictionary(uniqueKeysWithValues: items.map { (ObjectIdentifier($0), QuickBooksCatalogItemRevision($0)) })
+        guard Set(items.map(\.id)).count == items.count else { throw QuickBooksBillingWorkflowError.changed }
+        itemRevisions = Dictionary(uniqueKeysWithValues: items.map { ($0.id, QuickBooksCatalogItemRevision($0)) })
+        itemRecordIDs = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0.persistentModelID) })
+        newlyInsertedItemIDs = Set(items.filter { item in
+            context.insertedModelsArray.contains { ($0 as? Item) === item }
+        }.map(\.id))
         paymentRevisions = try context.fetch(FetchDescriptor<Payment>()).filter { $0.invoice?.id == document.id }
             .sorted { $0.id.uuidString < $1.id.uuidString }.map(QuickBooksBillingPaymentRevision.init)
         run = try lifecycle.begin(api: api, validateAccess: validate)
@@ -365,11 +372,20 @@ final class QuickBooksBillingWorkflow {
         }
         let currentItems = try context.fetch(FetchDescriptor<Item>())
         for item in items {
-            guard let revision = itemRevisions[ObjectIdentifier(item)] else { throw QuickBooksBillingWorkflowError.changed }
+            let persistentID = item.persistentModelID
+            guard let revision = itemRevisions[item.id],
+                  let capturedID = itemRecordIDs[item.id] else { throw QuickBooksBillingWorkflowError.changed }
             let matches = currentItems.filter { $0.id == revision.id }
-            guard matches.count == 1, matches.first === item,
-                  QuickBooksCatalogItemRevision(item) == itemRevisions[ObjectIdentifier(item)] else {
+            guard matches.count == 1, let current = matches.first,
+                  current.persistentModelID == persistentID,
+                  (capturedID == persistentID || newlyInsertedItemIDs.contains(item.id)),
+                  QuickBooksCatalogItemRevision(item) == revision,
+                  QuickBooksCatalogItemRevision(current) == revision else {
                 throw QuickBooksBillingWorkflowError.changed
+            }
+            if capturedID != persistentID {
+                itemRecordIDs[item.id] = persistentID
+                newlyInsertedItemIDs.remove(item.id)
             }
             if item.requiresPricebookReview { throw PricebookPublicationError.reviewRequired(item.name) }
             if item.isCatalogArchived { throw PricebookPublicationError.archived(item.name) }
@@ -458,7 +474,7 @@ final class QuickBooksBillingWorkflow {
                     let result = try await child.execute()
                     self.attemptedWrite = self.attemptedWrite || child.attemptedWrite
                     guard let revision = child.committedRevision else { throw QuickBooksBillingWorkflowError.changed }
-                    self.itemRevisions[ObjectIdentifier(item)] = revision
+                    self.itemRevisions[item.id] = revision
                     try self.check()
                     if result.remote.Active == false { throw PricebookPublicationError.inactiveQuickBooksMatch(item.name) }
                 } catch {

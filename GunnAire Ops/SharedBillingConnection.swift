@@ -130,9 +130,9 @@ final class SharedBillingPreparation {
         let customerID = originalCustomer.quickBooksID
         let selected = Set(CatalogLineItemSnapshot.decoded(from: document.snapshotJSON)
             .flatMap { [$0.catalogItemID] + $0.soldLeaves.map(\.catalogItemID) })
-        func items() throws -> [ObjectIdentifier: QuickBooksCatalogItemRevision] {
+        func items() throws -> [PersistentIdentifier: QuickBooksCatalogItemRevision] {
             Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<Item>())
-                .filter { selected.contains($0.id) }.map { (ObjectIdentifier($0), QuickBooksCatalogItemRevision($0)) })
+                .filter { selected.contains($0.id) }.map { ($0.persistentModelID, QuickBooksCatalogItemRevision($0)) })
         }
         func payments() throws -> [QuickBooksBillingPaymentRevision] {
             try context.fetch(FetchDescriptor<Payment>()).filter { $0.invoice?.id == document.id }

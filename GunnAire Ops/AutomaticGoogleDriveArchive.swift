@@ -47,6 +47,51 @@ nonisolated struct GoogleDriveArchiveReadStore: Sendable {
     }
 }
 
+/// The durable reservation and confirmation step shared by live recovery and
+/// local transport tests. The caller supplies authorization and source guards;
+/// neither a failed upload nor a dropped response creates a new reservation.
+@MainActor
+enum GoogleDriveArchivePublication {
+    static func run(
+        attachment: ServiceDocumentAttachment,
+        context: ModelContext,
+        actorEmail: String?,
+        check: @MainActor () async throws -> Void,
+        reserveFileID: @MainActor () async throws -> String,
+        readFile: @MainActor () async throws -> Data,
+        upload: @MainActor (String, Data) async throws -> GoogleDriveFile
+    ) async {
+        guard attachment.needsGoogleDriveArchive else { return }
+        do {
+            try await check()
+            let fileID: String
+            if let reserved = attachment.googleDriveFileID?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !reserved.isEmpty {
+                fileID = reserved
+            } else {
+                fileID = try await reserveFileID()
+                try await check()
+                attachment.markGoogleDrivePreparing(fileID: fileID, actorEmail: actorEmail)
+                try context.save()
+            }
+            let data = try await readFile()
+            try await check()
+            guard !data.isEmpty else { throw GoogleDriveAPIError.emptyFile }
+            attachment.markGoogleDriveUploading()
+            try context.save()
+            let file = try await upload(fileID, data)
+            try await check()
+            attachment.markGoogleDriveArchived(file, actorEmail: actorEmail)
+            try context.save()
+        } catch {
+            guard (try? await check()) != nil else { return }
+            attachment.markGoogleDriveArchiveFailed(error.localizedDescription,
+                discardReservedID: (error as? GoogleDriveAPIError)?.discardsReservedFileIDBeforeRetry == true)
+            try? context.save()
+        }
+    }
+}
+
 /// Archives only app-owned pending attachments while an administrator has a
 /// matching Google account with per-file Drive permission. Saved reservations
 /// make a later launch/reconnect reconcile the original Drive file ID.
@@ -192,35 +237,17 @@ final class AutomaticGoogleDriveArchive {
             }
         }
 
-        do {
-            try await check()
-            let fileID: String
-            if let reserved = attachment.googleDriveFileID?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !reserved.isEmpty {
-                fileID = reserved
-            } else {
-                fileID = try await GoogleDriveAPI.shared.generateFileID()
-                try await check()
-                attachment.markGoogleDrivePreparing(fileID: fileID, actorEmail: actorEmail)
-                try context.save()
+        await GoogleDriveArchivePublication.run(
+            attachment: attachment, context: context, actorEmail: actorEmail,
+            check: check,
+            reserveFileID: { try await GoogleDriveAPI.shared.generateFileID() },
+            readFile: { try await self.fileData(for: attachment, context: context) },
+            upload: { fileID, data in
+                try await GoogleDriveAPI.shared.uploadFile(
+                    fileID: fileID, displayName: originalName, mimeType: originalType,
+                    attachmentID: originalID, documentKind: originalKind, data: data)
             }
-            let data = try await fileData(for: attachment, context: context)
-            try await check()
-            guard !data.isEmpty else { throw GoogleDriveAPIError.emptyFile }
-            attachment.markGoogleDriveUploading()
-            try context.save()
-            let file = try await GoogleDriveAPI.shared.uploadFile(
-                fileID: fileID, displayName: originalName, mimeType: originalType,
-                attachmentID: originalID, documentKind: originalKind, data: data)
-            try await check()
-            attachment.markGoogleDriveArchived(file, actorEmail: actorEmail)
-            try context.save()
-        } catch {
-            guard (try? await check()) != nil else { return }
-            attachment.markGoogleDriveArchiveFailed(error.localizedDescription,
-                discardReservedID: (error as? GoogleDriveAPIError)?.discardsReservedFileIDBeforeRetry == true)
-            try? context.save()
-        }
+        )
     }
 
     private func fileData(for attachment: ServiceDocumentAttachment,
