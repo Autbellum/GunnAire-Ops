@@ -5181,7 +5181,8 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertFalse(quickBooksSend.isEnabled, "Connection alone is insufficient without an estimate QuickBooks ID.")
         let quickBooksIssue = app.staticTexts["SendEstimateQuickBooksIssue-A1000000-0000-4000-8000-000000000016"]
         XCTAssertTrue(quickBooksIssue.exists)
-        XCTAssertTrue(quickBooksIssue.label.contains("Publish this estimate to QuickBooks"))
+        XCTAssertTrue(quickBooksIssue.label.contains("Sync Saved Estimate"),
+                      "An unlinked saved estimate should direct the user to company-verified publication before email.")
         XCTAssertFalse(app.staticTexts["Message sent."].exists)
         app.terminate()
 
