@@ -73,7 +73,7 @@ silently passing release preparation after the app interface changes.
 
 ## Current-source verification
 
-The retained screenshot set was regenerated from build `1.0 (2026100119)` on
+The retained screenshot set was regenerated from build `1.0 (2026100120)` on
 2026-10-01. Both the iPad Pro 13-inch (M5) and iPhone 17 Pro Max capture tests
 passed **1/1** on iOS 26.5. The selected images show the current
 Command Center, Schedule, customer equipment, job billing, payment entry, and
@@ -81,7 +81,7 @@ QuickBooks publication review. The QuickBooks light-mode background and title
 remain readable in both device captures.
 
 The retained result bundles and exported attachment manifests are in
-`/Users/gunnaire/Documents/GunnAireCompletion/2026-10-01-release-0119/`.
+`/Users/gunnaire/Documents/GunnAireCompletion/2026-10-01-release-0120/`.
 All twelve selected images were visually reviewed and mechanically checked at
 2064 x 2752 or 1320 x 2868 with no alpha channel. The fixtures show disconnected
 Google Calendar and QuickBooks Payments states honestly; they do not represent
