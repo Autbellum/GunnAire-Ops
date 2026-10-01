@@ -127,7 +127,8 @@ final class QuickBooksCatalogWorkflow {
         self.save = save
         revision = QuickBooksCatalogItemRevision(item)
         try Self.validateItemValues(item)
-        let matches = try context.fetch(FetchDescriptor<Item>()).filter { $0.id == item.id }
+        let id = item.id
+        let matches = try context.fetch(FetchDescriptor<Item>(predicate: #Predicate { $0.id == id }))
         guard matches.count == 1, matches.first === item else { throw QuickBooksCatalogWorkflowError.itemChanged }
         if case .publish = mode {
             guard item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
@@ -163,7 +164,8 @@ final class QuickBooksCatalogWorkflow {
 
     func checkItem() throws {
         try run.check()
-        let matches = try context.fetch(FetchDescriptor<Item>()).filter { $0.id == revision.id }
+        let id = revision.id
+        let matches = try context.fetch(FetchDescriptor<Item>(predicate: #Predicate { $0.id == id }))
         guard matches.count == 1, matches.first === item,
               QuickBooksCatalogItemRevision(item) == revision else {
             throw QuickBooksCatalogWorkflowError.itemChanged

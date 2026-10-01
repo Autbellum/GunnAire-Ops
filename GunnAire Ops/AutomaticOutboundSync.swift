@@ -290,6 +290,7 @@ final class AutomaticOutboundSync {
     }
 
     enum DocumentKey: Hashable {
+        case catalog(UUID)
         case customer(UUID)
         case invoice(UUID)
         case estimate(UUID)
@@ -322,6 +323,7 @@ final class AutomaticOutboundSync {
     private var queueGeneration = UUID()
     private var invoiceOffset = 0
     private var estimateOffset = 0
+    private var catalogOffset = 0
     private var customerOffset = 0
     private var attachmentOffset = 0
     private var attachmentTasks: [UUID: Task<Void, Never>] = [:]
@@ -641,9 +643,15 @@ final class AutomaticOutboundSync {
             .map { .customer($0.id) }
     }
 
+    static func pendingCatalogKeys(_ items: [Item]) -> [DocumentKey] {
+        QuickBooksCatalogPublicationRecovery.queuedItems(from: items).map { .catalog($0.id) }
+    }
+
     static func pendingRecoveryKeys(invoices: [Invoice], estimates: [Estimate],
-                                    customers: [Customer], includeCustomers: Bool) -> [DocumentKey] {
-        pendingDocumentKeys(invoices: invoices, estimates: estimates) +
+                                    customers: [Customer], includeCustomers: Bool,
+                                    catalogItems: [Item] = [], includeCatalog: Bool = false) -> [DocumentKey] {
+        (includeCatalog ? pendingCatalogKeys(catalogItems) : []) +
+            pendingDocumentKeys(invoices: invoices, estimates: estimates) +
             (includeCustomers ? pendingCustomerKeys(customers) : [])
     }
 
@@ -697,6 +705,13 @@ final class AutomaticOutboundSync {
             }, sortBy: [SortDescriptor(\.createdAt, order: .reverse), SortDescriptor(\.id)])
             let invoices = try Self.nextPage(invoiceFetch, context: context, offset: &invoiceOffset)
             let estimates = try Self.nextPage(estimateFetch, context: context, offset: &estimateOffset)
+            let canRecoverCatalog = (try? QuickBooksSyncAccessPolicy.validate(context: context)) != nil
+            let catalogItems: [Item]
+            if canRecoverCatalog {
+                catalogItems = try Self.nextCatalogPage(context: context, offset: &catalogOffset)
+            } else {
+                catalogItems = []
+            }
             let canRecoverCustomers: Bool
             if QuickBooksDataAPI.shared.isAuthenticated {
                 do {
@@ -718,7 +733,8 @@ final class AutomaticOutboundSync {
                 customers = []
             }
             let keys = Self.pendingRecoveryKeys(invoices: invoices, estimates: estimates,
-                customers: customers, includeCustomers: canRecoverCustomers)
+                customers: customers, includeCustomers: canRecoverCustomers,
+                catalogItems: catalogItems, includeCatalog: canRecoverCatalog)
             for key in keys where !pending.contains(key) && currentKey != key &&
                 (deferredUntil[key] ?? .distantPast) <= now {
                 pending.append(key)
@@ -803,6 +819,15 @@ final class AutomaticOutboundSync {
         }
         offset = values.count < pageSize ? 0 : offset + values.count
         return values
+    }
+
+    static func nextCatalogPage(context: ModelContext, offset: inout Int) throws -> [Item] {
+        // Queue eligibility trims provider IDs; scanning a bounded page of
+        // all items also finds legacy whitespace-only IDs.
+        let descriptor = FetchDescriptor<Item>(sortBy: [
+            SortDescriptor(\.createdAt), SortDescriptor(\.id)
+        ])
+        return try nextPage(descriptor, context: context, offset: &offset, pageSize: 250)
     }
 
     func recoverCalendar(context: ModelContext, auth: GoogleAuthManager) {
@@ -895,6 +920,7 @@ final class AutomaticOutboundSync {
             currentKey = nil
             invoiceOffset = 0
             estimateOffset = 0
+            catalogOffset = 0
             customerOffset = 0
             attachmentOffset = 0
             attachmentTasks.removeAll()
@@ -917,7 +943,7 @@ final class AutomaticOutboundSync {
 
     private func document(for key: DocumentKey, context: ModelContext) throws -> QuickBooksBillingDocument? {
         switch key {
-        case .customer:
+        case .catalog, .customer:
             return nil
         case .invoice(let id):
             var fetch = FetchDescriptor<Invoice>(predicate: #Predicate { $0.id == id })
@@ -958,6 +984,13 @@ final class AutomaticOutboundSync {
             var proofCheckInProgress = false
             var hasNewMarkerForCurrentDocument = false
             do {
+                if case .catalog(let id) = next {
+                    try await publishCatalog(id, context: context)
+                    guard queueGeneration == generation else { currentKey = nil; break }
+                    deferredUntil.removeValue(forKey: next)
+                    currentKey = nil
+                    continue
+                }
                 if case .customer(let id) = next {
                     try await publishCustomer(id, context: context)
                     guard queueGeneration == generation else { currentKey = nil; break }
@@ -1038,7 +1071,10 @@ final class AutomaticOutboundSync {
                 let reported: Error = failure ?? underlying
                 let callbacks = completions.removeValue(forKey: next) ?? []
                 callbacks.forEach { $0(.failure(reported)) }
-                if failure?.mayHaveWritten == true {
+                if case .catalog = next {
+                    deferredUntil[next] = Self.catalogRetryDelay(after: underlying)
+                        .map { Date().addingTimeInterval($0) } ?? .distantFuture
+                } else if failure?.mayHaveWritten == true {
                     deferredUntil[next] = Date().addingTimeInterval(5 * 60)
                 }
                 // The original document retains its journal/attention state.
@@ -1056,6 +1092,26 @@ final class AutomaticOutboundSync {
 
     static func shouldPauseAfterFailure(_ error: Error) -> Bool {
         error is URLError || (error as? SharedBillingConnectionError) == .unavailable
+    }
+
+    /// Unknown server attempts can become verifiable later, but a rejected
+    /// proposal must wait for human correction. The backend journal prevents
+    /// a retry of the same local item from sending a second provider create.
+    static func catalogRetryDelay(after error: Error) -> TimeInterval? {
+        if let error = error as? CatalogPublicationError {
+            switch error {
+            case .needsReview: return 10 * 60
+            case .accessRequired, .unavailable: return 5 * 60
+            case .invalidResponse, .invalidProposal: return nil
+            }
+        }
+        if let error = error as? QuickBooksCatalogWorkflowError {
+            switch error {
+            case .itemChanged, .saveFailed, .busy: return 5 * 60
+            case .reviewChanged, .invalidItem, .remoteIdentity, .invalidResponse: return nil
+            }
+        }
+        return 5 * 60
     }
 
     private func publish(_ document: QuickBooksBillingDocument, context: ModelContext,
@@ -1132,5 +1188,35 @@ final class AutomaticOutboundSync {
         }
         do { try await workflow.publish() }
         catch { throw PublicationFailure(underlying: error, mayHaveWritten: true) }
+    }
+
+    private func publishCatalog(_ id: UUID, context: ModelContext) async throws {
+        let lifecycle = QuickBooksSyncLifecycle()
+        defer { lifecycle.cancel() }
+        let preparation: SharedCatalogPreparation
+        do {
+            var fetch = FetchDescriptor<Item>(predicate: #Predicate { $0.id == id })
+            fetch.fetchLimit = 1
+            guard let item = try context.fetch(fetch).first,
+                  !Self.pendingCatalogKeys([item]).isEmpty else { return }
+            let generation = queueGeneration
+            let stamp = queueStamp
+            preparation = try SharedCatalogPreparation(item: item, context: context,
+                isCurrent: { [weak self] in
+                    self?.queueGeneration == generation && self?.queueStamp == stamp &&
+                        self?.isAuthorized(context) == true
+                })
+        } catch {
+            throw PublicationFailure(underlying: error, mayHaveWritten: false)
+        }
+        var workflow: QuickBooksCatalogWorkflow?
+        do {
+            let prepared = try await preparation.makeWorkflow(lifecycle: lifecycle, mode: .publish)
+            workflow = prepared
+            _ = try await prepared.execute()
+        } catch {
+            if let workflow { try? workflow.recordFailure(error) }
+            throw PublicationFailure(underlying: error, mayHaveWritten: workflow?.attemptedWrite == true)
+        }
     }
 }
