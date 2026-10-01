@@ -412,6 +412,141 @@ enum GoogleCalendarScheduleSync {
         (await checkGoogleLink(call: call, workflow: workflow)).map(\.missingEventReview)
     }
 
+    enum UnlinkedMatchReason: String {
+        case appMarker, deterministicID, sameSchedule
+
+        var displayName: String {
+            switch self {
+            case .appMarker: "GunnAire job marker"
+            case .deterministicID: "GunnAire event ID"
+            case .sameSchedule: "same appointment time"
+            }
+        }
+    }
+
+    struct UnlinkedCalendarCandidate {
+        let calendarID: String
+        let eventID: String
+        let summary: String?
+        let reason: UnlinkedMatchReason
+    }
+
+    struct UnlinkedCalendarInspection {
+        let accountEmail: String
+        let originalCalendarID: String
+        let windowStart: Date
+        let windowEnd: Date
+        let searchedCalendarIDs: [String]
+        let candidates: [UnlinkedCalendarCandidate]
+
+        /// A complete scoped search found no matching ID, marker, or schedule.
+        /// It is not proof that no event exists in another account or time slot.
+        var noMatchWithinScope: Bool { candidates.isEmpty }
+    }
+
+    /// Inspect a legacy nil-ID job without saving a link or issuing a write.
+    /// A failed calendar read, overfull page, or changed job never yields a
+    /// negative result that could later be mistaken for creation authority.
+    static func inspectUnlinkedCalendarJob(call: ServiceCall, workflow: GoogleCalendarWorkflow) async
+        -> Result<UnlinkedCalendarInspection, Error> {
+        var inspection: UnlinkedCalendarInspection?
+        let result = await workflow.run { current in
+            inspection = try await inspectUnlinkedCalendarJobReadOnly(call: call, workflow: current)
+            return "Read-only Google Calendar inspection finished. No event was created or linked."
+        }
+        return result.flatMap { _ in
+            guard let inspection else { return .failure(GoogleCalendarWorkflowError.needsReview) }
+            return .success(inspection)
+        }
+    }
+
+    private static func inspectUnlinkedCalendarJobReadOnly(call: ServiceCall, workflow: GoogleCalendarWorkflow)
+        async throws -> UnlinkedCalendarInspection {
+        try requireCall(call, workflow: workflow)
+        guard try containsOriginalCall(call, in: workflow.context), !workflow.context.hasChanges,
+              !call.googleEventManagedByApp, normalizedOptional(call.googleEventID) == nil,
+              call.googleCalendarPendingAt == nil, call.googleEventConfirmedAt == nil,
+              call.status == .scheduled || call.status == .inProgress,
+              call.scheduledDate.timeIntervalSince1970.isFinite,
+              call.duration.isFinite, call.duration > 0, call.duration <= 24 * 60 * 60 else {
+            throw GoogleCalendarWorkflowError.needsReview
+        }
+        let account = AppAccess.normalizedEmail(workflow.auth.signedInEmail)
+        guard !account.isEmpty, account == AppAccess.normalizedEmail(workflow.signedInEmail) else {
+            throw GoogleCalendarWorkflowError.identity
+        }
+        let end = call.scheduledDate.addingTimeInterval(call.duration)
+        let windowStart = call.scheduledDate.addingTimeInterval(-2 * 60 * 60)
+        let windowEnd = end.addingTimeInterval(2 * 60 * 60)
+        guard end.timeIntervalSince1970.isFinite,
+              windowStart.timeIntervalSince1970.isFinite,
+              windowEnd.timeIntervalSince1970.isFinite else {
+            throw GoogleCalendarWorkflowError.invalidDates
+        }
+        // Include every calendar the account lists, including calendars that
+        // normal schedule import omits. A scoped absence result is not sound
+        // if a moved event could be hidden by that import filter.
+        let listed: [GoogleCalendar] = try await workflow.receive {
+            workflow.auth.fetchCalendarListForInspection(operation: workflow.operation, completion: $0)
+        }
+        guard !listed.isEmpty, listed.count <= 25,
+              listed.allSatisfy({ !$0.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+              Set(listed.map(\.id)).count == listed.count,
+              listed.filter({ $0.primary == true }).count <= 1 else {
+            throw GoogleCalendarWorkflowError.needsReview
+        }
+        let list = listed.sorted(by: { $0.id < $1.id })
+        let original = try canonicalCalendar(call.googleCalendarID, in: list, email: workflow.signedInEmail)
+        guard original.isWritable else { throw GoogleCalendarWorkflowError.readOnly }
+        let deterministicID = eventID(for: call.id)
+        var candidates: [String: UnlinkedCalendarCandidate] = [:]
+        for calendar in list {
+            let key = "\(calendar.id)|\(deterministicID)"
+            do {
+                let event: GoogleCalendarEvent = try await workflow.receive {
+                    workflow.auth.fetchCalendarEvent(calendarID: calendar.id, eventID: deterministicID,
+                        operation: workflow.operation, completion: $0)
+                }
+                guard event.id == deterministicID else { throw GoogleCalendarWorkflowError.identity }
+                candidates[key] = UnlinkedCalendarCandidate(calendarID: calendar.id, eventID: event.id,
+                    summary: event.summary, reason: .deterministicID)
+                guard candidates.count <= 20 else { throw GoogleCalendarWorkflowError.needsReview }
+            } catch GoogleAuthError.http(statusCode: 404) {
+                // Only an exact 404 on this ID may be treated as absent here.
+            }
+            let events: [GoogleCalendarEvent] = try await workflow.receive {
+                workflow.auth.fetchCalendarInspectionWindow(calendarID: calendar.id,
+                    timeMin: windowStart, timeMax: windowEnd,
+                    operation: workflow.operation, completion: $0)
+            }
+            for event in events {
+                guard GoogleAuthManager.calendarPathComponent(event.id) != nil,
+                      let start = parseEventDate(event.start), let finish = parseEventDate(event.end) else {
+                    throw GoogleCalendarWorkflowError.needsReview
+                }
+                let marker = event.extendedProperties?.privateProperties?["gunnaireServiceCallID"]
+                let matchesMarker = marker?.caseInsensitiveCompare(call.id.uuidString) == .orderedSame
+                let matchesSchedule = abs(start.timeIntervalSince(call.scheduledDate)) <= 60 &&
+                    abs(finish.timeIntervalSince(end)) <= 60
+                let reason: UnlinkedMatchReason
+                if matchesMarker { reason = .appMarker }
+                else if event.id == deterministicID { reason = .deterministicID }
+                else if matchesSchedule { reason = .sameSchedule }
+                else { continue }
+                let key = "\(calendar.id)|\(event.id)"
+                candidates[key] = UnlinkedCalendarCandidate(calendarID: calendar.id, eventID: event.id,
+                    summary: event.summary, reason: reason)
+                guard candidates.count <= 20 else { throw GoogleCalendarWorkflowError.needsReview }
+            }
+        }
+        try requireCall(call, workflow: workflow)
+        return UnlinkedCalendarInspection(accountEmail: account, originalCalendarID: original.id,
+            windowStart: windowStart, windowEnd: windowEnd, searchedCalendarIDs: list.map(\.id),
+            candidates: candidates.values.sorted {
+                $0.calendarID == $1.calendarID ? $0.eventID < $1.eventID : $0.calendarID < $1.calendarID
+            })
+    }
+
     static func repairMissingEvent(_ review: MissingEventReview) async -> Result<String, Error> {
         await review.workflow.run { workflow in
             let call = review.call
