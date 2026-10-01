@@ -13,6 +13,8 @@ struct CustomerAccountSignupsView: View {
     @State private var isLoading = false
     @State private var message: String?
     @State private var linkingAccount: BackendCustomerAccountRecord?
+    @State private var isCreatingCustomer = false
+    @State private var localCustomerStore: CustomerAccountLocalCustomerStore?
 
     private var formatter: ISO8601DateFormatter { ISO8601DateFormatter() }
 
@@ -122,17 +124,71 @@ struct CustomerAccountSignupsView: View {
     @MainActor
     private func createAndLink(_ account: BackendCustomerAccountRecord) async {
         linkingAccount = nil
-        let customer = Customer(name: account.name, phone: account.phone, email: account.email)
-        modelContext.insert(customer)
+        guard !isCreatingCustomer else { return }
+        isCreatingCustomer = true
+        defer { isCreatingCustomer = false }
+
+        let customerID: UUID
         do {
-            try modelContext.save()
-            _ = try await GunnAireBackendService.linkCustomerAccount(
-                id: account.id, customerID: customer.id, quickBooksID: nil
-            )
-            message = "Created a new customer record for \(account.name)."
-            await loadAccounts()
+            customerID = try CustomerAccountLinkIdentity.customerID(for: account.id)
+            let store = localCustomerStore ?? CustomerAccountLocalCustomerStore(container: modelContext.container)
+            localCustomerStore = store
+            try await store.prepare(id: customerID, name: account.name, email: account.email, phone: account.phone)
         } catch {
             message = error.localizedDescription
+            return
+        }
+
+        do {
+            _ = try await GunnAireBackendService.linkCustomerAccount(
+                id: account.id, customerID: customerID, quickBooksID: nil
+            )
+            await loadAccounts()
+            message = "Created a new customer record for \(account.name)."
+        } catch {
+            await reconcileFailedCreation(account: account, customerID: customerID, linkError: error)
+        }
+    }
+
+    @MainActor
+    private func reconcileFailedCreation(
+        account: BackendCustomerAccountRecord, customerID: UUID, linkError: Error
+    ) async {
+        let status = try? await GunnAireBackendService.fetchCustomerAccount(id: account.id)
+        let definiteRejection: Bool
+        if case GunnAireBackendError.server(let code, _) = linkError {
+            definiteRejection = (400..<500).contains(code)
+        } else {
+            definiteRejection = false
+        }
+        switch CustomerAccountLinkResolution.decide(
+            status: status?.linkStatus, linkedCustomerID: status?.linkedCustomerID,
+            linkedQuickBooksID: status?.linkedCustomerQuickBooksID,
+            customerID: customerID, definitiveRejection: definiteRejection
+        ) {
+        case .confirmed:
+            await loadAccounts()
+            message = "Created a new customer record for \(account.name)."
+            return
+        case .keepForRetry:
+            message = "The link result is unconfirmed. The customer record is kept for a safe retry."
+            return
+        case .reviewExistingLink:
+            message = "This signup has a link that needs review. The local customer record is kept."
+            return
+        case .discardUnlinked:
+            break
+        }
+        guard let store = localCustomerStore else { return }
+        do {
+            let removed = try await store.discardUnlinked(
+                id: customerID, name: account.name, email: account.email, phone: account.phone
+            )
+            message = removed
+                ? "The signup was not linked. No new customer record was kept."
+                : "The signup was not linked. Review the local customer record before retrying."
+        } catch {
+            message = "The signup was not linked. Review the local customer record before retrying."
         }
     }
 }

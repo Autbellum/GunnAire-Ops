@@ -3975,6 +3975,12 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 return
             self.list_customer_accounts()
             return
+        if parsed.path.startswith("/api/customer-accounts/"):
+            if not self.require_admin():
+                return
+            account_id = unquote(parsed.path.removeprefix("/api/customer-accounts/")).strip("/")
+            self.get_customer_account(account_id)
+            return
         if parsed.path == "/api/session":
             self.write_json({"user": self.principal()})
             return
@@ -6098,6 +6104,19 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             accounts = customer_accounts.pending_accounts(connection)
         self.write_json({"customerAccounts": accounts})
 
+    def get_customer_account(self, account_id: str) -> None:
+        try:
+            account_id = str(uuid.UUID(account_id))
+        except ValueError:
+            self.write_json({"error": "Invalid account ID"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        with db() as connection:
+            account = connection.execute("SELECT * FROM customer_accounts WHERE id = ?", (account_id,)).fetchone()
+        if account is None:
+            self.write_json({"error": "Customer account not found"}, status=HTTPStatus.NOT_FOUND)
+            return
+        self.write_json({"customerAccount": customer_accounts.account_record(account)})
+
     def link_customer_account(self, account_id: str) -> None:
         if not account_id or len(account_id) > 80:
             self.write_json({"error": "Invalid account ID"}, status=HTTPStatus.BAD_REQUEST)
@@ -6118,6 +6137,12 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             account = connection.execute("SELECT * FROM customer_accounts WHERE id = ?", (account_id,)).fetchone()
         if account is None:
             self.write_json({"error": "Customer account not found"}, status=HTTPStatus.NOT_FOUND)
+            return
+        if account["link_status"] != "pending":
+            if customer_accounts.link_matches(account, customer_id=customer_id, quickbooks_id=quickbooks_id):
+                self.write_json({"customerAccount": customer_accounts.account_record(account)})
+            else:
+                self.write_json({"error": "Customer account is already linked"}, status=HTTPStatus.CONFLICT)
             return
         if quickbooks_id:
             if customer_accounts.QBO_INVOICE_ID_PATTERN.fullmatch(quickbooks_id) is None:
@@ -6162,8 +6187,16 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 quickbooks_environment=environment,
                 actor_email=principal.get("email") if isinstance(principal.get("email"), str) else "unknown",
             )
+            current = None if updated is not None else connection.execute(
+                "SELECT * FROM customer_accounts WHERE id = ?", (account_id,)
+            ).fetchone()
         if updated is None:
-            self.write_json({"error": "Customer account not found"}, status=HTTPStatus.NOT_FOUND)
+            if current is None:
+                self.write_json({"error": "Customer account not found"}, status=HTTPStatus.NOT_FOUND)
+            elif customer_accounts.link_matches(current, customer_id=customer_id, quickbooks_id=quickbooks_id):
+                self.write_json({"customerAccount": customer_accounts.account_record(current)})
+            else:
+                self.write_json({"error": "Customer account is already linked"}, status=HTTPStatus.CONFLICT)
             return
         record_audit_event(principal.get("email") if isinstance(principal.get("email"), str) else None, "link", "customer-account", account_id)
         self.write_json({"customerAccount": updated})

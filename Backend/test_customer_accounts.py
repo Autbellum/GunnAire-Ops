@@ -262,6 +262,63 @@ class CustomerAccountsTests(unittest.TestCase):
                 pending_after = json.loads(response.read().decode("utf-8"))["customerAccounts"]
             self.assertEqual(pending_after, [])
 
+    def test_admin_can_read_one_account_status_without_exposing_it_to_customers_or_dispatchers(self) -> None:
+        with self.running_server() as base_url:
+            magic_token = self.request_magic_link_and_capture_token(
+                base_url, email="alex@example.com", name="Alex Customer"
+            )
+            customer_session = self.consume_magic_link(base_url, magic_token)
+            with urllib.request.urlopen(
+                self.json_request(base_url, "/api/customer-accounts", token=self.api_token), timeout=5
+            ) as response:
+                account_id = json.loads(response.read().decode("utf-8"))["customerAccounts"][0]["id"]
+
+            status_path = f"/api/customer-accounts/{account_id}"
+            with urllib.request.urlopen(self.json_request(base_url, status_path, token=self.api_token), timeout=5) as response:
+                record = json.loads(response.read().decode("utf-8"))["customerAccount"]
+            self.assertEqual(record["linkStatus"], "pending")
+            self.assertEqual(record["id"], account_id)
+
+            with self.assertRaises(urllib.error.HTTPError) as failure:
+                urllib.request.urlopen(self.json_request(base_url, status_path, token=customer_session), timeout=5)
+            self.assertEqual(failure.exception.code, 401)
+            with mock.patch.object(backend.GunnAireBackendHandler, "principal", return_value={
+                "email": "dispatcher@example.invalid", "role": "Dispatcher", "isActive": True,
+            }):
+                with self.assertRaises(urllib.error.HTTPError) as failure:
+                    urllib.request.urlopen(self.json_request(base_url, status_path, token=self.api_token), timeout=5)
+                self.assertEqual(failure.exception.code, 403)
+
+    def test_link_retry_is_idempotent_and_conflicting_relink_cannot_overwrite(self) -> None:
+        with self.running_server() as base_url:
+            self.request_magic_link_and_capture_token(base_url, email="alex@example.com", name="Alex Customer")
+            with urllib.request.urlopen(
+                self.json_request(base_url, "/api/customer-accounts", token=self.api_token), timeout=5
+            ) as response:
+                account_id = json.loads(response.read().decode("utf-8"))["customerAccounts"][0]["id"]
+            path = f"/api/customer-accounts/{account_id}/link"
+            first_customer_id = "11111111-1111-1111-1111-111111111111"
+            first = self.json_request(base_url, path, method="POST", token=self.api_token,
+                                      payload={"customerID": first_customer_id, "quickBooksID": None})
+            with urllib.request.urlopen(first, timeout=5) as response:
+                linked = json.loads(response.read().decode("utf-8"))["customerAccount"]
+            with urllib.request.urlopen(first, timeout=5) as response:
+                repeated = json.loads(response.read().decode("utf-8"))["customerAccount"]
+            self.assertEqual(repeated["linkedCustomerID"], first_customer_id)
+            self.assertEqual(repeated["linkedAt"], linked["linkedAt"])
+
+            different = self.json_request(base_url, path, method="POST", token=self.api_token,
+                                          payload={"customerID": "22222222-2222-2222-2222-222222222222",
+                                                   "quickBooksID": None})
+            with self.assertRaises(urllib.error.HTTPError) as failure:
+                urllib.request.urlopen(different, timeout=5)
+            self.assertEqual(failure.exception.code, 409)
+            with urllib.request.urlopen(
+                self.json_request(base_url, f"/api/customer-accounts/{account_id}", token=self.api_token), timeout=5
+            ) as response:
+                current = json.loads(response.read().decode("utf-8"))["customerAccount"]
+            self.assertEqual(current["linkedCustomerID"], first_customer_id)
+
     def test_qbo_link_requires_verified_current_realm_customer(self) -> None:
         with self.running_server() as base_url:
             self.request_magic_link_and_capture_token(base_url, email="alex@example.com", name="Alex Customer")
@@ -306,6 +363,19 @@ class CustomerAccountsTests(unittest.TestCase):
                 with urllib.request.urlopen(link, timeout=5) as response:
                     updated = json.loads(response.read().decode("utf-8"))["customerAccount"]
                 self.assertEqual(updated["linkedCustomerQuickBooksID"], "42")
+                with mock.patch.object(backend, "qbo_authorized_bearer", side_effect=AssertionError(
+                    "A confirmed same-ID retry must not fetch a new provider identity"
+                )):
+                    with urllib.request.urlopen(link, timeout=5) as response:
+                        repeated = json.loads(response.read().decode("utf-8"))["customerAccount"]
+                self.assertEqual(repeated["linkedAt"], updated["linkedAt"])
+                changed_customer = self.json_request(
+                    base_url, f"/api/customer-accounts/{account_id}/link", method="POST", token=self.api_token,
+                    payload={"customerID": "22222222-2222-2222-2222-222222222222", "quickBooksID": "42"},
+                )
+                with self.assertRaises(urllib.error.HTTPError) as failure:
+                    urllib.request.urlopen(changed_customer, timeout=5)
+                self.assertEqual(failure.exception.code, 409)
                 session = self.consume_magic_link(base_url, self.request_magic_link_and_capture_token(
                     base_url, email="alex@example.com", name="Alex Customer"))
                 with urllib.request.urlopen(self.json_request(base_url, "/api/customer/invoices", token=session), timeout=5) as response:

@@ -219,6 +219,14 @@ def pending_accounts(connection: sqlite3.Connection) -> list[dict[str, object]]:
     return [account_record(row) for row in rows]
 
 
+def link_matches(row: sqlite3.Row, *, customer_id: str, quickbooks_id: str | None) -> bool:
+    return (
+        row["link_status"] == "linked"
+        and row["linked_customer_id"] == customer_id
+        and row["linked_customer_quickbooks_id"] == quickbooks_id
+    )
+
+
 def link_account(
     connection: sqlite3.Connection,
     *,
@@ -235,7 +243,7 @@ def link_account(
         SET link_status = 'linked', linked_customer_id = ?, linked_customer_quickbooks_id = ?,
             linked_customer_quickbooks_realm_id = ?, linked_customer_quickbooks_environment = ?,
             linked_at = ?, linked_by = ?
-        WHERE id = ?
+        WHERE id = ? AND link_status = 'pending'
         """,
         (customer_id, quickbooks_id, quickbooks_realm_id, quickbooks_environment,
          utc_now_iso(), actor_email, account_id),

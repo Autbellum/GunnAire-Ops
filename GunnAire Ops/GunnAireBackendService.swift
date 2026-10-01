@@ -1776,6 +1776,12 @@ enum GunnAireBackendService {
         return try JSONDecoder().decode(CustomerAccountsResponse.self, from: data).customerAccounts
     }
 
+    static func fetchCustomerAccount(id: String) async throws -> BackendCustomerAccountRecord {
+        let encodedID = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        let data = try await send(path: "/api/customer-accounts/\(encodedID)", method: "GET")
+        return try JSONDecoder().decode(CustomerAccountLinkResponse.self, from: data).customerAccount
+    }
+
     static func linkCustomerAccount(id: String, customerID: UUID, quickBooksID: String?) async throws -> BackendCustomerAccountRecord {
         let encodedID = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
         let payload = CustomerAccountLinkPayload(customerID: customerID.uuidString, quickBooksID: quickBooksID)
