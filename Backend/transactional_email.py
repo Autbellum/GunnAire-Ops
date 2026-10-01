@@ -55,6 +55,18 @@ def send_transactional_email(
     )
     try:
         with opener(request, timeout=10) as response:
-            return 200 <= response.status < 300
-    except (urllib.error.URLError, TimeoutError, ValueError):
+            if not 200 <= response.status < 300:
+                return False
+            raw = response.read(4097)
+            if len(raw) > 4096:
+                return False
+            receipt = json.loads(raw.decode("utf-8"))
+            return (
+                isinstance(receipt, dict)
+                and type(receipt.get("ErrorCode")) is int
+                and receipt["ErrorCode"] == 0
+                and isinstance(receipt.get("MessageID"), str)
+                and bool(receipt["MessageID"])
+            )
+    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError, OSError):
         return False

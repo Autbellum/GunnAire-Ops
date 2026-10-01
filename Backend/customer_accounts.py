@@ -21,6 +21,7 @@ import re
 import secrets
 import sqlite3
 import uuid
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
@@ -53,6 +54,8 @@ def initialize_schema(connection: sqlite3.Connection, ensure_column: Callable[[s
             link_status TEXT NOT NULL DEFAULT 'pending',
             linked_customer_id TEXT,
             linked_customer_quickbooks_id TEXT,
+            linked_customer_quickbooks_realm_id TEXT,
+            linked_customer_quickbooks_environment TEXT,
             created_at TEXT NOT NULL,
             linked_at TEXT,
             linked_by TEXT
@@ -88,6 +91,8 @@ def initialize_schema(connection: sqlite3.Connection, ensure_column: Callable[[s
     # from an anonymous website lead without a second, parallel table.
     ensure_column(connection, "public_service_requests", "source", "TEXT")
     ensure_column(connection, "public_service_requests", "customer_account_id", "TEXT")
+    ensure_column(connection, "customer_accounts", "linked_customer_quickbooks_realm_id", "TEXT")
+    ensure_column(connection, "customer_accounts", "linked_customer_quickbooks_environment", "TEXT")
 
 
 def normalized_email(value: str | None) -> str:
@@ -220,16 +225,20 @@ def link_account(
     account_id: str,
     customer_id: str,
     quickbooks_id: str | None,
+    quickbooks_realm_id: str | None,
+    quickbooks_environment: str | None,
     actor_email: str,
 ) -> dict[str, object] | None:
     updated = connection.execute(
         """
         UPDATE customer_accounts
         SET link_status = 'linked', linked_customer_id = ?, linked_customer_quickbooks_id = ?,
+            linked_customer_quickbooks_realm_id = ?, linked_customer_quickbooks_environment = ?,
             linked_at = ?, linked_by = ?
         WHERE id = ?
         """,
-        (customer_id, quickbooks_id, utc_now_iso(), actor_email, account_id),
+        (customer_id, quickbooks_id, quickbooks_realm_id, quickbooks_environment,
+         utc_now_iso(), actor_email, account_id),
     )
     if updated.rowcount != 1:
         return None
@@ -307,6 +316,41 @@ QBO_INVOICE_ID_PATTERN = re.compile(r"[0-9]{1,21}")
 
 def _qbo_base_url(environment: str) -> str:
     return "https://sandbox-quickbooks.api.intuit.com" if environment == "sandbox" else "https://quickbooks.api.intuit.com"
+
+
+def verify_customer_quickbooks_identity(
+    *, quickbooks_customer_id: str, account_email: str, realm_id: str, environment: str,
+    bearer: str, transport: Callable[[object], tuple[int, dict[str, object]]],
+    request_factory: Callable[..., object],
+) -> bool:
+    """Require the original verified email on the customer in the pinned QBO realm."""
+    normalized_account_email = normalized_email(account_email)
+    if (
+        QBO_INVOICE_ID_PATTERN.fullmatch(quickbooks_customer_id) is None
+        or environment not in {"sandbox", "production"}
+        or not is_valid_email(normalized_account_email)
+    ):
+        return False
+    url = (
+        _qbo_base_url(environment) + "/v3/company/" + urllib.parse.quote(realm_id, safe="")
+        + "/customer/" + urllib.parse.quote(quickbooks_customer_id, safe="") + "?minorversion=75"
+    )
+    request = request_factory(
+        url, method="GET", headers={"Authorization": f"Bearer {bearer}", "Accept": "application/json"}
+    )
+    status, payload = transport(request)
+    if not 200 <= status < 300:
+        return False
+    customer = payload.get("Customer")
+    if not isinstance(customer, dict) or customer.get("Id") != quickbooks_customer_id:
+        return False
+    primary_email = customer.get("PrimaryEmailAddr")
+    if not isinstance(primary_email, dict):
+        return False
+    normalized_provider_email = normalized_email(
+        primary_email.get("Address") if isinstance(primary_email.get("Address"), str) else None
+    )
+    return is_valid_email(normalized_provider_email) and normalized_provider_email == normalized_account_email
 
 
 def fetch_customer_invoices(
