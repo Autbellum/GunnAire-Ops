@@ -20,12 +20,13 @@ struct GoogleCalendarStaffDeliveryPatch: Encodable {
     var extendedProperties: GoogleCalendarExtendedProperties?
 }
 
-enum GoogleCalendarStaffDeliveryError: LocalizedError {
-    case staffEmail, guestReview
+enum GoogleCalendarStaffDeliveryError: LocalizedError, Equatable {
+    case staffEmail, guestReview, unsafeScheduleUpdate
     var errorDescription: String? {
         switch self {
         case .staffEmail: "An assigned technician or crew member needs a unique staff record and valid calendar email. Update the technician contact, then sync again."
         case .guestReview: "The Google event has external or incomplete guest details. Review its staff invitations in Google Calendar; no customer invitation was sent."
+        case .unsafeScheduleUpdate: "Google event was not moved because existing guests could receive the new schedule while an assigned staff email is invalid or duplicated. Give each assigned technician and crew member a unique valid email, then Sync Google. No Google update was sent."
         }
     }
 }

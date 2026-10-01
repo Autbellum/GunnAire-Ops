@@ -361,6 +361,48 @@ final class ServiceDocumentAttachment {
         return googleDriveWebURL == nil
     }
 
+    private static let previousDriveIDsMarker = " Earlier Google Drive file IDs: "
+
+    private var previousDriveFileIDs: [String] {
+        guard let detail = googleDriveSyncDetail,
+              let range = detail.range(of: Self.previousDriveIDsMarker) else { return [] }
+        return detail[range.upperBound...]
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func driveDetail(_ message: String, previousIDs: [String]? = nil) -> String {
+        let ids = previousIDs ?? previousDriveFileIDs
+        guard !ids.isEmpty else { return message }
+        return message + Self.previousDriveIDsMarker + ids.joined(separator: ", ")
+    }
+
+    struct DriveUploadSource: Equatable {
+        let attachmentID: UUID
+        let createdAt: Date
+        let localFilePath: String
+        let displayName: String
+        let contentType: String
+        let fileSizeBytes: Int
+        let kindRaw: String
+        let customerID: UUID?
+        let fleetVehicleID: UUID?
+        let fileID: String
+    }
+
+    func driveUploadSource(fileID: String) -> DriveUploadSource {
+        DriveUploadSource(attachmentID: id, createdAt: createdAt,
+            localFilePath: localFilePath, displayName: displayName,
+            contentType: contentType, fileSizeBytes: fileSizeBytes,
+            kindRaw: kindRaw, customerID: customer?.id,
+            fleetVehicleID: fleetVehicleID, fileID: fileID)
+    }
+
+    func matchesDriveUploadSource(_ source: DriveUploadSource) -> Bool {
+        googleDriveFileID == source.fileID && driveUploadSource(fileID: source.fileID) == source
+    }
+
     var googleDriveWebURL: URL? {
         guard googleDriveSyncState == .archived,
               let rawValue = googleDriveWebViewLink,
@@ -375,23 +417,26 @@ final class ServiceDocumentAttachment {
 
     func markGoogleDrivePreparing(fileID: String, actorEmail: String?) {
         let normalizedActor = AppAccess.normalizedEmail(actorEmail)
+        let detail = driveDetail("Reserved a duplicate-safe Google Drive file. Upload is pending.")
         googleDriveFileID = fileID
         googleDriveSyncState = .preparing
-        googleDriveSyncDetail = "Reserved a duplicate-safe Google Drive file. Upload is pending."
+        googleDriveSyncDetail = detail
         googleDriveArchivedByEmail = normalizedActor.isEmpty ? nil : normalizedActor
     }
 
     func markGoogleDriveUploading() {
+        let detail = driveDetail("Uploading to Google Drive with resumable recovery.")
         googleDriveSyncState = .uploading
-        googleDriveSyncDetail = "Uploading to Google Drive with resumable recovery."
+        googleDriveSyncDetail = detail
     }
 
     func markGoogleDriveArchived(_ file: GoogleDriveFile, actorEmail: String?) {
         let normalizedActor = AppAccess.normalizedEmail(actorEmail)
+        let detail = driveDetail("Archived in Google Drive.")
         googleDriveFileID = file.id
         googleDriveWebViewLink = file.webViewLink
         googleDriveSyncState = .archived
-        googleDriveSyncDetail = "Archived in Google Drive."
+        googleDriveSyncDetail = detail
         googleDriveLastSyncedAt = Date()
         googleDriveArchivedByEmail = normalizedActor.isEmpty ? nil : normalizedActor
     }
@@ -400,6 +445,7 @@ final class ServiceDocumentAttachment {
         _ detail: String,
         discardReservedID: Bool = false
     ) {
+        let previousIDs = previousDriveFileIDs
         // Preserve a reserved Drive ID so retries reconcile the exact same file
         // instead of silently creating duplicate business records.
         if discardReservedID {
@@ -413,7 +459,9 @@ final class ServiceDocumentAttachment {
             .joined()
             .trimmingCharacters(in: .whitespacesAndNewlines)
         googleDriveSyncState = .needsAttention
-        googleDriveSyncDetail = "Google Drive archive needs attention: \(String(boundedDetail.prefix(300)))"
+        googleDriveSyncDetail = driveDetail(
+            "Google Drive archive needs attention: \(String(boundedDetail.prefix(300)))",
+            previousIDs: previousIDs)
     }
 
     func markSharedCompanyStored(id: String) {
@@ -1172,6 +1220,14 @@ final class ServiceDocumentAttachment {
         fileSizeBytes: Int,
         caption: String?
     ) {
+        var priorDriveIDs = previousDriveFileIDs
+        let hadDriveAttempt = googleDriveSyncState != .notArchived ||
+            googleDriveFileID != nil || googleDriveLastSyncedAt != nil ||
+            googleDriveWebViewLink != nil || !priorDriveIDs.isEmpty
+        if let currentDriveID = googleDriveFileID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !currentDriveID.isEmpty, !priorDriveIDs.contains(currentDriveID) {
+            priorDriveIDs.append(currentDriveID)
+        }
         self.displayName = displayName
         self.localFilePath = localFilePath
         self.contentType = contentType
@@ -1180,6 +1236,16 @@ final class ServiceDocumentAttachment {
         self.quickBooksAttachableID = nil
         self.quickBooksSyncError = nil
         self.quickBooksAttachedEntityKeysRaw = nil
+        // The old Drive ID points at the previous bytes. Retain it in the
+        // persisted detail, but reserve a fresh ID for this generated version.
+        googleDriveFileID = nil
+        googleDriveWebViewLink = nil
+        googleDriveLastSyncedAt = nil
+        googleDriveArchivedByEmail = nil
+        googleDriveSyncState = hadDriveAttempt ? .needsAttention : .notArchived
+        googleDriveSyncDetail = hadDriveAttempt ? driveDetail(
+            "Generated file changed. Archive the current version in Google Drive.",
+            previousIDs: priorDriveIDs) : nil
         self.createdAt = Date()
     }
 }

@@ -787,9 +787,11 @@ enum BusinessSuiteIntelligence {
         let sharedFileCount = attachments.filter {
             $0.customer != nil && $0.needsSharedCompanyStorageUpload
         }.count
-        let communicationCount = sharedServerConfigured
-            ? communications.filter { $0.customer != nil && $0.needsSharedCompanySync }.count
-            : 0
+        let communicationCount = communications.filter { communication in
+            communication.customer != nil &&
+                ((sharedServerConfigured && communication.needsSharedCompanySync) ||
+                    communication.needsQuickBooksEmailReview(now: now))
+        }.count
         // SwiftData relationships are optional at rest so CloudKit can deliver
         // records in either order. Keep unresolved records visible as recovery
         // work instead of crashing a dashboard while the relationship catches up.

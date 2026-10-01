@@ -1705,6 +1705,9 @@ struct ScheduleView: View {
                 }
                 if missingGoogleEventIDs[call.id] == call.googleEventID {
                     Label("Google event missing", systemImage: "calendar.badge.exclamationmark")
+                } else if GoogleCalendarScheduleSync.staffInvitationsNeedAttention(for: call,
+                    connectedGoogleEmail: googleAuth.signedInEmail, workspaceEmail: AppIdentity.currentEmail) {
+                    Label("Google event saved • fix staff email, then Sync Google", systemImage: "person.crop.circle.badge.exclamationmark")
                 } else if GoogleCalendarScheduleSync.needsOutboundSync(call) {
                     Label("Google pending", systemImage: "calendar.badge.exclamationmark")
                 } else if call.googleEventID != nil {

@@ -28,6 +28,20 @@ private actor StoreDistributionVerdict {
     func record(_ value: String) { summary = value }
 }
 
+/// A signed answer that contradicts this app is final. Only the absence of an
+/// AppTransaction may use the TestFlight distribution fallback.
+nonisolated enum CompanyStoreDistributionFailure: Error, Equatable, Sendable {
+    case transactionUnavailable
+    case unverified
+    case bundleMismatch
+    case unsupportedEnvironment
+}
+
+nonisolated enum CompanyStoreTransactionEvidence: Sendable {
+    case verified(bundleID: String, environmentAllowed: Bool)
+    case unverified
+}
+
 /// A concurrent account result retired this lookup. It is neither proof of
 /// revocation nor permission to reuse an earlier account without rechecking.
 ///
@@ -359,6 +373,8 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
                 return
             } catch is CancellationError {
                 throw CancellationError()
+            } catch let failure as CompanyStoreDistributionFailure {
+                throw failure
             } catch {
                 let transportError: Error
                 if let storeError = error as? StoreKitError,
@@ -374,22 +390,53 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
         }
     }
 
+    static func requireVerifiedStoreTransaction(
+        _ evidence: CompanyStoreTransactionEvidence, expectedBundleID: String?
+    ) throws {
+        switch evidence {
+        case .unverified:
+            throw CompanyStoreDistributionFailure.unverified
+        case .verified(let bundleID, let environmentAllowed):
+            guard let expectedBundleID, bundleID == expectedBundleID else {
+                throw CompanyStoreDistributionFailure.bundleMismatch
+            }
+            guard environmentAllowed else {
+                throw CompanyStoreDistributionFailure.unsupportedEnvironment
+            }
+        }
+    }
+
+    /// Classify only errors thrown by AppTransaction.shared. A verified but
+    /// mismatched result never reaches this path.
+    static func transactionUnavailable(_ error: Error) -> Bool {
+        if let storeError = error as? StoreKitError {
+            if case .unknown = storeError { return true }
+            if case .systemError(let underlying) = storeError {
+                let description = String(describing: underlying).trimmingCharacters(in: .whitespacesAndNewlines)
+                return description == "configuration" || description.localizedCaseInsensitiveContains("configuration")
+            }
+            return false
+        }
+        let description = String(describing: error).trimmingCharacters(in: .whitespacesAndNewlines)
+        return description == "configuration" || description.localizedCaseInsensitiveContains("configuration")
+    }
+
     /// TestFlight can omit the embedded profile and, on some iOS releases,
     /// StoreKit can surface its configuration failure as a private error
     /// string rather than a public StoreKitError case. A nonempty App Store
     /// receipt is the signed distribution marker available in that state. It
-    /// is accepted only for that exact diagnostic; unverified transactions,
-    /// bundle mismatches and transport failures still fail closed.
+    /// is accepted only when AppTransaction.shared itself was unavailable;
+    /// unverified transactions, bundle mismatches and transport failures fail closed.
     static func permitsStoreReceiptFallback(error: Error, receiptData: Data?) -> Bool {
-        guard receiptData?.isEmpty == false else { return false }
-        if let storeError = error as? StoreKitError {
-            if case .networkError = storeError { return false }
-            if case .userCancelled = storeError { return false }
-            if case .notAvailableInStorefront = storeError { return false }
-            if case .notEntitled = storeError { return false }
-        }
-        let description = String(describing: error).trimmingCharacters(in: .whitespacesAndNewlines)
-        return description == "configuration" || description.localizedCaseInsensitiveContains("configuration")
+        guard let failure = error as? CompanyStoreDistributionFailure,
+              failure == .transactionUnavailable else { return false }
+        return receiptData?.isEmpty == false
+    }
+
+    static func permitsStrippedProfileFallback(error: Error, hasStrippedDistributionProfile: Bool) -> Bool {
+        guard let failure = error as? CompanyStoreDistributionFailure,
+              failure == .transactionUnavailable else { return false }
+        return hasStrippedDistributionProfile
     }
 
     static func requireAvailableAccount(
@@ -477,20 +524,26 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
                         // It is the only description of what StoreKit actually
                         // refused, so capture it before that happens.
                         await verdict.record("threw \(type(of: error)): \(String(describing: error))")
+                        if Self.transactionUnavailable(error) {
+                            throw CompanyStoreDistributionFailure.transactionUnavailable
+                        }
                         throw error
                     }
                     switch result {
                     case .verified(let transaction):
-                        let bundleMatches = transaction.bundleID == Bundle.main.bundleIdentifier
                         let environmentAllowed = transaction.environment == .production ||
                             transaction.environment == .sandbox
                         await verdict.record(
                             "verified bundleID=\(transaction.bundleID) expected=\(Bundle.main.bundleIdentifier ?? "nil") " +
                             "environment=\(transaction.environment.rawValue)")
-                        return bundleMatches && environmentAllowed
+                        try Self.requireVerifiedStoreTransaction(
+                            .verified(bundleID: transaction.bundleID, environmentAllowed: environmentAllowed),
+                            expectedBundleID: Bundle.main.bundleIdentifier)
+                        return true
                     case .unverified(_, let verificationError):
                         await verdict.record("unverified: \(String(describing: verificationError))")
-                        return false
+                        try Self.requireVerifiedStoreTransaction(.unverified, expectedBundleID: Bundle.main.bundleIdentifier)
+                        return true
                     }
                 }
                 hasVerifiedDistribution = true
@@ -515,12 +568,15 @@ nonisolated enum CompanyCloudKitRuntimeAccount {
                     let detail = "profileData=nil, AppTransaction: \(String(describing: error)), " +
                         "receipt: \(receipt), transaction: \(transaction), distribution: \(source)"
                     await MainActor.run { CompanyWorkspaceDiagnostics.lastConfigurationDetail = detail }
-                    // A device build with no embedded profile is already
-                    // distribution-signed. Only the Simulator, which cannot use
-                    // that signal, still fails closed here.
-                    #if targetEnvironment(simulator)
-                    throw error
-                    #endif
+                    // A missing embedded profile may substitute for an
+                    // unavailable transaction on device, never for a signed
+                    // answer that rejects this app or a transport failure.
+                    if !Self.permitsStrippedProfileFallback(
+                        error: error, hasStrippedDistributionProfile: hasStrippedDistributionProfile
+                    ) {
+                        if error is CompanyStoreDistributionFailure { throw CompanyWorkspaceFailure.configuration }
+                        throw error
+                    }
                 }
             }
         } else {

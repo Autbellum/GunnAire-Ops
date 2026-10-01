@@ -1486,7 +1486,7 @@ struct SyncIntegrationsView: View {
         if syncAttentionSummary.communicationCount > 0 {
             syncRecoveryRow(
                 title: "Customer communications",
-                detail: "Open Mail while the server is available to retry durable delivery history.",
+                detail: "Review unconfirmed QuickBooks email acceptance and any company delivery history awaiting sync.",
                 count: syncAttentionSummary.communicationCount,
                 systemImage: "envelope.badge",
                 identifier: "SyncRecoveryCommunications",
@@ -1634,28 +1634,76 @@ struct SyncIntegrationsView: View {
     private func archiveInGoogleDrive(_ attachment: ServiceDocumentAttachment) async -> Bool {
         guard AutomaticGoogleDriveArchive.shared.claim(attachment.id) else { return false }
         defer { AutomaticGoogleDriveArchive.shared.release(attachment.id) }
+        var source: ServiceDocumentAttachment.DriveUploadSource?
+        var retainedProviderOperation: WorkspaceProviderOperation?
+        let workspace = CompanyWorkspaceAccessController.shared
+        let originalStamp = workspace.operationStamp
+        let originalAttachmentID = attachment.id
         do {
             guard canManageGoogleDriveArchive else {
                 throw GoogleDriveAPIError.authorizationChanged
             }
+            guard workspace.authorizedContainer === modelContext.container,
+                  originalStamp != nil,
+                  googleDriveAuthorizationState == .ready else {
+                throw GoogleDriveAPIError.authorizationChanged
+            }
+            let providerOperation = try GoogleAuthManager.shared.captureProviderOperation()
+            retainedProviderOperation = providerOperation
             guard attachment.customer != nil || attachment.fleetVehicleID != nil else {
                 throw GoogleDriveArchivePreparationError.unresolvedCustomer
+            }
+
+            func checkCurrent(_ captured: ServiceDocumentAttachment.DriveUploadSource) throws {
+                guard canManageGoogleDriveArchive,
+                      googleDriveAuthorizationState == .ready,
+                      workspace.authorizedContainer === modelContext.container,
+                      workspace.operationStamp == originalStamp,
+                      attachment.modelContext?.container === modelContext.container,
+                      attachment.matchesDriveUploadSource(captured) else {
+                    throw GoogleDriveAPIError.authorizationChanged
+                }
+                try providerOperation.check()
+                var fetch = FetchDescriptor<ServiceDocumentAttachment>(
+                    predicate: #Predicate { $0.id == originalAttachmentID })
+                fetch.fetchLimit = 2
+                let matches = try modelContext.fetch(fetch)
+                guard matches.count == 1, matches[0] === attachment else {
+                    throw GoogleDriveAPIError.authorizationChanged
+                }
             }
 
             let actorEmail = AppIdentity.currentEmail
             let existingID = attachment.googleDriveFileID?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            let preReservationSource = attachment.driveUploadSource(fileID: existingID ?? "")
             let fileID: String
             if let existingID, !existingID.isEmpty {
                 fileID = existingID
             } else {
                 fileID = try await GoogleDriveAPI.shared.generateFileID()
+                guard workspace.authorizedContainer === modelContext.container,
+                      workspace.operationStamp == originalStamp,
+                      attachment.modelContext?.container === modelContext.container,
+                      attachment.driveUploadSource(fileID: "") == preReservationSource,
+                      attachment.googleDriveFileID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
+                      googleDriveAuthorizationState == .ready,
+                      canManageGoogleDriveArchive,
+                      (try? providerOperation.check()) != nil else { return false }
+                var reservationMembership = FetchDescriptor<ServiceDocumentAttachment>(
+                    predicate: #Predicate { $0.id == originalAttachmentID })
+                reservationMembership.fetchLimit = 2
+                guard let matches = try? modelContext.fetch(reservationMembership),
+                      matches.count == 1, matches[0] === attachment else { return false }
                 attachment.markGoogleDrivePreparing(fileID: fileID, actorEmail: actorEmail)
                 try modelContext.save()
             }
+            let capturedSource = attachment.driveUploadSource(fileID: fileID)
+            source = capturedSource
 
             let data = try await googleDriveData(for: attachment)
             guard !Task.isCancelled else { throw CancellationError() }
+            try checkCurrent(capturedSource)
             attachment.markGoogleDriveUploading()
             try modelContext.save()
 
@@ -1668,10 +1716,25 @@ struct SyncIntegrationsView: View {
                 data: data
             )
             guard !Task.isCancelled else { throw CancellationError() }
+            // An older upload response cannot mark regenerated local bytes as
+            // archived. The replacement stays queued with its new file ID.
+            try checkCurrent(capturedSource)
             attachment.markGoogleDriveArchived(file, actorEmail: actorEmail)
             try modelContext.save()
             return true
         } catch {
+            if let source, !attachment.matchesDriveUploadSource(source) { return false }
+            guard workspace.authorizedContainer === modelContext.container,
+                  workspace.operationStamp == originalStamp,
+                  attachment.modelContext?.container === modelContext.container,
+                  googleDriveAuthorizationState == .ready,
+                  canManageGoogleDriveArchive,
+                  (try? retainedProviderOperation?.check()) != nil else { return false }
+            var membership = FetchDescriptor<ServiceDocumentAttachment>(
+                predicate: #Predicate { $0.id == originalAttachmentID })
+            membership.fetchLimit = 2
+            guard let matches = try? modelContext.fetch(membership),
+                  matches.count == 1, matches[0] === attachment else { return false }
             let detail = Task.isCancelled
                 ? "Archive stopped before completion. Retry uses the same reserved Drive file."
                 : error.localizedDescription
@@ -3138,6 +3201,8 @@ private struct CustomerEditorView: View {
     @State private var customerAttachmentCaption = ""
     @State private var selectedCustomerAttachmentEquipmentID: UUID?
     @State private var customerAttachmentMessage: String?
+    @State private var customerCommunicationReviewMessage: String?
+    @State private var showsAllCustomerCommunications = false
     @State private var customerAttachmentSearchText = ""
     @State private var customerAttachmentPreviewURL: URL?
     @State private var sharedCustomerDocuments: [BackendDocumentRecord] = []
@@ -4124,9 +4189,21 @@ private struct CustomerEditorView: View {
                         Text("A delivery record is kept for customer-facing email. Full message content remains in the connected Gmail mailbox.")
                             .font(.caption)
                             .foregroundColor(.secondary)
+                        if let customerCommunicationReviewMessage {
+                            Text(customerCommunicationReviewMessage)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
 
-                        ForEach(customerCommunicationsForCustomer.prefix(12)) { communication in
+                        ForEach(showsAllCustomerCommunications ?
+                            customerCommunicationsForCustomer : Array(customerCommunicationsForCustomer.prefix(12))) { communication in
                             customerCommunicationRow(communication)
+                        }
+                        if customerCommunicationsForCustomer.count > 12 {
+                            Button(showsAllCustomerCommunications ? "Show Recent" : "Show All Email History") {
+                                showsAllCustomerCommunications.toggle()
+                            }
+                            .buttonStyle(.bordered)
                         }
                     }
                 }
@@ -5320,10 +5397,14 @@ private struct CustomerEditorView: View {
         let linkedEstimate = communication.estimateID.flatMap { id in estimates.first { $0.id == id } }
         let linkedCall = communication.serviceCallID.flatMap { id in customerServiceCalls.first { $0.id == id } }
         let wasSent = communication.normalizedDeliveryStatus == "sent"
+        let needsQuickBooksReview = communication.needsQuickBooksEmailReview()
 
         return VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline) {
-                Label(communication.deliveryStatus.capitalized, systemImage: wasSent ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                Label(needsQuickBooksReview ? "Needs attention" :
+                    (communication.normalizedDeliveryStatus == "reviewed_unconfirmed" ?
+                        "Reviewed • unconfirmed" : communication.deliveryStatus.capitalized),
+                      systemImage: wasSent ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                     .font(.caption.weight(.semibold))
                     .foregroundColor(wasSent ? .green : .orange)
                 Text(communication.workflow.displayName)
@@ -5345,7 +5426,18 @@ private struct CustomerEditorView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
-            if let providerStatusDetail = communication.providerStatusDetail, !wasSent {
+            if needsQuickBooksReview {
+                Text("QuickBooks email acceptance is unconfirmed. Review the original document and its QuickBooks email history before attempting another send.")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                if canReviewQuickBooksEmailHistory {
+                    Button("I Checked QBO History • Dismiss Alert") {
+                        reviewQuickBooksEmailHistory(communication)
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.caption)
+                }
+            } else if let providerStatusDetail = communication.providerStatusDetail, !wasSent {
                 Text(providerStatusDetail)
                     .font(.caption2)
                     .foregroundStyle(.orange)
@@ -5393,6 +5485,57 @@ private struct CustomerEditorView: View {
             }
         }
         .padding(.vertical, 2)
+    }
+
+    private var canReviewQuickBooksEmailHistory: Bool {
+        let workspace = CompanyWorkspaceAccessController.shared
+        let email = AppAccess.normalizedEmail(currentEmail)
+        return !email.isEmpty && workspace.authorizedContainer === modelContext.container &&
+            workspace.operationStamp != nil && workspace.verifiedCompanyID != nil &&
+            workspace.verifiedRole == .admin &&
+            AppAccess.normalizedEmail(workspace.verifiedUser?.email) == email &&
+            AppAccess.canAccessSidebarItem(.quickBooksManagement, email: email, users: users)
+    }
+
+    private func reviewQuickBooksEmailHistory(_ communication: CustomerCommunication) {
+        let workspace = CompanyWorkspaceAccessController.shared
+        guard canReviewQuickBooksEmailHistory, let stamp = workspace.operationStamp,
+              CustomerDocumentUpload.isCurrentRecord(communication, in: modelContext),
+              CustomerDocumentUpload.isCurrentRecord(customer, in: modelContext),
+              communication.customer === customer else {
+            customerCommunicationReviewMessage = "QuickBooks email review requires the current company administrator session."
+            return
+        }
+        let id = communication.id
+        let customerID = customer.id
+        let originalStatus = communication.deliveryStatus
+        let originalDetail = communication.providerStatusDetail
+        let originalDeliveredAt = communication.deliveredAt
+        do {
+            let rows = try modelContext.fetch(FetchDescriptor<CustomerCommunication>(predicate: #Predicate { $0.id == id }))
+            let customers = try modelContext.fetch(FetchDescriptor<Customer>(predicate: #Predicate { $0.id == customerID }))
+            guard rows.count == 1, rows.first === communication,
+                  customers.count == 1, customers.first === customer,
+                  workspace.operationStamp == stamp,
+                  canReviewQuickBooksEmailHistory,
+                  communication.customer === customer,
+                  communication.needsQuickBooksEmailReview(),
+                  communication.markQuickBooksEmailReviewed(by: AppAccess.normalizedEmail(currentEmail)) else {
+                customerCommunicationReviewMessage = "QuickBooks email history changed. Reopen the customer and review the original attempt."
+                return
+            }
+            do {
+                try modelContext.save()
+                customerCommunicationReviewMessage = "Review recorded locally. QuickBooks email acceptance remains unconfirmed."
+            } catch {
+                communication.deliveryStatus = originalStatus
+                communication.providerStatusDetail = originalDetail
+                communication.deliveredAt = originalDeliveredAt
+                customerCommunicationReviewMessage = "QuickBooks email review could not be saved: \(error.localizedDescription)"
+            }
+        } catch {
+            customerCommunicationReviewMessage = "QuickBooks email review could not be loaded: \(error.localizedDescription)"
+        }
     }
 
     private func handleCapturedCustomerImage(_ image: UIImage) {

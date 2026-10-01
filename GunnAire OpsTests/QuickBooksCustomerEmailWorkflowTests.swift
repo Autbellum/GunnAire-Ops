@@ -80,6 +80,73 @@ struct QuickBooksCustomerEmailWorkflowTests {
         }
     }
 
+    @Test func interruptedPendingQuickBooksEmailIsVisibleWithoutAssumingAProviderFailure() throws {
+        let fixture = try Fixture()
+        let flow = try fixture.flow()
+        try flow.prepare()
+        let record = try #require(fixture.history().first)
+        let stillInFlight = record.createdAt.addingTimeInterval(119)
+        let staleAfterRestart = record.createdAt.addingTimeInterval(121)
+        #expect(!record.needsQuickBooksEmailReview(now: stillInFlight))
+        #expect(record.needsQuickBooksEmailReview(now: staleAfterRestart))
+        let attention = BusinessSuiteIntelligence.syncAttentionSummary(
+            serviceCalls: [], estimates: [fixture.estimate], invoices: [], payments: [],
+            attachments: [], communications: [record], timeEntries: [], items: [],
+            googleConnected: false, quickBooksConnected: false,
+            sharedServerConfigured: false, now: staleAfterRestart)
+        #expect(attention.communicationCount == 1)
+        #expect(record.deliveryStatus == "pending")
+        #expect(fixture.posts == 0)
+
+        record.deliveryStatus = "sent"
+        #expect(!record.needsQuickBooksEmailReview(now: staleAfterRestart))
+        record.deliveryStatus = "unconfirmed"
+        #expect(record.needsQuickBooksEmailReview(now: stillInFlight))
+        record.deliveryStatus = "pending"
+        record.subject = "Unrelated customer message"
+        #expect(!record.needsQuickBooksEmailReview(now: staleAfterRestart))
+        record.subject = "QuickBooks estimate"
+        record.estimateID = nil
+        #expect(record.needsQuickBooksEmailReview(now: staleAfterRestart))
+        record.deliveryStatus = "unconfirmed"
+        #expect(record.needsQuickBooksEmailReview(now: stillInFlight))
+    }
+
+    @Test func reviewedQuickBooksEmailRemainsUnconfirmedAndStopsRepeatedAttentionWithoutSending() throws {
+        let fixture = try Fixture()
+        let flow = try fixture.flow()
+        try flow.prepare()
+        let record = try #require(fixture.history().first)
+        let reviewTime = record.createdAt.addingTimeInterval(121)
+        let originalRecipient = record.recipient
+        let originalConsent = record.consentSnapshotJSON
+        let originalDocumentID = record.estimateID
+        #expect(record.markQuickBooksEmailReviewed(by: "admin@gunnaire.com", now: reviewTime))
+        try fixture.context.save()
+        let recovered = try #require(fixture.history().first)
+        #expect(recovered.deliveryStatus == "reviewed_unconfirmed")
+        #expect(recovered.providerStatusDetail?.contains("acceptance remains unconfirmed") == true)
+        #expect(recovered.deliveredAt == nil)
+        #expect(recovered.recipient == originalRecipient)
+        #expect(recovered.consentSnapshotJSON == originalConsent)
+        #expect(recovered.estimateID == originalDocumentID)
+        #expect(!recovered.needsQuickBooksEmailReview(now: reviewTime.addingTimeInterval(3_600)))
+        #expect(!recovered.markQuickBooksEmailReviewed(by: "admin@gunnaire.com", now: reviewTime))
+        #expect(fixture.posts == 0)
+    }
+
+    @Test func reviewCannotDismissRecentOrUnrelatedPendingHistory() throws {
+        let fixture = try Fixture()
+        let flow = try fixture.flow()
+        try flow.prepare()
+        let record = try #require(fixture.history().first)
+        #expect(!record.markQuickBooksEmailReviewed(by: "admin@gunnaire.com", now: record.createdAt.addingTimeInterval(119)))
+        record.subject = "Unrelated customer message"
+        #expect(!record.markQuickBooksEmailReviewed(by: "admin@gunnaire.com", now: record.createdAt.addingTimeInterval(121)))
+        #expect(record.deliveryStatus == "pending")
+        #expect(fixture.posts == 0)
+    }
+
     @Test func declinedConsentSavesSuppressedHistoryWithoutTransport() throws {
         let fixture = try Fixture(); fixture.customer.allowsTransactionalEmail = false
         let flow = try fixture.flow()

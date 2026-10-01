@@ -63,6 +63,10 @@ struct GoogleCalendarWorkflowTests {
 
         func key(_ calendar: String, _ id: String) -> String { calendar + "|" + id }
         var writes: [URLRequest] { requests.filter { $0.httpMethod != "GET" } }
+        var staffInvitationsNeedAttention: Bool {
+            GoogleCalendarScheduleSync.staffInvitationsNeedAttention(for: call,
+                connectedGoogleEmail: auth.signedInEmail, workspaceEmail: email)
+        }
         func event(id: String, start: Date? = nil, managed: Bool = true) -> [String: Any] {
             let start = start ?? call.scheduledDate
             var value: [String: Any] = [
@@ -241,18 +245,121 @@ struct GoogleCalendarWorkflowTests {
         #expect((reminders["overrides"] as? [[String: Any]])?.first?["minutes"] as? Int == 30)
     }
 
-    @Test func invalidStaffEmailDoesNotReserveAnUnsentEvent() async throws {
+    @Test func invalidStaffEmailPublishesOrganizerEventAndRetainsInvitationWarning() async throws {
         let f = try Fixture()
         let technician = Technician(name: "Missing calendar email", contactInfo: "555-0100")
         f.context.insert(technician); f.call.assignedTechnician = technician
         try f.context.save()
-        failed(try await f.publish())
-        #expect(f.writes.isEmpty)
-        #expect(f.call.googleEventID == nil)
+        let result = try await f.publish().get()
+        #expect(result.contains("Staff invitations need attention"))
+        #expect(f.writes.count == 1)
+        #expect(f.writes[0].httpMethod == "POST")
+        let body = try #require(f.writes[0].httpBody)
+        let created = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect((created["attendees"] as? [[String: String]])?.isEmpty != false)
+        #expect(f.call.googleEventID == GoogleCalendarScheduleSync.eventID(for: f.call.id))
+        #expect(f.staffInvitationsNeedAttention)
+        #expect(!GoogleCalendarScheduleSync.staffInvitationsNeedAttention(for: f.call,
+            connectedGoogleEmail: "another@gunnaire.com", workspaceEmail: f.email))
+        #expect(!GoogleCalendarScheduleSync.staffInvitationsNeedAttention(for: f.call,
+            connectedGoogleEmail: f.email, workspaceEmail: "another@gunnaire.com"))
+        #expect(GoogleCalendarScheduleSync.needsOutboundSync(f.call))
         technician.contactInfo = "tech@example.invalid"
         try f.context.save()
         _ = try await f.publish().get()
+        #expect(f.writes.count == 2)
+        #expect(f.writes[1].httpMethod == "PATCH")
+        #expect(f.writes[1].url?.query == "sendUpdates=all")
+        #expect(!f.staffInvitationsNeedAttention)
+        #expect(!GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+    }
+
+    @Test func duplicateStaffEmailPublishesOrganizerEventWithoutClaimingInvitations() async throws {
+        let f = try Fixture()
+        let lead = Technician(name: "Lead", contactInfo: "shared@example.invalid")
+        let crew = Technician(name: "Crew", contactInfo: "shared@example.invalid")
+        f.context.insert(lead); f.context.insert(crew)
+        f.call.assignedTechnician = lead
+        f.call.additionalTechnicianIDs = [crew.id]
+        try f.context.save()
+        let result = try await f.publish().get()
+        #expect(result.contains("Staff invitations need attention"))
         #expect(f.writes.count == 1)
+        #expect(f.writes[0].httpMethod == "POST")
+        #expect(f.staffInvitationsNeedAttention)
+        crew.contactInfo = "crew@example.invalid"
+        try f.context.save()
+        _ = try await f.publish().get()
+        #expect(f.writes.count == 2)
+        #expect(f.writes[1].httpMethod == "PATCH")
+        #expect(!f.staffInvitationsNeedAttention)
+    }
+
+    @Test func invalidReplacementStaffCannotMoveEventAndNotifyFormerAssignee() async throws {
+        let f = try Fixture(linked: true)
+        let former = Technician(name: "Former technician", contactInfo: "former@example.invalid")
+        let replacement = Technician(name: "Replacement", contactInfo: "555-0100")
+        f.context.insert(former); f.context.insert(replacement)
+        f.call.assignedTechnician = replacement
+        let oldStart = f.call.scheduledDate
+        f.call.scheduledDate = oldStart.addingTimeInterval(3600)
+        try f.context.save()
+        var existing = f.event(id: "fixture-event", start: oldStart)
+        existing["attendees"] = [["email": "former@example.invalid"]]
+        existing["extendedProperties"] = ["private": [
+            "gunnaireManaged": "true", "gunnaireManagedVersion": "4",
+            "gunnaireOrigin": "ios-app", "gunnaireServiceCallID": f.call.id.uuidString,
+            GoogleCalendarStaffDelivery.managedEmailsKey: "former@example.invalid"
+        ]]
+        f.remote[f.key(f.email, "fixture-event")] = existing
+
+        let result = try await f.publish()
+        guard case .failure(let error) = result else {
+            Issue.record("A moved event with an invalid replacement must remain pending")
+            return
+        }
+        #expect(error as? GoogleCalendarStaffDeliveryError == .unsafeScheduleUpdate)
+        #expect(f.writes.isEmpty)
+        #expect(GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+        let unchanged = try #require(f.remote[f.key(f.email, "fixture-event")])
+        let start = try #require(unchanged["start"] as? [String: String])
+        #expect(start["dateTime"] == ISO8601DateFormatter().string(from: oldStart))
+        let guests = try #require(unchanged["attendees"] as? [[String: String]])
+        #expect(guests.compactMap { $0["email"] } == ["former@example.invalid"])
+    }
+
+    @Test func invalidStaffCanMoveOrganizerOnlyEventWithoutSendingGuestUpdates() async throws {
+        let f = try Fixture(linked: true)
+        let replacement = Technician(name: "Replacement", contactInfo: "555-0100")
+        f.context.insert(replacement)
+        f.call.assignedTechnician = replacement
+        f.call.scheduledDate = f.call.scheduledDate.addingTimeInterval(3600)
+        try f.context.save()
+
+        let message = try await f.publish().get()
+        #expect(message.contains("Staff invitations need attention"))
+        #expect(f.writes.count == 1)
+        #expect(f.writes.first?.httpMethod == "PATCH")
+        #expect(f.writes.first?.url?.query == "sendUpdates=none")
+        #expect(f.staffInvitationsNeedAttention)
+        #expect(GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+    }
+
+    @Test func automaticSyncReportsConfirmedEventAndPendingStaffInvitations() async throws {
+        let f = try Fixture()
+        let technician = Technician(name: "Missing calendar email", contactInfo: "555-0100")
+        f.context.insert(technician)
+        f.call.assignedTechnician = technician
+        try f.context.save()
+        let message = try await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.synchronize(workflow: $0)
+        }.get()
+        #expect(message.contains("Published 1 pending calendar update"))
+        #expect(message.contains("need review"))
+        #expect(message.contains("valid calendar email"))
+        #expect(f.writes.count == 1)
+        #expect(f.writes.first?.httpMethod == "POST")
+        #expect(f.staffInvitationsNeedAttention)
     }
 
     @Test func assignmentOnlyChangeInvitesNewStaffWithoutMovingOrDuplicatingEvent() async throws {
@@ -512,6 +619,30 @@ struct GoogleCalendarWorkflowTests {
         #expect(f.remote[f.key(f.email, "fixture-event")] != nil)
         _ = try await f.publish().get()
         #expect(f.writes.count == 1, "A later sync must reconcile, not create twice.")
+    }
+
+    @Test func explicitMissingLinkRepairPublishesOwnerEventWhenStaffEmailIsInvalid() async throws {
+        let f = try Fixture(linked: true)
+        f.remote.removeValue(forKey: f.key(f.email, "fixture-event"))
+        let technician = Technician(name: "Missing calendar email", contactInfo: "555-0100")
+        f.context.insert(technician)
+        f.call.assignedTechnician = technician
+        try f.context.save()
+        let review = try #require(try await GoogleCalendarScheduleSync.checkMissingEvent(
+            call: f.call, workflow: f.flow()).get())
+        let message = try await GoogleCalendarScheduleSync.repairMissingEvent(review).get()
+        #expect(message.contains("Staff invitations need attention"))
+        #expect(f.writes.count == 1)
+        #expect(f.writes.first?.httpMethod == "POST")
+        #expect(f.remote[f.key(f.email, "fixture-event")] != nil)
+        #expect(f.staffInvitationsNeedAttention)
+        #expect(GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+        technician.contactInfo = "tech@example.invalid"
+        try f.context.save()
+        _ = try await f.publish().get()
+        #expect(f.writes.count == 2)
+        #expect(f.writes.last?.httpMethod == "PATCH")
+        #expect(!f.staffInvitationsNeedAttention)
     }
 
     @Test func missingLinkRepairRefusesMovedEventAndChangedJob() async throws {

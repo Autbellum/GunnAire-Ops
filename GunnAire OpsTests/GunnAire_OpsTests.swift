@@ -13585,6 +13585,83 @@ struct GunnAire_OpsTests {
         #expect(attachment.canUploadToQuickBooksInvoice(invoice))
     }
 
+    @Test func regeneratedGeneratedDocumentRequeuesDriveWithoutLosingTheOldFileIdentity() throws {
+        let customer = Customer(name: "Regenerated Drive Customer")
+        let attachment = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            invoiceID: UUID(),
+            kind: .invoiceSupport,
+            displayName: "old-invoice.pdf",
+            localFilePath: "/tmp/old-invoice.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 128
+        )
+        let oldID = "old-drive-file"
+        attachment.markGoogleDriveArchived(GoogleDriveFile(
+            id: oldID, name: "old-invoice.pdf", mimeType: "application/pdf",
+            webViewLink: "https://drive.google.com/file/d/old-drive-file/view",
+            trashed: false, appProperties: nil
+        ), actorEmail: "admin@gunnaire.com")
+        #expect(!attachment.needsGoogleDriveArchive)
+        let uploadedSource = attachment.driveUploadSource(fileID: oldID)
+        #expect(attachment.matchesDriveUploadSource(uploadedSource))
+
+        attachment.replaceGeneratedFile(
+            displayName: "new-invoice.pdf",
+            localFilePath: "/tmp/new-invoice.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 256,
+            caption: "Revised invoice PDF"
+        )
+        #expect(attachment.needsGoogleDriveArchive)
+        #expect(attachment.googleDriveSyncState == GoogleDriveDocumentSyncState.needsAttention)
+        #expect(attachment.googleDriveFileID == nil)
+        #expect(attachment.googleDriveWebViewLink == nil)
+        #expect(attachment.googleDriveWebURL == nil)
+        #expect(attachment.googleDriveLastSyncedAt == nil)
+        #expect(attachment.googleDriveArchivedByEmail == nil)
+        #expect(attachment.googleDriveSyncDetail?.contains(oldID) == true)
+        #expect(!attachment.matchesDriveUploadSource(uploadedSource))
+
+        attachment.markGoogleDriveArchiveFailed(String(repeating: "x", count: 1_000))
+        #expect(attachment.googleDriveSyncDetail?.contains(oldID) == true)
+        attachment.markGoogleDrivePreparing(fileID: "new-drive-file", actorEmail: "admin@gunnaire.com")
+        attachment.markGoogleDriveUploading()
+        attachment.markGoogleDriveArchived(GoogleDriveFile(
+            id: "new-drive-file", name: "new-invoice.pdf", mimeType: "application/pdf",
+            webViewLink: "https://drive.google.com/file/d/new-drive-file/view",
+            trashed: false, appProperties: nil
+        ), actorEmail: "admin@gunnaire.com")
+        #expect(!attachment.needsGoogleDriveArchive)
+        #expect(attachment.googleDriveFileID == "new-drive-file")
+        #expect(attachment.googleDriveSyncDetail?.contains(oldID) == true)
+    }
+
+    @Test func neverArchivedGeneratedDocumentRemainsReadyForFirstDriveArchiveAfterRegeneration() throws {
+        let customer = Customer(name: "First Drive Archive Customer")
+        let attachment = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            kind: .invoiceSupport,
+            displayName: "initial.pdf",
+            localFilePath: "/tmp/initial.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 128
+        )
+        #expect(attachment.googleDriveSyncState == .notArchived)
+        attachment.replaceGeneratedFile(
+            displayName: "revised.pdf",
+            localFilePath: "/tmp/revised.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 256,
+            caption: nil
+        )
+        #expect(attachment.googleDriveSyncState == .notArchived)
+        #expect(attachment.googleDriveSyncDetail == nil)
+        #expect(attachment.needsGoogleDriveArchive)
+    }
+
     @MainActor
     @Test func quickBooksAttachmentSyncFindsPendingEstimateAttachments() async throws {
         let customer = Customer(name: "Estimate Attachment Customer")

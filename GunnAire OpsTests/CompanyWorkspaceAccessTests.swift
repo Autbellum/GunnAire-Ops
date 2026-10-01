@@ -40,7 +40,7 @@ struct CompanyWorkspaceAccessTests {
     }
 
     nonisolated private enum DistributionOutcome: Sendable {
-        case verified, rejected, timeout, networkFailure, cancelled
+        case verified, rejected, unverifiedTransaction, mismatchedTransaction, timeout, networkFailure, cancelled
     }
 
     private actor DistributionProbe {
@@ -55,6 +55,8 @@ struct CompanyWorkspaceAccessTests {
             switch outcomes.removeFirst() {
             case .verified: return true
             case .rejected: return false
+            case .unverifiedTransaction: throw CompanyStoreDistributionFailure.unverified
+            case .mismatchedTransaction: throw CompanyStoreDistributionFailure.bundleMismatch
             case .timeout: throw CompanyCloudKitTimeout(seconds: 6)
             case .networkFailure: throw StoreKitError.networkError(URLError(.notConnectedToInternet))
             case .cancelled: throw CancellationError()
@@ -423,6 +425,24 @@ struct CompanyWorkspaceAccessTests {
         #expect(controller.phase == .blocked(.configuration))
         #expect(controller.authorizedContainer == nil)
         #expect(h.openCount == 0 && h.lease == nil)
+    }
+
+    @Test func terminalStoreTransactionRejectionsStayTypedAndNeverRetry() async throws {
+        for (outcome, expected) in [
+            (DistributionOutcome.unverifiedTransaction, CompanyStoreDistributionFailure.unverified),
+            (.mismatchedTransaction, .bundleMismatch)
+        ] {
+            let probe = DistributionProbe([outcome, .verified])
+            do {
+                try await CompanyCloudKitRuntimeAccount.verifyStoreDistribution(
+                    attempt: { try await probe.next() }, pause: {}
+                )
+                Issue.record("A rejected signed transaction cannot reach the fallback")
+            } catch {
+                #expect(error as? CompanyStoreDistributionFailure == expected)
+            }
+            #expect(await probe.reads == 1)
+        }
     }
 
     @Test func storeDistributionOutageKeepsExistingLeaseWithoutExtendingIt() async throws {
@@ -1026,16 +1046,56 @@ struct CompanyWorkspaceAccessTests {
         #expect(CompanyCloudKitRuntimeAccount.environment(profileData: Data("invalid profile".utf8), hasVerifiedStoreDistribution: true) == nil)
     }
 
-    @Test func storeReceiptFallbackAcceptsOnlyStoreKitConfigurationErrorWithBytes() {
+    @Test func storeTransactionEvidenceRejectsUnverifiedOrMismatchedSignedAnswers() throws {
+        try CompanyCloudKitRuntimeAccount.requireVerifiedStoreTransaction(
+            .verified(bundleID: "com.gunnaire.businesssuite", environmentAllowed: true),
+            expectedBundleID: "com.gunnaire.businesssuite")
+        for (evidence, expected) in [
+            (CompanyStoreTransactionEvidence.unverified, CompanyStoreDistributionFailure.unverified),
+            (.verified(bundleID: "different.example", environmentAllowed: true), .bundleMismatch),
+            (.verified(bundleID: "com.gunnaire.businesssuite", environmentAllowed: false), .unsupportedEnvironment)
+        ] {
+            do {
+                try CompanyCloudKitRuntimeAccount.requireVerifiedStoreTransaction(
+                    evidence, expectedBundleID: "com.gunnaire.businesssuite")
+                Issue.record("A rejected signed transaction cannot authorize production CloudKit")
+            } catch {
+                #expect(error as? CompanyStoreDistributionFailure == expected)
+            }
+        }
+    }
+
+    @Test func storeFallbackAcceptsOnlyUnavailableTransactionEvidence() {
         struct ConfigurationFailure: Error, CustomStringConvertible {
             var description: String { "configuration" }
         }
+        let receipt = Data("synthetic receipt".utf8)
+        #expect(CompanyCloudKitRuntimeAccount.transactionUnavailable(ConfigurationFailure()))
+        #expect(CompanyCloudKitRuntimeAccount.transactionUnavailable(StoreKitError.unknown))
+        #expect(!CompanyCloudKitRuntimeAccount.transactionUnavailable(URLError(.notConnectedToInternet)))
+        #expect(!CompanyCloudKitRuntimeAccount.transactionUnavailable(
+            StoreKitError.networkError(URLError(.timedOut))))
+        #expect(!CompanyCloudKitRuntimeAccount.transactionUnavailable(StoreKitError.userCancelled))
         #expect(CompanyCloudKitRuntimeAccount.permitsStoreReceiptFallback(
-            error: ConfigurationFailure(), receiptData: Data("synthetic receipt".utf8)))
+            error: CompanyStoreDistributionFailure.transactionUnavailable, receiptData: receipt))
         #expect(!CompanyCloudKitRuntimeAccount.permitsStoreReceiptFallback(
-            error: ConfigurationFailure(), receiptData: Data()))
+            error: CompanyStoreDistributionFailure.transactionUnavailable, receiptData: Data()))
         #expect(!CompanyCloudKitRuntimeAccount.permitsStoreReceiptFallback(
-            error: URLError(.notConnectedToInternet), receiptData: Data("synthetic receipt".utf8)))
+            error: ConfigurationFailure(), receiptData: receipt))
+        for rejected in [CompanyStoreDistributionFailure.unverified, .bundleMismatch, .unsupportedEnvironment] {
+            #expect(!CompanyCloudKitRuntimeAccount.permitsStoreReceiptFallback(
+                error: rejected, receiptData: receipt))
+            #expect(!CompanyCloudKitRuntimeAccount.permitsStrippedProfileFallback(
+                error: rejected, hasStrippedDistributionProfile: true))
+        }
+        #expect(CompanyCloudKitRuntimeAccount.permitsStrippedProfileFallback(
+            error: CompanyStoreDistributionFailure.transactionUnavailable,
+            hasStrippedDistributionProfile: true))
+        #expect(!CompanyCloudKitRuntimeAccount.permitsStrippedProfileFallback(
+            error: CompanyStoreDistributionFailure.transactionUnavailable,
+            hasStrippedDistributionProfile: false))
+        #expect(!CompanyCloudKitRuntimeAccount.permitsStrippedProfileFallback(
+            error: URLError(.notConnectedToInternet), hasStrippedDistributionProfile: true))
     }
 
     /// Real device provisioning profiles (confirmed on-device) encode this
