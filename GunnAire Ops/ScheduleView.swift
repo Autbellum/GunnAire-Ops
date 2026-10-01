@@ -110,6 +110,7 @@ struct ScheduleView: View {
     @State private var requestForQualification: ServiceRequest?
     @State private var requestForDecline: ServiceRequest?
     @State private var requestMessage: String?
+    @State private var highlightedBackendRequestID: String?
     @State private var maintenanceMessage: String?
     @State private var approvedWorkMessage: String?
     @State private var selectedEstimateForScheduling: Estimate?
@@ -235,7 +236,12 @@ struct ScheduleView: View {
     }
 
     private var openServiceRequests: [ServiceRequest] {
-        ServiceRequestPipelinePolicy.sortedOpenRequests(serviceRequests)
+        let requests = ServiceRequestPipelinePolicy.sortedOpenRequests(serviceRequests)
+        guard let highlightedBackendRequestID,
+              let highlighted = requests.first(where: { $0.backendRequestID?.lowercased() == highlightedBackendRequestID }) else {
+            return requests
+        }
+        return [highlighted] + requests.filter { $0.id != highlighted.id }
     }
 
     private var quickBooksAttentionPayments: [Payment] {
@@ -498,6 +504,7 @@ struct ScheduleView: View {
                 .onAppear {
                     AppAccess.ensureTechnicianRecords(for: users, technicians: technicians, modelContext: modelContext)
                     applyPendingScheduleIntentIfNeeded()
+                    applyPendingServiceRequestNotificationIfNeeded()
                     wakePendingCalendarIfReady()
                 }
                 .onChange(of: scenePhase) { _, phase in
@@ -509,6 +516,7 @@ struct ScheduleView: View {
                 }
                 .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
                     applyPendingScheduleIntentIfNeeded()
+                    applyPendingServiceRequestNotificationIfNeeded()
                 }
                 .onChange(of: canManageDispatch) { _, isAllowed in
                     guard !isAllowed else { return }
@@ -744,6 +752,13 @@ struct ScheduleView: View {
         }
     }
 
+    private func applyPendingServiceRequestNotificationIfNeeded() {
+        guard canManageDispatch else { return }
+        guard let requestID = GunnAireAppIntentRouter.consumePendingServiceRequestID() else { return }
+        highlightedBackendRequestID = requestID.uuidString.lowercased()
+        importOnlineRequests()
+    }
+
     @ViewBuilder
     private var serviceRequestsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -780,6 +795,11 @@ struct ScheduleView: View {
             } else {
                 ForEach(openServiceRequests.prefix(5)) { request in
                     VStack(alignment: .leading, spacing: 6) {
+                        if request.backendRequestID?.lowercased() == highlightedBackendRequestID {
+                            Label("From notification", systemImage: "bell.badge")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Color.brandGold)
+                        }
                         HStack(alignment: .firstTextBaseline) {
                             Text(request.customerName)
                                 .font(.headline)
@@ -1017,13 +1037,12 @@ struct ScheduleView: View {
     }
 
     private func importOnlineRequests() {
-        guard canManageDispatch, GunnAireBackendService.isConfigured else { return }
+        guard canManageDispatch, GunnAireBackendService.isConfigured, !isImportingOnlineRequests else { return }
         isImportingOnlineRequests = true
         Task {
             do {
                 let count = try await GunnAireBackendService.importServiceRequests(
-                    into: modelContext,
-                    currentRequests: serviceRequests
+                    into: modelContext.container
                 )
                 requestMessage = count == 0 ? "No new online requests." : "Imported \(count) online request\(count == 1 ? "" : "s") for qualification."
             } catch {

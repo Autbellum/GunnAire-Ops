@@ -273,7 +273,7 @@ nonisolated struct BackendCustomerCommunicationRecord: Codable, Identifiable, Se
     let createdAt: String?
 }
 
-struct BackendServiceRequestRecord: Codable, Identifiable {
+nonisolated struct BackendServiceRequestRecord: Codable, Identifiable, Sendable {
     let id: String
     let customerName: String
     let phone: String?
@@ -1849,38 +1849,9 @@ enum GunnAireBackendService {
         return try JSONDecoder().decode(BackendCustomerPortalLinkRecord.self, from: responseData)
     }
 
-    @MainActor
-    static func importServiceRequests(
-        into modelContext: ModelContext,
-        currentRequests: [ServiceRequest]
-    ) async throws -> Int {
+    static func importServiceRequests(into container: ModelContainer) async throws -> Int {
         let remoteRequests = try await fetchServiceRequests()
-        let knownIDs = Set(currentRequests.compactMap(\.backendRequestID))
-        let formatter = ISO8601DateFormatter()
-        var imported = 0
-        for remote in remoteRequests where !knownIDs.contains(remote.id) {
-            let type = ServiceCallType(rawValue: remote.requestedServiceType) ?? .service
-            let urgency = ServiceRequestUrgency(rawValue: remote.urgency) ?? .normal
-            let source = remote.source.flatMap(ServiceRequestSource.init(rawValue:)) ?? .website
-            let request = ServiceRequest(
-                backendRequestID: remote.id,
-                customerName: remote.customerName,
-                phone: remote.phone,
-                email: remote.email,
-                address: remote.address,
-                requestedServiceType: type,
-                urgency: urgency,
-                summary: remote.summary,
-                preferredDate: remote.preferredDate.flatMap(formatter.date(from:)),
-                source: source,
-                createdByEmail: "online-booking",
-                createdAt: formatter.date(from: remote.createdAt) ?? Date()
-            )
-            modelContext.insert(request)
-            imported += 1
-        }
-        if imported > 0 { try? modelContext.save() }
-        return imported
+        return try await ServiceRequestImportStore(container: container).persist(remoteRequests)
     }
 
     @discardableResult
