@@ -356,6 +356,42 @@ struct GoogleCalendarWorkflowTests {
         _ = try await (try f.flow()).run { try await GoogleCalendarScheduleSync.synchronize(workflow: $0) }.get()
         #expect(f.writes.isEmpty)
         f.call.googleEventManagedByApp = false
+        #expect(ScheduleGoogleLinkStatus.needsUnlinkedReview(f.call))
+        #expect(ScheduleGoogleLinkStatus.unlinkedReviewGuidance(f.call,
+            connectedGoogleEmail: f.email)?.contains("saving this job will not publish it") == true)
+    }
+
+    @Test func legacyUnlinkedJobShowsReviewWithoutAutomaticGoogleWrite() async throws {
+        let f = try Fixture()
+        f.call.googleEventManagedByApp = false
+        f.call.scheduledDate = Date().addingTimeInterval(3600)
+        try f.context.save()
+
+        #expect(ScheduleGoogleLinkStatus.needsUnlinkedReview(f.call))
+        #expect(ScheduleGoogleLinkStatus.unlinkedReviewGuidance(f.call,
+            connectedGoogleEmail: f.email)?.contains(f.email) == true)
+        let disconnectedGuidance = try #require(ScheduleGoogleLinkStatus.unlinkedReviewGuidance(
+            f.call, connectedGoogleEmail: nil))
+        #expect(disconnectedGuidance.contains("your intended Google account"))
+        #expect(disconnectedGuidance.contains("add the event manually in Google Calendar"))
+        #expect(!disconnectedGuidance.contains("connected Google account"))
+        #expect(!GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+        let queued = try ServiceCallCalendarOutbox.save(f.call) { try f.context.save() }
+        #expect(!queued)
+        #expect(f.call.googleCalendarPendingAt == nil)
+
+        _ = try await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.synchronize(workflow: $0)
+        }.get()
+        #expect(f.writes.isEmpty)
+        #expect(f.call.googleEventID == nil)
+
+        f.call.googleEventID = "existing-external-event"
+        #expect(!ScheduleGoogleLinkStatus.needsUnlinkedReview(f.call))
+        #expect(ScheduleGoogleLinkStatus.unlinkedReviewGuidance(f.call,
+            connectedGoogleEmail: f.email) == nil)
+        f.call.googleEventID = nil
+        f.call.status = .completed
         #expect(!ScheduleGoogleLinkStatus.needsUnlinkedReview(f.call))
     }
 

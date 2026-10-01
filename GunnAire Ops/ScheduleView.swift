@@ -22,12 +22,18 @@ enum ScheduleGoogleLinkStatus {
     }
 
     static func needsUnlinkedReview(_ call: ServiceCall, now: Date = Date()) -> Bool {
-        guard call.googleEventManagedByApp,
-              call.status == .scheduled || call.status == .inProgress,
+        guard call.status == .scheduled || call.status == .inProgress,
               call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false else {
             return false
         }
         return !GoogleCalendarScheduleSync.needsOutboundSync(call, now: now)
+    }
+
+    static func unlinkedReviewGuidance(_ call: ServiceCall, connectedGoogleEmail: String?) -> String? {
+        guard needsUnlinkedReview(call), !call.googleEventManagedByApp else { return nil }
+        let account = AppAccess.normalizedEmail(connectedGoogleEmail)
+        let accountDetail = account.isEmpty ? "" : " The app currently lists \(account) as its Google account."
+        return "This appointment has no Google event link or app-managed publication record. Sync Google and saving this job will not publish it. Check your intended Google account and calendar for a matching event.\(accountDetail) If none exists, add the event manually in Google Calendar; this app job will remain unlinked. This review does not send an event or invitation."
     }
 
     static func verificationCalls(selectedDay: [ServiceCall], upcoming: [ServiceCall]) -> [ServiceCall] {
@@ -1709,6 +1715,14 @@ struct ScheduleView: View {
                         .accessibilityIdentifier("GoogleLinkCheckResult-\(call.id.uuidString)")
                 }
                 verifiedGoogleEventButton(for: call)
+            } else if canManageDispatch,
+                      let guidance = ScheduleGoogleLinkStatus.unlinkedReviewGuidance(
+                        call, connectedGoogleEmail: googleAuth.signedInEmail) {
+                Button("Review Google publication") {
+                    googleLinkCheckAlertMessage = guidance
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("ReviewUnlinkedGoogleEvent-\(call.id.uuidString)")
             }
         }
         .padding(14)
@@ -1811,7 +1825,10 @@ struct ScheduleView: View {
                            "Google update pending • Sync Google"),
                           systemImage: "calendar.badge.exclamationmark")
                 } else if canManageDispatch, ScheduleGoogleLinkStatus.needsUnlinkedReview(call) {
-                    Label("Google not linked • open and save to publish", systemImage: "calendar.badge.exclamationmark")
+                    Label(call.googleEventManagedByApp
+                          ? "Google not linked • open and save to publish"
+                          : "Google not linked • review publication",
+                          systemImage: "calendar.badge.exclamationmark")
                 } else if call.googleEventID != nil {
                     Label(canManageDispatch
                           ? (call.googleEventConfirmedAt == nil ? "Google link unconfirmed — check link" : "Google schedule last confirmed")
