@@ -3142,9 +3142,17 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Google ID saved"].exists)
         checkLink.tap()
 
-        let disconnectedStatus = app.staticTexts.matching(identifier: "ScheduleSyncStatus")
-            .matching(NSPredicate(format: "label CONTAINS[c] %@", "disconnected")).firstMatch
-        XCTAssertTrue(disconnectedStatus.waitForExistence(timeout: 5))
+        let localResult = app.descendants(matching: .any)
+            .matching(identifier: "GoogleLinkCheckResult-\(screenshotServiceCallID)").firstMatch
+        XCTAssertTrue(localResult.waitForExistence(timeout: 5))
+        XCTAssertTrue(localResult.label.localizedCaseInsensitiveContains("disconnected"),
+                      "Actual inline result: \(localResult.label)")
+        let immediateResult = app.alerts["Google Calendar link"]
+        XCTAssertTrue(immediateResult.waitForExistence(timeout: 5))
+        XCTAssertTrue(immediateResult.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] %@", "disconnected")
+        ).firstMatch.exists)
+        immediateResult.buttons["OK"].tap()
         XCTAssertFalse(app.buttons["Recreate Missing Event"].exists,
             "A saved ID alone must not offer a create before an authenticated Google check.")
     }
