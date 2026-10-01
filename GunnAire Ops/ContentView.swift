@@ -2313,6 +2313,7 @@ GunnAire
             modelContext.insert(attachment)
             agreement.linkGeneratedDocument(attachment.id)
             try modelContext.save()
+            AutomaticGoogleDriveArchive.shared.wakeAfterSave(attachment, context: modelContext)
             syncMaintenanceAgreementDocumentFromJob(attachment, data: data)
         } catch {
             maintenanceAgreementMessage = "Agreement saved, but its PDF could not be generated: \(error.localizedDescription)"

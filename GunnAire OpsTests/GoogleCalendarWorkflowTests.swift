@@ -798,6 +798,79 @@ struct GoogleCalendarWorkflowTests {
         #expect(GoogleCalendarScheduleSync.needsOutboundSync(retained))
     }
 
+    @Test func automaticVerificationRotatesPastIneligibleRowsAndThrottlesWakes() throws {
+        let f = try Fixture(linked: true)
+        let now = f.call.scheduledDate.addingTimeInterval(-3600)
+        let pending = ServiceCall(googleCalendarID: "primary", googleEventManagedByApp: true,
+            type: .repair, scheduledDate: f.call.scheduledDate.addingTimeInterval(1800), customer: f.customer)
+        let second = ServiceCall(googleCalendarID: "primary", googleEventID: "second-event",
+            googleEventConfirmedAt: now, googleEventManagedByApp: true,
+            type: .repair, scheduledDate: f.call.scheduledDate.addingTimeInterval(3600), customer: f.customer)
+        let third = ServiceCall(googleCalendarID: "primary", googleEventID: "third-event",
+            googleEventConfirmedAt: now, googleEventManagedByApp: true,
+            type: .repair, scheduledDate: f.call.scheduledDate.addingTimeInterval(7200), customer: f.customer)
+        f.context.insert(pending); f.context.insert(second); f.context.insert(third)
+        try f.context.save()
+
+        let first = try GoogleCalendarScheduleSync.automaticVerificationPage(
+            context: f.context, now: now, offset: 0)
+        #expect(first.calls.map(\.id) == [f.call.id, second.id])
+        let next = try GoogleCalendarScheduleSync.automaticVerificationPage(
+            context: f.context, now: now, offset: first.nextOffset)
+        #expect(next.calls.map(\.id) == [third.id])
+        #expect(next.nextOffset == 0)
+        #expect(AutomaticOutboundSync.calendarVerificationIsDue(lastAttempt: nil, now: now, interval: 600))
+        #expect(!AutomaticOutboundSync.calendarVerificationIsDue(
+            lastAttempt: now.addingTimeInterval(-599), now: now, interval: 600))
+        #expect(AutomaticOutboundSync.calendarVerificationIsDue(
+            lastAttempt: now.addingTimeInterval(-600), now: now, interval: 600))
+    }
+
+    @Test func automaticCandidateFindsDeletedOriginalWithoutPosting() async throws {
+        let f = try Fixture(linked: true)
+        let page = try GoogleCalendarScheduleSync.automaticVerificationPage(context: f.context,
+            now: f.call.scheduledDate.addingTimeInterval(-3600), offset: 0)
+        #expect(page.calls.map(\.id) == [f.call.id])
+        f.remote.removeValue(forKey: f.key(f.email, "fixture-event"))
+        var verifiedNotFound: [UUID: String] = [:]
+
+        let message = try await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.synchronize(workflow: $0,
+                verifyConfirmedCalls: page.calls, verifiedNotFound: { verifiedNotFound[$0] = $1 })
+        }.get()
+        #expect(message.contains("not found in this connected account's accessible calendars"))
+        #expect(verifiedNotFound[f.call.id] == "fixture-event")
+        #expect(f.call.googleEventID == "fixture-event")
+        #expect(f.call.googleEventConfirmedAt == nil && f.call.googleCalendarPendingAt != nil)
+        #expect(f.writes.isEmpty)
+    }
+
+    @Test func automaticMissingLinkIsPersistedEvenWhenLaterImportNeedsReview() async throws {
+        let f = try Fixture(linked: true)
+        f.remote.removeValue(forKey: f.key(f.email, "fixture-event"))
+        let conflicting = ServiceCall(googleCalendarID: "not-shared@example.invalid",
+            googleEventID: "import-conflict", googleEventConfirmedAt: Date(),
+            googleEventManagedByApp: true, type: .repair,
+            scheduledDate: f.call.scheduledDate.addingTimeInterval(3600), customer: f.customer)
+        f.context.insert(conflicting)
+        try f.context.save()
+        f.remote[f.key(f.email, "import-conflict")] = f.event(id: "import-conflict")
+        var verifiedNotFound: [UUID: String] = [:]
+
+        let result = await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.synchronize(workflow: $0,
+                verifyConfirmedCalls: [f.call], verifiedNotFound: { verifiedNotFound[$0] = $1 })
+        }
+        guard case .failure = result else {
+            Issue.record("Duplicate imported identities must still fail closed")
+            return
+        }
+        #expect(verifiedNotFound[f.call.id] == "fixture-event")
+        #expect(f.call.googleEventConfirmedAt == nil && f.call.googleCalendarPendingAt != nil)
+        #expect(f.call.googleEventID == "fixture-event")
+        #expect(f.writes.isEmpty)
+    }
+
     @Test func explicitSyncKeepsPresentConfirmedLinkWithoutProviderWrite() async throws {
         let f = try Fixture(linked: true)
         let originalConfirmation = f.call.googleEventConfirmedAt

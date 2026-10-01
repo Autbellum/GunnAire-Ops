@@ -5657,6 +5657,7 @@ private struct CustomerEditorView: View {
             )
             modelContext.insert(attachment)
             try modelContext.save()
+            AutomaticGoogleDriveArchive.shared.wakeAfterSave(attachment, context: modelContext)
             customerAttachmentCaption = ""
             if isProfilePhoto {
                 selectedCustomerAttachmentEquipmentID = nil
@@ -5702,6 +5703,7 @@ private struct CustomerEditorView: View {
             )
             modelContext.insert(attachment)
             try modelContext.save()
+            AutomaticGoogleDriveArchive.shared.wakeAfterSave(attachment, context: modelContext)
             syncCustomerAttachmentIfPossible(attachment, data: data, isAccountStatement: true)
 
             if emailAfterGeneration {

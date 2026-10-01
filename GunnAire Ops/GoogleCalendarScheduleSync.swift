@@ -15,6 +15,11 @@ enum GoogleCalendarScheduleSync {
         let verifiedNotFoundIDs: [UUID: String]
     }
 
+    struct AutomaticVerificationPage {
+        let calls: [ServiceCall]
+        let nextOffset: Int
+    }
+
     private final class VerifiedLinkEvidence {
         var notFoundIDs: [UUID: String] = [:]
     }
@@ -389,6 +394,43 @@ enum GoogleCalendarScheduleSync {
             (call.googleEventConfirmedAt == nil && call.scheduledDate >= Calendar.current.startOfDay(for: now))
     }
 
+    /// One small SwiftData page per automatic pass. The cursor advances past
+    /// every inspected row, including ineligible rows, so frequent foreground
+    /// wakes cannot repeatedly spend the request budget on the same jobs.
+    static func automaticVerificationPage(context: ModelContext, now: Date, offset: Int,
+                                          pageSize: Int = 32, maxLinks: Int = 2) throws -> AutomaticVerificationPage {
+        guard pageSize > 0, maxLinks > 0 else { return AutomaticVerificationPage(calls: [], nextOffset: 0) }
+        let lower = Calendar.current.date(byAdding: .day, value: -7, to: Calendar.current.startOfDay(for: now)) ?? now
+        let upper = Calendar.current.date(byAdding: .day, value: 90, to: now) ?? now
+        var descriptor = FetchDescriptor<ServiceCall>(
+            predicate: #Predicate { $0.googleEventManagedByApp &&
+                $0.scheduledDate >= lower && $0.scheduledDate <= upper },
+            sortBy: [SortDescriptor(\.scheduledDate), SortDescriptor(\.id)])
+        descriptor.fetchLimit = pageSize
+        descriptor.fetchOffset = max(0, offset)
+        var page = try context.fetch(descriptor)
+        var baseOffset = max(0, offset)
+        if page.isEmpty, baseOffset > 0 {
+            descriptor.fetchOffset = 0
+            page = try context.fetch(descriptor)
+            baseOffset = 0
+        }
+        var inspected = 0
+        var calls: [ServiceCall] = []
+        for call in page {
+            inspected += 1
+            if call.googleEventConfirmedAt != nil, call.googleCalendarPendingAt == nil,
+               normalizedOptional(call.googleEventID) != nil,
+               (call.status == .scheduled || call.status == .inProgress),
+               !isCalendarEventDeleted(calendarID: call.googleCalendarID, eventID: call.googleEventID) {
+                calls.append(call)
+                if calls.count == maxLinks { break }
+            }
+        }
+        let nextOffset = inspected == page.count && page.count < pageSize ? 0 : baseOffset + inspected
+        return AutomaticVerificationPage(calls: calls, nextOffset: nextOffset)
+    }
+
     static func synchronize(workflow: GoogleCalendarWorkflow,
                             verifyConfirmedCalls: [ServiceCall] = [],
                             verifiedNotFound: ((UUID, String) -> Void)? = nil) async throws -> String {
@@ -433,10 +475,10 @@ enum GoogleCalendarScheduleSync {
             offset += page.count
             await Task.yield()
         }
-        let imported = try await importSchedule(workflow: workflow)
-        // Explicit Sync Google checks the visible confirmed links by their
-        // original IDs. A saved confirmation is historical proof, not proof
-        // that someone has not since removed the event in Google.
+        // Foreground recovery and explicit Sync Google check a small set of
+        // confirmed links by their original IDs before a separate import can
+        // fail on an unrelated calendar row. A saved confirmation is historical
+        // proof, not proof that someone has not since removed the event.
         let confirmed = verifyConfirmedCalls.filter {
             $0.googleEventManagedByApp && $0.googleEventConfirmedAt != nil &&
             $0.googleCalendarPendingAt == nil && $0.googleEventID != nil &&
@@ -471,6 +513,7 @@ enum GoogleCalendarScheduleSync {
                 reviewErrors.append("A confirmed Google link could not be verified (\(error.localizedDescription)). Use Check Google Link on its appointment.")
             }
         }
+        let imported = try await importSchedule(workflow: workflow)
         let review = reviewErrors.first.map { " \(reviewErrors.count) update(s) still need review. \($0)" } ?? ""
         let linkCheck = verifyConfirmedCalls.isEmpty ? "" :
             " Checked \(checked) confirmed selected-day/upcoming Google link(s) (up to 25 per sync)." +

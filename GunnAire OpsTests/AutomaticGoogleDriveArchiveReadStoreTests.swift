@@ -72,4 +72,42 @@ struct AutomaticGoogleDriveArchiveReadStoreTests {
         #expect(second.candidateIDs == [expectedPending].compactMap { $0 })
         #expect(end.fetchedCount == 0)
     }
+
+    @Test func savedOwnedAttachmentsWakeArchiveWithoutRewakingArchivedOrUnownedFiles() throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let customer = Customer(name: "Drive wake fixture")
+        context.insert(customer)
+
+        let pending = ServiceDocumentAttachment(customer: customer, serviceCallID: nil,
+            kind: .serviceReport, displayName: "report.pdf", localFilePath: "/tmp/report.pdf",
+            contentType: "application/pdf", fileSizeBytes: 12)
+        let archived = ServiceDocumentAttachment(customer: customer, serviceCallID: nil,
+            kind: .customerDocument, displayName: "archived.pdf", localFilePath: "/tmp/archived.pdf",
+            contentType: "application/pdf", fileSizeBytes: 12,
+            googleDriveFileID: "saved-file", googleDriveWebViewLink: "https://drive.google.com/file/d/saved-file/view",
+            googleDriveSyncStatus: GoogleDriveDocumentSyncState.archived.rawValue)
+        let unowned = ServiceDocumentAttachment(customer: nil, serviceCallID: nil,
+            kind: .other, displayName: "unowned.pdf", localFilePath: "/tmp/unowned.pdf",
+            contentType: "application/pdf", fileSizeBytes: 12)
+        let fleet = ServiceDocumentAttachment(customer: nil, serviceCallID: nil,
+            fleetVehicleID: UUID(), kind: .fleetService, displayName: "fleet.pdf",
+            localFilePath: "/tmp/fleet.pdf", contentType: "application/pdf", fileSizeBytes: 12)
+        context.insert(pending)
+        context.insert(archived)
+        context.insert(unowned)
+        context.insert(fleet)
+        try context.save()
+
+        var wakeCount = 0
+        let recovery: @MainActor (ModelContext) -> Void = { recoveredContext in
+            #expect(recoveredContext === context)
+            wakeCount += 1
+        }
+        AutomaticGoogleDriveArchive.shared.wakeAfterSave(pending, context: context, recovery: recovery)
+        AutomaticGoogleDriveArchive.shared.wakeAfterSave(archived, context: context, recovery: recovery)
+        AutomaticGoogleDriveArchive.shared.wakeAfterSave(unowned, context: context, recovery: recovery)
+        AutomaticGoogleDriveArchive.shared.wakeAfterSave(fleet, context: context, recovery: recovery)
+        #expect(wakeCount == 2)
+    }
 }

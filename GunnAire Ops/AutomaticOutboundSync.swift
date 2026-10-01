@@ -162,6 +162,15 @@ final class AutomaticOutboundSync {
     private var attachmentDeferredUntil: [UUID: Date] = [:]
     private var calendarRunning = false
     private var calendarQueued = false
+    private struct CalendarVerificationScope: Equatable {
+        let container: ObjectIdentifier
+        let workspace: CompanyWorkspaceOperationStamp
+        let googleEmail: String
+    }
+    private var calendarVerificationScope: CalendarVerificationScope?
+    private var calendarVerificationOffset = 0
+    private var lastCalendarVerificationAt: Date?
+    private let calendarVerificationInterval: TimeInterval = 10 * 60
     private var lastRecoveryAt: Date?
     private let recoveryInterval: TimeInterval = 60
     private let realmStore = AutomaticOutboundRealmStore()
@@ -470,9 +479,29 @@ final class AutomaticOutboundSync {
             return
         }
         if calendarRunning { calendarQueued = true; return }
+        guard let stamp = CompanyWorkspaceAccessController.shared.operationStamp else { return }
+        let scope = CalendarVerificationScope(container: ObjectIdentifier(context.container),
+            workspace: stamp, googleEmail: AppAccess.normalizedEmail(auth.signedInEmail))
+        if calendarVerificationScope != scope {
+            calendarVerificationScope = scope
+            calendarVerificationOffset = 0
+            lastCalendarVerificationAt = nil
+        }
+        let now = Date()
+        var verifyConfirmedCalls: [ServiceCall] = []
+        if Self.calendarVerificationIsDue(lastAttempt: lastCalendarVerificationAt, now: now,
+                                          interval: calendarVerificationInterval) {
+            lastCalendarVerificationAt = now
+            if let page = try? GoogleCalendarScheduleSync.automaticVerificationPage(
+                context: context, now: now, offset: calendarVerificationOffset) {
+                calendarVerificationOffset = page.nextOffset
+                verifyConfirmedCalls = page.calls
+            }
+        }
         calendarRunning = true
         GoogleCalendarScheduleSync.sync(auth: auth, modelContext: context,
-            signedInEmail: AppIdentity.currentEmail, isAdminUser: false) { [weak self] _ in
+            signedInEmail: AppIdentity.currentEmail, isAdminUser: false,
+            verifyConfirmedCalls: verifyConfirmedCalls) { [weak self] _ in
                 guard let self else { return }
                 self.calendarRunning = false
                 if self.calendarQueued {
@@ -480,6 +509,12 @@ final class AutomaticOutboundSync {
                     self.recoverCalendar(context: context, auth: auth)
                 }
             }
+    }
+
+    static func calendarVerificationIsDue(lastAttempt: Date?, now: Date, interval: TimeInterval) -> Bool {
+        guard let lastAttempt else { return true }
+        let elapsed = now.timeIntervalSince(lastAttempt)
+        return elapsed < 0 || elapsed >= interval
     }
 
     private func isAuthorized(_ context: ModelContext) -> Bool {

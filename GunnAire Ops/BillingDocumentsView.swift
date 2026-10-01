@@ -7169,6 +7169,7 @@ GunnAire
             modelContext.insert(attachment)
             applyAttachmentProgress(attachment, to: call)
             try modelContext.save()
+            AutomaticGoogleDriveArchive.shared.wakeAfterSave(attachment, context: modelContext)
             attachmentMessage = "Saved annotated copy. The original photo was preserved."
             attachmentPreviewURL = nil
             attachmentPendingMarkup = nil
@@ -7362,6 +7363,7 @@ GunnAire
             modelContext.insert(attachment)
             applyAttachmentProgress(attachment, to: call)
             try modelContext.save()
+            AutomaticGoogleDriveArchive.shared.wakeAfterSave(attachment, context: modelContext)
             attachmentCaption = ""
             attachmentMessage = "Attached \(attachment.displayName)."
             syncAttachmentIfPossible(attachment, data: data)
@@ -7659,6 +7661,7 @@ GunnAire
             }
 
             try modelContext.save()
+            AutomaticGoogleDriveArchive.shared.wakeAfterSave(attachment, context: modelContext)
             var reportToUpload: (attachment: ServiceDocumentAttachment, data: Data, validate: () throws -> Void)?
             if let linkedCall {
                     let report = try await generateAndPersistOnsiteReportAttachment(
@@ -7867,6 +7870,7 @@ GunnAire
         }
 
         try modelContext.save()
+        AutomaticGoogleDriveArchive.shared.wakeAfterSave(attachment, context: modelContext)
         adoptExport()
         return (attachment, data, validateSource)
     }
@@ -7928,6 +7932,7 @@ GunnAire
                 modelContext.insert(attachment)
             }
             try modelContext.save()
+            AutomaticGoogleDriveArchive.shared.wakeAfterSave(attachment, context: modelContext)
             return (attachment, data, validateSource)
     }
 
@@ -8591,6 +8596,7 @@ GunnAire
                 attachment.estimateID = estimateID
             }
             try modelContext.save()
+            AutomaticGoogleDriveArchive.shared.wakeAfterSave(attachment, context: modelContext)
             syncAttachmentIfPossible(attachment, data: data)
             let completionNote = serviceCall.documentationCompletionBlockedMessage.map { " \($0)" } ?? ""
             if invoice?.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
@@ -9028,6 +9034,7 @@ GunnAire
                 attachment = generated
             }
             try modelContext.save()
+            AutomaticGoogleDriveArchive.shared.wakeAfterSave(attachment, context: modelContext)
             syncAttachmentIfPossible(attachment, data: data)
             actionMessage = successMessage
             return attachment

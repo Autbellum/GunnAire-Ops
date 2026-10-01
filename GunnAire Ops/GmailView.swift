@@ -3,6 +3,15 @@ import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 
+enum GmailAutomaticRefreshPolicy {
+    static let interval: TimeInterval = 120
+
+    static func isDue(lastAttempt: Date?, now: Date) -> Bool {
+        guard let lastAttempt else { return true }
+        return now < lastAttempt || now.timeIntervalSince(lastAttempt) >= interval
+    }
+}
+
 enum GmailMessagePresentation {
     static func inboxQuery(searchText: String) -> String {
         let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -109,6 +118,7 @@ enum GmailMessagePresentation {
 
 struct GmailView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @ObservedObject private var workspace = CompanyWorkspaceAccessController.shared
 
@@ -123,6 +133,8 @@ struct GmailView: View {
     @State private var needsMailApproval = false
     @State private var mailConnectionRun = UUID()
     @State private var mailConnectionTask: Task<Void, Never>?
+    @State private var lastAutomaticRefreshAt: Date?
+    @State private var automaticRecoveryOffset = 0
 
     private var messages: [GmailMessageDetail] { mailbox.messages }
     private var isLoading: Bool { mailbox.isLoading }
@@ -308,13 +320,13 @@ struct GmailView: View {
                         Button("Drafts on This Device", systemImage: "doc") { loadDrafts() }
                             .disabled(!canUseGoogleIntegration || !mailbox.busyIDs.isEmpty)
                             .accessibilityIdentifier("MailDraftsButton")
-                        if let provider = mailbox.provider, provider.serverMail != nil {
+                        if let provider = mailbox.provider, let serverMail = provider.serverMail {
                             NavigationLink("Outbox", destination: GmailServerOutboxView(provider: provider))
                                 .accessibilityIdentifier("MailOutboxButton")
                             Button("Check Mail Changes", systemImage: "arrow.clockwise") {
                                 Task { @MainActor in
                                     do {
-                                        let remaining = try await provider.serverMail!.recoverActions(operation: provider)
+                                        let remaining = try await serverMail.recoverActions(operation: provider)
                                         statusMessage = remaining == 0 ? "Mail changes checked." : "Some changes still need confirmation. The original requests have been kept."
                                         loadMessages(preservingStatus: true)
                                     } catch { statusMessage = GmailServerMailError.safe(error).localizedDescription }
@@ -344,10 +356,11 @@ struct GmailView: View {
                 }
             }
             .onAppear {
-                if canUseGoogleIntegration && messages.isEmpty {
-                    loadMessages()
-                }
+                automaticRefreshIfDue()
                 applyPendingDraftIfNeeded()
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { automaticRefreshIfDue() }
             }
             .onSubmit(of: .search) {
                 if showingDrafts { loadDrafts() } else { loadMessages() }
@@ -397,7 +410,16 @@ struct GmailView: View {
         }
     }
 
-    private func loadMessages(folder: GmailMailboxFolder? = nil, preservingStatus: Bool = false) {
+    private func automaticRefreshIfDue(now: Date = Date()) {
+        guard scenePhase == .active, !showingDrafts, composeDraft == nil,
+              canUseGoogleIntegration, !connectingMail, !isLoading, mailbox.busyIDs.isEmpty,
+              GmailAutomaticRefreshPolicy.isDue(lastAttempt: lastAutomaticRefreshAt, now: now) else { return }
+        lastAutomaticRefreshAt = now
+        loadMessages(preservingStatus: false, recoverPendingActions: true)
+    }
+
+    private func loadMessages(folder: GmailMailboxFolder? = nil, preservingStatus: Bool = false,
+                              recoverPendingActions: Bool = false) {
         guard mailbox.busyIDs.isEmpty else {
             statusMessage = "Wait for the message change to finish, then try again."
             return
@@ -416,7 +438,28 @@ struct GmailView: View {
                     guard mailConnectionRun == run else { return }
                     try provider.check()
                     needsMailApproval = false; showingDrafts = false
-                    mailbox.refresh(folder: folder ?? mailbox.folder, query: searchQuery, provider: provider, preservingStatus: preservingStatus)
+                    var keepStatus = preservingStatus
+                    if recoverPendingActions, let serverMail = provider.serverMail {
+                        do {
+                            let remaining = try await serverMail.recoverActions(
+                                operation: provider, maximum: 8, offset: automaticRecoveryOffset)
+                            guard mailConnectionRun == run, !Task.isCancelled else { return }
+                            automaticRecoveryOffset = (automaticRecoveryOffset + 8) % 128
+                            if remaining > 0 {
+                                statusMessage = "Some mail changes still need confirmation. The original requests have been kept."
+                                keepStatus = true
+                            }
+                        } catch {
+                            guard mailConnectionRun == run, !Task.isCancelled else { return }
+                            try provider.check()
+                            statusMessage = GmailServerMailError.safe(error).localizedDescription
+                            keepStatus = true
+                        }
+                    }
+                    guard mailConnectionRun == run, !Task.isCancelled else { return }
+                    try provider.check()
+                    mailbox.refresh(folder: folder ?? mailbox.folder, query: searchQuery,
+                                    provider: provider, preservingStatus: keepStatus)
                 } catch {
                     guard mailConnectionRun == run, !(error is CancellationError) else { return }
                     mailbox.clear()
@@ -489,6 +532,7 @@ struct GmailView: View {
 
     private func clearMailbox() {
         mailConnectionRun = UUID(); mailConnectionTask?.cancel(); mailConnectionTask = nil; connectingMail = false
+        lastAutomaticRefreshAt = nil; automaticRecoveryOffset = 0
         mailbox.clear()
         savedDrafts = []; showingDrafts = false
         composeDraft = nil

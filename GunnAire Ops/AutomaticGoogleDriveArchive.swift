@@ -69,6 +69,15 @@ final class AutomaticGoogleDriveArchive {
         activeAttachmentIDs.remove(id)
     }
 
+    /// Called only after the attachment has been saved. Recovery keeps the
+    /// workspace, administrator, Google account, and Drive scope checks.
+    func wakeAfterSave(_ attachment: ServiceDocumentAttachment, context: ModelContext,
+                       recovery: @MainActor (ModelContext) -> Void = { AutomaticGoogleDriveArchive.shared.recover(context: $0) }) {
+        guard (attachment.customer != nil || attachment.fleetVehicleID != nil),
+              attachment.needsGoogleDriveArchive else { return }
+        recovery(context)
+    }
+
     func recover(context: ModelContext) {
         guard canArchiveFast(context: context),
               let stamp = CompanyWorkspaceAccessController.shared.operationStamp,
