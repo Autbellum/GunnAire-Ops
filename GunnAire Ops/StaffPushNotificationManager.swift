@@ -99,6 +99,22 @@ nonisolated enum StaffPushNotificationRouteParser {
         }
         return invoiceID
     }
+
+    static func serviceRequestID(from userInfo: [AnyHashable: Any]) -> UUID? {
+        guard let payload = userInfo["gunnaire"] as? [String: Any],
+              let version = payload["version"] as? NSNumber,
+              version.intValue == 1,
+              payload["route"] as? String == "serviceRequestsQueue",
+              let recordID = payload["recordID"] as? String,
+              let requestID = UUID(uuidString: recordID),
+              let eventID = payload["eventID"] as? String,
+              eventID.hasPrefix("customer-service-request:"),
+              let eventRequestID = UUID(uuidString: String(eventID.dropFirst("customer-service-request:".count))),
+              eventRequestID == requestID else {
+            return nil
+        }
+        return requestID
+    }
 }
 
 @MainActor
@@ -472,9 +488,9 @@ extension StaffPushNotificationManager: UNUserNotificationCenterDelegate {
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        if StaffPushNotificationRouteParser.paymentCollectionInvoiceID(
-            from: notification.request.content.userInfo
-        ) != nil {
+        let userInfo = notification.request.content.userInfo
+        if StaffPushNotificationRouteParser.paymentCollectionInvoiceID(from: userInfo) != nil
+            || StaffPushNotificationRouteParser.serviceRequestID(from: userInfo) != nil {
             completionHandler([.banner, .list, .sound])
         } else {
             completionHandler([])
@@ -490,6 +506,10 @@ extension StaffPushNotificationManager: UNUserNotificationCenterDelegate {
             from: response.notification.request.content.userInfo
         ) {
             GunnAireAppIntentRouter.storeFieldPaymentCollectionRoute(invoiceID)
+        } else if let requestID = StaffPushNotificationRouteParser.serviceRequestID(
+            from: response.notification.request.content.userInfo
+        ) {
+            GunnAireAppIntentRouter.storeServiceRequestsQueueRoute(requestID)
         }
         completionHandler()
     }

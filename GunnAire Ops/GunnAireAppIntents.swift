@@ -286,6 +286,7 @@ enum GunnAireAppIntentRouter {
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingCustomerID")
         case .schedule:
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingScheduleServiceCallID")
+            UserDefaults.standard.removeObject(forKey: "GunnAirePendingServiceRequestID")
         case .documentation, .invoices:
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingServiceCallID")
         case .payments:
@@ -317,6 +318,7 @@ enum GunnAireAppIntentRouter {
             "GunnAirePendingAppRoute",
             "GunnAirePendingCustomerID",
             "GunnAirePendingScheduleServiceCallID",
+            "GunnAirePendingServiceRequestID",
             "GunnAirePendingServiceCallID",
             "GunnAirePendingInvoiceID",
             "GunnAirePendingOpenPaymentCollection",
@@ -347,6 +349,18 @@ enum GunnAireAppIntentRouter {
     nonisolated static func storeQuickBooksRoute(workspace: QuickBooksManagementWorkspace) {
         UserDefaults.standard.set(workspace.rawValue, forKey: "GunnAirePendingQuickBooksWorkspace")
         store(.quickBooks)
+    }
+
+    nonisolated static func storeServiceRequestsQueueRoute(_ requestID: UUID) {
+        UserDefaults.standard.set(requestID.uuidString, forKey: "GunnAirePendingServiceRequestID")
+        store(.schedule)
+    }
+
+    nonisolated static func consumePendingServiceRequestID() -> UUID? {
+        let key = "GunnAirePendingServiceRequestID"
+        guard let rawValue = UserDefaults.standard.string(forKey: key) else { return nil }
+        UserDefaults.standard.removeObject(forKey: key)
+        return UUID(uuidString: rawValue)
     }
 
     nonisolated static func consumePendingQuickBooksWorkspace() -> QuickBooksManagementWorkspace? {
