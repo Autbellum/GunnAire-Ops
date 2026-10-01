@@ -5190,7 +5190,7 @@ GunnAire
         )
         modelContext.insert(activity)
         do {
-            try modelContext.save()
+            try ServiceCallCalendarOutbox.save(visit) { try modelContext.save() }
             AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
             milestonePendingScheduling = nil
             actionMessage = "\(milestone.title) was added to the dispatch schedule."
@@ -9363,7 +9363,7 @@ GunnAire
             in: modelContext
         )
         do {
-            try modelContext.save()
+            try ServiceCallCalendarOutbox.save(followUpCall) { try modelContext.save() }
             AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
         } catch {
             modelContext.delete(sourceActivity)
@@ -9478,7 +9478,7 @@ GunnAire
                     in: modelContext
                 )
             }
-            try modelContext.save()
+            try ServiceCallCalendarOutbox.save(approvedWorkCall) { try modelContext.save() }
             AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
             selectedEstimateForScheduling = nil
             actionMessage = "Approved work scheduled for \(scheduledDate.formatted(date: .abbreviated, time: .shortened)). Assign the crew from the Schedule workspace."

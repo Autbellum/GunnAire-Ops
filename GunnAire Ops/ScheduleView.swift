@@ -2403,7 +2403,7 @@ GunnAire
         }
         modelContext.insert(call)
         do {
-            try modelContext.save()
+            try ServiceCallCalendarOutbox.save(call) { try modelContext.save() }
         } catch {
             modelContext.delete(call)
             maintenanceMessage = "Could not save the maintenance visit. The agreement due date was not advanced."
@@ -2454,7 +2454,7 @@ GunnAire
             in: modelContext
         )
         do {
-            try modelContext.save()
+            try ServiceCallCalendarOutbox.save(followUpCall) { try modelContext.save() }
         } catch {
             modelContext.delete(sourceActivity)
             modelContext.delete(followUpActivity)
@@ -2554,7 +2554,7 @@ GunnAire
                     in: modelContext
                 )
             }
-            try modelContext.save()
+            try ServiceCallCalendarOutbox.save(approvedWorkCall) { try modelContext.save() }
             selectedEstimateForScheduling = nil
             approvedWorkMessage = nil
             publishToGoogleCalendar(approvedWorkCall)
@@ -2665,7 +2665,7 @@ GunnAire
         modelContext.insert(activity)
 
         do {
-            try modelContext.save()
+            try ServiceCallCalendarOutbox.save(call) { try modelContext.save() }
         } catch {
             call.scheduledDate = originalStart
             modelContext.delete(activity)
@@ -2721,7 +2721,9 @@ GunnAire
         // than guessing write access to the newly assigned person's calendar.
         if let newStart { call.scheduledDate = newStart }
         do {
-            try JobBillingDispatch.shared.save(call, original: originalBilling, context: modelContext)
+            try ServiceCallCalendarOutbox.save(call) {
+                try JobBillingDispatch.shared.save(call, original: originalBilling, context: modelContext)
+            }
         } catch {
             call.assignedTechnician = originalTechnician
             call.additionalTechnicianIDs = originalCrew

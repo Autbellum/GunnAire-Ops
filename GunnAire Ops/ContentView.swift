@@ -2145,7 +2145,7 @@ GunnAire
             in: modelContext
         )
         do {
-            try modelContext.save()
+            try ServiceCallCalendarOutbox.save(followUpCall) { try modelContext.save() }
             AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
         } catch {
             modelContext.delete(sourceActivity)
@@ -4182,6 +4182,42 @@ struct ServiceCalendarRouteOption: Identifiable, Equatable {
     let label: String
 }
 
+/// Persist the Calendar outbox marker with the appointment mutation. The
+/// provider wake happens after this local save succeeds.
+enum ServiceCallCalendarOutbox {
+    struct PreviousState {
+        let confirmedAt: Date?
+        let pendingAt: Date?
+    }
+
+    static func prepareForLocalSave(_ call: ServiceCall) -> PreviousState? {
+        guard GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call) else { return nil }
+        let previous = PreviousState(confirmedAt: call.googleEventConfirmedAt,
+                                     pendingAt: call.googleCalendarPendingAt)
+        call.googleEventConfirmedAt = nil
+        call.googleCalendarPendingAt = Date()
+        return previous
+    }
+
+    static func restoreAfterFailedSave(_ previous: PreviousState?, on call: ServiceCall) {
+        guard let previous else { return }
+        call.googleEventConfirmedAt = previous.confirmedAt
+        call.googleCalendarPendingAt = previous.pendingAt
+    }
+
+    @discardableResult
+    static func save(_ call: ServiceCall, using action: () throws -> Void) throws -> Bool {
+        let previous = prepareForLocalSave(call)
+        do {
+            try action()
+            return previous != nil
+        } catch {
+            restoreAfterFailedSave(previous, on: call)
+            throw error
+        }
+    }
+}
+
 enum ServiceCalendarRouting {
     static func routeOptions(from calendars: [GoogleCalendar]) -> [ServiceCalendarRouteOption] {
         var options = calendars
@@ -4921,7 +4957,9 @@ struct AddServiceCallView: View {
         }
         modelContext.insert(call)
         do {
-            try JobBillingDispatch.shared.save(call, original: nil, context: modelContext)
+            try ServiceCallCalendarOutbox.save(call) {
+                try JobBillingDispatch.shared.save(call, original: nil, context: modelContext)
+            }
         } catch {
             // Only the just-inserted unsaved job is removed; form values and
             // unrelated model changes are retained. Never dismiss on failure.
@@ -5822,10 +5860,12 @@ struct EditServiceCallView: View {
         if originalDispatchUrgency != dispatchUrgency {
             ServiceCallActivity.record(for: call, action: "Dispatch priority updated", detail: "Priority changed from \(originalDispatchUrgency.displayName) to \(dispatchUrgency.displayName).", actorEmail: actorEmail, in: modelContext)
         }
-        let shouldPublishCalendarChanges = GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call)
+        let shouldPublishCalendarChanges: Bool
         billingEditRevision = JobBillingLocalRevision(call)
         do {
-            try JobBillingDispatch.shared.save(call, original: originalBillingTarget, context: modelContext)
+            shouldPublishCalendarChanges = try ServiceCallCalendarOutbox.save(call) {
+                try JobBillingDispatch.shared.save(call, original: originalBillingTarget, context: modelContext)
+            }
         } catch {
             restoreFailedEdit()
             billingEditRevision = JobBillingLocalRevision(call)

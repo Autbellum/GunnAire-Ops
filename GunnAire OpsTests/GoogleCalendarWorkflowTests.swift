@@ -183,6 +183,75 @@ struct GoogleCalendarWorkflowTests {
         #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
     }
 
+    @Test func firstLocalSaveRetainsBackdatedCalendarOutboxAfterContextRestart() async throws {
+        let f = try Fixture()
+        f.call.scheduledDate = try #require(Calendar.current.date(
+            byAdding: .day, value: -1, to: Calendar.current.startOfDay(for: Date())))
+        try ServiceCallCalendarOutbox.save(f.call) { try f.context.save() }
+        f.loseDeviceLocalCalendarMarkers()
+
+        let resumedContext = ModelContext(f.context.container)
+        let callID = f.call.id
+        let resumed = try #require(resumedContext.fetch(FetchDescriptor<ServiceCall>(
+            predicate: #Predicate { $0.id == callID })).first)
+        #expect(resumed.googleCalendarPendingAt != nil)
+        #expect(GoogleCalendarScheduleSync.needsOutboundSync(resumed))
+        let workflow = try GoogleCalendarWorkflow(auth: f.auth, context: resumedContext,
+            signedInEmail: f.email, validateAccess: {})
+        _ = try await workflow.run { try await GoogleCalendarScheduleSync.synchronize(workflow: $0) }.get()
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+    }
+
+    @Test func firstLocalSaveRetainsLinkedEditAfterContextRestart() async throws {
+        let f = try Fixture(linked: true)
+        let originalID = try #require(f.call.googleEventID)
+        f.call.scheduledDate = f.call.scheduledDate.addingTimeInterval(3_600)
+        try ServiceCallCalendarOutbox.save(f.call) { try f.context.save() }
+        f.loseDeviceLocalCalendarMarkers()
+
+        let resumedContext = ModelContext(f.context.container)
+        let callID = f.call.id
+        let resumed = try #require(resumedContext.fetch(FetchDescriptor<ServiceCall>(
+            predicate: #Predicate { $0.id == callID })).first)
+        #expect(resumed.googleEventID == originalID)
+        #expect(resumed.googleEventConfirmedAt == nil)
+        #expect(GoogleCalendarScheduleSync.needsOutboundSync(resumed))
+        let workflow = try GoogleCalendarWorkflow(auth: f.auth, context: resumedContext,
+            signedInEmail: f.email, validateAccess: {})
+        _ = try await workflow.run { try await GoogleCalendarScheduleSync.synchronize(workflow: $0) }.get()
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.isEmpty)
+        #expect(f.writes.contains { $0.httpMethod == "PATCH" })
+        let remote = try #require(f.remote[f.key(f.email, originalID)])
+        let remoteStart = try #require(remote["start"] as? [String: String])
+        #expect(remoteStart["dateTime"] == ISO8601DateFormatter().string(from: resumed.scheduledDate))
+        #expect(resumed.googleEventID == originalID)
+    }
+
+    @Test func failedLocalSaveRestoresCalendarProofWithoutDeviceMarker() throws {
+        let f = try Fixture(linked: true)
+        let previousConfirmation = f.call.googleEventConfirmedAt
+        let previousPending = f.call.googleCalendarPendingAt
+        struct SaveRejected: Error {}
+        do {
+            try ServiceCallCalendarOutbox.save(f.call) { throw SaveRejected() }
+            Issue.record("The local save should have failed")
+        } catch is SaveRejected {
+            // The helper restores the exact prior proof on a failed save.
+        }
+
+        #expect(f.call.googleEventConfirmedAt == previousConfirmation)
+        #expect(f.call.googleCalendarPendingAt == previousPending)
+        #expect(!(UserDefaults.standard.stringArray(forKey: "GunnAireLocallyEditedGoogleCalendarCallIDs") ?? [])
+            .contains(f.call.id.uuidString))
+        #expect(!GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+        let resumedContext = ModelContext(f.context.container)
+        let callID = f.call.id
+        let resumed = try #require(resumedContext.fetch(FetchDescriptor<ServiceCall>(
+            predicate: #Predicate { $0.id == callID })).first)
+        #expect(resumed.googleEventConfirmedAt == previousConfirmation)
+        #expect(resumed.googleCalendarPendingAt == previousPending)
+    }
+
     @Test func backdatedUnmarkedJobIsNotAutomaticallyPublished() async throws {
         let f = try Fixture()
         f.call.scheduledDate = try #require(Calendar.current.date(
