@@ -14,6 +14,7 @@ enum ServiceRequestStatus: String, Codable, CaseIterable, Identifiable {
 enum ServiceRequestSource: String, Codable, CaseIterable, Identifiable {
     case phone
     case website
+    case customerPortal
     case googleBusinessProfile
     case referral
     case repeatCustomer
@@ -27,6 +28,7 @@ enum ServiceRequestSource: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .phone: "Phone"
         case .website: "Website / Online Booking"
+        case .customerPortal: "Customer Account"
         case .googleBusinessProfile: "Google Business Profile"
         case .referral: "Referral"
         case .repeatCustomer: "Repeat Customer"
