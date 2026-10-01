@@ -5116,10 +5116,25 @@ final class GunnAire_OpsUITests: XCTestCase {
         let save = app.buttons["SaveBillingDocument"]
         XCTAssertTrue(waitForHittable(save)); XCTAssertTrue(save.isEnabled); save.tap()
         let savedCustomer = app.staticTexts["ManagementBillingSavedCustomer"]
-        XCTAssertTrue(savedCustomer.waitForExistence(timeout: 5))
+        if !savedCustomer.waitForExistence(timeout: 10) {
+            let draftStatus = app.staticTexts["ManagementBillingDraftStatus"]
+            XCTFail("Estimate save did not reach confirmation: \(draftStatus.exists ? draftStatus.label : "No save status shown")")
+            return
+        }
         XCTAssertEqual(savedCustomer.label, "Blue Ridge Dental")
         XCTAssertTrue(app.staticTexts["Estimate Saved"].exists)
         XCTAssertFalse(app.buttons["SaveBillingDocument"].exists)
+        let quickBooksSend = app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "SendEstimateQuickBooks-"
+        )).firstMatch
+        for _ in 0..<6 where !quickBooksSend.exists || !quickBooksSend.isHittable { app.swipeUp() }
+        XCTAssertTrue(quickBooksSend.exists, "The saved estimate must show its QuickBooks delivery route here.")
+        XCTAssertFalse(quickBooksSend.isEnabled, "A disconnected account cannot send through QuickBooks.")
+        let quickBooksIssue = app.staticTexts.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "SendEstimateQuickBooksIssue-"
+        )).firstMatch
+        XCTAssertTrue(quickBooksIssue.exists)
+        XCTAssertTrue(quickBooksIssue.label.contains("Connect QuickBooks in Settings"))
 
         let sendEstimate = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "SendEstimate-")).firstMatch
         for _ in 0..<6 where !sendEstimate.exists || !sendEstimate.isHittable { app.swipeUp() }
