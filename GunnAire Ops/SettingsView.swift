@@ -206,10 +206,13 @@ struct SettingsView: View {
                         Section("Operational Readiness") {
                             readinessRow(title: "Users and roles", isComplete: !users.isEmpty)
                             readinessRow(title: "QuickBooks connected", isComplete: isQuickBooksAuthenticated)
-                            readinessRow(
-                                title: "Google Calendar, Gmail & Drive authorized",
-                                isComplete: isGoogleAuthenticated && googleAuth.googleDriveAuthorizationState == .ready
-                            )
+                            readinessRow(title: "Google Calendar authorized",
+                                         isComplete: googleAuth.googleCalendarAuthorizationState == .ready)
+                            readinessRow(title: "Gmail authorized",
+                                         isComplete: googleAuth.canUseCurrentBusinessIdentity &&
+                                            googleAuth.hasGrantedScope(Config.Google.gmailModifyScope))
+                            readinessRow(title: "Google Drive authorized",
+                                         isComplete: googleAuth.googleDriveAuthorizationState == .ready)
                             readinessRow(
                                 title: "CloudKit on this device",
                                 isComplete: cloudKitHealthIsReady
@@ -954,22 +957,29 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var googleDeviceConnectionStatus: some View {
-        connectionStatusRow(title: "On this device", isConnected: isGoogleAuthenticated)
-        if googleAuth.googleDriveAuthorizationState == .ready {
-            Label("Calendar, Gmail, and per-file Drive archive access confirmed.", systemImage: "checkmark.shield")
+        connectionStatusRow(title: "On this device", isConnected: googleAuth.isAuthenticated)
+        if let email = googleAuth.signedInEmail, !email.isEmpty {
+            Text("Connected Google account: \(email)")
                 .font(.caption)
                 .foregroundColor(.secondary)
-        } else {
-            Text(googleAuth.googleDriveAuthorizationState.detail)
-                .font(.caption)
-                .foregroundColor(googleAuth.googleDriveAuthorizationState == .disconnected ? .secondary : .orange)
         }
+        Text(googleAuth.googleCalendarAuthorizationState.detail)
+            .font(.caption)
+            .foregroundColor(googleAuth.googleCalendarAuthorizationState == .ready ? .secondary : .orange)
+        if let message = googleAuth.calendarSyncMessage {
+            Text("Latest calendar sync: \(message)")
+                .font(.caption)
+                .foregroundColor(.primary)
+        }
+        Text(googleAuth.googleDriveAuthorizationState.detail)
+            .font(.caption)
+            .foregroundColor(googleAuth.googleDriveAuthorizationState == .disconnected ? .secondary : .orange)
     }
 
     @ViewBuilder
     private var googleDeviceConnectionControls: some View {
         if canConnectDeviceGoogle {
-            if isGoogleAuthenticated {
+            if googleAuth.isAuthenticated {
                 if isAdminUser {
                     Button("Disconnect Google", role: .destructive) {
                         guard canConnectDeviceGoogle, isAdminUser else { return }
@@ -977,10 +987,12 @@ struct SettingsView: View {
                         isGoogleAuthenticated = false
                     }
                 }
-                if googleAuth.googleDriveAuthorizationState == .reauthorizationRequired ||
+                if googleAuth.googleCalendarAuthorizationState == .reauthorizationRequired ||
+                    googleAuth.googleCalendarAuthorizationState == .businessAccountMismatch ||
+                    googleAuth.googleDriveAuthorizationState == .reauthorizationRequired ||
                     googleAuth.googleDriveAuthorizationState == .businessAccountMismatch {
                     Button(action: connectDeviceGoogle) {
-                        Label("Reconnect Google for Drive", systemImage: "arrow.clockwise.circle")
+                        Label("Reconnect Google access", systemImage: "arrow.clockwise.circle")
                     }
                     .accessibilityIdentifier("ReconnectGoogleForDrive")
                 }

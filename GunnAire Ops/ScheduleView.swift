@@ -294,6 +294,21 @@ struct ScheduleView: View {
                 List {
                     scheduleCardRow { snapshotSection }
 
+                    if let message = googleAuth.calendarSyncMessage ?? syncMessage {
+                        scheduleCardRow {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Label("Google Calendar status", systemImage: "calendar.badge.exclamationmark")
+                                    .font(.subheadline.weight(.semibold))
+                                Text(message)
+                                    .font(.caption)
+                            }
+                            .accessibilityIdentifier("ScheduleSyncStatus")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12)
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                        }
+                    }
+
                     scheduleCardRow { jobSearchSection }
 
                     if canManageDispatch {
@@ -367,15 +382,6 @@ struct ScheduleView: View {
                         }
                     }
 
-                    if let message = googleAuth.calendarSyncMessage ?? syncMessage {
-                        scheduleCardRow {
-                            Text(message)
-                                .accessibilityIdentifier("ScheduleSyncStatus")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 2)
-                        }
-                    }
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
@@ -1658,10 +1664,10 @@ struct ScheduleView: View {
                 if !call.additionalTechnicianIDs.isEmpty {
                     Label("+\(call.additionalTechnicianIDs.count) crew", systemImage: "person.2.fill")
                 }
-                if call.googleEventID != nil {
-                    // A retained link can also be an unconfirmed reservation.
-                    // Its existence is not fresh provider-sync evidence.
-                    Label("Google", systemImage: "calendar")
+                if GoogleCalendarScheduleSync.needsOutboundSync(call) {
+                    Label("Google pending", systemImage: "calendar.badge.exclamationmark")
+                } else if call.googleEventID != nil {
+                    Label("Google linked", systemImage: "calendar")
                 }
                 if call.documentationStartedAt != nil {
                     Label("Started", systemImage: "doc.text")
@@ -1841,8 +1847,8 @@ struct ScheduleView: View {
             syncMessage = "Dispatcher or administrator access is required to sync Google Calendar appointments."
             return
         }
-        guard googleAuth.isAuthenticated else {
-            syncMessage = "Google Calendar requires a Google sign-in. Your Apple sign-in still protects the rest of GunnAire Ops."
+        guard googleAuth.googleCalendarAuthorizationState == .ready else {
+            syncMessage = googleAuth.googleCalendarAuthorizationState.detail
             return
         }
         isSyncingGoogleCalendar = true

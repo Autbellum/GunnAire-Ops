@@ -345,6 +345,34 @@ enum GoogleAccountLinkPolicy {
     }
 }
 
+enum GoogleCalendarAuthorizationState: Equatable {
+    case disconnected
+    case businessAccountMismatch
+    case reauthorizationRequired
+    case ready
+
+    static func evaluate(isAuthenticated: Bool, businessIdentityMatches: Bool,
+                         hasCalendarScope: Bool) -> Self {
+        guard isAuthenticated else { return .disconnected }
+        guard businessIdentityMatches else { return .businessAccountMismatch }
+        guard hasCalendarScope else { return .reauthorizationRequired }
+        return .ready
+    }
+
+    var detail: String {
+        switch self {
+        case .disconnected:
+            "Google Calendar is disconnected. Saved appointments cannot be published until the approved account is connected."
+        case .businessAccountMismatch:
+            "The connected Google account must match the signed-in GunnAire business account before calendar events can be published."
+        case .reauthorizationRequired:
+            "Google Calendar permission is missing or could not be verified. Reconnect Google to grant Calendar access, then use Sync Google."
+        case .ready:
+            "Google Calendar permission is available. Check the schedule status to confirm each event was published."
+        }
+    }
+}
+
 final class GoogleAuthManager: NSObject, ObservableObject {
     static let shared = GoogleAuthManager()
     static var callbackScheme: String {
@@ -527,6 +555,14 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         isAuthenticated && GoogleAccountLinkPolicy.canUseIntegration(
             primaryBusinessEmail: businessEmailProvider(),
             googleEmail: signedInEmail
+        )
+    }
+
+    var googleCalendarAuthorizationState: GoogleCalendarAuthorizationState {
+        GoogleCalendarAuthorizationState.evaluate(
+            isAuthenticated: isAuthenticated,
+            businessIdentityMatches: canUseCurrentBusinessIdentity,
+            hasCalendarScope: hasGrantedScope(Config.Google.calendarScope)
         )
     }
 

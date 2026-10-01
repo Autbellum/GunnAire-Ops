@@ -412,9 +412,29 @@ enum GoogleCalendarScheduleSync {
             properties[GoogleCalendarStaffDelivery.managedEmailsKey] = (proposal.attendees ?? []).map(\.email).sorted().joined(separator: ",")
             proposal.extendedProperties = .init(privateProperties: properties)
             proposal.id = id
-            saved = try await workflow.receive {
-                workflow.auth.createCalendarEvent(calendarID: calendar.id, event: proposal,
-                    operation: workflow.operation, completion: $0)
+            do {
+                saved = try await workflow.receive {
+                    workflow.auth.createCalendarEvent(calendarID: calendar.id, event: proposal,
+                        operation: workflow.operation, completion: $0)
+                }
+            } catch GoogleAuthError.http(statusCode: let code) where code == 401 || code == 403 {
+                // An explicit authorization denial means Google did not
+                // create this event. Release only this newly reserved link so
+                // reconnecting can publish it later. Transport failures and
+                // ambiguous server responses keep the reservation intact.
+                try workflow.check()
+                guard call.googleCalendarID == calendar.id, call.googleEventID == id else {
+                    throw GoogleCalendarWorkflowError.changed
+                }
+                call.googleCalendarID = previousCalendar
+                call.googleEventID = originalID
+                do { try workflow.saveChanges() }
+                catch {
+                    call.googleCalendarID = calendar.id
+                    call.googleEventID = id
+                    throw error
+                }
+                throw GoogleAuthError.http(statusCode: code)
             }
         }
         try requireCall(call, workflow: workflow)

@@ -345,7 +345,14 @@ final class AutomaticOutboundSync {
     }
 
     func recoverCalendar(context: ModelContext, auth: GoogleAuthManager) {
-        guard auth.isAuthenticated, isAuthorized(context) else { return }
+        guard auth.googleCalendarAuthorizationState == .ready else {
+            auth.calendarSyncMessage = auth.googleCalendarAuthorizationState.detail
+            return
+        }
+        guard isAuthorized(context) else {
+            auth.calendarSyncMessage = "Google Calendar is waiting for a verified company workspace. Saved appointments remain on this device until access is restored."
+            return
+        }
         if calendarRunning { calendarQueued = true; return }
         calendarRunning = true
         GoogleCalendarScheduleSync.sync(auth: auth, modelContext: context,

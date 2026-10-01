@@ -15,6 +15,7 @@ struct GoogleCalendarWorkflowTests {
         var calendarList: [[String: Any]] = []
         var authorized = true
         var failPatch = false
+        var rejectedCreateStatus: Int?
         var beforeReply: ((URLRequest) async throws -> Void)?
         var afterWrite: ((URLRequest) throws -> Void)?
         lazy var auth = GoogleAuthManager(testTokens: .init(accessToken: "fixture-only",
@@ -100,7 +101,8 @@ struct GoogleCalendarWorkflowTests {
             } else if request.httpMethod == "POST" {
                 payload = try #require(JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
                 let createdID = try #require(payload["id"] as? String)
-                if remote[key(calendar, createdID)] != nil { status = 409 }
+                if let rejectedCreateStatus { status = rejectedCreateStatus }
+                else if remote[key(calendar, createdID)] != nil { status = 409 }
                 else {
                     payload["etag"] = "\"version-created\""
                     remote[key(calendar, createdID)] = payload
@@ -167,6 +169,30 @@ struct GoogleCalendarWorkflowTests {
         #expect(f.call.googleEventID == reserved)
         #expect(f.writes.count == 1)
         #expect(!GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+    }
+
+    @Test func rejectedCalendarPermissionReleasesOnlyUnsentReservationForReconnect() async throws {
+        let f = try Fixture()
+        f.rejectedCreateStatus = 403
+        failed(try await f.publish())
+        #expect(f.call.googleEventID == nil)
+        #expect(f.call.googleCalendarID == "primary")
+        #expect(f.remote.isEmpty)
+        f.rejectedCreateStatus = nil
+        _ = try await f.publish().get()
+        #expect(f.writes.map(\.httpMethod) == ["POST", "POST"])
+        #expect(f.remote.count == 1)
+    }
+
+    @Test func calendarPermissionReadinessDoesNotDependOnDriveScope() {
+        #expect(GoogleCalendarAuthorizationState.evaluate(
+            isAuthenticated: false, businessIdentityMatches: false, hasCalendarScope: false) == .disconnected)
+        #expect(GoogleCalendarAuthorizationState.evaluate(
+            isAuthenticated: true, businessIdentityMatches: false, hasCalendarScope: true) == .businessAccountMismatch)
+        #expect(GoogleCalendarAuthorizationState.evaluate(
+            isAuthenticated: true, businessIdentityMatches: true, hasCalendarScope: false) == .reauthorizationRequired)
+        #expect(GoogleCalendarAuthorizationState.evaluate(
+            isAuthenticated: true, businessIdentityMatches: true, hasCalendarScope: true) == .ready)
     }
 
     @Test func pendingPolicyExcludesExternalAndCompletedJobs() throws {
