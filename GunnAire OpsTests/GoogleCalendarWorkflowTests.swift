@@ -223,6 +223,21 @@ struct GoogleCalendarWorkflowTests {
         #expect(!GoogleCalendarScheduleSync.hasPotentialOutboundSync(in: f.context))
     }
 
+    @Test func scheduleReconnectWakeRequiresActiveAuthorizedDispatcher() throws {
+        let f = try Fixture()
+        f.call.googleCalendarPendingAt = Date()
+        try f.context.save()
+        #expect(GoogleCalendarScheduleSync.hasPotentialOutboundSync(in: f.context))
+
+        let mayWake = ScheduleGoogleLinkStatus.shouldWakePendingCalendar
+        #expect(mayWake(true, true, .ready))
+        #expect(!mayWake(false, true, .ready))
+        #expect(!mayWake(true, false, .ready))
+        #expect(!mayWake(true, true, .disconnected))
+        #expect(!mayWake(true, true, .businessAccountMismatch))
+        #expect(!mayWake(true, true, .reauthorizationRequired))
+    }
+
     @Test func firstLocalSaveRetainsLinkedEditAfterContextRestart() async throws {
         let f = try Fixture(linked: true)
         let originalID = try #require(f.call.googleEventID)

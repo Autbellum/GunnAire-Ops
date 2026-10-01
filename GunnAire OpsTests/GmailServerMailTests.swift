@@ -238,6 +238,38 @@ struct GmailServerMailTests {
         }
         #expect(f.requests.count == 2)
     }
+    @Test func boundedAutomaticRecoveryResumesAfterConnectionReturnsWithoutResending() async throws {
+        let fixture = Fixture()
+        let provider = try fixture.provider()
+        let mail = try #require(provider.serverMail)
+        let records = (0..<9).map { index in
+            GmailServerActionRecord(id: UUID(), messageID: "message-\(index)",
+                threadID: "thread", action: .read)
+        }
+        fixture.actionRecords = records
+        fixture.serverActions = Set(records.map(\.id))
+        fixture.labels = ["INBOX"]
+        fixture.modify = { value in
+            guard let rawID = value["id"] as? String,
+                  let id = UUID(uuidString: rawID),
+                  let record = fixture.actionRecords.first(where: { $0.id == id }) else { return }
+            value["message"] = fixture.message(record.messageID)
+        }
+
+        fixture.allowed = false
+        await #expect(throws: GmailServerMailError.access) {
+            try await mail.recoverActions(operation: provider, maximum: 8)
+        }
+        #expect(fixture.requests.isEmpty && fixture.actionRecords == records)
+
+        fixture.allowed = true
+        #expect(try await mail.recoverActions(operation: provider, maximum: 8, offset: 0) == 1)
+        #expect(fixture.requests.count == 8)
+        #expect(try await mail.recoverActions(operation: provider, maximum: 8, offset: 8) == 0)
+        #expect(fixture.requests.count == 9)
+        #expect(fixture.requests.allSatisfy { $0.1 == "GET" })
+        #expect(fixture.providerWrites == 0 && fixture.actionRecords.isEmpty)
+    }
     @Test func automaticMailRefreshIsDueOnlyAfterTheBoundedInterval() {
         let now = Date(timeIntervalSince1970: 2_000)
         #expect(GmailAutomaticRefreshPolicy.isDue(lastAttempt: nil, now: now))

@@ -16,6 +16,11 @@ private struct ScheduleDocumentationPresentation: Identifiable {
 }
 
 enum ScheduleGoogleLinkStatus {
+    static func shouldWakePendingCalendar(canManageDispatch: Bool, sceneIsActive: Bool,
+                                          authorization: GoogleCalendarAuthorizationState) -> Bool {
+        canManageDispatch && sceneIsActive && authorization == .ready
+    }
+
     static func needsUnlinkedReview(_ call: ServiceCall, now: Date = Date()) -> Bool {
         guard call.googleEventManagedByApp,
               call.status == .scheduled || call.status == .inProgress,
@@ -48,6 +53,7 @@ enum ScheduleGoogleLinkStatus {
 
 struct ScheduleView: View {
     @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.modelContext) private var modelContext
     @Environment(\.gunnaireReduceMotion) private var reduceMotion
     @Query(sort: [SortDescriptor(\ServiceCall.scheduledDate)]) private var serviceCalls: [ServiceCall]
@@ -491,13 +497,13 @@ struct ScheduleView: View {
                 .onAppear {
                     AppAccess.ensureTechnicianRecords(for: users, technicians: technicians, modelContext: modelContext)
                     applyPendingScheduleIntentIfNeeded()
-                    if canManageDispatch {
-                        GoogleCalendarScheduleSync.retryPendingIfNeeded(
-                            auth: googleAuth,
-                            modelContext: modelContext,
-                            signedInEmail: AppIdentity.currentEmail
-                        )
-                    }
+                    wakePendingCalendarIfReady()
+                }
+                .onChange(of: scenePhase) { _, phase in
+                    if phase == .active { wakePendingCalendarIfReady() }
+                }
+                .onChange(of: googleAuth.googleCalendarAuthorizationState) { _, authorization in
+                    if authorization == .ready { wakePendingCalendarIfReady() }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
                     applyPendingScheduleIntentIfNeeded()
@@ -1902,6 +1908,19 @@ struct ScheduleView: View {
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty && !$0.localizedCaseInsensitiveContains("Calendar event:") }
+    }
+
+    private func wakePendingCalendarIfReady() {
+        guard ScheduleGoogleLinkStatus.shouldWakePendingCalendar(
+            canManageDispatch: canManageDispatch,
+            sceneIsActive: scenePhase == .active,
+            authorization: googleAuth.googleCalendarAuthorizationState
+        ) else { return }
+        GoogleCalendarScheduleSync.retryPendingIfNeeded(
+            auth: googleAuth,
+            modelContext: modelContext,
+            signedInEmail: AppIdentity.currentEmail
+        )
     }
 
     private func deleteCall(_ call: ServiceCall) {

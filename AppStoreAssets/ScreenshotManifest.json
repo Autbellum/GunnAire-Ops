@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "sourceVersion": "1.0",
-  "sourceBuild": "2026100112",
+  "sourceBuild": "2026100113",
   "reviewedAt": "2026-10-01",
   "captureEvidence": {
-    "iPad-13-inch": "GunnAire Ops 1.0 (2026100112 iPad Screenshots r3).xcresult",
-    "iPhone-6.9-inch": "GunnAire Ops 1.0 (2026100112 iPhone Screenshots).xcresult"
+    "iPad-13-inch": "GunnAire Ops 1.0 (2026100113 iPad Screenshots).xcresult",
+    "iPhone-6.9-inch": "GunnAire Ops 1.0 (2026100113 iPhone Screenshots).xcresult"
   },
   "sets": {
     "iPad-13-inch": {
@@ -14,27 +14,27 @@
       "files": [
         {
           "name": "01-command-center.png",
-          "sha256": "7da332269005518b75463b1ad95a43b91cdb7b00de3a53fd5347ef02dab5d4f7"
+          "sha256": "1317d8c8c33d239d609d7ae146554b917e70bfe30c59876dba98bfaebaaf3906"
         },
         {
           "name": "02-schedule.png",
-          "sha256": "7f34727ae183f58e34ac5e652fa6bbc98c7cd213a1d11ba46910fc40c33da9c5"
+          "sha256": "d7541f374c8e4c2420eb033f5421c4b6e8155b5a4dd6789d3a0f3b5c467ad737"
         },
         {
           "name": "03-customer-systems.png",
-          "sha256": "2e22b82d94dadaec66eafc810ab1e49b61a80565b50adc3c252704af0439d177"
+          "sha256": "43c9b7387ebc88bbaed1cd2bc777615fafb1bce949434d27424235db7e638d6f"
         },
         {
           "name": "04-job-billing.png",
-          "sha256": "66ccb19b6ddce085a3e60b56e46a3efa8759529bfe8876b6b762e18c178acb38"
+          "sha256": "c6ddbc39c6666791c2c5eb9917d3f3adbd115f3397b169ba60f1219152c8aba4"
         },
         {
           "name": "05-field-collection.png",
-          "sha256": "49ed2569ca064d3d5a6ac8a72339dfad1caf2a4381e6a79f5753dc25a8d095a6"
+          "sha256": "5d536596e6a9192510e9c397f495705903a145b4f4df0084a3b70d66dadc854a"
         },
         {
           "name": "06-quickbooks-sales.png",
-          "sha256": "dc0a3807265ab6199a0c7c8ee671bab03563efbf5c8815a57045c1b055df5a62"
+          "sha256": "3837bd99a33ec26f1062a4aa4e831c5c4d9e825171e0adc702975881cb0ed6c0"
         }
       ]
     },
@@ -44,27 +44,27 @@
       "files": [
         {
           "name": "01-command-center.png",
-          "sha256": "4b823245220af766583c316464c820c64ee8dea2892fff08321b3e3d2eea1f24"
+          "sha256": "36bbea09c2730f5ccb88acd45dc0a54bb3c06a9a9dffa1c06878acf78b4f6b3c"
         },
         {
           "name": "02-schedule.png",
-          "sha256": "5c65344bcdc0ac00c4044a92d36115de75e27748dd8c929fe80deead0dc7b9a1"
+          "sha256": "f8b2d92cc9ac870f3f0f4f40e43ca1d7c53f411b831c71cb2087fd146e537722"
         },
         {
           "name": "03-customer-systems.png",
-          "sha256": "c0b3b234646de16b6e7aa27a06500fc098c265e380f7d15500bd66c967cca289"
+          "sha256": "1e3888821186160da4750dbf6b6840762ea10e4dcea84a60c16db5b7db86041b"
         },
         {
           "name": "04-job-billing.png",
-          "sha256": "101f4f3e4fd75417d6410d6084ef2892986dc8bdcddaa772d1e3d24f42b34014"
+          "sha256": "e8950efd49f0716cbfb627eeefa908ed5880a98d97cc71f8d59a0ac142f59343"
         },
         {
           "name": "05-field-collection.png",
-          "sha256": "ec066d25feafbe4bc8784c0685c1687b98a0d5964ea213b3996d974aa510caaf"
+          "sha256": "5e263ddd6451b390c8973ddd232b025183ded7d927dca90ab1244b82d32bc83b"
         },
         {
           "name": "06-quickbooks-sales.png",
-          "sha256": "b331d6618225a3a0359d94a25174103c18c6cf03459ae14d2b6ed9e2ffef2a31"
+          "sha256": "2c833261b332d4d6838af8d2e4357aa10c3342479137647e616c3cb34f73a633"
         }
       ]
     }

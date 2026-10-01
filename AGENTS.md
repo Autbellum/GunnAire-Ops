@@ -21,6 +21,7 @@ at the start of every turn; append to it rather than rewriting it.
 ## Claims
 
 
+
 ## Shared rules
 
 1. The project sets `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`. A helper reached
@@ -43,6 +44,12 @@ at the start of every turn; append to it rather than rewriting it.
    pins the old behavior and the new one.
 
 ## Status log
+
+- 2026-10-01 Codex root: build 2026100113 Calendar and Mail reconnect recovery passed combined `generated/omni_runner.py` with zero warnings, signed iPad full units 2,877/2,877 with zero failures/skips/warnings (`build-2026100113/Full iPad Units.xcresult`), 94 Tools Python checks, and fresh iPad/iPhone screenshot UI captures 1/1 each. Twelve current-build screenshots have verified dimensions and hashes in the 2026100113 manifest. Calendar and Mail focused suites passed 116/116 and 26/26. Live user-specific Google Calendar delivery, installed-device sign-in, QBO/Drive publication, and Production CloudKit schema remain unverified. Root owns commit, push, archive and upload.
+
+- 2026-10-01 Codex integration_acceptance_audit2: Mail now checks its bounded shared-mail recovery every 120 seconds while the view remains active and wakes on restored connectivity, Google authentication, or workspace reconnection. Existing role/workspace/provider checks still gate reads; no automatic outgoing send was added. A nine-action regression proves blocked access makes no request, then recovered access clears the original queued actions in two batches of at most eight GETs and zero provider writes. Focused signed iPad Pro 13-inch M5 GmailServerMailTests passed 26 logical tests / 35 executions, zero failures/skips/expected failures and zero build warnings/errors (`/tmp/gmail-integration-audit2.xcresult`); Swift parse and `git diff --check` passed. No live Gmail request, full suite, commit, push, archive, or upload by this agent. Gmail source/test claims released to root for combined validation.
+
+- 2026-10-01 Codex calendar_delivery_audit2: Schedule now wakes saved Google Calendar publication when the visible scene returns to foreground or the connected Calendar authorization becomes ready, as well as on entry. The wake requires active dispatcher access and a matched business Google account with Calendar scope; the existing durable pending probe and provider/workspace operation fences apply before writes. A focused readiness regression was added. Signed iPad Pro 13-inch M5 GoogleCalendarWorkflowTests passed 116 logical / 118 executions with zero failures, skips, expected failures or compiler warnings (`/tmp/calendar-delivery-audit2.xcresult`); Swift parse and `git diff --check` passed. Existing selected-calendar and 30-minute popup reminder tests also passed in that suite. No live Google delivery, installed device verification, commit, push, archive or upload by this agent; Calendar claims released to root.
 
 - 2026-10-01 Codex root: regenerated the twelve iPad/iPhone App Store screenshots
   from build 2026100112 using the Debug-only fictional fixture. Both capture UI

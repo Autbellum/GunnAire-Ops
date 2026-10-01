@@ -359,8 +359,19 @@ struct GmailView: View {
                 automaticRefreshIfDue()
                 applyPendingDraftIfNeeded()
             }
+            .task {
+                while !Task.isCancelled {
+                    do { try await Task.sleep(for: .seconds(GmailAutomaticRefreshPolicy.interval)) }
+                    catch { return }
+                    automaticRefreshIfDue()
+                }
+            }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active { automaticRefreshIfDue() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .gunnaireConnectivityRestored)) { _ in
+                lastAutomaticRefreshAt = nil
+                automaticRefreshIfDue()
             }
             .onSubmit(of: .search) {
                 if showingDrafts { loadDrafts() } else { loadMessages() }
@@ -402,10 +413,23 @@ struct GmailView: View {
                     applyPendingDraftIfNeeded(force: true)
                 }
             }
-            .onChange(of: googleAuth.signedInEmail) { _, _ in if mailbox.provider?.serverMail == nil { clearMailbox() } }
-            .onChange(of: googleAuth.isAuthenticated) { _, _ in if mailbox.provider?.serverMail == nil { clearMailbox() } }
+            .onChange(of: googleAuth.signedInEmail) { _, _ in
+                if mailbox.provider?.serverMail == nil { clearMailbox() }
+                if googleAuth.isAuthenticated {
+                    lastAutomaticRefreshAt = nil
+                    automaticRefreshIfDue()
+                }
+            }
+            .onChange(of: googleAuth.isAuthenticated) { _, connected in
+                if mailbox.provider?.serverMail == nil { clearMailbox() }
+                if connected {
+                    lastAutomaticRefreshAt = nil
+                    automaticRefreshIfDue()
+                }
+            }
             .onChange(of: workspace.operationStamp) { _, _ in
                 if !usesMailUITestFixture { clearMailbox() }
+                automaticRefreshIfDue()
             }
         }
     }
