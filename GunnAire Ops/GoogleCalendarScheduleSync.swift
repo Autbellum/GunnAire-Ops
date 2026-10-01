@@ -347,6 +347,13 @@ enum GoogleCalendarScheduleSync {
         }
     }
 
+    /// A failed full recovery may have left a durable saved appointment in the
+    /// outbox. Use the existing bounded publish-only retry without importing.
+    static func retryPendingAfterAutomaticFailure(auth: GoogleAuthManager, modelContext: ModelContext,
+                                                  signedInEmail: String?) {
+        scheduleRetry(auth: auth, modelContext: modelContext, signedInEmail: signedInEmail, attempt: 0)
+    }
+
     /// The Schedule entry and retry timer need only know whether a durable
     /// outbound candidate exists. Decode at most one row here; the publication
     /// pass applies the exact eligibility and provider checks.

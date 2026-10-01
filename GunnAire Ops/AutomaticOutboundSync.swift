@@ -835,16 +835,42 @@ final class AutomaticOutboundSync {
             }
         }
         calendarRunning = true
+        let signedInEmail = AppIdentity.currentEmail
         GoogleCalendarScheduleSync.sync(auth: auth, modelContext: context,
-            signedInEmail: AppIdentity.currentEmail, isAdminUser: false,
-            verifyConfirmedCalls: verifyConfirmedCalls) { [weak self] _ in
+            signedInEmail: signedInEmail, isAdminUser: false,
+            verifyConfirmedCalls: verifyConfirmedCalls) { [weak self] result in
                 guard let self else { return }
                 self.calendarRunning = false
-                if self.calendarQueued {
-                    self.calendarQueued = false
+                let queued = self.calendarQueued
+                self.calendarQueued = false
+                var hasPendingOutbound = false
+                if case .failure = result {
+                    hasPendingOutbound = GoogleCalendarScheduleSync.hasPotentialOutboundSync(in: context)
+                }
+                switch Self.calendarRecoveryFollowUp(result: result, queued: queued,
+                                                     hasPendingOutbound: hasPendingOutbound) {
+                case .queuedPass:
                     self.recoverCalendar(context: context, auth: auth)
+                case .retryPending:
+                    GoogleCalendarScheduleSync.retryPendingAfterAutomaticFailure(
+                        auth: auth, modelContext: context, signedInEmail: signedInEmail)
+                case .none:
+                    break
                 }
             }
+    }
+
+    enum CalendarRecoveryFollowUp: Equatable {
+        case queuedPass
+        case retryPending
+        case none
+    }
+
+    static func calendarRecoveryFollowUp<Value>(result: Result<Value, Error>, queued: Bool,
+                                                hasPendingOutbound: Bool) -> CalendarRecoveryFollowUp {
+        if queued { return .queuedPass }
+        if case .failure = result, hasPendingOutbound { return .retryPending }
+        return .none
     }
 
     static func calendarVerificationIsDue(lastAttempt: Date?, now: Date, interval: TimeInterval) -> Bool {

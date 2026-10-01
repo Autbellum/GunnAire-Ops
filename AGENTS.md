@@ -20,7 +20,6 @@ at the start of every turn; append to it rather than rewriting it.
 
 ## Claims
 
-
 ## Shared rules
 
 1. The project sets `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`. A helper reached
@@ -43,6 +42,8 @@ at the start of every turn; append to it rather than rewriting it.
    pins the old behavior and the new one.
 
 ## Status log
+
+- 2026-10-01 Codex calendar_live_gap: When an automatic full Google Calendar recovery failed with a durable pending appointment, its completion previously discarded the failure and left only a later foreground/periodic wake. It now schedules the existing bounded 30-second/2-minute/10-minute publish-only retry; a queued full pass still takes precedence, and success or no pending outbox does not retry. The initial save-to-Google trigger, company/Google authorization, original calendar/event identity checks, and uncertain-write protection are unchanged. Signed iPad `GoogleCalendarWorkflowTests` red run failed only the new assertion against old no-retry behavior (119/120 passed); final green run passed 120/120 with zero failures/skips. Final-source `generated/omni_runner.py` passed zero compiler warnings. Evidence: `2026-10-01-release-0119/Calendar Retry Red.xcresult`, `Calendar Retry Green.xcresult`, and `Calendar Retry Omni.log`. Live exact-event delivery and physical-device notifications remain unverified; source/test claims released.
 
 - 2026-10-01 Codex auth_cloudkit_current: On the isolated `fix/0118-workspace-diagnostic-reset` branch from `release/2026100118`, the CloudKit configuration detail now belongs to the account lookup that produced it. A successful account verification clears its provisional detail, and a retired lookup cannot overwrite or clear a newer lookup's failure. The original workspace authorization gate and CloudKit environment checks are unchanged. The signed iPad `CompanyWorkspaceAccessTests` suite passed 68/68 with zero failures/skips/warnings (`/private/tmp/gunnaire-0118-diagnostic-token-suite.xcresult`); final-source `python3 generated/omni_runner.py` passed zero compiler warnings (`/private/tmp/gunnaire-0118-diagnostic-omni-final-source.log`). This verifies diagnostic behavior only; live physical-device sign-in and Production CloudKit configuration remain separate acceptance checks. Source/test claims released.
 
