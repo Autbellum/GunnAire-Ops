@@ -3126,6 +3126,30 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testSavedGoogleCalendarIDOffersVerificationWithoutClaimingDelivery() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin", "-uiTestSeedSyncRecovery", "-uiTestSeedOperationalAlert",
+            "-GunnAirePendingAppRoute", "scheduleAndJobs"
+        ]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 8))
+
+        let checkLink = app.buttons["CheckGoogleLink-\(screenshotServiceCallID)"]
+        for _ in 0..<12 where !checkLink.exists || !checkLink.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(checkLink))
+        XCTAssertTrue(app.staticTexts["Google ID saved"].exists)
+        checkLink.tap()
+
+        let disconnectedStatus = app.staticTexts.matching(identifier: "ScheduleSyncStatus")
+            .matching(NSPredicate(format: "label CONTAINS[c] %@", "disconnected")).firstMatch
+        XCTAssertTrue(disconnectedStatus.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Recreate Missing Event"].exists,
+            "A saved ID alone must not offer a create before an authenticated Google check.")
+    }
+
+    @MainActor
     func testJobBillingReviewUsesSavedCrewAndReturnsToTheSameJob() throws {
         let app = openJobBillingReviewFixture(recovering: false)
         XCTAssertTrue(app.staticTexts["JobBillingSavedCrew"].label.contains("UI Test Technician"))
@@ -5118,8 +5142,53 @@ final class GunnAire_OpsUITests: XCTestCase {
         for _ in 0..<6 where !sendEstimate.exists || !sendEstimate.isHittable { app.swipeUp() }
         XCTAssertTrue(waitForHittable(sendEstimate))
         XCTAssertTrue(sendEstimate.isEnabled)
+        XCTAssertEqual(sendEstimate.label, "Prepare Estimate Email Draft")
+        let quickBooksSend = app.buttons["SendEstimateQuickBooks-A1000000-0000-4000-8000-000000000016"]
+        XCTAssertTrue(quickBooksSend.exists, "Saved estimates must show the QuickBooks send route even when disconnected.")
+        XCTAssertFalse(quickBooksSend.isEnabled, "A disconnected account cannot send through QuickBooks.")
+        let quickBooksIssue = app.staticTexts["SendEstimateQuickBooksIssue-A1000000-0000-4000-8000-000000000016"]
+        XCTAssertTrue(quickBooksIssue.exists)
+        XCTAssertTrue(quickBooksIssue.label.contains("Connect QuickBooks in Settings"))
         sendEstimate.tap()
         assertEstimateMailDraft(app)
+    }
+
+    @MainActor
+    func testSavedEstimateQuickBooksSendIsEligibleOnlyAfterConnectionAndSync() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-appStoreScreenshotFixtures", "-uiTestSeedCollectibleJob", "-uiTestSeedPendingEstimate",
+            "-uiTestForceQuickBooksConnected", "-uiTestSeedMailInbox"]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+        revealSidebarDestination("Estimates", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Estimates"].waitForExistence(timeout: 8))
+        let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Blue Ridge Dental")).firstMatch
+        for _ in 0..<14 where !row.exists || !row.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(row)); row.tap()
+        let quickBooksSend = app.buttons["SendEstimateQuickBooks-A1000000-0000-4000-8000-000000000016"]
+        for _ in 0..<6 where !quickBooksSend.exists || !quickBooksSend.isHittable { app.swipeUp() }
+        XCTAssertTrue(quickBooksSend.exists)
+        XCTAssertFalse(quickBooksSend.isEnabled, "Connection alone is insufficient without an estimate QuickBooks ID.")
+        let quickBooksIssue = app.staticTexts["SendEstimateQuickBooksIssue-A1000000-0000-4000-8000-000000000016"]
+        XCTAssertTrue(quickBooksIssue.exists)
+        XCTAssertTrue(quickBooksIssue.label.contains("Publish this estimate to QuickBooks"))
+        XCTAssertFalse(app.staticTexts["Message sent."].exists)
+        app.terminate()
+
+        app.launchArguments.append("-uiTestDocumentLinkTargets")
+        app.launch()
+        revealSidebarDestination("Estimates", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Estimates"].waitForExistence(timeout: 8))
+        let linkedRow = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Blue Ridge Dental")).firstMatch
+        for _ in 0..<14 where !linkedRow.exists || !linkedRow.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(linkedRow)); linkedRow.tap()
+        let linkedSend = app.buttons["SendEstimateQuickBooks-A1000000-0000-4000-8000-000000000016"]
+        for _ in 0..<6 where !linkedSend.exists || !linkedSend.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(linkedSend))
+        XCTAssertTrue(linkedSend.isEnabled, "A connected, synced estimate with customer email and consent must expose explicit send.")
+        XCTAssertFalse(app.staticTexts["SendEstimateQuickBooksIssue-A1000000-0000-4000-8000-000000000016"].exists)
+        XCTAssertFalse(app.staticTexts["Message sent."].exists, "Opening the saved estimate must never send it automatically.")
     }
 
     @MainActor

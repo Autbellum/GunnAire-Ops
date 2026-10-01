@@ -49,6 +49,23 @@ enum GunnAireAccessibilityTextSizePolicy {
     }
 }
 
+@MainActor
+enum AppRootAuthenticationPolicy {
+    /// An Apple credential may remain stored after Google becomes the selected
+    /// business login. Revoking that old credential must not close Google.
+    static func shouldEndBusinessSessionAfterAppleRevocation(
+        selectedProvider: BusinessLoginProvider?,
+        appleBusinessSessionAvailable: Bool,
+        googleBusinessSessionAvailable: Bool
+    ) -> Bool {
+        BusinessLoginSelection.resolvedProvider(
+            selected: selectedProvider,
+            appleBusinessSessionAvailable: appleBusinessSessionAvailable,
+            googleBusinessSessionAvailable: googleBusinessSessionAvailable
+        ) != .google
+    }
+}
+
 private struct GunnAireAccessibilityTextSizeModifier: ViewModifier {
     let forcedSize: DynamicTypeSize?
 
@@ -148,9 +165,19 @@ struct AppRootView: View {
             )
         ) { _ in
             guard AppleAuthManager.shared.isAuthenticated else { return }
-            FieldPaymentHandoff.shared.end()
+            let shouldEndBusinessSession = AppRootAuthenticationPolicy
+                .shouldEndBusinessSessionAfterAppleRevocation(
+                    selectedProvider: BusinessLoginSelection.selected,
+                    appleBusinessSessionAvailable: AppleAuthManager.shared.isAuthenticated &&
+                        AppleAuthManager.shared.workspaceSessionProof != nil,
+                    googleBusinessSessionAvailable: GoogleAuthManager.shared.isAuthenticated &&
+                        GoogleAuthManager.shared.workspaceSessionProof != nil
+                )
             AppleAuthManager.shared.signOut()
-            hasAuthenticatedUser = false
+            if shouldEndBusinessSession {
+                FieldPaymentHandoff.shared.end()
+                hasAuthenticatedUser = false
+            }
         }
     }
 

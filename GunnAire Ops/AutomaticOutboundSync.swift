@@ -144,6 +144,8 @@ final class AutomaticOutboundSync {
     private var preparations: [DocumentKey: SharedBillingPreparation] = [:]
     private var explicitReviewKeys: Set<DocumentKey> = []
     private var deferredUntil: [DocumentKey: Date] = [:]
+    private var proofChecksInFlight: Set<DocumentKey> = []
+    private var boundDuringProofCheck: Set<DocumentKey> = []
     private var completions: [DocumentKey: [(Result<String, Error>) -> Void]] = [:]
     private var currentKey: DocumentKey?
     private var running = false
@@ -163,11 +165,61 @@ final class AutomaticOutboundSync {
 
     private init() {}
 
+    nonisolated enum ProofWakeDisposition: Equatable, Sendable {
+        case ignore
+        case handoff
+        case enqueue
+    }
+
+    nonisolated static func proofWakeDisposition(_ deferred: Date?,
+                                                 sameGeneration: Bool,
+                                                 sameContainer: Bool,
+                                                 proofMatches: Bool,
+                                                 checkingProof: Bool) -> ProofWakeDisposition {
+        guard sameGeneration, sameContainer, proofMatches else { return .ignore }
+        if checkingProof { return .handoff }
+        return deferred == Date.distantFuture ? .enqueue : .ignore
+    }
+
+    static func requeueAfterProofCheck(_ key: DocumentKey, pending: inout [DocumentKey],
+                                       handoffs: inout Set<DocumentKey>,
+                                       explicitReviews: Set<DocumentKey>) -> Bool {
+        let boundDuringCheck = handoffs.remove(key) != nil
+        guard boundDuringCheck || explicitReviews.contains(key), !pending.contains(key) else { return false }
+        pending.append(key)
+        return true
+    }
+
+    private func resumeAfterVerifiedBinding(_ document: QuickBooksBillingDocument,
+                                            context: ModelContext, generation: UUID,
+                                            stamp: CompanyWorkspaceOperationStamp?) {
+        let key: DocumentKey = document.label == "Invoice" ? .invoice(document.id) : .estimate(document.id)
+        let sameGeneration = queueGeneration == generation && queueStamp == stamp &&
+            queueRealmID == QuickBooksDataAPI.shared.realmID
+        let sameContainer = queueContainer == ObjectIdentifier(context.container) && isAuthorized(context)
+        switch Self.proofWakeDisposition(deferredUntil[key], sameGeneration: sameGeneration,
+            sameContainer: sameContainer, proofMatches: true,
+            checkingProof: proofChecksInFlight.contains(key)) {
+        case .ignore:
+            return
+        case .handoff:
+            boundDuringProofCheck.insert(key)
+        case .enqueue:
+            deferredUntil.removeValue(forKey: key)
+            if !pending.contains(key), currentKey != key {
+                pending.append(key)
+            }
+            Task { await drain(context: context) }
+        }
+    }
+
     @discardableResult
     func recordNewlySaved(_ document: QuickBooksBillingDocument, context: ModelContext) async throws -> Bool {
         guard isAuthorized(context), let record = realmRecord(for: document, realmID: nil, environment: nil) else {
             throw BillingPublicationError.accessRequired
         }
+        adopt(context)
+        let generation = queueGeneration
         let stamp = CompanyWorkspaceAccessController.shared.operationStamp
         try await realmStore.markNew(record)
         guard isAuthorized(context), CompanyWorkspaceAccessController.shared.operationStamp == stamp else {
@@ -181,6 +233,7 @@ final class AutomaticOutboundSync {
             guard isAuthorized(context), CompanyWorkspaceAccessController.shared.operationStamp == stamp else {
                 throw BillingPublicationError.accessRequired
             }
+            resumeAfterVerifiedBinding(document, context: context, generation: generation, stamp: stamp)
             return true
         }
         guard let customer = document.customer else { throw BillingPublicationError.accessRequired }
@@ -212,6 +265,7 @@ final class AutomaticOutboundSync {
         guard isAuthorized(context), CompanyWorkspaceAccessController.shared.operationStamp == stamp else {
             throw BillingPublicationError.accessRequired
         }
+        resumeAfterVerifiedBinding(document, context: context, generation: generation, stamp: stamp)
         return true
     }
 
@@ -387,6 +441,8 @@ final class AutomaticOutboundSync {
             preparations.removeAll()
             explicitReviewKeys.removeAll()
             deferredUntil.removeAll()
+            proofChecksInFlight.removeAll()
+            boundDuringProofCheck.removeAll()
             let callbacks = completions.values.flatMap { $0 }
             completions.removeAll()
             callbacks.forEach { $0(.failure(BillingPublicationError.accessRequired)) }
@@ -437,6 +493,7 @@ final class AutomaticOutboundSync {
             currentKey = next
             let explicitReview = explicitReviewKeys.remove(next) != nil
             processed += 1
+            var proofCheckInProgress = false
             do {
                 if case .customer(let id) = next {
                     try await publishCustomer(id, context: context)
@@ -454,8 +511,25 @@ final class AutomaticOutboundSync {
                     continue
                 }
                 if !explicitReview {
-                    guard let identity = realmRecord(for: document, realmID: nil, environment: nil),
-                          try await realmStore.hasBoundProof(identity) else {
+                    guard let identity = realmRecord(for: document, realmID: nil, environment: nil) else {
+                        deferredUntil[next] = .distantFuture
+                        let callbacks = completions.removeValue(forKey: next) ?? []
+                        callbacks.forEach { $0(.failure(RealmError.reviewRequired)) }
+                        currentKey = nil
+                        continue
+                    }
+                    proofChecksInFlight.insert(next)
+                    proofCheckInProgress = true
+                    let hasProof = try await realmStore.hasBoundProof(identity)
+                    guard queueGeneration == generation else { break }
+                    proofChecksInFlight.remove(next)
+                    proofCheckInProgress = false
+                    if !hasProof {
+                        if Self.requeueAfterProofCheck(next, pending: &pending,
+                            handoffs: &boundDuringProofCheck, explicitReviews: explicitReviewKeys) {
+                            currentKey = nil
+                            continue
+                        }
                         // The proof can only be added through explicit review
                         // or a new-document save on this device. Do not read
                         // the same missing Keychain entry on every timer pass.
@@ -465,7 +539,8 @@ final class AutomaticOutboundSync {
                         currentKey = nil
                         continue
                     }
-                    guard queueGeneration == generation else { currentKey = nil; break }
+                    boundDuringProofCheck.remove(next)
+                    explicitReviewKeys.remove(next)
                 }
                 let capturedPreparation = preparations.removeValue(forKey: next)
                 let result = try await publish(document, context: context,
@@ -474,10 +549,19 @@ final class AutomaticOutboundSync {
                 let callbacks = completions.removeValue(forKey: next) ?? []
                 callbacks.forEach { $0(.success(result)) }
                 deferredUntil.removeValue(forKey: next)
+                explicitReviewKeys.remove(next)
                 currentKey = nil
             } catch {
-                currentKey = nil
                 guard queueGeneration == generation else { break }
+                currentKey = nil
+                proofChecksInFlight.remove(next)
+                if proofCheckInProgress,
+                   Self.requeueAfterProofCheck(next, pending: &pending,
+                       handoffs: &boundDuringProofCheck, explicitReviews: explicitReviewKeys) {
+                    continue
+                }
+                boundDuringProofCheck.remove(next)
+                explicitReviewKeys.remove(next)
                 let failure = error as? PublicationFailure
                 let underlying = failure?.underlying ?? error
                 let reported: Error = failure ?? underlying

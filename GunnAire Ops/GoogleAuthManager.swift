@@ -1250,7 +1250,11 @@ final class GoogleAuthManager: NSObject, ObservableObject {
             completion(.failure(GoogleAuthError.invalidEndpoint))
             return
         }
-        authorizedJSONRequest(url: url, method: "POST", body: event, existingOperation: operation, completion: completion)
+        // The caller must distinguish Google's explicit 401/403 rejection
+        // from a request whose delivery is uncertain. Preserve the HTTP
+        // status even when Google includes its usual JSON error envelope.
+        authorizedJSONRequest(url: url, method: "POST", body: event, existingOperation: operation,
+                              reportHTTPStatus: true, completion: completion)
     }
 
     @available(*, unavailable, message: "Use patchCalendarEvent with the schedule-only GoogleCalendarEventPatch so existing Google details are preserved.")

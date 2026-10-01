@@ -3909,6 +3909,7 @@ GunnAire
                                         }
                                         BillingPublicationReviewLink(document: .estimate(estimate), context: modelContext)
                                         estimateDeliveryAction(estimate)
+                                        estimateQuickBooksDeliveryAction(estimate)
                                         Button("Create Invoice") {
                                             createInvoiceFromEstimate(estimate)
                                         }
@@ -8607,19 +8608,70 @@ GunnAire
             Button {
                 scheduleCustomerDocumentExport(document: .estimate(estimate)) { await prepareEstimateEmail(estimate) }
             } label: {
-                Label("Send Estimate", systemImage: "paperplane")
+                Label("Prepare Estimate Email Draft", systemImage: "envelope")
             }
             .buttonStyle(.borderedProminent)
             .accessibilityIdentifier("SendEstimate-\(estimate.id.uuidString)")
-            Text("Review the recipient, message, and attached PDF in Mail before sending.")
+            Text("Opens an email draft with the estimate PDF. Review it and tap Send in Mail; nothing is sent from this button.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if !googleAuth.canUseCurrentBusinessIdentity {
-                Text("You can prepare a draft now. Sending requires Google connected in Settings for your current business login.")
+                Text("Connect Google in Settings with the same account as your current business login and grant Gmail access before sending from Mail.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func estimateQuickBooksDeliveryAction(_ estimate: Estimate) -> some View {
+        let blocker = estimateQuickBooksSendBlocker(for: estimate)
+        return VStack(alignment: .leading, spacing: 4) {
+            Button {
+                sendEstimateThroughQuickBooks(estimate)
+            } label: {
+                Label("Send Estimate Through QuickBooks", systemImage: "paperplane")
+            }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("SendEstimateQuickBooks-\(estimate.id.uuidString)")
+            .disabled(blocker != nil || isPreparingCustomerDocument || isCreatingDocument)
+            if let blocker {
+                Text(blocker)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("SendEstimateQuickBooksIssue-\(estimate.id.uuidString)")
+            } else {
+                Text("Sends the synced estimate to the customer's email through QuickBooks after you tap this button. Provider acceptance will appear in the estimate's status.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func estimateQuickBooksSendBlocker(for estimate: Estimate) -> String? {
+        guard isQuickBooksConnected else {
+            return "Connect QuickBooks in Settings to send this estimate through QuickBooks. The email draft option above remains available."
+        }
+        guard estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            return "Publish this estimate to QuickBooks using Billing Review, then return here to send it."
+        }
+        guard let customer = estimate.customer else {
+            return "This estimate's customer is unavailable. Reopen the estimate after customer access recovers."
+        }
+        guard customer.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            return "Sync this customer to QuickBooks before sending the estimate."
+        }
+        guard let email = customer.email,
+              let addresses = try? GmailAddressList.parse(email),
+              addresses.count == 1 else {
+            return "Add a valid customer email address in Customers before sending the estimate."
+        }
+        guard customer.allowsTransactionalEmail else {
+            return "The customer has declined transactional email. Review the customer's communication preferences."
+        }
+        guard AppAccess.canAccessSidebarItem(.mail, email: currentUserEmail, users: users) else {
+            return "Your business role cannot send customer email. Ask an administrator to review access."
+        }
+        return nil
     }
 
     private func prepareEstimateEmail(_ estimate: Estimate) async {

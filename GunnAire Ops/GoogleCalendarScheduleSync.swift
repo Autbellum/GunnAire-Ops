@@ -8,6 +8,18 @@ enum GoogleCalendarScheduleSync {
         let restrictedReviewCount: Int
     }
 
+    /// An in-memory, single-job review retains the original provider and
+    /// workspace operation across the operator's confirmation. It is never
+    /// persisted or reused after a different account or job revision appears.
+    struct MissingEventReview {
+        let call: ServiceCall
+        let callID: UUID
+        let calendarID: String
+        let eventID: String
+        let accountEmail: String
+        let workflow: GoogleCalendarWorkflow
+    }
+
     private static let deletedCalendarEventKeysStorageKey = "GunnAireDeletedGoogleCalendarEventKeys"
     private static let locallyEditedCalendarCallIDsStorageKey = "GunnAireLocallyEditedGoogleCalendarCallIDs"
 
@@ -81,6 +93,137 @@ enum GoogleCalendarScheduleSync {
         startWorkflow(auth: auth, context: modelContext, email: signedInEmail, completion: completion) {
             try await publish(call: call, workflow: $0)
         }
+    }
+
+    static func checkMissingEvent(call: ServiceCall, workflow: GoogleCalendarWorkflow) async
+        -> Result<MissingEventReview?, Error> {
+        var review: MissingEventReview?
+        let result = await workflow.run { current in
+            let (calendar, id, remote) = try await inspectStoredEvent(call: call, workflow: current)
+            if remote == nil {
+                guard let accountEmail = current.auth.signedInEmail,
+                      !accountEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw GoogleCalendarWorkflowError.identity
+                }
+                review = MissingEventReview(call: call, callID: call.id, calendarID: calendar.id,
+                                            eventID: id, accountEmail: accountEmail, workflow: current)
+            }
+            return remote == nil ? "The saved Google event was not found. Review the original calendar before choosing Recreate Missing Event." :
+                "The original Google event is present. No new event was created."
+        }
+        return result.map { _ in review }
+    }
+
+    static func repairMissingEvent(_ review: MissingEventReview) async -> Result<String, Error> {
+        await review.workflow.run { workflow in
+            let call = review.call
+            guard AppAccess.normalizedEmail(workflow.auth.signedInEmail) ==
+                    AppAccess.normalizedEmail(review.accountEmail) else {
+                throw GoogleCalendarWorkflowError.changed
+            }
+            let (calendar, id, remote) = try await inspectStoredEvent(call: call, workflow: workflow)
+            guard call.id == review.callID, calendar.id == review.calendarID,
+                  id == review.eventID else {
+                throw GoogleCalendarWorkflowError.changed
+            }
+            if let remote {
+                try validateRemote(remote, id: id, call: call)
+                guard remoteEventMatchesExactSchedule(call: call, remoteEvent: remote) else {
+                    throw GoogleCalendarWorkflowError.needsReview
+                }
+                return "The original Google event is present. No new event was created."
+            }
+            let recipients = try staffAttendees(for: call, workflow: workflow)
+            var proposal = makeCalendarCreateEvent(for: call)
+            proposal.attendees = recipients.filter {
+                $0.email != GoogleCalendarStaffDelivery.email(calendar.id)
+            }
+            var properties = proposal.extendedProperties?.privateProperties ?? [:]
+            properties[GoogleCalendarStaffDelivery.managedEmailsKey] =
+                (proposal.attendees ?? []).map(\.email).sorted().joined(separator: ",")
+            proposal.extendedProperties = .init(privateProperties: properties)
+            proposal.id = id
+            let saved: GoogleCalendarEvent
+            do {
+                saved = try await workflow.receive {
+                    workflow.auth.createCalendarEvent(calendarID: calendar.id, event: proposal,
+                        operation: workflow.operation, completion: $0)
+                }
+            } catch GoogleAuthError.http(statusCode: 409) {
+                // Another writer may have created the reserved ID between the
+                // last GET and POST. Reconcile only the exact original route.
+                saved = try await workflow.receive {
+                    workflow.auth.fetchCalendarEvent(calendarID: calendar.id, eventID: id,
+                        operation: workflow.operation, completion: $0)
+                }
+            }
+            try requireCall(call, workflow: workflow)
+            try validateRemote(saved, id: id, call: call)
+            guard remoteEventMatchesExactSchedule(call: call, remoteEvent: saved) else {
+                throw GoogleCalendarWorkflowError.needsReview
+            }
+            _ = try await deliverToStaff(call: call, remote: saved, calendarID: calendar.id,
+                                          workflow: workflow)
+            try requireCall(call, workflow: workflow)
+            clearCalendarCallLocallyEdited(call)
+            return "Saved the original appointment ID in Google Calendar. Staff invitations use their Google Calendar notification settings."
+        }
+    }
+
+    /// A 404 proves only that one route is missing. Check every accessible
+    /// calendar by the same opaque ID; a moved or colliding event needs review.
+    private static func inspectStoredEvent(call: ServiceCall, workflow: GoogleCalendarWorkflow)
+        async throws -> (GoogleCalendar, String, GoogleCalendarEvent?) {
+        try requireCall(call, workflow: workflow)
+        guard call.googleEventManagedByApp,
+              call.status == .scheduled || call.status == .inProgress,
+              call.scheduledDate.timeIntervalSince1970.isFinite, call.duration.isFinite,
+              call.duration > 0,
+              call.scheduledDate.addingTimeInterval(call.duration).timeIntervalSince1970.isFinite,
+              let id = normalizedOptional(call.googleEventID),
+              GoogleAuthManager.calendarPathComponent(id) != nil,
+              !isCalendarEventDeleted(calendarID: call.googleCalendarID, eventID: id) else {
+            throw GoogleCalendarWorkflowError.needsReview
+        }
+        let list = try await calendars(workflow: workflow)
+        guard list.count <= 25 else { throw GoogleCalendarWorkflowError.needsReview }
+        let calendar = try canonicalCalendar(call.googleCalendarID, in: list, email: workflow.signedInEmail)
+        guard calendar.isWritable else { throw GoogleCalendarWorkflowError.readOnly }
+        guard !isCalendarEventDeleted(calendarID: calendar.id, eventID: id) else {
+            throw GoogleCalendarWorkflowError.needsReview
+        }
+        // Event IDs are scoped by calendar, but another local call holding
+        // the same ID could use the `primary` alias for this exact calendar.
+        // Conservatively refuse any duplicate local ID rather than guess.
+        var linkedDescriptor = FetchDescriptor<ServiceCall>(predicate: #Predicate { $0.googleEventID == id })
+        linkedDescriptor.fetchLimit = 2
+        let linked = try workflow.context.fetch(linkedDescriptor)
+        guard linked.count == 1, linked.first === call else {
+            throw GoogleCalendarWorkflowError.identity
+        }
+        var original: GoogleCalendarEvent?
+        for candidate in list.sorted(by: { $0.id < $1.id }) {
+            do {
+                let remote: GoogleCalendarEvent = try await workflow.receive {
+                    workflow.auth.fetchCalendarEvent(calendarID: candidate.id, eventID: id,
+                        operation: workflow.operation, completion: $0)
+                }
+                guard candidate.id == calendar.id else {
+                    throw GoogleCalendarWorkflowError.needsReview
+                }
+                original = remote
+            } catch GoogleAuthError.http(statusCode: 404) {
+                continue
+            }
+        }
+        try requireCall(call, workflow: workflow)
+        if let original {
+            try validateRemote(original, id: id, call: call)
+            guard remoteEventMatchesExactSchedule(call: call, remoteEvent: original) else {
+                throw GoogleCalendarWorkflowError.needsReview
+            }
+        }
+        return (calendar, id, original)
     }
 
     static func cancelManagedEventImmediately(

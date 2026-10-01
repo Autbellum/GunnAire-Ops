@@ -101,7 +101,11 @@ struct GoogleCalendarWorkflowTests {
             } else if request.httpMethod == "POST" {
                 payload = try #require(JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
                 let createdID = try #require(payload["id"] as? String)
-                if let rejectedCreateStatus { status = rejectedCreateStatus }
+                if let rejectedCreateStatus {
+                    status = rejectedCreateStatus
+                    payload = ["error": ["code": rejectedCreateStatus,
+                                         "message": "Calendar permission rejected by Google"]]
+                }
                 else if remote[key(calendar, createdID)] != nil { status = 409 }
                 else {
                     payload["etag"] = "\"version-created\""
@@ -171,9 +175,10 @@ struct GoogleCalendarWorkflowTests {
         #expect(!GoogleCalendarScheduleSync.needsOutboundSync(f.call))
     }
 
-    @Test func rejectedCalendarPermissionReleasesOnlyUnsentReservationForReconnect() async throws {
+    @Test(arguments: [401, 403])
+    func rejectedCalendarPermissionReleasesOnlyUnsentReservationForReconnect(status: Int) async throws {
         let f = try Fixture()
-        f.rejectedCreateStatus = 403
+        f.rejectedCreateStatus = status
         failed(try await f.publish())
         #expect(f.call.googleEventID == nil)
         #expect(f.call.googleCalendarID == "primary")
@@ -465,6 +470,86 @@ struct GoogleCalendarWorkflowTests {
         #expect(f.writes.count == 1)
         #expect(f.call.googleEventID != nil)
         #expect(f.remote.isEmpty)
+    }
+
+    @Test func legacyMissingLinkNeedsExplicitReviewAndKeepsItsOriginalID() async throws {
+        let f = try Fixture(linked: true)
+        f.remote.removeValue(forKey: f.key(f.email, "fixture-event"))
+        #expect(!GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+        let review = try #require(try await GoogleCalendarScheduleSync.checkMissingEvent(
+            call: f.call, workflow: f.flow()).get())
+        #expect(review.eventID == "fixture-event")
+        #expect(review.calendarID == f.email)
+        #expect(f.call.googleEventID == "fixture-event")
+        #expect(f.writes.isEmpty)
+        failed(try await f.publish())
+        #expect(f.writes.isEmpty, "Ordinary sync must never recreate a previously linked 404.")
+    }
+
+    @Test func explicitMissingLinkRepairRechecksAndReusesTheSavedID() async throws {
+        let f = try Fixture(linked: true)
+        f.remote.removeValue(forKey: f.key(f.email, "fixture-event"))
+        let review = try #require(try await GoogleCalendarScheduleSync.checkMissingEvent(
+            call: f.call, workflow: f.flow()).get())
+        _ = try await GoogleCalendarScheduleSync.repairMissingEvent(review).get()
+        #expect(f.writes.count == 1)
+        #expect(f.writes.first?.httpMethod == "POST")
+        let requestBody = try #require(f.writes.first?.httpBody)
+        let body = try #require(JSONSerialization.jsonObject(with: requestBody) as? [String: Any])
+        #expect(body["id"] as? String == "fixture-event")
+        #expect(f.call.googleEventID == "fixture-event")
+        #expect(f.remote[f.key(f.email, "fixture-event")] != nil)
+        _ = try await f.publish().get()
+        #expect(f.writes.count == 1, "A later sync must reconcile, not create twice.")
+    }
+
+    @Test func missingLinkRepairRefusesMovedEventAndChangedJob() async throws {
+        let moved = try Fixture(linked: true)
+        moved.remote.removeValue(forKey: moved.key(moved.email, "fixture-event"))
+        moved.calendarList.append(["id": "other@example.invalid", "primary": false, "accessRole": "owner"])
+        moved.remote[moved.key("other@example.invalid", "fixture-event")] = moved.event(id: "fixture-event")
+        let movedResult = await GoogleCalendarScheduleSync.checkMissingEvent(call: moved.call,
+            workflow: try moved.flow())
+        if case .success = movedResult { Issue.record("A moved event was offered for recreation") }
+        #expect(moved.writes.isEmpty)
+
+        let changed = try Fixture(linked: true)
+        changed.remote.removeValue(forKey: changed.key(changed.email, "fixture-event"))
+        let review = try #require(try await GoogleCalendarScheduleSync.checkMissingEvent(
+            call: changed.call, workflow: changed.flow()).get())
+        changed.call.scheduledDate = changed.call.scheduledDate.addingTimeInterval(3600)
+        failed(await GoogleCalendarScheduleSync.repairMissingEvent(review))
+        #expect(changed.writes.isEmpty)
+        #expect(changed.call.googleEventID == "fixture-event")
+    }
+
+    @Test func missingLinkRepairReconcilesA409AndKeepsLostRepliesReserved() async throws {
+        let raced = try Fixture(linked: true)
+        raced.remote.removeValue(forKey: raced.key(raced.email, "fixture-event"))
+        let review = try #require(try await GoogleCalendarScheduleSync.checkMissingEvent(
+            call: raced.call, workflow: raced.flow()).get())
+        raced.beforeReply = { request in
+            if request.httpMethod == "POST" {
+                raced.remote[raced.key(raced.email, "fixture-event")] = raced.event(id: "fixture-event")
+            }
+        }
+        _ = try await GoogleCalendarScheduleSync.repairMissingEvent(review).get()
+        #expect(raced.writes.count == 1)
+        #expect(raced.call.googleEventID == "fixture-event")
+
+        let lost = try Fixture(linked: true)
+        lost.remote.removeValue(forKey: lost.key(lost.email, "fixture-event"))
+        let lostReview = try #require(try await GoogleCalendarScheduleSync.checkMissingEvent(
+            call: lost.call, workflow: lost.flow()).get())
+        lost.afterWrite = { _ in throw URLError(.networkConnectionLost) }
+        failed(await GoogleCalendarScheduleSync.repairMissingEvent(lostReview))
+        #expect(lost.call.googleEventID == "fixture-event")
+        #expect(lost.writes.count == 1)
+        lost.afterWrite = nil
+        let next = try await GoogleCalendarScheduleSync.checkMissingEvent(call: lost.call,
+            workflow: lost.flow()).get()
+        #expect(next == nil)
+        #expect(lost.writes.count == 1)
     }
 
     @Test func failedReservationSavePreventsAnyPostAndRestoresOnlyLinkFields() async throws {

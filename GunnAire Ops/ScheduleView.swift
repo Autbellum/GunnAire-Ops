@@ -56,6 +56,10 @@ struct ScheduleView: View {
     @State private var navigationPath = NavigationPath()
     @State private var isSyncingGoogleCalendar = false
     @State private var syncMessage: String?
+    @State private var checkingGoogleLinkID: UUID?
+    @State private var repairingGoogleLinkID: UUID?
+    @State private var missingGoogleEventIDs: [UUID: String] = [:]
+    @State private var missingGoogleEventReview: GoogleCalendarScheduleSync.MissingEventReview?
     @State private var deleteConfirmationCall: ScheduleDeletionConfirmation?
     @State private var jobSearchText = ""
     @State private var showingNewRequestSheet = false
@@ -462,6 +466,12 @@ struct ScheduleView: View {
                     showingAvailabilityBlocks = false
                     showingDispatchWeekBoard = false
                     selectedEstimateForScheduling = nil
+                    missingGoogleEventReview = nil
+                    missingGoogleEventIDs.removeAll()
+                }
+                .onChange(of: googleAuth.signedInEmail) { _, _ in
+                    missingGoogleEventReview = nil
+                    missingGoogleEventIDs.removeAll()
                 }
                 .sheet(isPresented: $showingAddCallSheet) {
                     if canManageDispatch {
@@ -629,6 +639,25 @@ struct ScheduleView: View {
                     }
                 } message: { confirmation in
                     Text("Delete \(confirmation.title)? App-managed Google events are checked first. Jobs with work or billing history must be cancelled instead.")
+                }
+                .confirmationDialog(
+                    "Recreate the missing Google event?",
+                    isPresented: Binding(
+                        get: { missingGoogleEventReview != nil },
+                        set: { if !$0 { missingGoogleEventReview = nil } }
+                    ),
+                    titleVisibility: .visible,
+                    presenting: missingGoogleEventReview
+                ) { review in
+                    Button("Recreate Missing Event") {
+                        missingGoogleEventReview = nil
+                        repairMissingGoogleEvent(review)
+                    }
+                    Button("Cancel", role: .cancel) {
+                        missingGoogleEventReview = nil
+                    }
+                } message: { review in
+                    Text("Connected Google account: \(review.accountEmail). The saved event ID was not found in this account's accessible calendars. Check the original Google Calendar for a moved or copied appointment before continuing. Recreating it may send staff invitations; the app will recheck the original ID before creating anything.")
                 }
             }
         }
@@ -1575,6 +1604,16 @@ struct ScheduleView: View {
             }
             .font(.caption.weight(.semibold))
             .tint(Color.brandGold)
+            if canManageDispatch, call.googleEventManagedByApp,
+               call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+               call.status == .scheduled || call.status == .inProgress {
+                Button(checkingGoogleLinkID == call.id ? "Checking Google Link…" : "Check Google Link") {
+                    checkGoogleLink(for: call)
+                }
+                .buttonStyle(.bordered)
+                .disabled(checkingGoogleLinkID != nil || repairingGoogleLinkID != nil)
+                .accessibilityIdentifier("CheckGoogleLink-\(call.id.uuidString)")
+            }
         }
         .padding(14)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -1664,10 +1703,12 @@ struct ScheduleView: View {
                 if !call.additionalTechnicianIDs.isEmpty {
                     Label("+\(call.additionalTechnicianIDs.count) crew", systemImage: "person.2.fill")
                 }
-                if GoogleCalendarScheduleSync.needsOutboundSync(call) {
+                if missingGoogleEventIDs[call.id] == call.googleEventID {
+                    Label("Google event missing", systemImage: "calendar.badge.exclamationmark")
+                } else if GoogleCalendarScheduleSync.needsOutboundSync(call) {
                     Label("Google pending", systemImage: "calendar.badge.exclamationmark")
                 } else if call.googleEventID != nil {
-                    Label("Google linked", systemImage: "calendar")
+                    Label("Google ID saved", systemImage: "calendar")
                 }
                 if call.documentationStartedAt != nil {
                     Label("Started", systemImage: "doc.text")
@@ -1834,6 +1875,67 @@ struct ScheduleView: View {
                         editingCall = nil
                     }
                 }
+            }
+        }
+    }
+
+    private func checkGoogleLink(for call: ServiceCall) {
+        guard canManageDispatch, checkingGoogleLinkID == nil, repairingGoogleLinkID == nil else { return }
+        guard googleAuth.googleCalendarAuthorizationState == .ready else {
+            syncMessage = googleAuth.googleCalendarAuthorizationState.detail
+            return
+        }
+        let workflow: GoogleCalendarWorkflow
+        do {
+            workflow = try GoogleCalendarWorkflow(auth: googleAuth, context: modelContext,
+                                                  signedInEmail: AppIdentity.currentEmail)
+        } catch {
+            syncMessage = "Google link check could not start: \(error.localizedDescription)"
+            return
+        }
+        checkingGoogleLinkID = call.id
+        missingGoogleEventReview = nil
+        Task { @MainActor in
+            let result = await GoogleCalendarScheduleSync.checkMissingEvent(call: call, workflow: workflow)
+            guard checkingGoogleLinkID == call.id else { return }
+            checkingGoogleLinkID = nil
+            switch result {
+            case .success(let review):
+                if let review {
+                    missingGoogleEventIDs[call.id] = review.eventID
+                    missingGoogleEventReview = review
+                    syncMessage = "The saved Google event ID was not found for \(review.accountEmail). Review that account's original calendar before choosing Recreate Missing Event."
+                } else {
+                    missingGoogleEventIDs.removeValue(forKey: call.id)
+                    syncMessage = "The original Google event is present. No new event was created."
+                }
+            case .failure(let error):
+                syncMessage = "Google link check needs review: \(error.localizedDescription) No event was created."
+            }
+        }
+    }
+
+    private func repairMissingGoogleEvent(_ review: GoogleCalendarScheduleSync.MissingEventReview) {
+        guard canManageDispatch, repairingGoogleLinkID == nil,
+              missingGoogleEventIDs[review.callID] == review.eventID else {
+            syncMessage = "The saved appointment changed. Check its Google link again before repair."
+            return
+        }
+        repairingGoogleLinkID = review.callID
+        syncMessage = "Rechecking the original Google event before repair…"
+        Task { @MainActor in
+            let result = await GoogleCalendarScheduleSync.repairMissingEvent(review)
+            guard repairingGoogleLinkID == review.callID else { return }
+            repairingGoogleLinkID = nil
+            switch result {
+            case .success(let message):
+                missingGoogleEventIDs.removeValue(forKey: review.callID)
+                syncMessage = message
+            case .failure(let error):
+                // A failed reply may follow an accepted POST. The earlier 404
+                // no longer proves the event is missing; require a new check.
+                missingGoogleEventIDs.removeValue(forKey: review.callID)
+                syncMessage = "Google event repair was not confirmed: \(error.localizedDescription) The saved event ID was retained. Check the original calendar before trying again."
             }
         }
     }

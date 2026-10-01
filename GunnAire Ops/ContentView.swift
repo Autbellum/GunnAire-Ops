@@ -5945,8 +5945,10 @@ extension ContentView {
                     switch validationResult {
                     case .success:
                         DispatchQueue.main.async {
+                            let wasGoogleAuthenticated = isGoogleAuthenticated
                             isGoogleAuthenticated = true
                             googleOAuthState = nil
+                            if wasGoogleAuthenticated { recoverOutboundGoogleWork() }
                             fetchAndSyncGoogleData()
                         }
                     case .failure(let error):
@@ -5997,6 +5999,16 @@ extension ContentView {
                 }
             }
         }
+    }
+
+    private func recoverOutboundGoogleWork() {
+        // OAuth can add Calendar or Drive permission to an account that was
+        // already signed in. The Bool above then remains true, so its onChange
+        // handler cannot wake pending outbound work.
+        AutomaticOutboundSync.shared.recoverCalendar(
+            context: modelContext, auth: GoogleAuthManager.shared
+        )
+        AutomaticGoogleDriveArchive.shared.recover(context: modelContext)
     }
 
     private func renewGoogleApplicationSessionIfNeeded(profile: GoogleUserProfile? = nil) {
@@ -6220,11 +6232,11 @@ extension ContentView {
             guard let calendarID = primaryCalendarID else {
                 if failures.isEmpty {
                     presentAuthAlert(
-                        title: "Google Sync Complete",
-                        message: "Loaded profile \(profileEmail ?? "unknown"), \(calendarCount) calendars."
+                        title: "Google Account Data Loaded",
+                        message: "Loaded profile \(profileEmail ?? "unknown"), \(calendarCount) calendars. Saved appointments and files publish separately; check their delivery status in Schedule and Settings."
                     )
                 } else {
-                    presentAuthAlert(title: "Google Sync Partial", message: failures.joined(separator: "\n"))
+                    presentAuthAlert(title: "Google Account Check Incomplete", message: failures.joined(separator: "\n"))
                 }
                 return
             }
@@ -6243,11 +6255,11 @@ extension ContentView {
                     }
                     if failures.isEmpty {
                         presentAuthAlert(
-                            title: "Google Sync Complete",
-                            message: "Loaded profile \(profileEmail ?? "unknown"), \(calendarCount) calendars, \(eventCount) events."
+                            title: "Google Account Data Loaded",
+                            message: "Loaded profile \(profileEmail ?? "unknown"), \(calendarCount) calendars, \(eventCount) events. Saved appointments and files publish separately; check their delivery status in Schedule and Settings."
                         )
                     } else {
-                        presentAuthAlert(title: "Google Sync Partial", message: failures.joined(separator: "\n"))
+                        presentAuthAlert(title: "Google Account Check Incomplete", message: failures.joined(separator: "\n"))
                     }
                 }
             }

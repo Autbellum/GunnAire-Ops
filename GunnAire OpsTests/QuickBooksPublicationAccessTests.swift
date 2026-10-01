@@ -183,6 +183,103 @@ struct QuickBooksPublicationAccessTests {
             explicitReview: false) == .proceed)
     }
 
+    @Test func proofBindingWakesOnlyMatchingEarlyScanAndConsumesHandoffOnce() throws {
+        let schema = GunnAireModelSchema.schema
+        let store = try ModelContainer(for: schema, configurations: [
+            ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+        ])
+        let writer = ModelContext(store)
+        let customer = Customer(name: "Recovery race fixture")
+        let estimate = Estimate(customer: customer, amount: 190,
+            createdAt: Date(timeIntervalSince1970: 1_700_000_001))
+        writer.insert(customer)
+        writer.insert(estimate)
+        try writer.save()
+
+        let companyID = UUID()
+        let marker = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+            documentType: "estimate", documentID: estimate.id, customerID: customer.id,
+            createdAt: estimate.createdAt, realmID: nil, environment: nil)
+        let account = marker.account
+        defer { try? KeychainStore.remove(account: account) }
+        let earlyScanProof = try persistedRoundTrip(marker, account: account)
+        let deferred = Date.distantFuture
+        #expect(AutomaticOutboundSync.realmDecision(stored: earlyScanProof,
+            expected: marker, explicitReview: false) == .reviewRequired)
+
+        let reopened = ModelContext(store)
+        let saved = try #require(reopened.fetch(FetchDescriptor<Estimate>()).first)
+        let savedCustomer = try #require(saved.customer)
+        let verified = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+            documentType: "estimate", documentID: saved.id, customerID: savedCustomer.id,
+            createdAt: saved.createdAt, realmID: "realm-a", environment: "production")
+        let persistedProof = try persistedRoundTrip(verified, account: account)
+        let proofMatches = AutomaticOutboundSync.realmDecision(stored: persistedProof,
+            expected: verified, explicitReview: false) == .proceed
+        #expect(AutomaticOutboundSync.proofWakeDisposition(deferred,
+            sameGeneration: true, sameContainer: true, proofMatches: proofMatches,
+            checkingProof: false) == .enqueue)
+        #expect(AutomaticOutboundSync.proofWakeDisposition(nil,
+            sameGeneration: true, sameContainer: true, proofMatches: proofMatches,
+            checkingProof: true) == .handoff)
+        let key = AutomaticOutboundSync.DocumentKey.estimate(saved.id)
+        var handoffs: Set<AutomaticOutboundSync.DocumentKey> = [key]
+        var pending: [AutomaticOutboundSync.DocumentKey] = []
+        let firstHandoff = AutomaticOutboundSync.requeueAfterProofCheck(key,
+            pending: &pending, handoffs: &handoffs, explicitReviews: [])
+        #expect(firstHandoff)
+        #expect(pending == [key])
+        let repeatedHandoff = AutomaticOutboundSync.requeueAfterProofCheck(key,
+            pending: &pending, handoffs: &handoffs, explicitReviews: [])
+        #expect(!repeatedHandoff)
+        #expect(pending == [key])
+        #expect(AutomaticOutboundSync.proofWakeDisposition(deferred,
+            sameGeneration: false, sameContainer: true, proofMatches: proofMatches,
+            checkingProof: true) == .ignore)
+        #expect(AutomaticOutboundSync.proofWakeDisposition(deferred,
+            sameGeneration: true, sameContainer: false, proofMatches: proofMatches,
+            checkingProof: false) == .ignore)
+        #expect(AutomaticOutboundSync.proofWakeDisposition(deferred,
+            sameGeneration: true, sameContainer: true, proofMatches: false,
+            checkingProof: false) == .ignore)
+        #expect(AutomaticOutboundSync.proofWakeDisposition(Date().addingTimeInterval(300),
+            sameGeneration: true, sameContainer: true, proofMatches: proofMatches,
+            checkingProof: false) == .ignore)
+        let differentRealm = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+            documentType: "estimate", documentID: saved.id, customerID: savedCustomer.id,
+            createdAt: saved.createdAt, realmID: "realm-b", environment: "production")
+        #expect(AutomaticOutboundSync.realmDecision(stored: persistedProof,
+            expected: differentRealm, explicitReview: false) == .wrongRealm)
+        #expect(AutomaticOutboundSync.proofWakeDisposition(deferred,
+            sameGeneration: true, sameContainer: true,
+            proofMatches: AutomaticOutboundSync.realmDecision(stored: persistedProof,
+                expected: differentRealm, explicitReview: false) == .proceed,
+            checkingProof: false) == .ignore)
+    }
+
+    @Test func explicitReviewDuringProofCheckRequeuesTheSavedDocumentOnlyOnce() {
+        let key = AutomaticOutboundSync.DocumentKey.estimate(UUID())
+        var pending: [AutomaticOutboundSync.DocumentKey] = []
+        var handoffs: Set<AutomaticOutboundSync.DocumentKey> = []
+        let explicitReviews: Set<AutomaticOutboundSync.DocumentKey> = [key]
+
+        let first = AutomaticOutboundSync.requeueAfterProofCheck(key,
+            pending: &pending, handoffs: &handoffs, explicitReviews: explicitReviews)
+        #expect(first)
+        #expect(pending == [key])
+        let repeated = AutomaticOutboundSync.requeueAfterProofCheck(key,
+            pending: &pending, handoffs: &handoffs, explicitReviews: explicitReviews)
+        #expect(!repeated)
+        #expect(pending == [key])
+
+        pending.removeAll()
+        let differentKey = AutomaticOutboundSync.DocumentKey.invoice(UUID())
+        let unrelated = AutomaticOutboundSync.requeueAfterProofCheck(differentKey,
+            pending: &pending, handoffs: &handoffs, explicitReviews: explicitReviews)
+        #expect(!unrelated)
+        #expect(pending.isEmpty)
+    }
+
     @Test func oneRejectedDraftDoesNotPauseOtherAutomaticPublications() {
         #expect(!AutomaticOutboundSync.shouldPauseAfterFailure(QuickBooksBillingWorkflowError.changed))
         #expect(!AutomaticOutboundSync.shouldPauseAfterFailure(SharedBillingConnectionError.updateRequired))
