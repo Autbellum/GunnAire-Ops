@@ -1,19 +1,21 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import tempfile
 import threading
 import unittest
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 from contextlib import contextmanager
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Iterator
 from unittest import mock
 
-from Backend import customer_accounts
+from Backend import customer_accounts, transactional_email
 from Backend import gunnaire_backend as backend
 
 
@@ -96,6 +98,40 @@ class CustomerAccountsTests(unittest.TestCase):
             with self.assertRaises(urllib.error.HTTPError) as failure:
                 self.consume_magic_link(base_url, magic_token)
             self.assertEqual(failure.exception.code, 401)
+
+    def test_emailed_magic_link_opens_the_verification_page(self) -> None:
+        with self.running_server() as base_url:
+            with mock.patch("Backend.gunnaire_backend.transactional_email.send_transactional_email", return_value=True) as sender:
+                request = self.json_request(base_url, "/api/customer/magic-link", method="POST",
+                                            payload={"email": "alex@example.com", "name": "Alex Customer"})
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    self.assertEqual(response.status, 202)
+            link = re.search(r"https://account\.gunnaire\.com/\S+", sender.call_args.kwargs["text_body"])
+            self.assertIsNotNone(link)
+            parsed = urlsplit(link.group(0))
+            with urllib.request.urlopen(base_url + parsed.path + "?" + parsed.query, timeout=5) as response:
+                self.assertEqual(response.status, 200)
+                self.assertIn(b"GunnAire Customer Account", response.read())
+
+    def test_failed_or_unconfigured_email_does_not_claim_delivery(self) -> None:
+        with self.running_server() as base_url:
+            payload = {"email": "alex@example.com", "name": "Alex Customer"}
+            with mock.patch.object(backend, "EMAIL_PROVIDER_API_KEY", ""):
+                with self.assertRaises(urllib.error.HTTPError) as failure:
+                    urllib.request.urlopen(self.json_request(base_url, "/api/customer/magic-link",
+                                                         method="POST", payload=payload), timeout=5)
+                self.assertEqual(failure.exception.code, 503)
+            with backend.db() as connection:
+                self.assertEqual(connection.execute("SELECT count(*) FROM customer_magic_links").fetchone()[0], 0)
+            with mock.patch("Backend.gunnaire_backend.transactional_email.send_transactional_email", return_value=False) as sender:
+                with self.assertRaises(urllib.error.HTTPError) as failure:
+                    urllib.request.urlopen(self.json_request(base_url, "/api/customer/magic-link",
+                                                         method="POST", payload=payload), timeout=5)
+                self.assertEqual(failure.exception.code, 503)
+                self.assertIn("could not be confirmed", failure.exception.read().decode("utf-8"))
+            token = re.search(r"token=([A-Za-z0-9_-]+)", sender.call_args.kwargs["text_body"])
+            self.assertIsNotNone(token)
+            self.assertTrue(self.consume_magic_link(base_url, token.group(1)))
 
     def test_repeat_signup_does_not_overwrite_existing_profile(self) -> None:
         with self.running_server() as base_url:
@@ -213,18 +249,102 @@ class CustomerAccountsTests(unittest.TestCase):
 
             link = self.json_request(
                 base_url, f"/api/customer-accounts/{account_id}/link", method="POST", token=self.api_token,
-                payload={"customerID": "11111111-1111-1111-1111-111111111111", "quickBooksID": "42"},
+                payload={"customerID": "11111111-1111-1111-1111-111111111111", "quickBooksID": None},
             )
             with urllib.request.urlopen(link, timeout=5) as response:
                 updated = json.loads(response.read().decode("utf-8"))["customerAccount"]
             self.assertEqual(updated["linkStatus"], "linked")
-            self.assertEqual(updated["linkedCustomerQuickBooksID"], "42")
+            self.assertIsNone(updated["linkedCustomerQuickBooksID"])
 
             with urllib.request.urlopen(
                 self.json_request(base_url, "/api/customer-accounts", token=self.api_token), timeout=5
             ) as response:
                 pending_after = json.loads(response.read().decode("utf-8"))["customerAccounts"]
             self.assertEqual(pending_after, [])
+
+    def test_qbo_link_requires_verified_current_realm_customer(self) -> None:
+        with self.running_server() as base_url:
+            self.request_magic_link_and_capture_token(base_url, email="alex@example.com", name="Alex Customer")
+            with urllib.request.urlopen(self.json_request(base_url, "/api/customer-accounts", token=self.api_token), timeout=5) as response:
+                account_id = json.loads(response.read().decode("utf-8"))["customerAccounts"][0]["id"]
+            link = self.json_request(base_url, f"/api/customer-accounts/{account_id}/link", method="POST",
+                                     token=self.api_token,
+                                     payload={"customerID": "11111111-1111-1111-1111-111111111111", "quickBooksID": "42"})
+            with self.assertRaises(urllib.error.HTTPError) as failure:
+                urllib.request.urlopen(link, timeout=5)
+            self.assertEqual(failure.exception.code, 503)
+            with urllib.request.urlopen(self.json_request(base_url, "/api/customer-accounts", token=self.api_token), timeout=5) as response:
+                self.assertEqual(len(json.loads(response.read().decode("utf-8"))["customerAccounts"]), 1)
+
+            with backend.db() as connection:
+                connection.execute("INSERT INTO qbo_connections VALUES (1,?,?,?,?,?,?)",
+                                   ("current-realm", "cipher", "sandbox", hashlib.sha256(b"fixture-client").hexdigest(),
+                                    "grant", "updated"))
+            with mock.patch.object(backend, "QBO_ENVIRONMENT", "sandbox"), mock.patch.object(
+                backend, "qbo_authorized_bearer", return_value="fixture-bearer"
+            ), mock.patch.object(backend, "qbo_payment_read_transport", return_value=(200, {
+                "Customer": {"Id": "42", "PrimaryEmailAddr": {"Address": "someone-else@example.com"}}
+            })):
+                with self.assertRaises(urllib.error.HTTPError) as failure:
+                    urllib.request.urlopen(link, timeout=5)
+                self.assertEqual(failure.exception.code, 409)
+
+            def qbo_transport(request):
+                if "/customer/42" in request.full_url:
+                    return 200, {"Customer": {"Id": "42", "PrimaryEmailAddr": {"Address": "ALEX@example.com"}}}
+                if "/query?" in request.full_url:
+                    return 200, {"QueryResponse": {"Invoice": [
+                        {"Id": "101", "DocNumber": "1001", "Balance": 25.0, "TotalAmt": 25.0}
+                    ]}}
+                if "/invoice/101" in request.full_url:
+                    return 200, {"Invoice": {"Id": "101", "InvoiceLink": "https://qbo.example/pay/101"}}
+                self.fail("Unexpected QuickBooks request")
+
+            with mock.patch.object(backend, "QBO_ENVIRONMENT", "sandbox"), mock.patch.object(
+                backend, "qbo_authorized_bearer", return_value="fixture-bearer"
+            ), mock.patch.object(backend, "qbo_payment_read_transport", side_effect=qbo_transport) as transport:
+                with urllib.request.urlopen(link, timeout=5) as response:
+                    updated = json.loads(response.read().decode("utf-8"))["customerAccount"]
+                self.assertEqual(updated["linkedCustomerQuickBooksID"], "42")
+                session = self.consume_magic_link(base_url, self.request_magic_link_and_capture_token(
+                    base_url, email="alex@example.com", name="Alex Customer"))
+                with urllib.request.urlopen(self.json_request(base_url, "/api/customer/invoices", token=session), timeout=5) as response:
+                    invoices = json.loads(response.read().decode("utf-8"))["invoices"]
+                self.assertEqual(invoices[0]["docNumber"], "1001")
+                with mock.patch.object(backend, "qbo_payment_read_transport", return_value=(200, {
+                    "Customer": {"Id": "42", "PrimaryEmailAddr": {"Address": "changed@example.com"}}
+                })):
+                    with self.assertRaises(urllib.error.HTTPError) as failure:
+                        urllib.request.urlopen(self.json_request(base_url, "/api/customer/invoices", token=session), timeout=5)
+                    self.assertEqual(failure.exception.code, 409)
+                with mock.patch.object(backend, "qbo_payment_read_transport", side_effect=backend.payment_attempts.AttemptError(
+                    "provider_unavailable", "Provider unavailable", 502
+                )):
+                    with self.assertRaises(urllib.error.HTTPError) as failure:
+                        urllib.request.urlopen(self.json_request(base_url, "/api/customer/invoices", token=session), timeout=5)
+                    self.assertEqual(failure.exception.code, 503)
+                before_rotation = transport.call_count
+                with backend.db() as connection:
+                    connection.execute("UPDATE qbo_connections SET realm_id = 'different-realm' WHERE id = 1")
+                with self.assertRaises(urllib.error.HTTPError) as failure:
+                    urllib.request.urlopen(self.json_request(base_url, "/api/customer/invoices", token=session), timeout=5)
+                self.assertEqual(failure.exception.code, 503)
+                self.assertEqual(transport.call_count, before_rotation)
+
+    def test_feature_off_rejects_existing_customer_session_and_invoices(self) -> None:
+        with self.running_server() as base_url:
+            session = self.consume_magic_link(base_url, self.request_magic_link_and_capture_token(
+                base_url, email="alex@example.com", name="Alex Customer"))
+            with mock.patch.object(backend, "CUSTOMER_ACCOUNTS_ENABLED", False):
+                for path in ("/api/customer/account", "/api/customer/invoices"):
+                    with self.assertRaises(urllib.error.HTTPError) as failure:
+                        urllib.request.urlopen(self.json_request(base_url, path, token=session), timeout=5)
+                    self.assertEqual(failure.exception.code, 404, path)
+                with self.assertRaises(urllib.error.HTTPError) as failure:
+                    urllib.request.urlopen(self.json_request(base_url, "/api/customer/service-requests",
+                                                         method="POST", token=session,
+                                                         payload={"summary": "Maintenance request"}), timeout=5)
+                self.assertEqual(failure.exception.code, 404)
 
     def test_portal_page_is_served_when_enabled_and_hidden_when_disabled(self) -> None:
         with self.running_server() as base_url:
@@ -233,6 +353,11 @@ class CustomerAccountsTests(unittest.TestCase):
                 self.assertIn("text/html", response.headers.get("Content-Type", ""))
                 body = response.read().decode("utf-8")
             self.assertIn("GunnAire Customer Account", body)
+
+            with mock.patch.object(backend, "EMAIL_PROVIDER_API_KEY", ""):
+                with self.assertRaises(urllib.error.HTTPError) as failure:
+                    urllib.request.urlopen(f"{base_url}/account", timeout=5)
+                self.assertEqual(failure.exception.code, 503)
 
         with self.running_server(accounts_enabled=False) as base_url:
             with self.assertRaises(urllib.error.HTTPError) as failure:
@@ -267,6 +392,21 @@ class CustomerAccountsTests(unittest.TestCase):
                 with self.assertRaises(urllib.error.HTTPError) as failure:
                     urllib.request.urlopen(request, timeout=5)
                 self.assertEqual(failure.exception.code, 429)
+
+    def test_forwarded_for_header_cannot_evade_rate_limit(self) -> None:
+        with self.running_server() as base_url, mock.patch.object(backend, "CUSTOMER_ACCOUNTS_RATE_LIMIT", 1):
+            for index in range(2):
+                request = self.json_request(base_url, "/api/customer/magic-link", method="POST",
+                                            payload={"email": "alex@example.com", "name": "Alex Customer"})
+                request.add_header("X-Forwarded-For", f"198.51.100.{index + 1}")
+                if index == 0:
+                    with mock.patch("Backend.gunnaire_backend.transactional_email.send_transactional_email", return_value=True):
+                        with urllib.request.urlopen(request, timeout=5) as response:
+                            self.assertEqual(response.status, 202)
+                else:
+                    with self.assertRaises(urllib.error.HTTPError) as failure:
+                        urllib.request.urlopen(request, timeout=5)
+                    self.assertEqual(failure.exception.code, 429)
 
 
 class CustomerInvoiceFetchTests(unittest.TestCase):
@@ -316,6 +456,52 @@ class CustomerInvoiceFetchTests(unittest.TestCase):
             request_factory=lambda *a, **k: "unused",
         )
         self.assertEqual(invoices, [])
+
+    def test_magic_link_query_token_is_redacted_from_access_log(self) -> None:
+        raw = 'GET /account/verify?token=fixture-login-secret HTTP/1.1'
+        safe = backend.redact_capability_tokens(raw)
+        self.assertNotIn("fixture-login-secret", safe)
+
+    def test_qbo_identity_rejects_matching_empty_or_malformed_emails(self) -> None:
+        for email in ("", "not-an-email"):
+            with self.subTest(email=email):
+                verified = customer_accounts.verify_customer_quickbooks_identity(
+                    quickbooks_customer_id="42", account_email=email, realm_id="realm", environment="sandbox",
+                    bearer="fixture-bearer", request_factory=lambda url, **kwargs: url,
+                    transport=lambda request: (200, {
+                        "Customer": {"Id": "42", "PrimaryEmailAddr": {"Address": email}}
+                    }),
+                )
+                self.assertFalse(verified)
+
+
+class TransactionalEmailTests(unittest.TestCase):
+    def test_postmark_acceptance_requires_success_body(self) -> None:
+        class Response:
+            status = 200
+
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def read(self, _limit):
+                return json.dumps(self.payload).encode("utf-8")
+
+        def send(payload):
+            return transactional_email.send_transactional_email(
+                api_key="fixture-key", from_address="noreply@example.com",
+                to_address="alex@example.com", subject="Sign in", text_body="Use the link",
+                opener=lambda request, timeout: Response(payload),
+            )
+
+        self.assertFalse(send({"ErrorCode": 406, "Message": "Inactive recipient"}))
+        self.assertFalse(send({"MessageID": "fixture-message"}))
+        self.assertTrue(send({"ErrorCode": 0, "MessageID": "fixture-message"}))
 
 
 if __name__ == "__main__":

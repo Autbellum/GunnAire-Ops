@@ -379,6 +379,7 @@ CUSTOMER_ACCOUNTS_RATE_LIMIT = int(os.environ.get("GUNNAIRE_CUSTOMER_ACCOUNTS_RA
 CUSTOMER_ACCOUNTS_RATE_WINDOW_SECONDS = int(os.environ.get("GUNNAIRE_CUSTOMER_ACCOUNTS_RATE_WINDOW_SECONDS", "3600"))
 CUSTOMER_ACCOUNTS_ATTEMPTS: dict[str, list[float]] = {}
 CUSTOMER_ACCOUNTS_LOCK = threading.Lock()
+CUSTOMER_ACCOUNTS_MAX_CLIENT_BUCKETS = 4096
 EMAIL_PROVIDER_API_KEY = os.environ.get("GUNNAIRE_EMAIL_PROVIDER_API_KEY", "").strip()
 EMAIL_FROM_ADDRESS = os.environ.get("GUNNAIRE_EMAIL_FROM_ADDRESS", "").strip()
 CUSTOMER_FINANCING_MIN_AMOUNT = os.environ.get("GUNNAIRE_CUSTOMER_FINANCING_MIN_AMOUNT", "").strip()
@@ -835,6 +836,7 @@ def redact_capability_tokens(value: str) -> str:
     """Keep bearer-style portal secrets out of ordinary HTTP access logs."""
     # OAuth codes, states and returned scope/account hints must not enter logs.
     value = re.sub(r"(?i)(/api/google/oauth/callback)\?[^\s\"]*", r"\1?[REDACTED]", value)
+    value = re.sub(r"(?i)(/account/verify)\?[^\s\"]*", r"\1?[REDACTED]", value)
     return re.sub(
         r"(?i)(/portal/)[A-Za-z0-9_-]{32,128}",
         r"\1[REDACTED]",
@@ -5870,6 +5872,10 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if not CUSTOMER_ACCOUNTS_ENABLED:
             self.write_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND, require_auth=False)
             return
+        if customer_accounts_origin() is None or not EMAIL_PROVIDER_API_KEY or not EMAIL_FROM_ADDRESS:
+            self.write_json({"error": "Customer sign-in is unavailable"},
+                            status=HTTPStatus.SERVICE_UNAVAILABLE, require_auth=False)
+            return
         body = CUSTOMER_ACCOUNT_PORTAL_HTML.encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_cors_headers()
@@ -5877,6 +5883,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
         self.wfile.write(body)
 
@@ -5889,6 +5896,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return customer_accounts.session_account(connection, token=token)
 
     def require_customer_session(self) -> sqlite3.Row | None:
+        if not CUSTOMER_ACCOUNTS_ENABLED:
+            self.write_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND, require_auth=False)
+            return None
         account = self.customer_principal()
         if account is None:
             self.write_json({"error": "Sign in again"}, status=HTTPStatus.UNAUTHORIZED, require_auth=False)
@@ -5899,14 +5909,25 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if not CUSTOMER_ACCOUNTS_ENABLED:
             self.write_json({"error": "Customer accounts are not enabled"}, status=HTTPStatus.NOT_FOUND, require_auth=False)
             return
-        client_ip = (self.headers.get("X-Forwarded-For", "").split(",")[0].strip() or self.client_address[0])
+        # X-Forwarded-For is caller-controlled unless a trusted edge explicitly
+        # rewrites it. The socket peer is the only address this server can trust.
+        client_ip = self.client_address[0]
         now_timestamp = datetime.now(timezone.utc).timestamp()
         with CUSTOMER_ACCOUNTS_LOCK:
+            for key, values in list(CUSTOMER_ACCOUNTS_ATTEMPTS.items()):
+                recent = [value for value in values if now_timestamp - value < CUSTOMER_ACCOUNTS_RATE_WINDOW_SECONDS]
+                if recent:
+                    CUSTOMER_ACCOUNTS_ATTEMPTS[key] = recent
+                else:
+                    del CUSTOMER_ACCOUNTS_ATTEMPTS[key]
             attempts = [
                 value for value in CUSTOMER_ACCOUNTS_ATTEMPTS.get(client_ip, [])
                 if now_timestamp - value < CUSTOMER_ACCOUNTS_RATE_WINDOW_SECONDS
             ]
-            if len(attempts) >= CUSTOMER_ACCOUNTS_RATE_LIMIT:
+            if len(attempts) >= CUSTOMER_ACCOUNTS_RATE_LIMIT or (
+                client_ip not in CUSTOMER_ACCOUNTS_ATTEMPTS
+                and len(CUSTOMER_ACCOUNTS_ATTEMPTS) >= CUSTOMER_ACCOUNTS_MAX_CLIENT_BUCKETS
+            ):
                 self.write_json({"error": "Too many requests. Please try again later."}, status=HTTPStatus.TOO_MANY_REQUESTS, require_auth=False)
                 return
             attempts.append(now_timestamp)
@@ -5928,18 +5949,30 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if len(name) > customer_accounts.MAX_NAME_LENGTH or (phone and len(phone) > customer_accounts.MAX_PHONE_LENGTH):
             self.write_json({"error": "Request contains fields that are too long"}, status=HTTPStatus.BAD_REQUEST, require_auth=False)
             return
+        origin = customer_accounts_origin()
+        if origin is None or not EMAIL_PROVIDER_API_KEY or not EMAIL_FROM_ADDRESS:
+            self.write_json({"error": "Sign-in email is unavailable. Please try again later."},
+                            status=HTTPStatus.SERVICE_UNAVAILABLE, require_auth=False)
+            return
         with db() as connection:
             account_id = customer_accounts.create_or_reuse_account(connection, email=email, name=name, phone=phone)
             token = customer_accounts.issue_magic_link(connection, account_id=account_id)
-        origin = customer_accounts_origin()
-        if origin and EMAIL_PROVIDER_API_KEY and EMAIL_FROM_ADDRESS:
-            transactional_email.send_transactional_email(
+        try:
+            sent = transactional_email.send_transactional_email(
                 api_key=EMAIL_PROVIDER_API_KEY,
                 from_address=EMAIL_FROM_ADDRESS,
                 to_address=email,
                 subject="Sign in to your GunnAire account",
-                text_body=f"Use this link to sign in. It expires in {customer_accounts.MAGIC_LINK_TTL_MINUTES} minutes:\n\n{origin}/verify?token={token}",
+                text_body=f"Use this link to sign in. It expires in {customer_accounts.MAGIC_LINK_TTL_MINUTES} minutes:\n\n{origin}/account/verify?token={token}",
             )
+        except Exception:
+            sent = False
+        if not sent:
+            # A lost provider response cannot prove whether Postmark accepted
+            # the message. Keep the short-lived link usable if it arrives.
+            self.write_json({"error": "Sign-in email delivery could not be confirmed. If a link arrives, it will work; otherwise try again."},
+                            status=HTTPStatus.SERVICE_UNAVAILABLE, require_auth=False)
+            return
         # Always the same generic response, regardless of whether the account
         # already existed or the email actually sent, so this endpoint cannot
         # be used to enumerate registered customers.
@@ -5979,8 +6012,12 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         with db() as connection:
             grant = connection.execute("SELECT * FROM qbo_connections WHERE id=1").fetchone()
-        if grant is None:
-            self.write_json({"invoices": []}, require_auth=False)
+        if grant is None or (
+            account["linked_customer_quickbooks_realm_id"] != grant["realm_id"]
+            or account["linked_customer_quickbooks_environment"] != grant["environment"]
+        ):
+            self.write_json({"error": "Invoices are unavailable. Please contact GunnAire."},
+                            status=HTTPStatus.SERVICE_UNAVAILABLE, require_auth=False)
             return
         try:
             bearer = qbo_authorized_bearer(
@@ -5992,16 +6029,42 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 audit_actor="system:customer-portal",
             )
         except payment_attempts.AttemptError:
-            self.write_json({"invoices": []}, require_auth=False)
+            self.write_json({"error": "Invoices are unavailable. Please contact GunnAire."},
+                            status=HTTPStatus.SERVICE_UNAVAILABLE, require_auth=False)
             return
-        invoices = customer_accounts.fetch_customer_invoices(
-            quickbooks_customer_id=quickbooks_customer_id,
-            realm_id=grant["realm_id"],
-            environment=grant["environment"],
-            bearer=bearer,
-            transport=qbo_payment_read_transport,
-            request_factory=urllib.request.Request,
-        )
+        try:
+            verified = customer_accounts.verify_customer_quickbooks_identity(
+                quickbooks_customer_id=quickbooks_customer_id, account_email=account["email"],
+                realm_id=grant["realm_id"], environment=grant["environment"], bearer=bearer,
+                transport=qbo_payment_read_transport, request_factory=urllib.request.Request,
+            )
+            if not verified:
+                self.write_json({"error": "Invoices need GunnAire account review."},
+                                status=HTTPStatus.CONFLICT, require_auth=False)
+                return
+            invoices = customer_accounts.fetch_customer_invoices(
+                quickbooks_customer_id=quickbooks_customer_id,
+                realm_id=grant["realm_id"], environment=grant["environment"], bearer=bearer,
+                transport=qbo_payment_read_transport, request_factory=urllib.request.Request,
+            )
+        except payment_attempts.AttemptError:
+            self.write_json({"error": "Invoices are unavailable. Please contact GunnAire."},
+                            status=HTTPStatus.SERVICE_UNAVAILABLE, require_auth=False)
+            return
+        with db() as connection:
+            current_grant = connection.execute("SELECT * FROM qbo_connections WHERE id=1").fetchone()
+            current_account = connection.execute("SELECT * FROM customer_accounts WHERE id = ?", (account["id"],)).fetchone()
+        if (
+            current_grant is None
+            or payment_attempts.grant_fingerprint(current_grant) != payment_attempts.grant_fingerprint(grant)
+            or current_account is None
+            or current_account["linked_customer_quickbooks_id"] != quickbooks_customer_id
+            or current_account["linked_customer_quickbooks_realm_id"] != grant["realm_id"]
+            or current_account["linked_customer_quickbooks_environment"] != grant["environment"]
+        ):
+            self.write_json({"error": "Invoices are unavailable. Please contact GunnAire."},
+                            status=HTTPStatus.SERVICE_UNAVAILABLE, require_auth=False)
+            return
         self.write_json({"invoices": invoices}, require_auth=False)
 
     def create_customer_service_request(self) -> None:
@@ -6049,13 +6112,54 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if not customer_id:
             self.write_json({"error": "customerID is required"}, status=HTTPStatus.BAD_REQUEST)
             return
+        realm_id = None
+        environment = None
+        with db() as connection:
+            account = connection.execute("SELECT * FROM customer_accounts WHERE id = ?", (account_id,)).fetchone()
+        if account is None:
+            self.write_json({"error": "Customer account not found"}, status=HTTPStatus.NOT_FOUND)
+            return
+        if quickbooks_id:
+            if customer_accounts.QBO_INVOICE_ID_PATTERN.fullmatch(quickbooks_id) is None:
+                self.write_json({"error": "Invalid QuickBooks customer ID"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            with db() as connection:
+                grant = connection.execute("SELECT * FROM qbo_connections WHERE id=1").fetchone()
+            if grant is None:
+                self.write_json({"error": "QuickBooks customer verification is unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            try:
+                bearer = qbo_authorized_bearer({
+                    "realm_id": grant["realm_id"], "environment": grant["environment"],
+                    "grant_fingerprint": payment_attempts.grant_fingerprint(grant),
+                }, audit_actor="system:customer-account-link")
+                verified = customer_accounts.verify_customer_quickbooks_identity(
+                    quickbooks_customer_id=quickbooks_id, account_email=account["email"],
+                    realm_id=grant["realm_id"], environment=grant["environment"], bearer=bearer,
+                    transport=qbo_payment_read_transport, request_factory=urllib.request.Request,
+                )
+            except payment_attempts.AttemptError:
+                self.write_json({"error": "QuickBooks customer verification is unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            if not verified:
+                self.write_json({"error": "QuickBooks customer identity needs review"}, status=HTTPStatus.CONFLICT)
+                return
+            realm_id = grant["realm_id"]
+            environment = grant["environment"]
         principal = self.principal() or {}
         with db() as connection:
+            if quickbooks_id:
+                current_grant = connection.execute("SELECT * FROM qbo_connections WHERE id=1").fetchone()
+                if current_grant is None or payment_attempts.grant_fingerprint(current_grant) != payment_attempts.grant_fingerprint(grant):
+                    self.write_json({"error": "QuickBooks connection changed. Please retry."}, status=HTTPStatus.CONFLICT)
+                    return
             updated = customer_accounts.link_account(
                 connection,
                 account_id=account_id,
                 customer_id=customer_id,
                 quickbooks_id=quickbooks_id,
+                quickbooks_realm_id=realm_id,
+                quickbooks_environment=environment,
                 actor_email=principal.get("email") if isinstance(principal.get("email"), str) else "unknown",
             )
         if updated is None:
