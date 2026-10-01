@@ -24,6 +24,15 @@ enum GoogleCalendarScheduleSync {
         var notFoundIDs: [UUID: String] = [:]
     }
 
+    private struct QueuedWorkflow {
+        let workflow: GoogleCalendarWorkflow
+        let action: (GoogleCalendarWorkflow) async throws -> String
+        let completion: (Result<String, Error>) -> Void
+    }
+
+    private static var queuedWorkflows: [ObjectIdentifier: [QueuedWorkflow]] = [:]
+    private static var drainingWorkflowContainers: Set<ObjectIdentifier> = []
+
     /// An in-memory, single-job review retains the original provider and
     /// workspace operation across the operator's confirmation. It is never
     /// persisted or reused after a different account or job revision appears.
@@ -377,11 +386,37 @@ enum GoogleCalendarScheduleSync {
             // Capture before Task scheduling; a later callback cannot capture a
             // replacement provider for an old retained job.
             let workflow = try GoogleCalendarWorkflow(auth: auth, context: context, signedInEmail: email)
-            Task { @MainActor in
-                let result = await workflow.run(action)
-                report(result)
-            }
+            runQueued(workflow: workflow, container: context.container, action: action, completion: report)
         } catch { report(.failure(error)) }
+    }
+
+    /// Calendar writes for one store run in save order. Each queued workflow
+    /// retains its original provider/workspace operation, which is rechecked
+    /// before any provider request after an account or workspace switch.
+    static func runQueued(workflow: GoogleCalendarWorkflow, container: ModelContainer,
+                          action: @escaping (GoogleCalendarWorkflow) async throws -> String,
+                          completion: @escaping (Result<String, Error>) -> Void) {
+        let key = ObjectIdentifier(container)
+        queuedWorkflows[key, default: []].append(
+            QueuedWorkflow(workflow: workflow, action: action, completion: completion))
+        guard drainingWorkflowContainers.insert(key).inserted else { return }
+        Task { @MainActor in
+            while let item = queuedWorkflows[key]?.first {
+                var result: Result<String, Error> = .failure(GoogleCalendarWorkflowError.busy)
+                for attempt in 0..<60 {
+                    result = await item.workflow.run(item.action)
+                    guard case .failure(let error) = result,
+                          error as? GoogleCalendarWorkflowError == .busy,
+                          attempt < 59 else { break }
+                    do { try await Task.sleep(for: .milliseconds(500)) }
+                    catch { result = .failure(error); break }
+                }
+                queuedWorkflows[key]?.removeFirst()
+                if queuedWorkflows[key]?.isEmpty == true { queuedWorkflows.removeValue(forKey: key) }
+                item.completion(result)
+            }
+            drainingWorkflowContainers.remove(key)
+        }
     }
 
     /// Retry only explicitly edited app-owned jobs and upcoming never-linked

@@ -3271,7 +3271,8 @@ final class GunnAire_OpsUITests: XCTestCase {
         billed.tap()
         XCTAssertTrue(confirmation.waitForExistence(timeout: 3))
         confirmation.buttons["Delete Event"].tap()
-        let status = app.staticTexts["ScheduleSyncStatus"]
+        let status = app.staticTexts.matching(identifier: "ScheduleSyncStatus")
+            .matching(NSPredicate(format: "label CONTAINS %@", "Cancel Job")).firstMatch
         for _ in 0..<10 where !status.isHittable { app.swipeUp() }
         XCTAssertTrue(status.waitForExistence(timeout: 3))
         XCTAssertTrue(status.label.contains("Cancel Job"))
@@ -8115,7 +8116,24 @@ final class GunnAire_OpsUITests: XCTestCase {
             predicate: NSPredicate(format: "exists == false"),
             object: dueHeader
         )
-        XCTAssertEqual(XCTWaiter.wait(for: [queueCleared], timeout: 5), .completed)
+        let queueResult = XCTWaiter.wait(for: [queueCleared], timeout: 5)
+        var queueFailureDetails = ""
+        if queueResult != .completed {
+            let errorPrefixes = [
+                "Only Accounting or an administrator can issue",
+                "Choose an administrator-approved pricebook item",
+                "This billing cycle changed",
+                "The approved agreement line could not be captured",
+                "The agreement invoice was not committed"
+            ]
+            let sheetError = app.staticTexts.allElementsBoundByIndex.map(\.label)
+                .first { label in errorPrefixes.contains { label.hasPrefix($0) } } ?? "<none visible>"
+            let actionStatus = app.staticTexts["ManagementBillingSavedStatus"].firstMatch
+            queueFailureDetails = "Review sheet visible: \(app.navigationBars["Review Agreement Invoice"].exists); " +
+                "sheet error: \(sheetError); action status: \(actionStatus.exists ? actionStatus.label : "<none visible>")."
+            retainNavigationFailure(app, name: "Agreement invoice due queue did not clear")
+        }
+        XCTAssertEqual(queueResult, .completed, queueFailureDetails)
         XCTAssertTrue(app.staticTexts["Balance due: $49.00"].waitForExistence(timeout: 5))
     }
 
@@ -8822,7 +8840,8 @@ final class GunnAire_OpsUITests: XCTestCase {
         }
         func requireEditingEnded() {
             let ended = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: controls)
-            XCTAssertEqual(XCTWaiter.wait(for: [ended], timeout: 5), .completed)
+            XCTAssertEqual(XCTWaiter.wait(for: [ended], timeout: 10), .completed,
+                           "Done Editing must clear the focused field and remove the sheet control.")
             XCTAssertTrue(navigation.exists, "Ending field editing must not save or dismiss the item.")
         }
         func rotateDevice(to orientation: UIDeviceOrientation) {

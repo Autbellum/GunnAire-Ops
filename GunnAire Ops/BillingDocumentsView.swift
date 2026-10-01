@@ -56,6 +56,7 @@ struct BillingDocumentsView: View {
     @State private var invoiceWorkspaceLane: InvoiceWorkspaceLane = .overview
     @State private var expandedInvoiceIDs: Set<UUID> = []
     @State private var completedNewDocument: QuickBooksBillingDocument?
+    @State private var completedNewDocumentHadWriteAheadMarker = false
     @State private var newDocumentSaveConfirmed = false
     @State private var standaloneInvoiceWorkType: InvoiceWorkType = .service
     @State private var showingNewDocumentDismissConfirmation = false
@@ -1888,7 +1889,7 @@ GunnAire
                 .toolbar {
                     if startsNewDocument, completedNewDocument == nil {
                         ToolbarItem(placement: .confirmationAction) {
-                            Button(documentActionTitle) { createDocument() }
+                            Button(documentActionTitle) { Task { await createDocument() } }
                                 .disabled(documentActionIsDisabled)
                                 .accessibilityIdentifier("SaveBillingDocument")
                         }
@@ -2061,7 +2062,7 @@ GunnAire
                             paymentTerms: configuredDefaultInvoicePaymentTerms,
                             quickBooksConnected: canAttemptSharedBilling
                         ) {
-                            try createMaintenanceAgreementInvoice(for: candidate)
+                            try await createMaintenanceAgreementInvoice(for: candidate)
                         }
                         .tint(Color.brandGold)
                     } else {
@@ -2110,7 +2111,7 @@ GunnAire
                 ) {
                     if let milestone = milestonePendingInvoice {
                         Button("Create \(milestone.plannedAmount.formatted(.currency(code: "USD"))) Invoice") {
-                            createProgressInvoice(for: milestone)
+                            Task { await createProgressInvoice(for: milestone) }
                             milestonePendingInvoice = nil
                         }
                         Button("Cancel", role: .cancel) { milestonePendingInvoice = nil }
@@ -2217,7 +2218,8 @@ GunnAire
         guard saveBillingContext(failureMessage: "Could not save the original draft") else { return }
         newDocumentSaveConfirmed = true
         actionMessage = "\(document.label) saved locally."
-        recordNewlySavedBillingDocument(document, publishWhenAvailable: true)
+        recordNewlySavedBillingDocument(document, publishWhenAvailable: true,
+            hadWriteAheadMarker: completedNewDocumentHadWriteAheadMarker)
     }
 
     @ViewBuilder
@@ -2458,7 +2460,7 @@ GunnAire
                         paymentTerms: configuredDefaultInvoicePaymentTerms,
                         quickBooksConnected: canAttemptSharedBilling
                     ) {
-                        try createMaintenanceAgreementInvoice(for: candidate)
+                        try await createMaintenanceAgreementInvoice(for: candidate)
                     }
                     .tint(Color.brandGold)
                 } else {
@@ -2577,7 +2579,7 @@ GunnAire
             ) {
                 if let milestone = milestonePendingInvoice {
                     Button("Create \(milestone.plannedAmount.formatted(.currency(code: "USD"))) Invoice") {
-                        createProgressInvoice(for: milestone)
+                        Task { await createProgressInvoice(for: milestone) }
                         milestonePendingInvoice = nil
                     }
                     Button("Cancel", role: .cancel) { milestonePendingInvoice = nil }
@@ -3141,7 +3143,7 @@ GunnAire
 
                                 if currentJobInvoice == nil {
                                     Button("Create Invoice From Estimate") {
-                                        createInvoiceFromEstimate(estimate)
+                                        Task { await createInvoiceFromEstimate(estimate) }
                                     }
                                     .buttonStyle(.borderedProminent)
                                     .tint(Color.brandGold)
@@ -3295,7 +3297,7 @@ GunnAire
                                     }
 
                                     Button("Create Invoice") {
-                                        createInvoiceFromEstimate(estimate)
+                                        Task { await createInvoiceFromEstimate(estimate) }
                                     }
                                     .buttonStyle(.borderedProminent)
                                     .tint(Color.brandGold)
@@ -3346,7 +3348,7 @@ GunnAire
                                     .disabled(!canScheduleApprovedWork || !estimate.hasRecordedCustomerApproval)
 
                                     Button("Create Invoice") {
-                                        createInvoiceFromEstimate(estimate)
+                                        Task { await createInvoiceFromEstimate(estimate) }
                                     }
                                     .buttonStyle(.bordered)
                                     .disabled(!canCreateOrOpenInvoice(from: estimate))
@@ -3794,7 +3796,7 @@ GunnAire
 
                     if !startsNewDocument {
                         Button(documentActionTitle) {
-                            createDocument()
+                            Task { await createDocument() }
                         }
                         .accessibilityIdentifier("SaveBillingDocument")
                         .buttonStyle(.borderedProminent)
@@ -3911,7 +3913,7 @@ GunnAire
                                         estimateDeliveryAction(estimate)
                                         estimateQuickBooksDeliveryAction(estimate)
                                         Button("Create Invoice") {
-                                            createInvoiceFromEstimate(estimate)
+                                            Task { await createInvoiceFromEstimate(estimate) }
                                         }
                                         .buttonStyle(.bordered)
                                         .disabled(estimate.status == "invoiced" || !canCreateOrOpenInvoice(from: estimate))
@@ -4497,7 +4499,7 @@ GunnAire
                         if workspaceMode.showsEstimateBuilder {
                             Button(isCreatingDocument && selectedDocumentKind == .estimate ? "Creating Estimate..." : "Create Estimate") {
                                 selectedDocumentKind = .estimate
-                                createDocument()
+                                Task { await createDocument() }
                             }
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
@@ -4514,7 +4516,7 @@ GunnAire
                         if workspaceMode.showsInvoiceBuilder {
                             Button(invoiceActionTitle) {
                                 selectedDocumentKind = .invoice
-                                createDocument()
+                                Task { await createDocument() }
                             }
                             .buttonStyle(.borderedProminent)
                             .tint(.green)
@@ -5314,7 +5316,7 @@ GunnAire
 
     private func createMaintenanceAgreementInvoice(
         for candidate: MaintenanceAgreementBillingCandidate
-    ) throws {
+    ) async throws {
         guard canIssueMaintenanceAgreementInvoices else {
             throw MaintenanceAgreementBillingWorkflowError.unauthorizedInvoice
         }
@@ -5378,6 +5380,28 @@ GunnAire
         }
         let priorLinkedInvoiceID = linkedCall?.linkedInvoiceID
         let priorCallStatus = linkedCall?.status
+        let firstSave = await prepareNewBillingDocument(.invoice(invoice))
+        guard firstSave.ready else {
+            throw MaintenanceAgreementBillingWorkflowError.saveFailed(actionMessage)
+        }
+        guard canIssueMaintenanceAgreementInvoices,
+              isCurrentRecord(agreement), isCurrentRecord(billingItem),
+              (linkedCall == nil || isCurrentRecord(linkedCall)),
+              agreement.lifecycleJSON == priorLifecycleJSON,
+              agreement.customer === invoice.customer,
+              invoice.siteAddress == agreement.customer.address,
+              invoice.lineItemSummary == "\(agreement.displayName) — \(candidate.interval.displayName) billing",
+              linkedCall?.linkedInvoiceID == priorLinkedInvoiceID,
+              linkedCall?.status == priorCallStatus,
+              (linkedCall == nil || linkedCall?.customer === agreement.customer),
+              let current = MaintenanceAgreementBillingPolicy.firstDueCandidate(
+                for: agreement, serviceCalls: serviceCalls),
+              current.id == refreshedCandidate.id,
+              abs(current.amount - refreshedCandidate.amount) < 0.005,
+              billingCatalogItem(for: current) === billingItem,
+              CatalogLineItemSnapshot(item: billingItem, priceAdjustment: adjustment) == snapshot else {
+            throw MaintenanceAgreementBillingWorkflowError.cycleChanged
+        }
         modelContext.insert(invoice)
         do {
             try agreement.recordBillingInvoice(
@@ -5397,13 +5421,16 @@ GunnAire
             throw MaintenanceAgreementBillingWorkflowError.saveFailed(error.localizedDescription)
         }
 
-        actionMessage = canAttemptSharedBilling
-            ? "Agreement invoice created locally. Publishing its approved item and invoice to QuickBooks..."
-            : "Agreement invoice created locally. QuickBooks publication is pending until the connection is available."
-        recordNewlySavedBillingDocument(.invoice(invoice), publishWhenAvailable: true)
+        if firstSave.markerIssue == nil {
+            actionMessage = canAttemptSharedBilling
+                ? "Agreement invoice created locally. Publishing its approved item and invoice to QuickBooks..."
+                : "Agreement invoice created locally. QuickBooks publication is pending until the connection is available."
+        }
+        recordNewlySavedBillingDocument(.invoice(invoice), publishWhenAvailable: true,
+            hadWriteAheadMarker: firstSave.markerIssue == nil)
     }
 
-    private func createProgressInvoice(for milestone: ProjectMilestone) {
+    private func createProgressInvoice(for milestone: ProjectMilestone) async {
         guard let call = activeServiceCall,
               let estimate = projectEstimate,
               milestone.projectServiceCallID == call.id,
@@ -5461,6 +5488,29 @@ GunnAire
                 createdAt: invoiceCreatedAt
             )
             _ = try BillingTaxAddressContext.forPublication(.invoice(invoice))
+            let firstSave = await prepareNewBillingDocument(.invoice(invoice))
+            guard firstSave.ready else { return }
+            guard activeServiceCall === call, projectEstimate === estimate,
+                  isCurrentRecord(call), isCurrentRecord(estimate), isCurrentRecord(milestone),
+                  call.customer === invoice.customer,
+                  call.serviceLocationID == invoice.serviceLocationID,
+                  call.siteAddress == invoice.siteAddress,
+                  currentProjectMilestones.contains(where: { $0 === milestone }),
+                  AppAccess.canIssueProjectProgressInvoices(email: currentUserEmail, users: users),
+                  AppAccess.canAccessServiceCall(call, email: currentUserEmail, users: users,
+                    serviceCalls: serviceCalls, technicians: technicians),
+                  ProjectBillingPolicy.canInvoice(milestone, estimate: estimate,
+                    scheduledVisit: milestone.scheduledVisitID.flatMap { visitID in
+                        serviceCalls.first { $0.id == visitID }
+                    }),
+                  !invoices.contains(where: { $0.id == invoiceID }),
+                  (try? ProjectBillingPolicy.progressDocumentSnapshotJSON(
+                    for: milestone, estimate: estimate,
+                    milestones: currentProjectMilestones, invoices: invoices
+                  )) == snapshotJSON else {
+                actionMessage = "The approved milestone or job changed while preparing this invoice. Review it and try again."
+                return
+            }
             let priorStatus = milestone.status
             let priorCompletedAt = milestone.completedAt
             let priorCompletedBy = milestone.completedByEmail
@@ -5494,10 +5544,13 @@ GunnAire
             do {
                 try modelContext.save()
                 linkExistingInvoiceAttachments(to: invoice, serviceCallID: call.id)
-                actionMessage = canAttemptSharedBilling
-                    ? "Progress invoice created locally. Syncing the approved milestone allocation to QuickBooks..."
-                    : "Progress invoice created locally. QuickBooks publication is pending."
-                recordNewlySavedBillingDocument(.invoice(invoice), publishWhenAvailable: true)
+                if firstSave.markerIssue == nil {
+                    actionMessage = canAttemptSharedBilling
+                        ? "Progress invoice created locally. Syncing the approved milestone allocation to QuickBooks..."
+                        : "Progress invoice created locally. QuickBooks publication is pending."
+                }
+                recordNewlySavedBillingDocument(.invoice(invoice), publishWhenAvailable: true,
+                    hadWriteAheadMarker: firstSave.markerIssue == nil)
             } catch {
                 milestone.invoiceID = nil
                 milestone.status = priorStatus
@@ -8277,8 +8330,11 @@ GunnAire
         actionMessage = "Estimate loaded into the invoice builder for this job."
     }
 
-    private func createInvoiceFromEstimate(_ estimate: Estimate) {
+    private func createInvoiceFromEstimate(_ estimate: Estimate) async {
         guard !isCreatingDocument, !isPreparingCustomerDocument else { return }
+        isCreatingDocument = true
+        var handedOffToReport = false
+        defer { if !handedOffToReport { isCreatingDocument = false } }
         guard isCurrentRecord(estimate), isCurrentRecord(estimate.customer) else { return }
         guard isCurrentProposal(estimate) else {
             actionMessage = "A newer change order is the active proposal. Invoice the approved current proposal instead."
@@ -8307,17 +8363,52 @@ GunnAire
             return
         }
 
-        let conversion = convertEstimate(estimate)
+        let createdAt = Date()
+        let dueDate = configuredDefaultInvoicePaymentTerms.dueDate(from: createdAt)
+            ?? Calendar.current.startOfDay(for: createdAt)
+        let draft = Invoice.draft(from: estimate, dueDate: dueDate, createdAt: createdAt)
+        let sourceRevision = estimate.customerPortalRevision
+        let sourceNotes = estimate.notes
+        let sourceAddress = estimate.siteAddress
+        let sourceStatus = estimate.status
+        let sourceApprovalAt = estimate.customerApprovedAt
+        let firstSave = await prepareNewBillingDocument(.invoice(draft))
+        guard firstSave.ready, isCreatingDocument else { return }
+        guard billingSyncLifecycles["document-preparation"] == nil else {
+            actionMessage = "Another invoice is still being prepared. Wait for it to finish, then try again."
+            return
+        }
+        guard isCurrentRecord(estimate), isCurrentRecord(estimate.customer),
+              isCurrentProposal(estimate), invoice(for: estimate) == nil,
+              estimate.customerPortalRevision == sourceRevision,
+              estimate.notes == sourceNotes,
+              estimate.siteAddress == sourceAddress,
+              estimate.status == sourceStatus,
+              estimate.customerApprovedAt == sourceApprovalAt,
+              EstimateProposalPolicy.selectionIssue(for: estimate, in: estimates) == nil,
+              currentProjectMilestones.isEmpty,
+              (!estimate.isProposalOption || estimate.hasRecordedCustomerApproval),
+              (serviceCall(for: estimate)?.canCreateInvoiceDocument ?? true) else {
+            actionMessage = "The approved estimate changed while preparing its invoice. Review it and try again."
+            return
+        }
+        let conversion = convertEstimate(estimate, invoice: draft)
         let invoice = conversion.invoice
         selectedInvoiceForCloseout = invoice
         let restoredItems = restoredCatalogItems(snapshotJSON: estimate.catalogSnapshotJSON, lineItemSummary: estimate.lineItemSummary)
         guard saveBillingContext(failureMessage: "Could not save the converted invoice") else { return }
-        beginInvoiceReportPreparation(invoice, serviceCall: conversion.serviceCall, items: restoredItems)
+        if let markerIssue = firstSave.markerIssue {
+            actionMessage = "Invoice saved locally. Automatic QuickBooks delivery is not confirmed: \(markerIssue)"
+        }
+        handedOffToReport = true
+        beginInvoiceReportPreparation(invoice, serviceCall: conversion.serviceCall, items: restoredItems,
+            firstSaveMarkerIssue: firstSave.markerIssue)
     }
 
     /// Saves happen before this synchronous boundary. The original invoice and
     /// authority are captured before its report task is scheduled.
-    private func beginInvoiceReportPreparation(_ invoice: Invoice, serviceCall: ServiceCall?, items: [Item]) {
+    private func beginInvoiceReportPreparation(_ invoice: Invoice, serviceCall: ServiceCall?, items: [Item],
+                                               firstSaveMarkerIssue: String?) {
         let key = "document-preparation"
         guard billingSyncLifecycles[key] == nil else { return }
         let owner = QuickBooksSyncLifecycle()
@@ -8347,7 +8438,9 @@ GunnAire
                 })
             isCreatingDocument = true
             isPreparingCustomerDocument = true
-            actionMessage = "Invoice saved locally. Preparing its documentation…"
+            actionMessage = firstSaveMarkerIssue.map {
+                "Invoice saved locally. Automatic QuickBooks delivery is not confirmed: \($0)"
+            } ?? "Invoice saved locally. Preparing its documentation…"
             Task { @MainActor in
                 defer {
                     if billingSyncLifecycles[key] === owner {
@@ -8357,11 +8450,14 @@ GunnAire
                     }
                 }
                 let realmMarkerIssue: String?
+                let automaticRetryPending: Bool
                 do {
                     let bound = try await AutomaticOutboundSync.shared.recordNewlySaved(.invoice(invoice), context: modelContext)
-                    realmMarkerIssue = bound ? nil : "The original QuickBooks company could not be verified when this invoice was saved. Open the saved invoice and choose Sync Saved Invoice after reviewing the business connection."
+                    realmMarkerIssue = !bound ? firstSaveMarkerIssue : nil
+                    automaticRetryPending = !bound && firstSaveMarkerIssue == nil
                 } catch {
                     realmMarkerIssue = error.localizedDescription
+                    automaticRetryPending = false
                 }
                 do {
                     let validateReport = try await preparation.perform {
@@ -8373,24 +8469,29 @@ GunnAire
                     try validateReport?()
                     if let realmMarkerIssue {
                         actionMessage = "Invoice and documentation are saved locally. Automatic QuickBooks recovery needs review because its company binding could not be saved: \(realmMarkerIssue)"
+                    } else if automaticRetryPending {
+                        actionMessage = "Invoice and documentation are saved locally. QuickBooks company verification will retry automatically when connected; delivery is not yet confirmed."
                     } else if !items.isEmpty {
-                        syncInvoiceIfNeeded(invoice, customer: customer, items: items)
+                        syncInvoiceIfNeeded(invoice, customer: customer, items: items,
+                            automaticFirstSave: true)
                         actionMessage = canAttemptSharedBilling
                             ? "Invoice saved with its documentation. Checking QuickBooks publication…"
-                            : "Invoice and documentation saved locally."
+                            : "Invoice and documentation saved locally. QuickBooks publication will retry automatically when connected."
                     } else {
                         actionMessage = "Invoice saved locally. Review the catalog lines before publishing to QuickBooks."
                     }
                 } catch {
                     guard billingSyncLifecycles[key] === owner else { return }
-                    actionMessage = "Invoice is saved locally. Documentation or publication stopped: \(error.localizedDescription)"
+                    actionMessage = "Invoice is saved locally. Documentation or publication stopped: \(error.localizedDescription)" +
+                        (firstSaveMarkerIssue.map { " Automatic QuickBooks delivery is not confirmed: \($0)" } ?? "")
                 }
             }
         } catch {
             billingSyncLifecycles.removeValue(forKey: key)
             isCreatingDocument = false
             isPreparingCustomerDocument = false
-            actionMessage = "Invoice is saved locally. Documentation or publication stopped: \(error.localizedDescription)"
+            actionMessage = "Invoice is saved locally. Documentation or publication stopped: \(error.localizedDescription)" +
+                (firstSaveMarkerIssue.map { " Automatic QuickBooks delivery is not confirmed: \($0)" } ?? "")
         }
     }
 
@@ -9868,7 +9969,7 @@ GunnAire
         return customer
     }
 
-    private func createDocument() {
+    private func createDocument() async {
         guard !isCreatingDocument, !isPreparingCustomerDocument, !selectedLineItems.isEmpty else { return }
         guard loadedCatalogIssue == nil else { actionMessage = loadedCatalogIssue ?? ""; return }
         do {
@@ -9893,6 +9994,12 @@ GunnAire
         selectedCustomerID = customer.id
         BillingCustomerHandoff.apply(customer: customer, to: activeServiceCall)
         activeServiceCall?.notes = trimmedNotes.isEmpty ? activeServiceCall?.notes : trimmedNotes
+        let sourceCall = activeServiceCall
+        let sourceLineItemIDs = selectedLineItems.map(\.id)
+        let sourceCallSiteAddress = sourceCall?.siteAddress
+        let sourceCallStatus = sourceCall?.status
+        let sourceCallEstimateID = sourceCall?.linkedEstimateID
+        let sourceCallInvoiceID = sourceCall?.linkedInvoiceID
 
         switch selectedDocumentKind {
         case .estimate:
@@ -9935,24 +10042,65 @@ GunnAire
                 amount: selectedTotal,
                 notes: trimmedNotes.isEmpty ? nil : trimmedNotes
             )
+            let firstSave = await prepareNewBillingDocument(.estimate(estimate))
+            guard firstSave.ready, isCreatingDocument else {
+                isCreatingDocument = false
+                return
+            }
+            guard selectedDocumentKind == .estimate,
+                  selectedCustomerID == customer.id,
+                  activeServiceCall === sourceCall,
+                  (sourceCall == nil || isCurrentRecord(sourceCall)),
+                  sourceCall?.siteAddress == sourceCallSiteAddress,
+                  sourceCall?.status == sourceCallStatus,
+                  sourceCall?.linkedEstimateID == sourceCallEstimateID,
+                  sourceCall?.linkedInvoiceID == sourceCallInvoiceID,
+                  sourceCall?.customer === customer || sourceCall == nil,
+                  (sourceCall?.serviceLocationID ?? selectedServiceLocationID) == estimate.serviceLocationID,
+                  selectedLineItems.map(\.id) == sourceLineItemIDs,
+                  selectedCatalogSnapshotJSON == estimate.catalogSnapshotJSON,
+                  selectedSummary == estimate.lineItemSummary,
+                  selectedTotal == estimate.amount,
+                  selectedSiteAddressSnapshot == estimate.siteAddress,
+                  notes.trimmingCharacters(in: .whitespacesAndNewlines) == trimmedNotes,
+                  changeOrderParentEstimateID == estimate.parentEstimateID,
+                  (changeOrderParentEstimateID == nil ||
+                    changeOrderReason.trimmingCharacters(in: .whitespacesAndNewlines) == normalizedChangeOrderReason),
+                  (proposalOption == .standalone || proposalGroupID == resolvedProposalGroupID),
+                  estimate.proposalOption == (proposalOption == .standalone ? nil : proposalOption.rawValue),
+                  (proposalOption == .standalone || proposalIsRecommended == estimate.proposalIsRecommended),
+                  !startsNewDocument || completedNewDocument == nil else {
+                actionMessage = "The customer, job, or estimate lines changed while preparing this estimate. Review it and save again."
+                isCreatingDocument = false
+                return
+            }
             modelContext.insert(estimate)
             EstimateProposalPolicy.enforceSingleRecommendation(for: estimate, in: estimates + [estimate])
-            activeServiceCall?.linkedEstimateID = estimate.id
-            linkExistingEstimateAttachments(to: estimate, serviceCallID: activeServiceCall?.id)
+            sourceCall?.linkedEstimateID = estimate.id
+            linkExistingEstimateAttachments(to: estimate, serviceCallID: sourceCall?.id)
             let documentTitle = estimate.isChangeOrder ? "Change order" : "Estimate"
             actionMessage = canAttemptSharedBilling
                 ? "\(documentTitle) created locally. Syncing to QuickBooks..."
                 : "\(documentTitle) created locally."
-            if startsNewDocument { completedNewDocument = .estimate(estimate) }
+            if startsNewDocument {
+                completedNewDocument = .estimate(estimate)
+                completedNewDocumentHadWriteAheadMarker = firstSave.markerIssue == nil
+            }
             guard saveBillingContext(failureMessage: "Could not save estimate locally") else {
                 isCreatingDocument = false
                 return
             }
+            if let markerIssue = firstSave.markerIssue {
+                actionMessage = "Estimate saved locally. Automatic QuickBooks delivery is not confirmed: \(markerIssue)"
+            }
             if startsNewDocument { newDocumentSaveConfirmed = true }
-            recordNewlySavedBillingDocument(.estimate(estimate), publishWhenAvailable: true)
+            recordNewlySavedBillingDocument(.estimate(estimate), publishWhenAvailable: true,
+                hadWriteAheadMarker: firstSave.markerIssue == nil)
             if openInvoiceAfterEstimateCreation {
                 selectedDocumentKind = .invoice
-                actionMessage = "Estimate created. Review and create the invoice when ready."
+                if firstSave.markerIssue == nil {
+                    actionMessage = "Estimate created. Review and create the invoice when ready."
+                }
             } else {
                 clearSelectedCatalogLines()
                 notes = ""
@@ -9979,6 +10127,7 @@ GunnAire
             }
             let invoice: Invoice
             let isUpdatingExistingInvoice: Bool
+            var firstSaveMarkerIssue: String?
             if let currentJobInvoice {
                 if let blockedMessage = BillingInvoiceMutationPolicy.blockedMessage(
                     for: currentJobInvoice,
@@ -10027,15 +10176,52 @@ GunnAire
                     dueDate: resolvedInvoiceDueDate,
                     notes: trimmedNotes.isEmpty ? nil : trimmedNotes
                 )
+                let firstSave = await prepareNewBillingDocument(.invoice(invoice))
+                guard firstSave.ready, isCreatingDocument else {
+                    isCreatingDocument = false
+                    return
+                }
+                guard selectedDocumentKind == .invoice,
+                      selectedCustomerID == customer.id,
+                      activeServiceCall === sourceCall,
+                      (sourceCall == nil || isCurrentRecord(sourceCall)),
+                      sourceCall?.siteAddress == sourceCallSiteAddress,
+                      sourceCall?.status == sourceCallStatus,
+                      sourceCall?.linkedEstimateID == sourceCallEstimateID,
+                      sourceCall?.linkedInvoiceID == sourceCallInvoiceID,
+                      sourceCall?.customer === customer || sourceCall == nil,
+                      (sourceCall?.serviceLocationID ?? selectedServiceLocationID) == invoice.serviceLocationID,
+                      currentJobInvoice == nil,
+                      sourceCall?.canCreateInvoiceDocument ?? true,
+                      selectedLineItems.map(\.id) == sourceLineItemIDs,
+                      selectedCatalogSnapshotJSON == invoice.catalogSnapshotJSON,
+                      selectedSummary == invoice.lineItemSummary,
+                      selectedTotal == invoice.amount,
+                      selectedSiteAddressSnapshot == invoice.siteAddress,
+                      notes.trimmingCharacters(in: .whitespacesAndNewlines) == trimmedNotes,
+                      invoiceDueDateIsValid,
+                      resolvedInvoiceDueDate == invoice.dueDate,
+                      !startsNewDocument || completedNewDocument == nil else {
+                    actionMessage = "The customer, job, or invoice lines changed while preparing this invoice. Review it and save again."
+                    isCreatingDocument = false
+                    return
+                }
                 isUpdatingExistingInvoice = false
+                firstSaveMarkerIssue = firstSave.markerIssue
                 modelContext.insert(invoice)
-                activeServiceCall?.linkedInvoiceID = invoice.id
-                activeServiceCall?.markDocumentationCompleteIfReady()
-                activeServiceCall?.status = .invoiced
-                actionMessage = "Invoice saved locally."
+                sourceCall?.linkedInvoiceID = invoice.id
+                sourceCall?.markDocumentationCompleteIfReady()
+                sourceCall?.status = .invoiced
+                actionMessage = firstSave.markerIssue.map {
+                    "Invoice saved locally. Automatic QuickBooks delivery is not confirmed: \($0)"
+                } ?? "Invoice saved locally."
             }
-            if startsNewDocument { completedNewDocument = .invoice(invoice) }
-            guard saveBillingContext(failureMessage: isUpdatingExistingInvoice ? "Could not update invoice locally" : "Could not save invoice locally") else {
+            if startsNewDocument {
+                completedNewDocument = .invoice(invoice)
+                completedNewDocumentHadWriteAheadMarker = firstSaveMarkerIssue == nil
+            }
+            guard saveBillingContext(failureMessage: isUpdatingExistingInvoice
+                    ? "Could not update invoice locally" : "Could not save invoice locally") else {
                 isCreatingDocument = false
                 return
             }
@@ -10056,7 +10242,8 @@ GunnAire
                     ?? Calendar.current.startOfDay(for: Date())
             }
             if !isUpdatingExistingInvoice {
-                beginInvoiceReportPreparation(invoice, serviceCall: invoiceServiceCall, items: invoiceItems)
+                beginInvoiceReportPreparation(invoice, serviceCall: invoiceServiceCall, items: invoiceItems,
+                    firstSaveMarkerIssue: firstSaveMarkerIssue)
                 return
             }
         }
@@ -10071,6 +10258,45 @@ GunnAire
             actionMessage = "\(failureMessage): \(error.localizedDescription)"
             return false
         }
+    }
+
+    private func prepareNewBillingDocument(_ document: QuickBooksBillingDocument) async ->
+        (ready: Bool, markerIssue: String?) {
+        let stamp = CompanyWorkspaceAccessController.shared.operationStamp
+        let companyID = CompanyWorkspaceAccessController.shared.verifiedCompanyID
+        let customerID = document.customer?.id
+        let createdAt: Date
+        switch document {
+        case .invoice(let value): createdAt = value.createdAt
+        case .estimate(let value): createdAt = value.createdAt
+        }
+        let markerIssue: String?
+        do {
+            try await AutomaticOutboundSync.shared.markFirstSave(document, context: modelContext)
+            markerIssue = nil
+        } catch {
+            markerIssue = error.localizedDescription
+        }
+        let currentCreatedAt: Date
+        switch document {
+        case .invoice(let value): currentCreatedAt = value.createdAt
+        case .estimate(let value): currentCreatedAt = value.createdAt
+        }
+        guard let currentCustomer = document.customer,
+              currentCustomer.id == customerID,
+              currentCustomer.modelContext === modelContext,
+              !currentCustomer.isDeleted,
+              createdAt == currentCreatedAt,
+              stamp == CompanyWorkspaceAccessController.shared.operationStamp,
+              companyID == CompanyWorkspaceAccessController.shared.verifiedCompanyID,
+              CompanyWorkspaceAccessController.shared.authorizedContainer === modelContext.container || stamp == nil else {
+            actionMessage = "The business or saved document changed while preparing QuickBooks recovery. Review it and save again."
+            return (false, markerIssue)
+        }
+        if let markerIssue {
+            actionMessage = "Automatic QuickBooks delivery is not confirmed; review Sync Saved \(document.label) after saving. \(markerIssue)"
+        }
+        return (true, markerIssue)
     }
 
     private func openPaymentsForInvoice(_ invoice: Invoice) {
@@ -10138,10 +10364,13 @@ GunnAire
         }
     }
 
-    private func syncInvoiceIfNeeded(_ invoice: Invoice, customer: Customer, items: [Item]) {
+    private func syncInvoiceIfNeeded(_ invoice: Invoice, customer: Customer, items: [Item],
+                                     automaticFirstSave: Bool = false) {
         guard canAttemptSharedBilling else {
             invoice.quickBooksSyncStatus = "pending"
-            invoice.quickBooksSyncDetail = "Saved locally. Open this document in your verified business workspace and use Sync Saved Document when online."
+            invoice.quickBooksSyncDetail = automaticFirstSave
+                ? "Saved locally. QuickBooks publication will retry automatically when the verified business connection is available."
+                : "Saved locally. Open this document in your verified business workspace and use Sync Saved Document when online."
             saveQuickBooksSyncState()
             return
         }
@@ -10149,17 +10378,22 @@ GunnAire
     }
 
     private func recordNewlySavedBillingDocument(_ document: QuickBooksBillingDocument,
-                                                 publishWhenAvailable: Bool) {
+                                                 publishWhenAvailable: Bool,
+                                                 hadWriteAheadMarker: Bool = false) {
         Task { @MainActor in
             do {
                 let bound = try await AutomaticOutboundSync.shared.recordNewlySaved(document, context: modelContext)
                 if bound && publishWhenAvailable && canAttemptSharedBilling {
                     publishBillingDocument(document)
+                } else if !bound && hadWriteAheadMarker {
+                    actionMessage = "\(document.label) is saved locally. QuickBooks company verification will retry automatically when connected; delivery is not yet confirmed."
                 } else if !bound {
-                    actionMessage = "\(document.label) is saved locally. Its original QuickBooks company could not be verified at save time. Review the saved document and choose Sync Saved \(document.label) when connected."
+                    actionMessage = "\(document.label) is saved locally. Automatic QuickBooks delivery needs review because its first-save company intent was not confirmed."
+                } else if !hadWriteAheadMarker {
+                    actionMessage = "\(document.label) is saved locally. QuickBooks company binding was recovered; publication is still pending."
                 }
             } catch {
-                actionMessage = "\(document.label) is saved locally. Automatic QuickBooks recovery needs review because its company binding could not be saved: \(error.localizedDescription)"
+                actionMessage = "\(document.label) is saved locally. Automatic QuickBooks delivery is not confirmed; review the saved document and business connection: \(error.localizedDescription)"
             }
         }
     }
@@ -10183,11 +10417,7 @@ GunnAire
     }
 
     @discardableResult
-    private func convertEstimate(_ estimate: Estimate) -> (invoice: Invoice, serviceCall: ServiceCall?) {
-        let createdAt = Date()
-        let dueDate = configuredDefaultInvoicePaymentTerms.dueDate(from: createdAt)
-            ?? Calendar.current.startOfDay(for: createdAt)
-        let invoice = Invoice.draft(from: estimate, dueDate: dueDate, createdAt: createdAt)
+    private func convertEstimate(_ estimate: Estimate, invoice: Invoice) -> (invoice: Invoice, serviceCall: ServiceCall?) {
         estimate.status = "invoiced"
         modelContext.insert(invoice)
         var linkedServiceCall: ServiceCall?
@@ -12377,7 +12607,7 @@ private struct MaintenanceAgreementInvoiceReviewSheet: View {
     let billingItem: Item
     let paymentTerms: InvoicePaymentTerms
     let quickBooksConnected: Bool
-    let onCreate: () throws -> Void
+    let onCreate: () async throws -> Void
 
     @State private var isCreating = false
     @State private var errorMessage: String?
@@ -12472,12 +12702,14 @@ private struct MaintenanceAgreementInvoiceReviewSheet: View {
         guard !isCreating else { return }
         isCreating = true
         errorMessage = nil
-        do {
-            try onCreate()
-            dismiss()
-        } catch {
-            errorMessage = error.localizedDescription
-            isCreating = false
+        Task { @MainActor in
+            do {
+                try await onCreate()
+                dismiss()
+            } catch {
+                errorMessage = error.localizedDescription
+                isCreating = false
+            }
         }
     }
 }

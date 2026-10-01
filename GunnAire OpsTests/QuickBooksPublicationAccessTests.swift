@@ -124,6 +124,10 @@ struct QuickBooksPublicationAccessTests {
         let unattempted = AutomaticOutboundSync.RealmRecord(companyID: companyID,
             documentType: "estimate", documentID: documentID, customerID: customerID,
             createdAt: createdAt, realmID: nil, environment: nil)
+        let intended = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+            documentType: "estimate", documentID: documentID, customerID: customerID,
+            createdAt: createdAt, realmID: nil, environment: nil,
+            intendedRealmID: "realm-a", intendedEnvironment: "production")
         let otherRealm = AutomaticOutboundSync.RealmRecord(companyID: companyID,
             documentType: "estimate", documentID: documentID, customerID: customerID,
             createdAt: createdAt, realmID: "realm-b", environment: "production")
@@ -139,6 +143,12 @@ struct QuickBooksPublicationAccessTests {
             explicitReview: false) == .reviewRequired)
         #expect(AutomaticOutboundSync.realmDecision(stored: unattempted, expected: expected,
             explicitReview: true) == .bind)
+        #expect(!AutomaticOutboundSync.isNewMarker(unattempted, for: expected))
+        #expect(AutomaticOutboundSync.isNewMarker(intended, for: expected))
+        #expect(AutomaticOutboundSync.realmDecision(stored: intended, expected: expected,
+            explicitReview: false) == .reviewRequired)
+        #expect(AutomaticOutboundSync.realmDecision(stored: intended, expected: otherRealm,
+            explicitReview: true) == .wrongRealm)
         #expect(AutomaticOutboundSync.realmDecision(stored: expected, expected: expected,
             explicitReview: false) == .proceed)
         #expect(AutomaticOutboundSync.realmDecision(stored: otherRealm, expected: expected,
@@ -181,6 +191,142 @@ struct QuickBooksPublicationAccessTests {
         let afterRestart = try persistedRoundTrip(expected, account: account)
         #expect(AutomaticOutboundSync.realmDecision(stored: afterRestart, expected: expected,
             explicitReview: false) == .proceed)
+    }
+
+    @Test func firstSaveMarkersRecoverBothDocumentsAfterRestartAndRejectForeignRealm() async throws {
+        let schema = GunnAireModelSchema.schema
+        let store = try ModelContainer(for: schema, configurations: [
+            ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+        ])
+        let writer = ModelContext(store)
+        let customer = Customer(name: "Write-ahead fixture")
+        let estimate = Estimate(customer: customer, amount: 190)
+        let invoice = Invoice(customer: customer, amount: 190)
+        let companyID = UUID()
+        let estimateMarker = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+            documentType: "estimate", documentID: estimate.id, customerID: customer.id,
+            createdAt: estimate.createdAt, realmID: nil, environment: nil,
+            intendedRealmID: "realm-a", intendedEnvironment: "production")
+        let invoiceMarker = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+            documentType: "invoice", documentID: invoice.id, customerID: customer.id,
+            createdAt: invoice.createdAt, realmID: nil, environment: nil,
+            intendedRealmID: "realm-a", intendedEnvironment: "production")
+        defer {
+            try? KeychainStore.remove(account: estimateMarker.account)
+            try? KeychainStore.remove(account: invoiceMarker.account)
+        }
+
+        // Save-time intent is durable before the only local save. Provider
+        // proof remains absent until an exact backend connection is checked.
+        #if os(iOS)
+        try await QuickBooksDocumentRealmProofStore.shared.markNew(estimateMarker)
+        try await QuickBooksDocumentRealmProofStore.shared.markNew(invoiceMarker)
+        #endif
+        let storedEstimateMarker = try persistedRoundTrip(estimateMarker, account: estimateMarker.account)
+        let storedInvoiceMarker = try persistedRoundTrip(invoiceMarker, account: invoiceMarker.account)
+        writer.insert(customer)
+        writer.insert(estimate)
+        writer.insert(invoice)
+        try writer.save()
+
+        let restarted = ModelContext(store)
+        let savedEstimate = try #require(restarted.fetch(FetchDescriptor<Estimate>()).first)
+        let savedInvoice = try #require(restarted.fetch(FetchDescriptor<Invoice>()).first)
+        #expect(savedEstimate.id == estimate.id && savedInvoice.id == invoice.id)
+        #expect(AutomaticOutboundSync.isNewMarker(storedEstimateMarker, for: estimateMarker))
+        #expect(AutomaticOutboundSync.isNewMarker(storedInvoiceMarker, for: invoiceMarker))
+        #expect(!AutomaticOutboundSync.isNewMarker(nil, for: estimateMarker))
+        let foreignCompany = AutomaticOutboundSync.RealmRecord(companyID: UUID(),
+            documentType: "estimate", documentID: estimate.id, customerID: customer.id,
+            createdAt: estimate.createdAt, realmID: nil, environment: nil)
+        #expect(!AutomaticOutboundSync.isNewMarker(storedEstimateMarker, for: foreignCompany))
+        let foreignCustomer = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+            documentType: "estimate", documentID: estimate.id, customerID: UUID(),
+            createdAt: estimate.createdAt, realmID: nil, environment: nil)
+        #expect(!AutomaticOutboundSync.isNewMarker(storedEstimateMarker, for: foreignCustomer))
+
+        #if os(iOS)
+        let proofStore = QuickBooksDocumentRealmProofStore.shared
+        #expect(try await proofStore.hasNewMarker(estimateMarker))
+        #expect(try await proofStore.hasNewMarker(invoiceMarker))
+        #expect(!(try await proofStore.hasBoundProof(estimateMarker)))
+        let noIntent = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+            documentType: "estimate", documentID: UUID(), customerID: customer.id,
+            createdAt: estimate.createdAt, realmID: "realm-a", environment: "production")
+        #expect(!(try await proofStore.hasNewMarker(noIntent)))
+        await #expect(throws: AutomaticOutboundSync.RealmError.self) {
+            try await proofStore.bindNewMarker(noIntent)
+        }
+        let bound = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+            documentType: "estimate", documentID: estimate.id, customerID: customer.id,
+            createdAt: estimate.createdAt, realmID: "realm-a", environment: "production")
+        try await proofStore.bindNewMarker(bound)
+        #expect(try await proofStore.hasBoundProof(estimateMarker))
+        #expect(!(try await proofStore.hasNewMarker(estimateMarker)))
+        let otherRealm = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+            documentType: "estimate", documentID: estimate.id, customerID: customer.id,
+            createdAt: estimate.createdAt, realmID: "realm-b", environment: "production")
+        await #expect(throws: AutomaticOutboundSync.RealmError.self) {
+            try await proofStore.bindNewMarker(otherRealm)
+        }
+        #endif
+    }
+
+    @Test func abortedDeterministicInvoiceSaveCanReplaceOnlySameRealmOrphan() async throws {
+        let companyID = UUID()
+        let invoiceID = UUID()
+        let customerID = UUID()
+        let old = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+            documentType: "invoice", documentID: invoiceID, customerID: customerID,
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+            realmID: "realm-a", environment: "production",
+            intendedRealmID: "realm-a", intendedEnvironment: "production")
+        let retry = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+            documentType: "invoice", documentID: invoiceID, customerID: customerID,
+            createdAt: Date(timeIntervalSince1970: 1_700_000_001),
+            realmID: "realm-a", environment: "production",
+            intendedRealmID: "realm-a", intendedEnvironment: "production")
+        let foreignRetry = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+            documentType: "invoice", documentID: invoiceID, customerID: customerID,
+            createdAt: Date(timeIntervalSince1970: 1_700_000_002),
+            realmID: nil, environment: nil,
+            intendedRealmID: "realm-b", intendedEnvironment: "production")
+        defer { try? KeychainStore.remove(account: old.account) }
+
+        #if os(iOS)
+        let proofStore = QuickBooksDocumentRealmProofStore.shared
+        try await proofStore.markNew(old)
+        await #expect(throws: AutomaticOutboundSync.RealmError.self) {
+            try await proofStore.markNew(retry)
+        }
+        try await proofStore.markNew(retry, replacingOrphan: true)
+        #expect(try await proofStore.savedRecord(retry) == retry)
+        #expect(try await proofStore.savedRecord(old) == nil)
+        await #expect(throws: AutomaticOutboundSync.RealmError.self) {
+            try await proofStore.markNew(foreignRetry, replacingOrphan: true)
+        }
+        #expect(try await proofStore.savedRecord(retry) == retry)
+        #else
+        #expect(try persistedRoundTrip(old, account: old.account).sameDocument(as: retry) == false)
+        #endif
+    }
+
+    @Test func orphanReplacementDistinguishesInsertedDraftFromCommittedInvoice() throws {
+        let schema = GunnAireModelSchema.schema
+        let store = try ModelContainer(for: schema, configurations: [
+            ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+        ])
+        let writer = ModelContext(store)
+        let customer = Customer(name: "Deterministic retry fixture")
+        let invoiceID = UUID()
+        let draft = Invoice(id: invoiceID, customer: customer, amount: 190)
+        writer.insert(customer)
+        writer.insert(draft)
+        #expect(try !AutomaticOutboundSync.hasPersistedDocument(for: .invoice(draft), context: writer))
+
+        try writer.save()
+        let retry = Invoice(id: invoiceID, customer: customer, amount: 190)
+        #expect(try AutomaticOutboundSync.hasPersistedDocument(for: .invoice(retry), context: writer))
     }
 
     @Test func proofBindingWakesOnlyMatchingEarlyScanAndConsumesHandoffOnce() throws {

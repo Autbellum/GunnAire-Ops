@@ -7,11 +7,22 @@ import SwiftData
 actor QuickBooksDocumentRealmProofStore {
     static let shared = QuickBooksDocumentRealmProofStore()
 
-    func markNew(_ record: AutomaticOutboundSync.RealmRecord) throws {
+    func markNew(_ record: AutomaticOutboundSync.RealmRecord, replacingOrphan: Bool = false) throws {
+        guard record.hasValidIntent else { throw AutomaticOutboundSync.RealmError.reviewRequired }
         let account = record.account
         if let existing = try KeychainStore.loadCodable(AutomaticOutboundSync.RealmRecord.self, account: account) {
-            guard existing.sameDocument(as: record) else { throw AutomaticOutboundSync.RealmError.reviewRequired }
-            return
+            if existing.sameDocument(as: record) {
+                guard existing.intendedScope == record.intendedScope,
+                      existing.boundScope == nil || existing.boundScope == record.boundScope else {
+                    throw AutomaticOutboundSync.RealmError.wrongRealm
+                }
+                return
+            }
+            guard replacingOrphan, existing.sameDocumentKeyAndCustomer(as: record),
+                  existing.createdAt != record.createdAt,
+                  existing.originalScope == record.originalScope else {
+                throw AutomaticOutboundSync.RealmError.reviewRequired
+            }
         }
         try KeychainStore.saveCodable(record, account: account)
     }
@@ -28,10 +39,12 @@ actor QuickBooksDocumentRealmProofStore {
             account: expected.account), stored.sameDocument(as: expected) else {
             throw AutomaticOutboundSync.RealmError.reviewRequired
         }
-        guard stored.realmID == nil && stored.environment == nil || stored == expected else {
+        guard let expectedScope = expected.boundScope,
+              stored.intendedScope == expectedScope,
+              stored.boundScope == nil || stored.boundScope == expectedScope else {
             throw AutomaticOutboundSync.RealmError.wrongRealm
         }
-        try KeychainStore.saveCodable(expected, account: expected.account)
+        try KeychainStore.saveCodable(expected.boundWithIntent(from: stored), account: expected.account)
     }
 
     func remember(_ scope: AutomaticOutboundSync.RealmScope) throws {
@@ -41,11 +54,42 @@ actor QuickBooksDocumentRealmProofStore {
     func hasBoundProof(_ identity: AutomaticOutboundSync.RealmRecord) throws -> Bool {
         guard let stored = try KeychainStore.loadCodable(AutomaticOutboundSync.RealmRecord.self,
             account: identity.account), stored.sameDocument(as: identity),
-              let realmID = stored.realmID, !realmID.isEmpty,
-              let environment = stored.environment, ["sandbox", "production"].contains(environment) else {
+              let bound = stored.boundScope,
+              stored.intendedScope == nil || stored.intendedScope == bound else {
             return false
         }
         return true
+    }
+
+    func hasNewMarker(_ identity: AutomaticOutboundSync.RealmRecord) throws -> Bool {
+        let stored = try KeychainStore.loadCodable(AutomaticOutboundSync.RealmRecord.self,
+            account: identity.account)
+        return AutomaticOutboundSync.isNewMarker(stored, for: identity)
+    }
+
+    func bindNewMarker(_ expected: AutomaticOutboundSync.RealmRecord) throws {
+        guard let realmID = expected.realmID, QuickBooksProviderReference.isValid(realmID),
+              let environment = expected.environment,
+              ["sandbox", "production"].contains(environment) else {
+            throw AutomaticOutboundSync.RealmError.reviewRequired
+        }
+        guard let stored = try KeychainStore.loadCodable(AutomaticOutboundSync.RealmRecord.self,
+            account: expected.account), stored.sameDocument(as: expected) else {
+            throw AutomaticOutboundSync.RealmError.reviewRequired
+        }
+        guard let expectedScope = expected.boundScope,
+              stored.intendedScope == expectedScope else {
+            throw AutomaticOutboundSync.RealmError.wrongRealm
+        }
+        if stored.boundScope == expectedScope { return }
+        guard stored.boundScope == nil else { throw AutomaticOutboundSync.RealmError.wrongRealm }
+        try KeychainStore.saveCodable(expected.boundWithIntent(from: stored), account: expected.account)
+    }
+
+    func savedRecord(_ identity: AutomaticOutboundSync.RealmRecord) throws -> AutomaticOutboundSync.RealmRecord? {
+        guard let stored = try KeychainStore.loadCodable(AutomaticOutboundSync.RealmRecord.self,
+            account: identity.account), stored.sameDocument(as: identity) else { return nil }
+        return stored
     }
 
     func verifyOrBind(_ expected: AutomaticOutboundSync.RealmRecord, explicitReview: Bool) throws {
@@ -54,7 +98,11 @@ actor QuickBooksDocumentRealmProofStore {
         case .proceed:
             return
         case .bind:
-            try KeychainStore.saveCodable(expected, account: expected.account)
+            if let stored {
+                try KeychainStore.saveCodable(expected.boundWithIntent(from: stored), account: expected.account)
+            } else {
+                try KeychainStore.saveCodable(expected, account: expected.account)
+            }
         case .reviewRequired:
             throw AutomaticOutboundSync.RealmError.reviewRequired
         case .wrongRealm:
@@ -92,6 +140,40 @@ final class AutomaticOutboundSync {
         let createdAt: Date
         let realmID: String?
         let environment: String?
+        let intendedRealmID: String?
+        let intendedEnvironment: String?
+
+        nonisolated init(companyID: UUID, documentType: String, documentID: UUID,
+                         customerID: UUID, createdAt: Date, realmID: String?, environment: String?,
+                         intendedRealmID: String? = nil, intendedEnvironment: String? = nil) {
+            self.companyID = companyID
+            self.documentType = documentType
+            self.documentID = documentID
+            self.customerID = customerID
+            self.createdAt = createdAt
+            self.realmID = realmID
+            self.environment = environment
+            self.intendedRealmID = intendedRealmID
+            self.intendedEnvironment = intendedEnvironment
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case companyID, documentType, documentID, customerID, createdAt
+            case realmID, environment, intendedRealmID, intendedEnvironment
+        }
+
+        nonisolated init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            self.init(companyID: try values.decode(UUID.self, forKey: .companyID),
+                documentType: try values.decode(String.self, forKey: .documentType),
+                documentID: try values.decode(UUID.self, forKey: .documentID),
+                customerID: try values.decode(UUID.self, forKey: .customerID),
+                createdAt: try values.decode(Date.self, forKey: .createdAt),
+                realmID: try values.decodeIfPresent(String.self, forKey: .realmID),
+                environment: try values.decodeIfPresent(String.self, forKey: .environment),
+                intendedRealmID: try values.decodeIfPresent(String.self, forKey: .intendedRealmID),
+                intendedEnvironment: try values.decodeIfPresent(String.self, forKey: .intendedEnvironment))
+        }
 
         nonisolated var account: String {
             "GunnAireBillingRealm.v1.\(companyID.uuidString.lowercased()).\(documentType).\(documentID.uuidString.lowercased())"
@@ -100,6 +182,35 @@ final class AutomaticOutboundSync {
         nonisolated func sameDocument(as other: Self) -> Bool {
             companyID == other.companyID && documentType == other.documentType &&
                 documentID == other.documentID && customerID == other.customerID && createdAt == other.createdAt
+        }
+
+        nonisolated func sameDocumentKeyAndCustomer(as other: Self) -> Bool {
+            companyID == other.companyID && documentType == other.documentType &&
+                documentID == other.documentID && customerID == other.customerID
+        }
+
+        nonisolated var boundScope: RealmScope? {
+            guard let realmID, QuickBooksProviderReference.isValid(realmID),
+                  let environment, ["sandbox", "production"].contains(environment) else { return nil }
+            return RealmScope(companyID: companyID, realmID: realmID, environment: environment)
+        }
+
+        nonisolated var intendedScope: RealmScope? {
+            guard let intendedRealmID, QuickBooksProviderReference.isValid(intendedRealmID),
+                  let intendedEnvironment, ["sandbox", "production"].contains(intendedEnvironment) else { return nil }
+            return RealmScope(companyID: companyID, realmID: intendedRealmID,
+                environment: intendedEnvironment)
+        }
+
+        nonisolated var originalScope: RealmScope? { intendedScope ?? boundScope }
+        nonisolated func boundWithIntent(from stored: Self) -> Self {
+            Self(companyID: companyID, documentType: documentType, documentID: documentID,
+                customerID: customerID, createdAt: createdAt, realmID: realmID, environment: environment,
+                intendedRealmID: stored.intendedRealmID, intendedEnvironment: stored.intendedEnvironment)
+        }
+        nonisolated var hasValidIntent: Bool {
+            guard let intendedScope else { return false }
+            return (realmID == nil && environment == nil) || boundScope == intendedScope
         }
     }
 
@@ -135,11 +246,22 @@ final class AutomaticOutboundSync {
         guard let stored else { return explicitReview ? .bind : .reviewRequired }
         guard stored.sameDocument(as: expected) else { return .reviewRequired }
         if stored.realmID == nil && stored.environment == nil {
+            if let intended = stored.intendedScope {
+                guard intended == expected.boundScope else { return .wrongRealm }
+            } else if stored.intendedRealmID != nil || stored.intendedEnvironment != nil {
+                return .reviewRequired
+            }
             return explicitReview ? .bind : .reviewRequired
         }
-        guard let realmID = stored.realmID, let environment = stored.environment,
-              !realmID.isEmpty, !environment.isEmpty else { return .reviewRequired }
-        return realmID == expected.realmID && environment == expected.environment ? .proceed : .wrongRealm
+        guard let bound = stored.boundScope,
+              stored.intendedScope == nil || stored.intendedScope == bound else { return .reviewRequired }
+        return bound == expected.boundScope ? .proceed : .wrongRealm
+    }
+
+    nonisolated static func isNewMarker(_ stored: RealmRecord?, for identity: RealmRecord) -> Bool {
+        guard let stored else { return false }
+        return stored.sameDocument(as: identity) && stored.hasValidIntent &&
+            stored.realmID == nil && stored.environment == nil
     }
 
     enum DocumentKey: Hashable {
@@ -244,6 +366,91 @@ final class AutomaticOutboundSync {
         }
     }
 
+    /// Write the intended realm before the first local save. An active device
+    /// credential supplies intent only; a cached, backend-verified scope may
+    /// also supply bound proof when it agrees with that credential.
+    func markFirstSave(_ document: QuickBooksBillingDocument, context: ModelContext) async throws {
+        guard isAuthorized(context),
+              let identity = realmRecord(for: document, realmID: nil, environment: nil),
+              let stamp = CompanyWorkspaceAccessController.shared.operationStamp else {
+            throw BillingPublicationError.accessRequired
+        }
+        let api = QuickBooksDataAPI.shared
+        let activeScope: RealmScope?
+        if api.isAuthenticated, !api.savedSessionEnvironmentDiffersFromCurrentBuild,
+           let realmID = api.realmID, QuickBooksProviderReference.isValid(realmID),
+           ["sandbox", "production"].contains(api.currentEnvironment) {
+            activeScope = RealmScope(companyID: identity.companyID, realmID: realmID,
+                environment: api.currentEnvironment)
+        } else {
+            activeScope = nil
+        }
+        let cached = try await realmStore.cachedScope(companyID: identity.companyID)
+        guard isAuthorized(context), CompanyWorkspaceAccessController.shared.operationStamp == stamp,
+              realmRecord(for: document, realmID: nil, environment: nil)?.sameDocument(as: identity) == true,
+              currentActiveRealmScope(companyID: identity.companyID) == activeScope,
+              let intended = activeScope ?? cached,
+              QuickBooksProviderReference.isValid(intended.realmID),
+              ["sandbox", "production"].contains(intended.environment) else {
+            throw RealmError.reviewRequired
+        }
+        let verifiedAtSave = cached == intended
+        let record = RealmRecord(companyID: identity.companyID, documentType: identity.documentType,
+            documentID: identity.documentID, customerID: identity.customerID, createdAt: identity.createdAt,
+            realmID: verifiedAtSave ? intended.realmID : nil,
+            environment: verifiedAtSave ? intended.environment : nil,
+            intendedRealmID: intended.realmID, intendedEnvironment: intended.environment)
+        let replacingOrphan = try !Self.hasPersistedDocument(for: document, context: context)
+        try await realmStore.markNew(record, replacingOrphan: replacingOrphan)
+        guard isAuthorized(context), CompanyWorkspaceAccessController.shared.operationStamp == stamp,
+              realmRecord(for: document, realmID: nil, environment: nil)?.sameDocument(as: identity) == true,
+              currentActiveRealmScope(companyID: identity.companyID) == activeScope else {
+            throw BillingPublicationError.accessRequired
+        }
+    }
+
+    private func currentActiveRealmScope(companyID: UUID) -> RealmScope? {
+        let api = QuickBooksDataAPI.shared
+        guard api.isAuthenticated, !api.savedSessionEnvironmentDiffersFromCurrentBuild,
+              let realmID = api.realmID, QuickBooksProviderReference.isValid(realmID),
+              ["sandbox", "production"].contains(api.currentEnvironment) else { return nil }
+        return RealmScope(companyID: companyID, realmID: realmID, environment: api.currentEnvironment)
+    }
+
+    /// A fresh context sees only committed records, so inserted drafts cannot
+    /// hide a persisted collision with the same deterministic document ID.
+    static func hasPersistedDocument(for document: QuickBooksBillingDocument,
+                                     context: ModelContext) throws -> Bool {
+        let committed = ModelContext(context.container)
+        switch document {
+        case .invoice(let invoice):
+            let id = invoice.id
+            var fetch = FetchDescriptor<Invoice>(predicate: #Predicate { $0.id == id })
+            fetch.fetchLimit = 1
+            let saved = try !committed.fetch(fetch).isEmpty
+            return saved || context.deletedModelsArray.contains {
+                ($0 as? Invoice)?.id == invoice.id
+            }
+        case .estimate(let estimate):
+            let id = estimate.id
+            var fetch = FetchDescriptor<Estimate>(predicate: #Predicate { $0.id == id })
+            fetch.fetchLimit = 1
+            let saved = try !committed.fetch(fetch).isEmpty
+            return saved || context.deletedModelsArray.contains {
+                ($0 as? Estimate)?.id == estimate.id
+            }
+        }
+    }
+
+    private func isPendingInsertion(_ document: QuickBooksBillingDocument, context: ModelContext) -> Bool {
+        let modelID: PersistentIdentifier
+        switch document {
+        case .invoice(let value): modelID = value.persistentModelID
+        case .estimate(let value): modelID = value.persistentModelID
+        }
+        return context.insertedModelsArray.contains { $0.persistentModelID == modelID }
+    }
+
     @discardableResult
     func recordNewlySaved(_ document: QuickBooksBillingDocument, context: ModelContext) async throws -> Bool {
         guard isAuthorized(context), let record = realmRecord(for: document, realmID: nil, environment: nil) else {
@@ -252,20 +459,30 @@ final class AutomaticOutboundSync {
         adopt(context)
         let generation = queueGeneration
         let stamp = CompanyWorkspaceAccessController.shared.operationStamp
-        try await realmStore.markNew(record)
+        guard let stored = try await realmStore.savedRecord(record) else { return false }
         guard isAuthorized(context), CompanyWorkspaceAccessController.shared.operationStamp == stamp else {
             throw BillingPublicationError.accessRequired
         }
-        if let cached = try await realmStore.cachedScope(companyID: record.companyID) {
-            let bound = RealmRecord(companyID: record.companyID, documentType: record.documentType,
-                documentID: record.documentID, customerID: record.customerID, createdAt: record.createdAt,
-                realmID: cached.realmID, environment: cached.environment)
-            try await realmStore.bindSaved(bound)
-            guard isAuthorized(context), CompanyWorkspaceAccessController.shared.operationStamp == stamp else {
-                throw BillingPublicationError.accessRequired
+        if let bound = stored.boundScope {
+            guard stored.intendedScope == nil || stored.intendedScope == bound else {
+                throw RealmError.reviewRequired
             }
             resumeAfterVerifiedBinding(document, context: context, generation: generation, stamp: stamp)
             return true
+        }
+        guard let intended = stored.intendedScope, stored.hasValidIntent else { return false }
+        if let cached = try await realmStore.cachedScope(companyID: record.companyID) {
+            if cached == intended {
+                let bound = RealmRecord(companyID: record.companyID, documentType: record.documentType,
+                    documentID: record.documentID, customerID: record.customerID, createdAt: record.createdAt,
+                    realmID: cached.realmID, environment: cached.environment)
+                try await realmStore.bindSaved(bound)
+                guard isAuthorized(context), CompanyWorkspaceAccessController.shared.operationStamp == stamp else {
+                    throw BillingPublicationError.accessRequired
+                }
+                resumeAfterVerifiedBinding(document, context: context, generation: generation, stamp: stamp)
+                return true
+            }
         }
         guard let customer = document.customer else { throw BillingPublicationError.accessRequired }
         let identity = SharedBillingIdentity(companyID: record.companyID,
@@ -653,6 +870,7 @@ final class AutomaticOutboundSync {
             let explicitReview = explicitReviewKeys.remove(next) != nil
             processed += 1
             var proofCheckInProgress = false
+            var hasNewMarkerForCurrentDocument = false
             do {
                 if case .customer(let id) = next {
                     try await publishCustomer(id, context: context)
@@ -669,6 +887,11 @@ final class AutomaticOutboundSync {
                     currentKey = nil
                     continue
                 }
+                if isPendingInsertion(document, context: context) {
+                    deferredUntil[next] = Date().addingTimeInterval(recoveryInterval)
+                    currentKey = nil
+                    continue
+                }
                 if !explicitReview {
                     guard let identity = realmRecord(for: document, realmID: nil, environment: nil) else {
                         deferredUntil[next] = .distantFuture
@@ -680,10 +903,12 @@ final class AutomaticOutboundSync {
                     proofChecksInFlight.insert(next)
                     proofCheckInProgress = true
                     let hasProof = try await realmStore.hasBoundProof(identity)
+                    let hasNewMarker = hasProof ? false : try await realmStore.hasNewMarker(identity)
+                    hasNewMarkerForCurrentDocument = hasNewMarker
                     guard queueGeneration == generation else { break }
                     proofChecksInFlight.remove(next)
                     proofCheckInProgress = false
-                    if !hasProof {
+                    if !hasProof && !hasNewMarker {
                         if Self.requeueAfterProofCheck(next, pending: &pending,
                             handoffs: &boundDuringProofCheck, explicitReviews: explicitReviewKeys) {
                             currentKey = nil
@@ -703,7 +928,8 @@ final class AutomaticOutboundSync {
                 }
                 let capturedPreparation = preparations.removeValue(forKey: next)
                 let result = try await publish(document, context: context,
-                    preparation: capturedPreparation, explicitReview: explicitReview)
+                    preparation: capturedPreparation, explicitReview: explicitReview,
+                    allowNewMarker: !explicitReview && hasNewMarkerForCurrentDocument)
                 guard queueGeneration == generation else { currentKey = nil; break }
                 let callbacks = completions.removeValue(forKey: next) ?? []
                 callbacks.forEach { $0(.success(result)) }
@@ -748,7 +974,7 @@ final class AutomaticOutboundSync {
 
     private func publish(_ document: QuickBooksBillingDocument, context: ModelContext,
                          preparation capturedPreparation: SharedBillingPreparation?,
-                         explicitReview: Bool) async throws -> String {
+                         explicitReview: Bool, allowNewMarker: Bool) async throws -> String {
         let lifecycle = QuickBooksSyncLifecycle()
         defer { lifecycle.cancel() }
         let stamp = CompanyWorkspaceAccessController.shared.operationStamp
@@ -770,7 +996,11 @@ final class AutomaticOutboundSync {
                   let record = realmRecord(for: document, realmID: realmID,
                     environment: workflow.run.workflow.environment),
                   record.companyID == companyID else { throw BillingPublicationError.accessRequired }
-            try await realmStore.verifyOrBind(record, explicitReview: explicitReview)
+            if allowNewMarker {
+                try await realmStore.bindNewMarker(record)
+            } else {
+                try await realmStore.verifyOrBind(record, explicitReview: explicitReview)
+            }
             if explicitReview {
                 try await realmStore.remember(RealmScope(companyID: companyID,
                     realmID: realmID, environment: workflow.run.workflow.environment))

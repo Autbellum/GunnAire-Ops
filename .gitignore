@@ -67,6 +67,7 @@ Config/Local.xcconfig
 
 # Reproducible release outputs and interpreter caches
 /dist/
+/HVACDesignSuite/dist/
 __pycache__/
 *.pyc
 

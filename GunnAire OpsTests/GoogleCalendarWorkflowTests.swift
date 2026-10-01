@@ -1361,6 +1361,45 @@ struct GoogleCalendarWorkflowTests {
         #expect(f.writes.count == 1)
     }
 
+    @Test func closeSavedAppointmentsPublishInOrderWithoutLosingTheSecondOutboxEntry() async throws {
+        let f = try Fixture()
+        f.call.googleCalendarPendingAt = Date()
+        let secondCall = ServiceCall(googleCalendarID: "primary", googleCalendarPendingAt: Date(),
+            googleEventManagedByApp: true,
+            eventTitle: "Second repair visit", type: .repair,
+            scheduledDate: f.call.scheduledDate.addingTimeInterval(7200), duration: 3600,
+            customer: f.customer)
+        f.context.insert(secondCall)
+        try f.context.save()
+        let firstWorkflow = try f.flow()
+        let secondWorkflow = try f.flow()
+
+        let outcomes: [Result<String, Error>] = await withCheckedContinuation { continuation in
+            var completed: [Result<String, Error>] = []
+            let record: (Result<String, Error>) -> Void = { result in
+                completed.append(result)
+                if completed.count == 2 { continuation.resume(returning: completed) }
+            }
+            GoogleCalendarScheduleSync.runQueued(workflow: firstWorkflow, container: f.context.container,
+                action: { try await GoogleCalendarScheduleSync.publish(call: f.call, workflow: $0) },
+                completion: record)
+            GoogleCalendarScheduleSync.runQueued(workflow: secondWorkflow, container: f.context.container,
+                action: { try await GoogleCalendarScheduleSync.publish(call: secondCall, workflow: $0) },
+                completion: record)
+        }
+
+        #expect(outcomes.count == 2)
+        for outcome in outcomes { _ = try outcome.get() }
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 2)
+        #expect(f.call.googleEventID != nil)
+        #expect(secondCall.googleEventID != nil)
+        #expect(f.call.googleEventID != secondCall.googleEventID)
+        #expect(f.call.googleEventConfirmedAt != nil)
+        #expect(secondCall.googleEventConfirmedAt != nil)
+        #expect(f.call.googleCalendarPendingAt == nil)
+        #expect(secondCall.googleCalendarPendingAt == nil)
+    }
+
     @Test func staleOrReadOnlySelectedCalendarNeverFallsBackToPrimary() async throws {
         for missing in [false, true] {
             let f = try Fixture()
