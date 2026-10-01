@@ -20,7 +20,6 @@ at the start of every turn; append to it rather than rewriting it.
 
 ## Claims
 
-
 ## Shared rules
 
 1. The project sets `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`. A helper reached
@@ -43,6 +42,12 @@ at the start of every turn; append to it rather than rewriting it.
    pins the old behavior and the new one.
 
 ## Status log
+
+- 2026-10-01 Codex root: Combined 2026100119 source at `0b3ee50` passed `generated/omni_runner.py` with zero compiler warnings. The first full signed iPad run exposed one stale test expectation after the snapshot equality fast path; corrected test-only commit `0b3ee50` passed the focused suite 10/10 and the final full iPad suite 2,920/2,920 logical tests (3,000 executions), zero failures or skips. Six signed iPad billing, progress-invoice, and Google Calendar UI paths passed 6/6. Current-build iPad and iPhone screenshot captures passed 1/1 each; all twelve exported images were visually reviewed, dimension/alpha checked, and hashed in `AppStoreAssets/ScreenshotManifest.json`. The connected Google account has one app-shaped event, but the user's specific missing appointment and notification, physical-device iCloud sign-in, live QuickBooks/Drive delivery, and 0119 TestFlight availability remain unverified. Apple rejected the 0118 upload with error 90382 at 2026-10-01 16:13:50 EDT and said to wait one day; 0119 packaging must not claim upload before that limit clears.
+
+- 2026-10-01 Codex calendar_live_gap: When an automatic full Google Calendar recovery failed with a durable pending appointment, its completion previously discarded the failure and left only a later foreground/periodic wake. It now schedules the existing bounded 30-second/2-minute/10-minute publish-only retry; a queued full pass still takes precedence, and success or no pending outbox does not retry. The initial save-to-Google trigger, company/Google authorization, original calendar/event identity checks, and uncertain-write protection are unchanged. Signed iPad `GoogleCalendarWorkflowTests` red run failed only the new assertion against old no-retry behavior (119/120 passed); final green run passed 120/120 with zero failures/skips. Final-source `generated/omni_runner.py` passed zero compiler warnings. Evidence: `2026-10-01-release-0119/Calendar Retry Red.xcresult`, `Calendar Retry Green.xcresult`, and `Calendar Retry Omni.log`. Live exact-event delivery and physical-device notifications remain unverified; source/test claims released.
+
+- 2026-10-01 Codex auth_cloudkit_current: On the isolated `fix/0118-workspace-diagnostic-reset` branch from `release/2026100118`, the CloudKit configuration detail now belongs to the account lookup that produced it. A successful account verification clears its provisional detail, and a retired lookup cannot overwrite or clear a newer lookup's failure. The original workspace authorization gate and CloudKit environment checks are unchanged. The signed iPad `CompanyWorkspaceAccessTests` suite passed 68/68 with zero failures/skips/warnings (`/private/tmp/gunnaire-0118-diagnostic-token-suite.xcresult`); final-source `python3 generated/omni_runner.py` passed zero compiler warnings (`/private/tmp/gunnaire-0118-diagnostic-omni-final-source.log`). This verifies diagnostic behavior only; live physical-device sign-in and Production CloudKit configuration remain separate acceptance checks. Source/test claims released.
 
 - 2026-10-01 Codex root: Post-upload signed iPad interface audit of 2026100117 passed five of six selected sign-in, Google, QuickBooks, and Drive UI cases; the sole failure was a saved-estimate assertion expecting old QuickBooks copy. The app correctly instructs users to use Sync Saved Estimate for company-verified publication, so the UI test now pins that action. The focused saved-estimate UI rerun passed 1/1 with zero failures and no app source change (`build-2026100117/Saved Estimate QBO UI Final.xcresult`). Build 2026100117 remains exact commit `835d512`; this test-only follow-up does not change the uploaded binary.
 
@@ -1419,3 +1424,173 @@ at the start of every turn; append to it rather than rewriting it.
   after a failure (`retryPendingIfNeeded`, publish only, no import). Three tests that pinned the
   old read-only rule were updated to the new rule; four write-back tests added. After adoption the
   job is app-owned, so later edits made directly in Google no longer import over it.
+
+- 2026-10-01 Claude, Autofix on PR #27 (both iPad shards failed at head `d9aa3f3`).
+  Ten failures, three distinct causes; only the first is mine and only it is fixed here.
+  **(1) Fixed — unsigned-host keychain, test-only.**
+  `QuickBooksPublicationAccessTests.firstSaveMarkersRecoverBothDocumentsAfterRestartAndRejectForeignRealm`
+  and `.abortedDeterministicInvoiceSaveCanReplaceOnlySameRealmOrphan` failed with
+  `.unexpectedStatus(-34018)` = `errSecMissingEntitlement`. Cause verified, not guessed:
+  `9097cbe` added `#if os(iOS) && !targetEnvironment(macCatalyst)` blocks that call the real
+  keychain-backed `QuickBooksDocumentRealmProofStore`, and the workflow builds every iPad job
+  with `CODE_SIGNING_ALLOWED=NO` (`.github/workflows/native-app-regression.yml:168,207,224`),
+  so the unsigned host carries no `application-identifier` entitlement and the platform
+  keychain refuses. The platform was the wrong discriminator: the real one is whether the host
+  has a keychain entitlement, which is why Codex's *signed* local runs passed 20/20 while CI
+  failed. The three blocks now branch on a runtime probe (`platformKeychainIsAvailable()`,
+  same `errSecMissingEntitlement`-only tolerance as the existing `persistedRoundTrip`, any
+  other keychain error still fails). A signed host — local simulator and device, where the
+  product actually depends on the keychain — still runs the full proof-store path; an unsigned
+  host runs the equivalent serialized assertions that the Mac job already runs today. Nothing
+  skipped, excluded, or accepted as an expected failure, and no product source touched.
+  Parse-checked (`swiftc -frontend -parse`, iOS simulator target) and `git diff --check` clean;
+  **not compiled** — a full build here would put Codex's concurrent 0118 validation at risk with
+  ~6 GiB free, and the simulator is unavailable to this session, so root's run is the compile gate.
+  **(2) Reported, not touched — billing save never reaches confirmation.** Six UI failures at
+  `GunnAire_OpsUITests.swift:4591`, `:5078`, `:5252`, `:5425` (×3), all "tap SaveBillingDocument,
+  `ManagementBillingSavedCustomer` never appears". These passed at `3aa7733` and `146cc25`;
+  `73ec65b` put `await prepareNewBillingDocument(...)` ahead of the insert at every billing
+  creation entry point with `guard firstSave.ready, isCreatingDocument else { return }`, a silent
+  return. `BillingDocumentsView.swift:10282-10319` is the only thing that can clear `ready`.
+  Codex root says an isolated QBO agent owns this screen from `976de66`, so this agent did not
+  edit it. Candidate conditions, none proven without a run: `currentCustomer.modelContext ===
+  modelContext` (the document is not yet inserted), `authorizedContainer === modelContext.container`,
+  and `isCreatingDocument` surviving a suspension that did not exist before.
+  **(3) Reported, UNCLAIMED — Mail attachment disappears.**
+  `testMailAttachmentPreviewAndForwardRetainTheOriginalFile` passed at `3aa7733` in 34.5 s and
+  now fails at 17.1 s: the message detail opens, then `MailAttachment-0.0` never appears.
+  `73ec65b` added four new `automaticRefreshIfDue()` triggers to `GmailView`. One is provably
+  reachable in UI-test fixture mode and was previously a no-op there:
+  `GunnAire Ops/GmailView.swift:430-433` calls `automaticRefreshIfDue()` on every
+  `workspace.operationStamp` change while leaving `clearMailbox()` behind its original
+  `!usesMailUITestFixture` guard. `automaticRefreshIfDue` ends in
+  `loadMessages(preservingStatus: false, recoverPendingActions: true)`, which in fixture mode
+  reaches `mailbox.refresh(..., preservingStatus: false)` and replaces the message list under the
+  open detail. `:419-428` compound this by setting `lastAutomaticRefreshAt = nil`, which makes a
+  refresh immediately due regardless of the 120-second interval. Whoever owns Mail should decide
+  whether a fixture mailbox should refresh at all; this agent made no product edit on a hypothesis.
+
+- 2026-10-01 Claude, PR #27 Mail fixture auto-refresh regression (assigned after reporting it;
+  claimed `GunnAire Ops/GmailView.swift` and new `GunnAire OpsTests/GmailAutomaticRefreshPolicyTests.swift`
+  only — no edits to `BillingDocumentsView.swift`, `CompanyWorkspaceHost.swift`, or any existing
+  Gmail file another agent holds). `testMailAttachmentPreviewAndForwardRetainTheOriginalFile`
+  passed at `3aa7733` in 34.5 s and failed at `d9aa3f3` in 17.1 s: the message detail opened at
+  t=11.35 s, then `MailAttachment-0.0` never appeared across the 4-second wait. Cause, by diff
+  rather than by guess: `GmailView.swift` is the only Mail file `73ec65b` touched, its whole change
+  is four new unattended `automaticRefreshIfDue()` triggers, and one of them was reachable in
+  UI-test fixture mode where it had previously been a no-op — the `workspace.operationStamp`
+  handler calls it while leaving `clearMailbox()` behind its original `!usesMailUITestFixture`
+  guard. `automaticRefreshIfDue` ends in `loadMessages(preservingStatus: false, …)`, which in
+  fixture mode reaches `mailbox.refresh(…, preservingStatus: false)` and replaces the `messages`
+  array the open `NavigationLink` destination is built from, taking that message's attachments
+  with it. Two of the other new triggers also set `lastAutomaticRefreshAt = nil`, so such a
+  refresh is due immediately and the 120-second interval never protects it.
+  Fix: a synthetic fixture mailbox has no server behind it, so an unattended reload can only
+  destroy loaded state; `GmailAutomaticRefreshPolicy` now owns the entire wake decision
+  (`wakes(…)`), and the view's guard is one call to it rather than a second copy of the rules, so
+  a future trigger cannot acquire its own. The server-mail fixture keeps its bounded recovery
+  (`usesServerMailFixture`), entry and explicit refresh still seed a fixture mailbox, and
+  `usesMailUITestFixture` is `false` in release, so a real mailbox is unaffected — this changes
+  test-fixture behaviour only. Every pre-existing condition is carried over verbatim.
+  Verified without consuming DerivedData (≈2.7 GiB free, Codex's 0118 validation running):
+  `GmailAutomaticRefreshPolicy` was extracted verbatim from the edited source, compiled with
+  `swiftc` against a 17-assertion harness, and all passed, including an explicit demonstration
+  that the same inputs returned `true` before the fixture term existed — the regression itself.
+  `GmailAutomaticRefreshPolicyTests` pins the same decision in the suite: fixture never wakes
+  (at any elapsed time), real mailbox still wakes, server fixture still wakes, each of the seven
+  pre-existing conditions still stops a real mailbox, and the interval and a backwards clock
+  still behave. Both files pass `swiftc -frontend -parse` (iOS simulator target) and
+  `git diff --check`. NOT compiled in the app target and no UI test executed here — root's run
+  is the compile and behaviour gate. Still open and not touched by this agent: whether a real
+  mailbox should auto-refresh while the user has a message open. The same
+  `preservingStatus: false` reload replaces the array under a live detail for real users too;
+  no evidence either way was gathered, so no production behaviour was changed on that guess.
+
+- 2026-10-01 Claude, bounded task: the two progress-invoice CI failures at
+  `GunnAire_OpsUITests.swift:4591`. Branch `fix/progress-invoice-visible-failure-20261001` off
+  `b070b23`; the shared 0119 checkout was never touched, and `Item.swift` was restored to
+  `b070b23` immediately after the reproduction experiment.
+  **Failed guard term, reproduced not guessed: clause 14, the approved milestone allocation.**
+  `git diff 146cc25..b070b23` showed the only additions to `createProgressInvoice` are
+  `await prepareNewBillingDocument(...)`, a silent `guard firstSave.ready else { return }`, and a
+  new 14-clause post-await revalidation. The silent `ready` return is not the cause:
+  `operationStamp` needs both `authorizedContainer` and `activeLease`
+  (`CompanyWorkspaceAccess.swift:491`), these fixtures establish no lease, so `stamp == nil`,
+  `markFirstSave` throws into `markerIssue`, and the guard passes via its `|| stamp == nil` clause.
+  The refusal was invisible because the only `actionMessage` surface on this route
+  (`BillingDocumentsView.swift:2329`) sits behind `!isJobDocumentationMode` (`:2249`) and these
+  tests run in job documentation. Instrumenting the refusal to name its first failed clause, then
+  reverting only `CatalogLineItemSnapshot.encoded`'s `.sortedKeys` to match `d9aa3f3`, printed:
+  "The approved milestone or job changed while preparing this invoice (the approved milestone
+  allocation)." Clause 14 re-derives the allocation and compared it to the pre-await capture as raw
+  bytes, and the producers disagreed on key order - `BillingTaxAddressContext.attaching` has always
+  sorted (`BillingTaxAddresses.swift:71`), `encoded` did not before 0119.
+  **Fix.** `CatalogSnapshotCanonicalJSON.describesSameSnapshot` compares the two documents
+  re-serialized with `JSONSerialization` `.sortedKeys`, so key order is forgiven and nothing else
+  is: every key is still compared, including snapshot metadata this build does not decode, and an
+  absent or malformed snapshot has no canonical form and matches nothing, so it fails closed. This
+  is deliberately stronger than comparing the decoded lines, discount and tax addresses, which
+  would have ignored forward-compatible metadata. No guard weakened: all 14 clauses are preserved
+  verbatim and in their original order (machine-compared clause by clause against `b070b23`), and
+  `ProgressInvoiceChangeAudit` keeps the original short-circuit, which matters because the later
+  clauses read properties only the earlier identity clauses make safe to touch. 0119's sorted-key
+  encoder also happens to mask this, but raw-byte comparison would make every such revalidation
+  depend on the encoders never diverging again, so the fix stands on its own.
+  **Red/green, signed-off-source focused runs on simulator F4ECDEC1 (iPad Pro 13-inch M5), reusing
+  root's `/tmp/gunnaire-estimate-mail-current-dd`, `CODE_SIGNING_ALLOWED=NO` to match CI.**
+  RED: with `encoded`'s sorted keys reverted to the `d9aa3f3` form and no semantic comparison, the
+  progress test failed in 40.6 s naming clause 14 (`noSorted-ui.log`); the bundle variant passed.
+  GREEN on final source: `CatalogSnapshotCanonicalJSONTests`, `ProgressInvoiceChangeAuditTests`,
+  `CatalogSnapshotIntegrityTests` and `BillingMilestoneIdentityTests` all passed, and both UI cases
+  passed (45.4 s, 51.6 s), zero failures, zero compile errors, zero warnings
+  (`green-sorted.log`). Root asked for no further unsorted UI rerun so the DerivedData could go to
+  the Calendar patch, so the green case is proven on current source and the red case on the
+  reproduction; a green UI case under the old unsorted encoder is not claimed.
+  **Not covered:** this is the progress-invoice route only. The three management-billing failures
+  on PR #31 wait on `ManagementBillingSavedCustomer` through `createDocument`, whose own
+  `selectedCatalogSnapshotJSON == estimate.catalogSnapshotJSON` comparisons
+  (`BillingDocumentsView.swift:10087`, `:10223`) are raw-byte in exactly the same way; 0119's
+  sorted-key encoder masks them, and the durable fix there is the same canonical comparison. That
+  belongs to the QBO agent's task, not this one. `createMaintenanceAgreementInvoice` and
+  `createInvoiceFromEstimate` also still return silently with no rendered status.
+
+- 2026-10-01 Claude, third commit on `fix/progress-invoice-visible-failure-20261001`: narrow revision
+  of `CatalogSnapshotCanonicalJSON` after root's review. Shape chosen by root: non-nil exact raw
+  equality fast path; on mismatch, `FieldFormJSON.parse(maximumNodes: 100_000)` on both strings
+  solely as a gate against duplicate, malformed and oversize input; then the existing
+  `JSONSerialization` `.sortedKeys` canonicalization does the comparison.
+  **Why both steps.** Measured on this Mac with the real types extracted verbatim: canonicalization
+  alone keeps one value of a duplicate object key and discards the other, so `{"q":2,"q":9}` and
+  `{"q":2,"q":8}` compared **equal**, and an escaped equivalent (`"quantity"`) collapsed onto an
+  existing key the same way. An AST comparison with numeric tokens held exact fixes that but
+  introduces a false refusal: `BillingTaxAddressContext.attaching` re-serializes the whole document
+  and rewrites `199.95` as `199.94999999999999`, so a merely round-tripped snapshot read as changed -
+  the same false-refusal class as the original defect. The gate plus canonicalization has neither
+  failure mode, and needs no new numeric-equality algorithm. Claude's earlier claim that an AST
+  comparison was "strictly stronger" was wrong in that direction and is withdrawn; an earlier
+  duplicate-key measurement was also wrong because it varied the retained value rather than the
+  discarded one.
+  **Bounds, measured or read in source.** 750 rows is 328,148 bytes and 12,006 nodes against the
+  parser's 1 MiB and 100,000-node limits; parse depth 16 is safe because bundle members may not
+  nest (`CatalogBundle.swift:87` requires `leaf.bundle == nil`); the number grammar
+  `^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$` accepts every form `JSONEncoder` emits,
+  including negatives and exponents, so the gate cannot refuse legitimate output. Past 1 MiB a
+  snapshot has no canonical form and two differing ones are refused - fail closed, no worse than the
+  raw comparison this replaced, and the same bound `CatalogSnapshotPayload.read` already enforces.
+  Cost: the normal 0119 path is now a string comparison instead of 12.3 ms of canonicalization, and
+  the ~47 ms gate-plus-canonicalize path runs only on a genuine divergence.
+  **One deliberate semantic change, flagged to root before implementing:** the fast path makes two
+  byte-equal strings match even when neither parses, because the question is whether the snapshot
+  changed, not whether it is valid; validity is enforced by `CatalogSnapshotPayload.read` and by the
+  derivation that produced it. The two prior assertions that said otherwise were flipped with that
+  reasoning recorded in the test.
+  **Checks run here (no xcodebuild, no DerivedData, root owns native validation).** The revised
+  helper was extracted verbatim and compiled against 23 assertions plus 4 size-bound assertions, all
+  passing: key order, numeric re-spelling (`199.94999999999999`, `199.950`, `1.9995e2` all equal;
+  `199.96` a change), duplicate and escaped-duplicate refusal in both directions, nil and absent,
+  differing malformed, unknown metadata, array order, and the >1 MiB degradation. Root's diff review
+  caught that the escaped-key literal had been mangled into a plain duplicate by a Python heredoc
+  interpreting `q`; it now holds the six characters backslash-u-0-0-7-1, verified with `od`, and
+  the literal was lifted back out of the test file and shown to be refused by the gate while
+  `JSONSerialization` alone accepts it. Ten tests in the suite. `swiftc -frontend -parse` and
+  `git diff --check` clean. Not compiled in the app target and no UI test run for this revision.

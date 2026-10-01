@@ -6,12 +6,32 @@ import Testing
 
 @MainActor
 struct QuickBooksPublicationAccessTests {
-    /// The Mac test host carries no keychain entitlement, so the platform
-    /// keychain answers errSecMissingEntitlement there while the signed iOS
-    /// host stores normally. Persist through the real keychain wherever it is
-    /// available - which is where the product actually depends on it - and fall
-    /// back to an equivalent encode/decode round trip otherwise, so every
-    /// assertion below still runs. Any other keychain failure still fails.
+    /// A host without a keychain entitlement answers errSecMissingEntitlement:
+    /// the Mac test host carries none, and CI builds the iOS host with
+    /// CODE_SIGNING_ALLOWED=NO, so an unsigned simulator run has none either.
+    /// A signed host - a local simulator run and the device, which is where the
+    /// product actually depends on the keychain - stores normally. Probe once
+    /// rather than guessing from the platform, then exercise the real
+    /// keychain-backed store wherever it works and the equivalent serialized
+    /// assertions otherwise. Any other keychain failure still fails.
+    private func platformKeychainIsAvailable() -> Bool {
+        let account = "gunnaire.tests.keychain-probe.\(UUID().uuidString)"
+        defer { try? KeychainStore.remove(account: account) }
+        do {
+            try KeychainStore.saveCodable(["probe": true], account: account)
+            return true
+        } catch KeychainStore.KeychainError.unexpectedStatus(let status)
+            where status == errSecMissingEntitlement {
+            return false
+        } catch {
+            // Any other failure belongs to the assertions below, not here.
+            return true
+        }
+    }
+
+    /// Persist through the real keychain where it is available and fall back to
+    /// an equivalent encode/decode round trip otherwise, so every assertion
+    /// below still runs. Any other keychain failure still fails.
     private func persistedRoundTrip<T: Codable>(_ value: T, account: String) throws -> T {
         do {
             try KeychainStore.saveCodable(value, account: account)
@@ -214,6 +234,7 @@ struct QuickBooksPublicationAccessTests {
     }
 
     @Test func firstSaveMarkersRecoverBothDocumentsAfterRestartAndRejectForeignRealm() async throws {
+        let keychainIsAvailable = platformKeychainIsAvailable()
         let schema = GunnAireModelSchema.schema
         let store = try ModelContainer(for: schema, configurations: [
             ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
@@ -238,10 +259,10 @@ struct QuickBooksPublicationAccessTests {
 
         // Save-time intent is durable before the only local save. Provider
         // proof remains absent until an exact backend connection is checked.
-        #if os(iOS) && !targetEnvironment(macCatalyst)
-        try await QuickBooksDocumentRealmProofStore.shared.markNew(estimateMarker)
-        try await QuickBooksDocumentRealmProofStore.shared.markNew(invoiceMarker)
-        #endif
+        if keychainIsAvailable {
+            try await QuickBooksDocumentRealmProofStore.shared.markNew(estimateMarker)
+            try await QuickBooksDocumentRealmProofStore.shared.markNew(invoiceMarker)
+        }
         let storedEstimateMarker = try persistedRoundTrip(estimateMarker, account: estimateMarker.account)
         let storedInvoiceMarker = try persistedRoundTrip(invoiceMarker, account: invoiceMarker.account)
         writer.insert(customer)
@@ -265,50 +286,51 @@ struct QuickBooksPublicationAccessTests {
             createdAt: estimate.createdAt, realmID: nil, environment: nil)
         #expect(!AutomaticOutboundSync.isNewMarker(storedEstimateMarker, for: foreignCustomer))
 
-        #if os(iOS) && !targetEnvironment(macCatalyst)
-        let proofStore = QuickBooksDocumentRealmProofStore.shared
-        #expect(try await proofStore.hasNewMarker(estimateMarker))
-        #expect(try await proofStore.hasNewMarker(invoiceMarker))
-        #expect(!(try await proofStore.hasBoundProof(estimateMarker)))
-        let noIntent = AutomaticOutboundSync.RealmRecord(companyID: companyID,
-            documentType: "estimate", documentID: UUID(), customerID: customer.id,
-            createdAt: estimate.createdAt, realmID: "realm-a", environment: "production")
-        #expect(!(try await proofStore.hasNewMarker(noIntent)))
-        await #expect(throws: AutomaticOutboundSync.RealmError.self) {
-            try await proofStore.bindNewMarker(noIntent)
+        if keychainIsAvailable {
+            let proofStore = QuickBooksDocumentRealmProofStore.shared
+            #expect(try await proofStore.hasNewMarker(estimateMarker))
+            #expect(try await proofStore.hasNewMarker(invoiceMarker))
+            #expect(!(try await proofStore.hasBoundProof(estimateMarker)))
+            let noIntent = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+                documentType: "estimate", documentID: UUID(), customerID: customer.id,
+                createdAt: estimate.createdAt, realmID: "realm-a", environment: "production")
+            #expect(!(try await proofStore.hasNewMarker(noIntent)))
+            await #expect(throws: AutomaticOutboundSync.RealmError.self) {
+                try await proofStore.bindNewMarker(noIntent)
+            }
+            let bound = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+                documentType: "estimate", documentID: estimate.id, customerID: customer.id,
+                createdAt: estimate.createdAt, realmID: "realm-a", environment: "production")
+            try await proofStore.bindNewMarker(bound)
+            #expect(try await proofStore.hasBoundProof(estimateMarker))
+            #expect(!(try await proofStore.hasNewMarker(estimateMarker)))
+            let otherRealm = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+                documentType: "estimate", documentID: estimate.id, customerID: customer.id,
+                createdAt: estimate.createdAt, realmID: "realm-b", environment: "production")
+            await #expect(throws: AutomaticOutboundSync.RealmError.self) {
+                try await proofStore.bindNewMarker(otherRealm)
+            }
+        } else {
+            let bound = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+                documentType: "estimate", documentID: savedEstimate.id, customerID: customer.id,
+                createdAt: savedEstimate.createdAt, realmID: "realm-a", environment: "production")
+            let foreign = AutomaticOutboundSync.RealmRecord(companyID: companyID,
+                documentType: "estimate", documentID: savedEstimate.id, customerID: customer.id,
+                createdAt: savedEstimate.createdAt, realmID: "realm-b", environment: "production")
+            #expect(AutomaticOutboundSync.realmDecision(stored: storedEstimateMarker,
+                expected: bound, explicitReview: false) == .reviewRequired)
+            #expect(AutomaticOutboundSync.realmDecision(stored: storedEstimateMarker,
+                expected: foreign, explicitReview: true) == .wrongRealm)
+            let serializedBound = try JSONDecoder().decode(AutomaticOutboundSync.RealmRecord.self,
+                from: JSONEncoder().encode(bound.boundWithIntent(from: storedEstimateMarker)))
+            #expect(serializedBound.intendedScope == storedEstimateMarker.intendedScope)
+            #expect(AutomaticOutboundSync.realmDecision(stored: serializedBound,
+                expected: bound, explicitReview: false) == .proceed)
         }
-        let bound = AutomaticOutboundSync.RealmRecord(companyID: companyID,
-            documentType: "estimate", documentID: estimate.id, customerID: customer.id,
-            createdAt: estimate.createdAt, realmID: "realm-a", environment: "production")
-        try await proofStore.bindNewMarker(bound)
-        #expect(try await proofStore.hasBoundProof(estimateMarker))
-        #expect(!(try await proofStore.hasNewMarker(estimateMarker)))
-        let otherRealm = AutomaticOutboundSync.RealmRecord(companyID: companyID,
-            documentType: "estimate", documentID: estimate.id, customerID: customer.id,
-            createdAt: estimate.createdAt, realmID: "realm-b", environment: "production")
-        await #expect(throws: AutomaticOutboundSync.RealmError.self) {
-            try await proofStore.bindNewMarker(otherRealm)
-        }
-        #else
-        let bound = AutomaticOutboundSync.RealmRecord(companyID: companyID,
-            documentType: "estimate", documentID: savedEstimate.id, customerID: customer.id,
-            createdAt: savedEstimate.createdAt, realmID: "realm-a", environment: "production")
-        let foreign = AutomaticOutboundSync.RealmRecord(companyID: companyID,
-            documentType: "estimate", documentID: savedEstimate.id, customerID: customer.id,
-            createdAt: savedEstimate.createdAt, realmID: "realm-b", environment: "production")
-        #expect(AutomaticOutboundSync.realmDecision(stored: storedEstimateMarker,
-            expected: bound, explicitReview: false) == .reviewRequired)
-        #expect(AutomaticOutboundSync.realmDecision(stored: storedEstimateMarker,
-            expected: foreign, explicitReview: true) == .wrongRealm)
-        let serializedBound = try JSONDecoder().decode(AutomaticOutboundSync.RealmRecord.self,
-            from: JSONEncoder().encode(bound.boundWithIntent(from: storedEstimateMarker)))
-        #expect(serializedBound.intendedScope == storedEstimateMarker.intendedScope)
-        #expect(AutomaticOutboundSync.realmDecision(stored: serializedBound,
-            expected: bound, explicitReview: false) == .proceed)
-        #endif
     }
 
     @Test func abortedDeterministicInvoiceSaveCanReplaceOnlySameRealmOrphan() async throws {
+        let keychainIsAvailable = platformKeychainIsAvailable()
         let companyID = UUID()
         let invoiceID = UUID()
         let customerID = UUID()
@@ -329,28 +351,28 @@ struct QuickBooksPublicationAccessTests {
             intendedRealmID: "realm-b", intendedEnvironment: "production")
         defer { try? KeychainStore.remove(account: old.account) }
 
-        #if os(iOS) && !targetEnvironment(macCatalyst)
-        let proofStore = QuickBooksDocumentRealmProofStore.shared
-        try await proofStore.markNew(old)
-        await #expect(throws: AutomaticOutboundSync.RealmError.self) {
-            try await proofStore.markNew(retry)
+        if keychainIsAvailable {
+            let proofStore = QuickBooksDocumentRealmProofStore.shared
+            try await proofStore.markNew(old)
+            await #expect(throws: AutomaticOutboundSync.RealmError.self) {
+                try await proofStore.markNew(retry)
+            }
+            try await proofStore.markNew(retry, replacingOrphan: true)
+            #expect(try await proofStore.savedRecord(retry) == retry)
+            #expect(try await proofStore.savedRecord(old) == nil)
+            await #expect(throws: AutomaticOutboundSync.RealmError.self) {
+                try await proofStore.markNew(foreignRetry, replacingOrphan: true)
+            }
+            #expect(try await proofStore.savedRecord(retry) == retry)
+        } else {
+            let serialized = try persistedRoundTrip(old, account: old.account)
+            #expect(serialized.sameDocumentKeyAndCustomer(as: retry))
+            #expect(!serialized.sameDocument(as: retry))
+            #expect(serialized.originalScope == retry.originalScope)
+            #expect(serialized.originalScope != foreignRetry.originalScope)
+            #expect(AutomaticOutboundSync.realmDecision(stored: serialized,
+                expected: retry, explicitReview: false) == .reviewRequired)
         }
-        try await proofStore.markNew(retry, replacingOrphan: true)
-        #expect(try await proofStore.savedRecord(retry) == retry)
-        #expect(try await proofStore.savedRecord(old) == nil)
-        await #expect(throws: AutomaticOutboundSync.RealmError.self) {
-            try await proofStore.markNew(foreignRetry, replacingOrphan: true)
-        }
-        #expect(try await proofStore.savedRecord(retry) == retry)
-        #else
-        let serialized = try persistedRoundTrip(old, account: old.account)
-        #expect(serialized.sameDocumentKeyAndCustomer(as: retry))
-        #expect(!serialized.sameDocument(as: retry))
-        #expect(serialized.originalScope == retry.originalScope)
-        #expect(serialized.originalScope != foreignRetry.originalScope)
-        #expect(AutomaticOutboundSync.realmDecision(stored: serialized,
-            expected: retry, explicitReview: false) == .reviewRequired)
-        #endif
     }
 
     @Test func orphanReplacementDistinguishesInsertedDraftFromCommittedInvoice() throws {
