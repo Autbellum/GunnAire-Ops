@@ -45,16 +45,60 @@ struct CatalogSnapshotCanonicalJSONTests {
             withMetadata, #"{"taxAddresses":{"zip":"30601"},"lines":[],"version":1}"#))
     }
 
-    /// Absence of proof is a refusal, not a match.
-    @Test func missingOrMalformedSnapshotsNeverMatch() {
+    /// Absence of proof is a refusal, not a match. Note the deliberate
+    /// exception: identical text is unchanged by definition, so two byte-equal
+    /// strings match even when neither is valid JSON. The question here is
+    /// whether a snapshot changed, not whether it parses - validity is enforced
+    /// by `CatalogSnapshotPayload.read` and by the derivation that produced it.
+    @Test func missingSnapshotsNeverMatchAndIdenticalTextAlwaysDoes() {
         let valid = #"{"version":1,"lines":[]}"#
         #expect(!CatalogSnapshotCanonicalJSON.describesSameSnapshot(nil, valid))
         #expect(!CatalogSnapshotCanonicalJSON.describesSameSnapshot(valid, nil))
         #expect(!CatalogSnapshotCanonicalJSON.describesSameSnapshot(nil, nil))
-        #expect(!CatalogSnapshotCanonicalJSON.describesSameSnapshot("{not json", "{not json"))
-        #expect(!CatalogSnapshotCanonicalJSON.describesSameSnapshot("", ""))
+        // Two different malformed strings cannot be proven unchanged.
+        #expect(!CatalogSnapshotCanonicalJSON.describesSameSnapshot("{not json", "{also not json"))
+        #expect(!CatalogSnapshotCanonicalJSON.describesSameSnapshot("", valid))
+        // Byte-equal, so unchanged, parser or no parser.
+        #expect(CatalogSnapshotCanonicalJSON.describesSameSnapshot("{not json", "{not json"))
+        #expect(CatalogSnapshotCanonicalJSON.describesSameSnapshot("", ""))
         #expect(CatalogSnapshotCanonicalJSON.canonical("{not json") == nil)
         #expect(CatalogSnapshotCanonicalJSON.canonical(nil) == nil)
+    }
+
+    /// The tax-address attachment re-serializes the whole document, which
+    /// rewrites 199.95 as 199.94999999999999. That is the same price, so it must
+    /// not read as a change - this is what keeps a taxed document saveable.
+    @Test func numericRespellingIsNotAChangeButADifferentPriceIs() {
+        let authored = #"{"version":1,"lines":[{"name":"Labor","unitPrice":199.95}]}"#
+        let respelled = #"{"version":1,"lines":[{"name":"Labor","unitPrice":199.94999999999999}]}"#
+        #expect(authored != respelled)
+        #expect(CatalogSnapshotCanonicalJSON.describesSameSnapshot(authored, respelled))
+        for spelling in [#"{"version":1,"lines":[{"name":"Labor","unitPrice":199.950}]}"#,
+                         #"{"version":1,"lines":[{"name":"Labor","unitPrice":1.9995e2}]}"#] {
+            #expect(CatalogSnapshotCanonicalJSON.describesSameSnapshot(authored, spelling))
+        }
+        // A cent is a change.
+        #expect(!CatalogSnapshotCanonicalJSON.describesSameSnapshot(
+            authored, #"{"version":1,"lines":[{"name":"Labor","unitPrice":199.96}]}"#))
+    }
+
+    /// Re-serializing alone keeps one value of a duplicate key and discards the
+    /// other, so the strict parser has to reject the document first. The escaped
+    /// form decodes to a key already present and must be refused the same way.
+    @Test func duplicateObjectKeysAreRefusedRatherThanCollapsed() {
+        let kept = #"{"version":1,"quantity":2,"quantity":9}"#
+        let differsOnlyInTheDiscardedValue = #"{"version":1,"quantity":2,"quantity":8}"#
+        #expect(kept != differsOnlyInTheDiscardedValue)
+        #expect(!CatalogSnapshotCanonicalJSON.describesSameSnapshot(
+            kept, differsOnlyInTheDiscardedValue))
+        #expect(CatalogSnapshotCanonicalJSON.canonical(kept) == nil)
+
+        let escaped = #"{"version":1,"quantity":1,"\u0071uantity":2}"#
+        #expect(CatalogSnapshotCanonicalJSON.canonical(escaped) == nil)
+        #expect(!CatalogSnapshotCanonicalJSON.describesSameSnapshot(
+            escaped, #"{"version":1,"quantity":1}"#))
+        #expect(!CatalogSnapshotCanonicalJSON.describesSameSnapshot(
+            #"{"version":1,"quantity":1}"#, escaped))
     }
 
     /// A bare line array is the no-discount branch; it must canonicalize too.
@@ -89,6 +133,23 @@ struct CatalogSnapshotCanonicalJSONTests {
         #expect(!CatalogSnapshotCanonicalJSON.describesSameSnapshot(
             declarationOrder, #"{"version":1,"lines":[{"name":"Labor","quantity":2}],"taxAddresses":{}}"#))
         #expect(!CatalogSnapshotCanonicalJSON.describesSameSnapshot("{not json", "{not json"))
+    }
+
+    /// The bounded parser refuses input past 1 MiB, the same bound
+    /// `CatalogSnapshotPayload.read` enforces for published records. A snapshot
+    /// that large therefore has no canonical form, so two differing ones are
+    /// refused rather than compared - fail closed, and no worse than the raw
+    /// comparison this replaced. A 750-row document measures about 320 KB, so
+    /// this is a documented ceiling rather than a reachable one.
+    @Test func snapshotsPastTheParserBoundAreRefusedRatherThanCompared() {
+        let filler = String(repeating: "x", count: 1_100_000)
+        let oversize = #"{"version":1,"lines":[{"name":""# + filler + #"","unitPrice":1}]}"#
+        #expect(oversize.utf8.count > 1_048_576)
+        #expect(CatalogSnapshotCanonicalJSON.canonical(oversize) == nil)
+        let oversizeChanged = #"{"version":1,"lines":[{"name":""# + filler + #"","unitPrice":2}]}"#
+        #expect(!CatalogSnapshotCanonicalJSON.describesSameSnapshot(oversize, oversizeChanged))
+        // Identical text is still unchanged without consulting the parser.
+        #expect(CatalogSnapshotCanonicalJSON.describesSameSnapshot(oversize, oversize))
     }
 
     /// The real producer, as the app calls it: whatever key order the current

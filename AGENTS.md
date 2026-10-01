@@ -1551,3 +1551,44 @@ at the start of every turn; append to it rather than rewriting it.
   sorted-key encoder masks them, and the durable fix there is the same canonical comparison. That
   belongs to the QBO agent's task, not this one. `createMaintenanceAgreementInvoice` and
   `createInvoiceFromEstimate` also still return silently with no rendered status.
+
+- 2026-10-01 Claude, third commit on `fix/progress-invoice-visible-failure-20261001`: narrow revision
+  of `CatalogSnapshotCanonicalJSON` after root's review. Shape chosen by root: non-nil exact raw
+  equality fast path; on mismatch, `FieldFormJSON.parse(maximumNodes: 100_000)` on both strings
+  solely as a gate against duplicate, malformed and oversize input; then the existing
+  `JSONSerialization` `.sortedKeys` canonicalization does the comparison.
+  **Why both steps.** Measured on this Mac with the real types extracted verbatim: canonicalization
+  alone keeps one value of a duplicate object key and discards the other, so `{"q":2,"q":9}` and
+  `{"q":2,"q":8}` compared **equal**, and an escaped equivalent (`"quantity"`) collapsed onto an
+  existing key the same way. An AST comparison with numeric tokens held exact fixes that but
+  introduces a false refusal: `BillingTaxAddressContext.attaching` re-serializes the whole document
+  and rewrites `199.95` as `199.94999999999999`, so a merely round-tripped snapshot read as changed -
+  the same false-refusal class as the original defect. The gate plus canonicalization has neither
+  failure mode, and needs no new numeric-equality algorithm. Claude's earlier claim that an AST
+  comparison was "strictly stronger" was wrong in that direction and is withdrawn; an earlier
+  duplicate-key measurement was also wrong because it varied the retained value rather than the
+  discarded one.
+  **Bounds, measured or read in source.** 750 rows is 328,148 bytes and 12,006 nodes against the
+  parser's 1 MiB and 100,000-node limits; parse depth 16 is safe because bundle members may not
+  nest (`CatalogBundle.swift:87` requires `leaf.bundle == nil`); the number grammar
+  `^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$` accepts every form `JSONEncoder` emits,
+  including negatives and exponents, so the gate cannot refuse legitimate output. Past 1 MiB a
+  snapshot has no canonical form and two differing ones are refused - fail closed, no worse than the
+  raw comparison this replaced, and the same bound `CatalogSnapshotPayload.read` already enforces.
+  Cost: the normal 0119 path is now a string comparison instead of 12.3 ms of canonicalization, and
+  the ~47 ms gate-plus-canonicalize path runs only on a genuine divergence.
+  **One deliberate semantic change, flagged to root before implementing:** the fast path makes two
+  byte-equal strings match even when neither parses, because the question is whether the snapshot
+  changed, not whether it is valid; validity is enforced by `CatalogSnapshotPayload.read` and by the
+  derivation that produced it. The two prior assertions that said otherwise were flipped with that
+  reasoning recorded in the test.
+  **Checks run here (no xcodebuild, no DerivedData, root owns native validation).** The revised
+  helper was extracted verbatim and compiled against 23 assertions plus 4 size-bound assertions, all
+  passing: key order, numeric re-spelling (`199.94999999999999`, `199.950`, `1.9995e2` all equal;
+  `199.96` a change), duplicate and escaped-duplicate refusal in both directions, nil and absent,
+  differing malformed, unknown metadata, array order, and the >1 MiB degradation. Root's diff review
+  caught that the escaped-key literal had been mangled into a plain duplicate by a Python heredoc
+  interpreting `q`; it now holds the six characters backslash-u-0-0-7-1, verified with `od`, and
+  the literal was lifted back out of the test file and shown to be refused by the gate while
+  `JSONSerialization` alone accepts it. Ten tests in the suite. `swiftc -frontend -parse` and
+  `git diff --check` clean. Not compiled in the app target and no UI test run for this revision.
