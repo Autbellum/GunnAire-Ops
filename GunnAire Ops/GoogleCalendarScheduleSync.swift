@@ -8,6 +8,17 @@ enum GoogleCalendarScheduleSync {
         let restrictedReviewCount: Int
     }
 
+    struct SyncOutcome {
+        let message: String
+        /// Exact original IDs proved absent from every accessible calendar in
+        /// this connected account during this Sync Google operation.
+        let verifiedNotFoundIDs: [UUID: String]
+    }
+
+    private final class VerifiedLinkEvidence {
+        var notFoundIDs: [UUID: String] = [:]
+    }
+
     /// An in-memory, single-job review retains the original provider and
     /// workspace operation across the operator's confirmation. It is never
     /// persisted or reused after a different account or job revision appears.
@@ -131,10 +142,19 @@ enum GoogleCalendarScheduleSync {
 
     static func sync(
         auth: GoogleAuthManager, modelContext: ModelContext, signedInEmail: String?, isAdminUser: Bool,
-        completion: @escaping (Result<String, Error>) -> Void
+        verifyConfirmedCalls: [ServiceCall] = [],
+        completion: @escaping (Result<SyncOutcome, Error>) -> Void
     ) {
-        startWorkflow(auth: auth, context: modelContext, email: signedInEmail, completion: completion) {
-            try await synchronize(workflow: $0)
+        let evidence = VerifiedLinkEvidence()
+        startWorkflow(auth: auth, context: modelContext, email: signedInEmail,
+                      completion: { result in
+                          completion(result.map { SyncOutcome(message: $0,
+                              verifiedNotFoundIDs: evidence.notFoundIDs) })
+                      }) {
+            try await synchronize(workflow: $0, verifyConfirmedCalls: verifyConfirmedCalls,
+                                  verifiedNotFound: { callID, eventID in
+                                      evidence.notFoundIDs[callID] = eventID
+                                  })
         }
     }
 
@@ -369,7 +389,9 @@ enum GoogleCalendarScheduleSync {
             (call.googleEventConfirmedAt == nil && call.scheduledDate >= Calendar.current.startOfDay(for: now))
     }
 
-    static func synchronize(workflow: GoogleCalendarWorkflow) async throws -> String {
+    static func synchronize(workflow: GoogleCalendarWorkflow,
+                            verifyConfirmedCalls: [ServiceCall] = [],
+                            verifiedNotFound: ((UUID, String) -> Void)? = nil) async throws -> String {
         try workflow.check()
         guard !workflow.context.hasChanges else { throw GoogleCalendarWorkflowError.changed }
         var published = 0
@@ -412,8 +434,79 @@ enum GoogleCalendarScheduleSync {
             await Task.yield()
         }
         let imported = try await importSchedule(workflow: workflow)
+        // Explicit Sync Google checks the visible confirmed links by their
+        // original IDs. A saved confirmation is historical proof, not proof
+        // that someone has not since removed the event in Google.
+        let confirmed = verifyConfirmedCalls.filter {
+            $0.googleEventManagedByApp && $0.googleEventConfirmedAt != nil &&
+            $0.googleCalendarPendingAt == nil && $0.googleEventID != nil &&
+            ($0.status == .scheduled || $0.status == .inProgress)
+        }
+        var checked = 0
+        let confirmationCalendars = confirmed.isEmpty ? [] : try await calendars(workflow: workflow)
+        for call in confirmed.prefix(25) {
+            do {
+                let exists = try await verifyConfirmedLink(call: call, calendars: confirmationCalendars,
+                                                           workflow: workflow)
+                checked += 1
+                if !exists {
+                    guard let originalID = normalizedOptional(call.googleEventID) else {
+                        throw GoogleCalendarWorkflowError.identity
+                    }
+                    markCalendarCallLocallyEdited(call)
+                    try workflow.saveChanges()
+                    verifiedNotFound?(call.id, originalID)
+                    reviewErrors.append("A saved Google link was not found in this connected account's accessible calendars. Use Check Google Link before any repair.")
+                }
+            } catch {
+                try workflow.check()
+                if error is CancellationError { throw error }
+                if let issue = error as? GoogleCalendarWorkflowError,
+                   issue == .accessDenied || issue == .changed || issue == .busy ||
+                   issue == .saveFailed || issue == .unconfirmedWrite {
+                    throw error
+                }
+                if case GoogleAuthError.http(statusCode: let status) = error,
+                   status == 401 || status == 403 { throw error }
+                reviewErrors.append("A confirmed Google link could not be verified (\(error.localizedDescription)). Use Check Google Link on its appointment.")
+            }
+        }
         let review = reviewErrors.first.map { " \(reviewErrors.count) update(s) still need review. \($0)" } ?? ""
-        return "Published \(published) pending calendar update(s).\(review) \(imported)"
+        let linkCheck = verifyConfirmedCalls.isEmpty ? "" :
+            " Checked \(checked) confirmed selected-day/upcoming Google link(s) (up to 25 per sync)." +
+            (confirmed.count > 25 ? " \(confirmed.count - 25) more link(s) were not checked; use Check Google Link on those appointments." : "")
+        return "Published \(published) pending calendar update(s).\(review)\(linkCheck) \(imported)"
+    }
+
+    /// Read the saved route first. Only its 404 triggers a bounded same-ID
+    /// search across accessible calendars. Neither result authorizes creation;
+    /// Check Google Link retains the operator's guarded repair decision.
+    private static func verifyConfirmedLink(call: ServiceCall, calendars: [GoogleCalendar],
+                                            workflow: GoogleCalendarWorkflow) async throws -> Bool {
+        try requireCall(call, workflow: workflow)
+        guard let id = normalizedOptional(call.googleEventID),
+              GoogleAuthManager.calendarPathComponent(id) != nil else {
+            throw GoogleCalendarWorkflowError.identity
+        }
+        let calendar = try canonicalCalendar(call.googleCalendarID, in: calendars, email: workflow.signedInEmail)
+        let remote: GoogleCalendarEvent
+        do {
+            remote = try await workflow.receive {
+                workflow.auth.fetchCalendarEvent(calendarID: calendar.id, eventID: id,
+                    operation: workflow.operation, completion: $0)
+            }
+        } catch GoogleAuthError.http(statusCode: 404) {
+            try requireCall(call, workflow: workflow)
+            try await requireNoMovedEvent(id: id, originalCalendarID: calendar.id,
+                                          calendars: calendars, workflow: workflow)
+            return false
+        }
+        try requireCall(call, workflow: workflow)
+        try validateRemote(remote, id: id, call: call)
+        guard remoteEventMatchesExactSchedule(call: call, remoteEvent: remote) else {
+            throw GoogleCalendarWorkflowError.needsReview
+        }
+        return true
     }
 
     static func deleteImmediately(call: ServiceCall, auth: GoogleAuthManager, modelContext: ModelContext,
@@ -532,6 +625,10 @@ enum GoogleCalendarScheduleSync {
                 throw GoogleCalendarWorkflowError.needsReview
             } catch GoogleAuthError.http(statusCode: 404) {
                 continue
+            } catch GoogleAuthError.http(statusCode: 403) {
+                // A listed calendar may grant only free/busy access. That
+                // denial cannot prove the same ID is absent there.
+                throw GoogleCalendarWorkflowError.needsReview
             }
         }
     }

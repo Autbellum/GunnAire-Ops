@@ -17,6 +17,8 @@ struct GoogleCalendarWorkflowTests {
         var authorized = true
         var failPatch = false
         var rejectedCreateStatus: Int?
+        var deniedEventCalendarID: String?
+        var excludedWindowCalendarIDs: Set<String> = []
         var beforeReply: ((URLRequest) async throws -> Void)?
         var afterWrite: ((URLRequest) throws -> Void)?
         lazy var auth = GoogleAuthManager(testTokens: .init(accessToken: "fixture-only",
@@ -104,9 +106,11 @@ struct GoogleCalendarWorkflowTests {
             if path.hasSuffix("/calendarList") {
                 payload = ["items": calendarList]
             } else if request.httpMethod == "GET" && path.hasSuffix("/events") {
-                payload = ["items": remote.filter { $0.key.hasPrefix(calendar + "|") }.map(\.value)]
+                payload = ["items": excludedWindowCalendarIDs.contains(calendar) ? [] :
+                    remote.filter { $0.key.hasPrefix(calendar + "|") }.map(\.value)]
             } else if request.httpMethod == "GET" {
-                if let existing = remote[key(calendar, id)] { payload = existing }
+                if calendar == deniedEventCalendarID { status = 403 }
+                else if let existing = remote[key(calendar, id)] { payload = existing }
                 else { status = 404 }
             } else if request.httpMethod == "POST" {
                 payload = try #require(JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
@@ -765,6 +769,124 @@ struct GoogleCalendarWorkflowTests {
         #expect(f.writes.isEmpty)
         failed(try await f.publish())
         #expect(f.writes.isEmpty, "Ordinary sync must never recreate a previously linked 404.")
+    }
+
+    @Test func explicitSyncRechecksConfirmedVisibleLinkAndPersistsMissingReview() async throws {
+        let f = try Fixture(linked: true)
+        f.remote.removeValue(forKey: f.key(f.email, "fixture-event"))
+        #expect(!GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+        var verifiedNotFound: [UUID: String] = [:]
+
+        let message = try await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.synchronize(workflow: $0, verifyConfirmedCalls: [f.call],
+                verifiedNotFound: { verifiedNotFound[$0] = $1 })
+        }.get()
+        #expect(message.contains("not found in this connected account's accessible calendars"))
+        #expect(message.contains("Checked 1 confirmed selected-day/upcoming Google link"))
+        #expect(f.call.googleEventID == "fixture-event")
+        #expect(f.call.googleEventConfirmedAt == nil)
+        #expect(f.call.googleCalendarPendingAt != nil)
+        #expect(f.writes.isEmpty, "A missing confirmed event must not be recreated during sync.")
+        let missingIDs = ScheduleGoogleLinkStatus.reconciledMissingIDs(existing: [:],
+            verifiedNotFoundIDs: verifiedNotFound, visibleCalls: [f.call])
+        #expect(missingIDs[f.call.id] == "fixture-event",
+                "Schedule must show the missing-event status after Sync Google detects the 404.")
+
+        f.loseDeviceLocalCalendarMarkers()
+        let restarted = ModelContext(f.context.container)
+        let retained = try #require(restarted.fetch(FetchDescriptor<ServiceCall>()).first { $0.id == f.call.id })
+        #expect(GoogleCalendarScheduleSync.needsOutboundSync(retained))
+    }
+
+    @Test func explicitSyncKeepsPresentConfirmedLinkWithoutProviderWrite() async throws {
+        let f = try Fixture(linked: true)
+        let originalConfirmation = f.call.googleEventConfirmedAt
+        var verifiedNotFound: [UUID: String] = [:]
+        let deduplicated = ScheduleGoogleLinkStatus.verificationCalls(
+            selectedDay: [f.call], upcoming: [f.call])
+        #expect(deduplicated.count == 1)
+        let message = try await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.synchronize(workflow: $0, verifyConfirmedCalls: deduplicated,
+                verifiedNotFound: { verifiedNotFound[$0] = $1 })
+        }.get()
+        #expect(message.contains("Checked 1 confirmed selected-day/upcoming Google link"))
+        #expect(f.call.googleEventID == "fixture-event")
+        #expect(f.call.googleEventConfirmedAt == originalConfirmation)
+        #expect(f.call.googleCalendarPendingAt == nil)
+        #expect(f.writes.isEmpty)
+        #expect(f.requests.filter { $0.url?.path.hasSuffix("/events/fixture-event") == true }.count == 1)
+        let missingIDs = ScheduleGoogleLinkStatus.reconciledMissingIDs(existing: [f.call.id: "fixture-event"],
+            verifiedNotFoundIDs: verifiedNotFound, visibleCalls: [f.call])
+        #expect(missingIDs[f.call.id] == nil)
+    }
+
+    @Test func movedConfirmedEventNeedsReviewWithoutBeingMarkedMissing() async throws {
+        let f = try Fixture(linked: true)
+        let originalConfirmation = f.call.googleEventConfirmedAt
+        f.remote.removeValue(forKey: f.key(f.email, "fixture-event"))
+        let otherCalendar = "other-calendar@example.invalid"
+        f.calendarList.append(["id": otherCalendar, "primary": false, "accessRole": "writer"])
+        f.remote[f.key(otherCalendar, "fixture-event")] = f.event(id: "fixture-event")
+        // The fixture's list endpoint otherwise ignores its 90-day timeMin/timeMax.
+        // This saved appointment is outside that import window, but exact-ID GET
+        // must still discover its moved event.
+        f.excludedWindowCalendarIDs.insert(otherCalendar)
+        var verifiedNotFound: [UUID: String] = [:]
+
+        let message = try await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.synchronize(workflow: $0, verifyConfirmedCalls: [f.call],
+                verifiedNotFound: { verifiedNotFound[$0] = $1 })
+        }.get()
+        #expect(message.contains("needs review"))
+        #expect(verifiedNotFound.isEmpty)
+        #expect(f.call.googleEventConfirmedAt == originalConfirmation)
+        #expect(f.call.googleCalendarPendingAt == nil)
+        #expect(f.writes.isEmpty)
+    }
+
+    @Test func unreadableCandidateCalendarCannotProveConfirmedEventAbsent() async throws {
+        let f = try Fixture(linked: true)
+        f.remote.removeValue(forKey: f.key(f.email, "fixture-event"))
+        let unreadable = "free-busy@example.invalid"
+        f.calendarList.append(["id": unreadable, "primary": false, "accessRole": "freeBusyReader"])
+        f.deniedEventCalendarID = unreadable
+        var verifiedNotFound: [UUID: String] = [:]
+
+        let message = try await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.synchronize(workflow: $0, verifyConfirmedCalls: [f.call],
+                verifiedNotFound: { verifiedNotFound[$0] = $1 })
+        }.get()
+        #expect(message.contains("could not be verified"))
+        #expect(verifiedNotFound.isEmpty)
+        #expect(f.call.googleEventConfirmedAt != nil)
+        #expect(f.call.googleCalendarPendingAt == nil)
+        #expect(f.writes.isEmpty)
+    }
+
+    @Test func inaccessibleConfirmedRouteDoesNotAbortSyncOrCreateFalseMissingBadge() async throws {
+        let f = try Fixture(linked: true)
+        f.call.googleCalendarID = "not-shared@example.invalid"
+        f.excludedWindowCalendarIDs.insert(f.email)
+        try f.context.save()
+        var verifiedNotFound: [UUID: String] = [:]
+
+        let message = try await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.synchronize(workflow: $0, verifyConfirmedCalls: [f.call],
+                verifiedNotFound: { verifiedNotFound[$0] = $1 })
+        }.get()
+        #expect(message.contains("could not be verified"))
+        #expect(verifiedNotFound.isEmpty)
+        #expect(f.call.googleEventConfirmedAt != nil)
+        #expect(f.call.googleCalendarPendingAt == nil)
+        let missingIDs = ScheduleGoogleLinkStatus.reconciledMissingIDs(existing: [:],
+            verifiedNotFoundIDs: verifiedNotFound, visibleCalls: [f.call])
+        #expect(missingIDs.isEmpty)
+
+        f.call.googleEventConfirmedAt = nil
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(f.call)
+        let editedWithout404 = ScheduleGoogleLinkStatus.reconciledMissingIDs(existing: [:],
+            verifiedNotFoundIDs: [:], visibleCalls: [f.call])
+        #expect(editedWithout404.isEmpty, "A local edit cannot be misreported as a remote 404.")
     }
 
     @Test func explicitMissingLinkRepairRechecksAndReusesTheSavedID() async throws {

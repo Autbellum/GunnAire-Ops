@@ -15,6 +15,28 @@ private struct ScheduleDocumentationPresentation: Identifiable {
     var id: UUID { call.id }
 }
 
+enum ScheduleGoogleLinkStatus {
+    static func verificationCalls(selectedDay: [ServiceCall], upcoming: [ServiceCall]) -> [ServiceCall] {
+        var seen: Set<UUID> = []
+        return (selectedDay + upcoming).filter { seen.insert($0.id).inserted }
+    }
+
+    static func reconciledMissingIDs(existing: [UUID: String], verifiedNotFoundIDs: [UUID: String],
+                                     visibleCalls: [ServiceCall]) -> [UUID: String] {
+        var result = existing
+        for call in visibleCalls {
+            if call.googleEventConfirmedAt != nil {
+                result.removeValue(forKey: call.id)
+            }
+        }
+        for (callID, eventID) in verifiedNotFoundIDs {
+            guard visibleCalls.contains(where: { $0.id == callID && $0.googleEventID == eventID }) else { continue }
+            result[callID] = eventID
+        }
+        return result
+    }
+}
+
 struct ScheduleView: View {
     @Environment(\.openURL) private var openURL
     @Environment(\.modelContext) private var modelContext
@@ -1736,7 +1758,7 @@ struct ScheduleView: View {
                           systemImage: "calendar.badge.exclamationmark")
                 } else if call.googleEventID != nil {
                     Label(canManageDispatch
-                          ? (call.googleEventConfirmedAt == nil ? "Google link unconfirmed — check link" : "Google schedule confirmed")
+                          ? (call.googleEventConfirmedAt == nil ? "Google link unconfirmed — check link" : "Google schedule last confirmed")
                           : "Google event linked",
                           systemImage: canManageDispatch && call.googleEventConfirmedAt == nil
                               ? "calendar.badge.exclamationmark" : "calendar")
@@ -2005,18 +2027,23 @@ struct ScheduleView: View {
         isSyncingGoogleCalendar = true
         syncMessage = "Syncing Google Calendar..."
         let signedInEmail = AppIdentity.currentEmail
+        let visibleCalls = ScheduleGoogleLinkStatus.verificationCalls(
+            selectedDay: selectedDayCalls, upcoming: upcomingJobs)
         GoogleCalendarScheduleSync.sync(
             auth: googleAuth,
             modelContext: modelContext,
-            signedInEmail: signedInEmail
-            ,
-            isAdminUser: isAdminUser
+            signedInEmail: signedInEmail,
+            isAdminUser: isAdminUser,
+            verifyConfirmedCalls: visibleCalls
         ) { result in
             DispatchQueue.main.async {
                 isSyncingGoogleCalendar = false
                 switch result {
-                case .success(let message):
-                    syncMessage = message
+                case .success(let outcome):
+                    missingGoogleEventIDs = ScheduleGoogleLinkStatus.reconciledMissingIDs(
+                        existing: missingGoogleEventIDs, verifiedNotFoundIDs: outcome.verifiedNotFoundIDs,
+                        visibleCalls: visibleCalls)
+                    syncMessage = outcome.message
                 case .failure(let error):
                     let detail = error.localizedDescription
                     if detail.localizedCaseInsensitiveContains("insufficient") ||
