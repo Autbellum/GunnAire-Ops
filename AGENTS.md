@@ -1464,3 +1464,39 @@ at the start of every turn; append to it rather than rewriting it.
   open detail. `:419-428` compound this by setting `lastAutomaticRefreshAt = nil`, which makes a
   refresh immediately due regardless of the 120-second interval. Whoever owns Mail should decide
   whether a fixture mailbox should refresh at all; this agent made no product edit on a hypothesis.
+
+- 2026-10-01 Claude, PR #27 Mail fixture auto-refresh regression (assigned after reporting it;
+  claimed `GunnAire Ops/GmailView.swift` and new `GunnAire OpsTests/GmailAutomaticRefreshPolicyTests.swift`
+  only — no edits to `BillingDocumentsView.swift`, `CompanyWorkspaceHost.swift`, or any existing
+  Gmail file another agent holds). `testMailAttachmentPreviewAndForwardRetainTheOriginalFile`
+  passed at `3aa7733` in 34.5 s and failed at `d9aa3f3` in 17.1 s: the message detail opened at
+  t=11.35 s, then `MailAttachment-0.0` never appeared across the 4-second wait. Cause, by diff
+  rather than by guess: `GmailView.swift` is the only Mail file `73ec65b` touched, its whole change
+  is four new unattended `automaticRefreshIfDue()` triggers, and one of them was reachable in
+  UI-test fixture mode where it had previously been a no-op — the `workspace.operationStamp`
+  handler calls it while leaving `clearMailbox()` behind its original `!usesMailUITestFixture`
+  guard. `automaticRefreshIfDue` ends in `loadMessages(preservingStatus: false, …)`, which in
+  fixture mode reaches `mailbox.refresh(…, preservingStatus: false)` and replaces the `messages`
+  array the open `NavigationLink` destination is built from, taking that message's attachments
+  with it. Two of the other new triggers also set `lastAutomaticRefreshAt = nil`, so such a
+  refresh is due immediately and the 120-second interval never protects it.
+  Fix: a synthetic fixture mailbox has no server behind it, so an unattended reload can only
+  destroy loaded state; `GmailAutomaticRefreshPolicy` now owns the entire wake decision
+  (`wakes(…)`), and the view's guard is one call to it rather than a second copy of the rules, so
+  a future trigger cannot acquire its own. The server-mail fixture keeps its bounded recovery
+  (`usesServerMailFixture`), entry and explicit refresh still seed a fixture mailbox, and
+  `usesMailUITestFixture` is `false` in release, so a real mailbox is unaffected — this changes
+  test-fixture behaviour only. Every pre-existing condition is carried over verbatim.
+  Verified without consuming DerivedData (≈2.7 GiB free, Codex's 0118 validation running):
+  `GmailAutomaticRefreshPolicy` was extracted verbatim from the edited source, compiled with
+  `swiftc` against a 17-assertion harness, and all passed, including an explicit demonstration
+  that the same inputs returned `true` before the fixture term existed — the regression itself.
+  `GmailAutomaticRefreshPolicyTests` pins the same decision in the suite: fixture never wakes
+  (at any elapsed time), real mailbox still wakes, server fixture still wakes, each of the seven
+  pre-existing conditions still stops a real mailbox, and the interval and a backwards clock
+  still behave. Both files pass `swiftc -frontend -parse` (iOS simulator target) and
+  `git diff --check`. NOT compiled in the app target and no UI test executed here — root's run
+  is the compile and behaviour gate. Still open and not touched by this agent: whether a real
+  mailbox should auto-refresh while the user has a message open. The same
+  `preservingStatus: false` reload replaces the array under a live detail for real users too;
+  no evidence either way was gathered, so no production behaviour was changed on that guess.
