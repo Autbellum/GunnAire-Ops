@@ -1718,10 +1718,11 @@ struct ScheduleView: View {
             } else if canManageDispatch,
                       let guidance = ScheduleGoogleLinkStatus.unlinkedReviewGuidance(
                         call, connectedGoogleEmail: googleAuth.signedInEmail) {
-                Button("Review Google publication") {
-                    googleLinkCheckAlertMessage = guidance
+                Button(checkingGoogleLinkID == call.id ? "Checking Google calendars…" : "Review Google publication") {
+                    inspectUnlinkedGoogleJob(call, guidance: guidance)
                 }
                 .buttonStyle(.bordered)
+                .disabled(checkingGoogleLinkID != nil || repairingGoogleLinkID != nil)
                 .accessibilityIdentifier("ReviewUnlinkedGoogleEvent-\(call.id.uuidString)")
             }
         }
@@ -2078,6 +2079,47 @@ struct ScheduleView: View {
                 }
             case .failure(let error):
                 reportGoogleLinkCheck("Google link check needs review: \(error.localizedDescription) No event was created.", for: call.id)
+            }
+        }
+    }
+
+    private func inspectUnlinkedGoogleJob(_ call: ServiceCall, guidance: String) {
+        guard canManageDispatch, checkingGoogleLinkID == nil, repairingGoogleLinkID == nil,
+              ScheduleGoogleLinkStatus.unlinkedReviewGuidance(
+                call, connectedGoogleEmail: googleAuth.signedInEmail) != nil else { return }
+        missingGoogleEventReview = nil
+        guard googleAuth.googleCalendarAuthorizationState == .ready else {
+            reportGoogleLinkCheck("\(guidance) \(googleAuth.googleCalendarAuthorizationState.detail)", for: call.id)
+            return
+        }
+        let workflow: GoogleCalendarWorkflow
+        do {
+            workflow = try GoogleCalendarWorkflow(auth: googleAuth, context: modelContext,
+                signedInEmail: AppIdentity.currentEmail, scope: [call])
+        } catch {
+            reportGoogleLinkCheck("Google inspection could not start: \(error.localizedDescription) No event was created or linked.", for: call.id)
+            return
+        }
+        checkingGoogleLinkID = call.id
+        Task { @MainActor in
+            let result = await GoogleCalendarScheduleSync.inspectUnlinkedCalendarJob(call: call, workflow: workflow)
+            guard checkingGoogleLinkID == call.id else { return }
+            checkingGoogleLinkID = nil
+            switch result {
+            case .success(let inspection):
+                let scope = "\(inspection.searchedCalendarIDs.count) accessible Google calendar(s) for \(inspection.accountEmail)"
+                if inspection.noMatchWithinScope {
+                    reportGoogleLinkCheck("Read-only search of \(scope), including the saved calendar \(inspection.originalCalendarID), found no matching GunnAire ID, job marker, or same-time event near this appointment. An event could still exist in another account or time slot. No event was created or linked.", for: call.id)
+                } else {
+                    let examples = inspection.candidates.prefix(3).map {
+                        let title = $0.summary?.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let displayTitle = title?.isEmpty == false ? (title ?? "Untitled event") : "Untitled event"
+                        return "\(displayTitle) — \($0.calendarID) [\($0.reason.displayName)]"
+                    }.joined(separator: "; ")
+                    reportGoogleLinkCheck("Read-only search of \(scope) found \(inspection.candidates.count) possible event(s): \(examples). Review them in Google Calendar before any linking or creation. No event was created or linked.", for: call.id)
+                }
+            case .failure(let error):
+                reportGoogleLinkCheck("Google inspection is incomplete: \(error.localizedDescription) No absence was confirmed, and no event was created or linked.", for: call.id)
             }
         }
     }

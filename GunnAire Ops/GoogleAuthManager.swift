@@ -1094,6 +1094,26 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         )
     }
 
+    /// Inspection refuses a partial calendar list instead of silently
+    /// excluding a calendar that may hold an older or moved appointment.
+    func fetchCalendarListForInspection(operation: WorkspaceProviderOperation,
+                                        completion: @escaping (Result<[GoogleCalendar], Error>) -> Void) {
+        if let businessAccountLinkError { completion(.failure(businessAccountLinkError)); return }
+        var components = URLComponents(string: "https://www.googleapis.com/calendar/v3/users/me/calendarList")
+        components?.queryItems = [.init(name: "maxResults", value: "25")]
+        guard let url = components?.url else {
+            completion(.failure(GoogleAuthError.invalidEndpoint)); return
+        }
+        authorizedGET(url.absoluteString, existingOperation: operation) { (result: Result<GoogleCalendarListResponse, Error>) in
+            completion(result.flatMap { page in
+                guard page.items.count <= 25, page.nextPageToken == nil else {
+                    return .failure(GoogleAuthError.calendarPaginationLimit)
+                }
+                return .success(page.items)
+            })
+        }
+    }
+
     func fetchCalendarEvents(calendarID: String, timeMin: Date? = nil, timeMax: Date? = nil, operation: WorkspaceProviderOperation? = nil, completion: @escaping (Result<[GoogleCalendarEvent], Error>) -> Void) {
         if let businessAccountLinkError {
             completion(.failure(businessAccountLinkError))
@@ -1129,6 +1149,39 @@ final class GoogleAuthManager: NSObject, ObservableObject {
             existingOperation: operation,
             completion: completion
         )
+    }
+
+    /// A reconciliation check must never mistake an incomplete event page for
+    /// proof that an older appointment is absent. Read one bounded page only.
+    func fetchCalendarInspectionWindow(calendarID: String, timeMin: Date, timeMax: Date,
+                                       operation: WorkspaceProviderOperation,
+                                       completion: @escaping (Result<[GoogleCalendarEvent], Error>) -> Void) {
+        if let businessAccountLinkError { completion(.failure(businessAccountLinkError)); return }
+        guard timeMin < timeMax, timeMin.timeIntervalSince1970.isFinite,
+              timeMax.timeIntervalSince1970.isFinite,
+              let encodedCalendarID = Self.calendarPathComponent(calendarID),
+              var components = URLComponents(string: "https://www.googleapis.com/calendar/v3/calendars/\(encodedCalendarID)/events") else {
+            completion(.failure(GoogleAuthError.invalidEndpoint)); return
+        }
+        let iso = ISO8601DateFormatter()
+        components.queryItems = [
+            .init(name: "singleEvents", value: "true"),
+            .init(name: "orderBy", value: "startTime"),
+            .init(name: "maxResults", value: "100"),
+            .init(name: "timeMin", value: iso.string(from: timeMin)),
+            .init(name: "timeMax", value: iso.string(from: timeMax))
+        ]
+        guard let url = components.url else {
+            completion(.failure(GoogleAuthError.invalidEndpoint)); return
+        }
+        authorizedGET(url.absoluteString, existingOperation: operation) { (result: Result<GoogleCalendarEventsResponse, Error>) in
+            completion(result.flatMap { page in
+                guard page.items.count <= 100, page.nextPageToken == nil else {
+                    return .failure(GoogleAuthError.calendarPaginationLimit)
+                }
+                return .success(page.items)
+            })
+        }
     }
 
     private func fetchCalendarListPage(

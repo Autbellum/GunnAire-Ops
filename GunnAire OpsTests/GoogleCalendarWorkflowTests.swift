@@ -18,6 +18,8 @@ struct GoogleCalendarWorkflowTests {
         var failPatch = false
         var rejectedCreateStatus: Int?
         var deniedEventCalendarID: String?
+        var inspectionNextPageToken: String?
+        var inspectionCalendarListNextPageToken: String?
         var excludedWindowCalendarIDs: Set<String> = []
         var beforeReply: ((URLRequest) async throws -> Void)?
         var afterWrite: ((URLRequest) throws -> Void)?
@@ -106,9 +108,19 @@ struct GoogleCalendarWorkflowTests {
             var payload: [String: Any] = [:]
             if path.hasSuffix("/calendarList") {
                 payload = ["items": calendarList]
+                if request.url.flatMap({ URLComponents(url: $0, resolvingAgainstBaseURL: false) })?.queryItems?
+                    .contains(where: { $0.name == "maxResults" && $0.value == "25" }) == true,
+                   let inspectionCalendarListNextPageToken {
+                    payload["nextPageToken"] = inspectionCalendarListNextPageToken
+                }
             } else if request.httpMethod == "GET" && path.hasSuffix("/events") {
                 payload = ["items": excludedWindowCalendarIDs.contains(calendar) ? [] :
                     remote.filter { $0.key.hasPrefix(calendar + "|") }.map(\.value)]
+                if request.url.flatMap({ URLComponents(url: $0, resolvingAgainstBaseURL: false) })?.queryItems?
+                    .contains(where: { $0.name == "maxResults" && $0.value == "100" }) == true,
+                   let inspectionNextPageToken {
+                    payload["nextPageToken"] = inspectionNextPageToken
+                }
             } else if request.httpMethod == "GET" {
                 if calendar == deniedEventCalendarID { status = 403 }
                 else if let existing = remote[key(calendar, id)] { payload = existing }
@@ -393,6 +405,109 @@ struct GoogleCalendarWorkflowTests {
         f.call.googleEventID = nil
         f.call.status = .completed
         #expect(!ScheduleGoogleLinkStatus.needsUnlinkedReview(f.call))
+    }
+
+    @Test func legacyInspectionFindsGoogleChosenIDAtSavedTimeWithoutWriting() async throws {
+        let f = try Fixture()
+        f.call.googleEventManagedByApp = false
+        f.remote[f.key(f.email, "google-chosen-id")] = f.event(id: "google-chosen-id", managed: false)
+        try f.context.save()
+
+        let inspection = try await GoogleCalendarScheduleSync.inspectUnlinkedCalendarJob(
+            call: f.call, workflow: f.flow(scope: [f.call])).get()
+        #expect(!inspection.noMatchWithinScope)
+        #expect(inspection.candidates.count == 1)
+        #expect(inspection.candidates.first?.eventID == "google-chosen-id")
+        #expect(inspection.candidates.first?.reason == .sameSchedule)
+        #expect(f.writes.isEmpty)
+        #expect(f.call.googleEventID == nil)
+    }
+
+    @Test func legacyInspectionFindsJobMarkerAtDifferentTime() async throws {
+        let f = try Fixture()
+        f.call.googleEventManagedByApp = false
+        f.remote[f.key(f.email, "marker-event")] = f.event(id: "marker-event",
+            start: f.call.scheduledDate.addingTimeInterval(30 * 60))
+        try f.context.save()
+
+        let inspection = try await GoogleCalendarScheduleSync.inspectUnlinkedCalendarJob(
+            call: f.call, workflow: f.flow(scope: [f.call])).get()
+        #expect(inspection.candidates.first?.reason == .appMarker)
+        #expect(f.writes.isEmpty)
+    }
+
+    @Test func legacyInspectionFindsDeterministicIDOnAnotherCalendar() async throws {
+        let f = try Fixture()
+        f.call.googleEventManagedByApp = false
+        let other = "moved-calendar@example.invalid"
+        let deterministicID = GoogleCalendarScheduleSync.eventID(for: f.call.id)
+        f.calendarList.append(["id": other, "accessRole": "writer"])
+        f.remote[f.key(other, deterministicID)] = f.event(id: deterministicID, managed: false)
+        try f.context.save()
+
+        let inspection = try await GoogleCalendarScheduleSync.inspectUnlinkedCalendarJob(
+            call: f.call, workflow: f.flow(scope: [f.call])).get()
+        #expect(inspection.originalCalendarID == f.email)
+        #expect(inspection.candidates.first?.calendarID == other)
+        #expect(inspection.candidates.first?.reason == .deterministicID)
+        #expect(f.writes.isEmpty)
+    }
+
+    @Test func legacyInspectionRequiresCompleteCalendarReadsForNoMatchProof() async throws {
+        let f = try Fixture()
+        f.call.googleEventManagedByApp = false
+        try f.context.save()
+        let empty = try await GoogleCalendarScheduleSync.inspectUnlinkedCalendarJob(
+            call: f.call, workflow: f.flow(scope: [f.call])).get()
+        #expect(empty.noMatchWithinScope)
+        #expect(empty.searchedCalendarIDs == [f.email])
+        #expect(f.writes.isEmpty)
+
+        let denied = try Fixture()
+        denied.call.googleEventManagedByApp = false
+        denied.calendarList.append(["id": "unreadable@example.invalid", "accessRole": "freeBusyReader"])
+        denied.deniedEventCalendarID = "unreadable@example.invalid"
+        try denied.context.save()
+        let deniedResult = await GoogleCalendarScheduleSync.inspectUnlinkedCalendarJob(
+            call: denied.call, workflow: try denied.flow(scope: [denied.call]))
+        if case .success = deniedResult { Issue.record("A 403 cannot prove a Google event absent") }
+        #expect(denied.writes.isEmpty)
+
+        let paginated = try Fixture()
+        paginated.call.googleEventManagedByApp = false
+        paginated.inspectionNextPageToken = "another-page"
+        try paginated.context.save()
+        let paginatedResult = await GoogleCalendarScheduleSync.inspectUnlinkedCalendarJob(
+            call: paginated.call, workflow: try paginated.flow(scope: [paginated.call]))
+        if case .success = paginatedResult { Issue.record("A second page cannot prove a Google event absent") }
+        #expect(paginated.writes.isEmpty)
+
+        let paginatedCalendars = try Fixture()
+        paginatedCalendars.call.googleEventManagedByApp = false
+        paginatedCalendars.inspectionCalendarListNextPageToken = "more-calendars"
+        try paginatedCalendars.context.save()
+        let calendarListResult = await GoogleCalendarScheduleSync.inspectUnlinkedCalendarJob(
+            call: paginatedCalendars.call,
+            workflow: try paginatedCalendars.flow(scope: [paginatedCalendars.call]))
+        if case .success = calendarListResult { Issue.record("A second calendar page cannot prove an event absent") }
+        #expect(paginatedCalendars.writes.isEmpty)
+    }
+
+    @Test func legacyInspectionRefusesChangedJobRevision() async throws {
+        let f = try Fixture()
+        f.call.googleEventManagedByApp = false
+        try f.context.save()
+        f.beforeReply = { request in
+            guard request.url?.path.hasSuffix("/calendarList") == true else { return }
+            f.call.scheduledDate = f.call.scheduledDate.addingTimeInterval(15 * 60)
+            try f.context.save()
+        }
+
+        let result = await GoogleCalendarScheduleSync.inspectUnlinkedCalendarJob(
+            call: f.call, workflow: try f.flow(scope: [f.call]))
+        if case .success = result { Issue.record("A changed appointment cannot yield a scan result") }
+        #expect(f.writes.isEmpty)
+        #expect(f.call.googleEventID == nil)
     }
 
     @Test func immediateExportReportsMissingSavedCallBeforeProviderAccess() throws {
