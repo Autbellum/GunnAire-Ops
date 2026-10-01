@@ -254,6 +254,32 @@ struct GoogleCalendarWorkflowTests {
         #expect(!GoogleCalendarScheduleSync.hasPotentialOutboundSync(in: f.context))
     }
 
+    @Test func failedAutomaticRecoveryRetriesOnlySavedPendingCalendarWork() throws {
+        let fixture = try Fixture(linked: true)
+        let failed: Result<Void, Error> = .failure(GoogleCalendarWorkflowError.unconfirmedWrite)
+        let succeeded: Result<Void, Error> = .success(())
+
+        fixture.call.googleEventConfirmedAt = nil
+        fixture.call.googleCalendarPendingAt = Date()
+        try fixture.context.save()
+        #expect(AutomaticOutboundSync.calendarRecoveryFollowUp(
+            result: failed, queued: false,
+            hasPendingOutbound: GoogleCalendarScheduleSync.hasPotentialOutboundSync(in: fixture.context)) == .retryPending)
+
+        fixture.call.googleEventConfirmedAt = Date()
+        fixture.call.googleCalendarPendingAt = nil
+        try fixture.context.save()
+        #expect(AutomaticOutboundSync.calendarRecoveryFollowUp(
+            result: failed, queued: false,
+            hasPendingOutbound: GoogleCalendarScheduleSync.hasPotentialOutboundSync(in: fixture.context)) == .none)
+        #expect(AutomaticOutboundSync.calendarRecoveryFollowUp(
+            result: succeeded, queued: false, hasPendingOutbound: true) == .none)
+        #expect(AutomaticOutboundSync.calendarRecoveryFollowUp(
+            result: failed, queued: true, hasPendingOutbound: true) == .queuedPass)
+        #expect(AutomaticOutboundSync.calendarRecoveryFollowUp(
+            result: succeeded, queued: true, hasPendingOutbound: false) == .queuedPass)
+    }
+
     @Test func scheduleReconnectWakeRequiresActiveAuthorizedDispatcher() throws {
         let f = try Fixture()
         f.call.googleCalendarPendingAt = Date()
