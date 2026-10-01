@@ -4588,7 +4588,15 @@ final class GunnAire_OpsUITests: XCTestCase {
         confirm.tap()
 
         let reviewInvoice = app.buttons["ReviewProgressInvoice-\(projectDepositMilestoneID)"]
-        XCTAssertTrue(reviewInvoice.waitForExistence(timeout: 5))
+        if !reviewInvoice.waitForExistence(timeout: 10) {
+            // The refusal writes its cause into Project Billing; report it
+            // rather than a bare assertion that names nothing.
+            let status = app.staticTexts["ProjectBillingStatus"]
+            retainNavigationFailure(app, name: "Progress invoice did not reach review")
+            XCTFail("Progress invoice was not created: " +
+                (status.exists ? status.label : "Project Billing showed no status"))
+            return
+        }
         reviewInvoice.tap()
 
         let lockedAllocation = app.descendants(matching: .any)["ProjectMilestoneAllocationLocked"]
