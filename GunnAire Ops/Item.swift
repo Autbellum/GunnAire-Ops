@@ -731,9 +731,11 @@ nonisolated struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
         documentDiscount: AuthorizedDocumentDiscount? = nil
     ) -> String? {
         guard !snapshots.isEmpty else { return nil }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
         let data: Data?
         if let documentDiscount {
-            data = try? JSONEncoder().encode(
+            data = try? encoder.encode(
                 CatalogDocumentSnapshotEnvelope(
                     version: 1,
                     lines: snapshots,
@@ -741,7 +743,7 @@ nonisolated struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
                 )
             )
         } else {
-            data = try? JSONEncoder().encode(snapshots)
+            data = try? encoder.encode(snapshots)
         }
         guard let data else { return nil }
         return String(data: data, encoding: .utf8)
