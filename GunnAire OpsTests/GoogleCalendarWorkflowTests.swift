@@ -164,6 +164,37 @@ struct GoogleCalendarWorkflowTests {
         #expect(f.writes.count == 1)
     }
 
+    @Test func verifiedWritableSelectionPublishesOnThatCalendarWithoutPrimaryRetarget() async throws {
+        let f = try Fixture()
+        var primary = GoogleCalendar(id: f.email, summary: "Owner", timeZone: nil, accessRole: "reader")
+        primary.primary = true
+        let writable = GoogleCalendar(id: "dispatch@group.calendar.google.com", summary: "Dispatch",
+                                      timeZone: nil, accessRole: "writer")
+        let calendars = [primary, writable]
+        #expect(ServiceCalendarRouting.validSelection("primary", technician: nil, calendars: calendars) == nil)
+        #expect(ServiceCalendarRouting.routeIssue(
+            selectedCalendarID: "primary", calendars: calendars, verified: true
+        ) != nil)
+        let selected = try #require(ServiceCalendarRouting.validSelection(
+            writable.id, technician: nil, calendars: calendars
+        ))
+        f.calendarList = [
+            ["id": primary.id, "primary": true, "accessRole": "reader"],
+            ["id": writable.id, "accessRole": "writer"]
+        ]
+        f.call.googleCalendarID = selected
+        try ServiceCallCalendarOutbox.save(f.call) { try f.context.save() }
+
+        let result = await (try f.flow()).run { try await GoogleCalendarScheduleSync.synchronize(workflow: $0) }
+        #expect(try result.get().contains("Published 1"))
+        let posts = f.writes.filter { $0.httpMethod == "POST" }
+        #expect(posts.count == 1)
+        #expect(posts.first?.url?.path.contains("/calendars/\(writable.id)/events") == true)
+        #expect(f.call.googleCalendarID == writable.id)
+        #expect(f.call.googleEventConfirmedAt != nil)
+        #expect(f.call.googleCalendarPendingAt == nil)
+    }
+
     @Test func durablePendingMarkerPublishesBackdatedRequestOnce() async throws {
         let f = try Fixture()
         f.call.scheduledDate = try #require(Calendar.current.date(

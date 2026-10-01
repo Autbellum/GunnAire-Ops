@@ -4225,18 +4225,19 @@ enum ServiceCalendarRouting {
             .sorted { $0.displayLabel.localizedCaseInsensitiveCompare($1.displayLabel) == .orderedAscending }
             .map { ServiceCalendarRouteOption(id: $0.id, label: $0.displayLabel) }
 
-        if !options.contains(where: { $0.id == "primary" }) {
+        if calendars.contains(where: { $0.isWritable && ($0.primary == true || $0.id == "primary") }),
+           !options.contains(where: { $0.id == "primary" }) {
             options.insert(ServiceCalendarRouteOption(id: "primary", label: "Primary Calendar"), at: 0)
         }
         return options
     }
 
     static func preferredCalendarID(for technician: Technician?, calendars: [GoogleCalendar]) -> String {
-        guard let technician else { return "primary" }
+        guard let technician else { return routeOptions(from: calendars).contains(where: { $0.id == "primary" }) ? "primary" : "" }
         if let matchedCalendar = calendars.first(where: { $0.isWritable && $0.matchesTechnicianEmail(technician.contactInfo) }) {
             return matchedCalendar.id
         }
-        return "primary"
+        return routeOptions(from: calendars).contains(where: { $0.id == "primary" }) ? "primary" : ""
     }
 
     static func assignedCalendarID(for technician: Technician?) -> String {
@@ -4252,14 +4253,22 @@ enum ServiceCalendarRouting {
         return resolvedCalendarID != expectedCalendarID
     }
 
-    static func validSelection(_ selectedCalendarID: String, technician: Technician?, calendars: [GoogleCalendar]) -> String {
-        if routeOptions(from: calendars).contains(where: { $0.id == selectedCalendarID }) {
-            return selectedCalendarID
-        }
-        return preferredCalendarID(for: technician, calendars: calendars)
+    static func validSelection(_ selectedCalendarID: String, technician: Technician?, calendars: [GoogleCalendar]) -> String? {
+        routeOptions(from: calendars).contains(where: { $0.id == selectedCalendarID }) ? selectedCalendarID : nil
+    }
+
+    static func routeIssue(selectedCalendarID: String, calendars: [GoogleCalendar], verified: Bool) -> String? {
+        guard verified else { return nil }
+        guard validSelection(selectedCalendarID, technician: nil, calendars: calendars) == nil else { return nil }
+        return routeOptions(from: calendars).isEmpty
+            ? "No writable calendar was returned by Google. Check Calendar access in Google Settings, then reconnect Google and retry. The appointment has not been saved."
+            : "Choose a writable Google calendar before saving. The previously selected calendar is unavailable or read-only; the appointment has not been saved."
     }
 
     static func routingMessage(for technician: Technician?, selectedCalendarID: String, calendars: [GoogleCalendar]) -> String {
+        guard validSelection(selectedCalendarID, technician: technician, calendars: calendars) != nil else {
+            return "Google calendar route is unverified. Choose a writable calendar when access is restored."
+        }
         guard let technician else {
             return selectedCalendarID == "primary"
                 ? "Unassigned jobs will sync to the connected account's primary calendar."
@@ -4293,6 +4302,7 @@ enum ServiceCalendarRouting {
     }
 
     static func routingTint(for technician: Technician?, selectedCalendarID: String, calendars: [GoogleCalendar]) -> Color {
+        guard validSelection(selectedCalendarID, technician: technician, calendars: calendars) != nil else { return .orange }
         guard let technician else { return .orange }
         let assessment = TechnicianCalendarAccessAssessment.evaluate(
             calendarID: technician.contactInfo,
@@ -4365,6 +4375,8 @@ struct AddServiceCallView: View {
     @State private var followUpAction = ""
     @State private var followUpDueDate = Date()
     @State private var accessibleCalendars: [GoogleCalendar] = []
+    @State private var calendarListVerified = false
+    @State private var calendarAccessMessage: String?
     @State private var selectedCalendarID: String = "primary"
     @State private var openDocumentationAfterSave = false
 
@@ -4749,9 +4761,20 @@ struct AddServiceCallView: View {
                         .foregroundStyle(.secondary)
                 }
                 Picker("Calendar", selection: $selectedCalendarID) {
+                    if calendarListVerified && selectedCalendarID.isEmpty {
+                        Text("Choose a writable calendar").tag("")
+                    }
                     ForEach(availableCalendars, id: \.id) { calendar in
                         Text(calendar.label).tag(calendar.id)
                     }
+                }
+                if let issue = ServiceCalendarRouting.routeIssue(
+                    selectedCalendarID: selectedCalendarID, calendars: accessibleCalendars,
+                    verified: calendarListVerified
+                ) {
+                    Text(issue).font(.caption).foregroundStyle(.orange)
+                } else if let calendarAccessMessage {
+                    Text(calendarAccessMessage).font(.caption).foregroundStyle(.orange)
                 }
                 Text(ServiceCalendarRouting.routingMessage(for: technician, selectedCalendarID: selectedCalendarID, calendars: accessibleCalendars))
                     .font(.caption)
@@ -4908,6 +4931,13 @@ struct AddServiceCallView: View {
         }
         guard equipmentLifecycleSnapshot.validationMessage == nil else { return }
         guard let resolvedCustomer = resolvedCustomerForSave() else { return }
+        if let routeIssue = ServiceCalendarRouting.routeIssue(
+            selectedCalendarID: selectedCalendarID, calendars: accessibleCalendars,
+            verified: calendarListVerified
+        ) {
+            jobSaveMessage = routeIssue
+            return
+        }
         guard CustomerOperationalAlertPolicy.schedulingBlocker(
             customerID: resolvedCustomer.id,
             serviceLocationID: selectedServiceLocationID,
@@ -4915,11 +4945,7 @@ struct AddServiceCallView: View {
         ) == nil else { return }
         let trimmedSiteAddress = siteAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedSiteAddress = trimmedSiteAddress.isEmpty ? resolvedCustomer.address : trimmedSiteAddress
-        let resolvedCalendarID = ServiceCalendarRouting.validSelection(
-            selectedCalendarID,
-            technician: technician,
-            calendars: accessibleCalendars
-        )
+        let resolvedCalendarID = selectedCalendarID.isEmpty ? "primary" : selectedCalendarID
         let call = ServiceCall(
             googleCalendarID: resolvedCalendarID,
             googleEventManagedByApp: true,
@@ -5082,26 +5108,35 @@ struct AddServiceCallView: View {
     }
 
     private func loadAccessibleCalendarsIfNeeded() {
-        guard googleAuth.isAuthenticated else { return }
+        guard googleAuth.isAuthenticated else {
+            calendarAccessMessage = "Google is disconnected. Saving keeps this appointment local and pending until Calendar access is restored."
+            return
+        }
         googleAuth.fetchCalendars { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success(let calendars):
                     accessibleCalendars = calendars
+                    calendarListVerified = true
+                    calendarAccessMessage = nil
                     selectedCalendarID = ServiceCalendarRouting.validSelection(
                         selectedCalendarID,
                         technician: technician,
                         calendars: calendars
-                    )
+                    ) ?? ""
                 case .failure:
-                    break
+                    calendarAccessMessage = "Google calendar access could not be checked. Saving now keeps the appointment local and pending until Google reconnects."
                 }
             }
         }
     }
 
     private var availableCalendars: [(id: String, label: String)] {
-        ServiceCalendarRouting.routeOptions(from: accessibleCalendars)
+        guard calendarListVerified else {
+            let route = selectedCalendarID.isEmpty ? "primary" : selectedCalendarID
+            return [(id: route, label: "\(route == "primary" ? "Primary Calendar" : route) (pending verification)")]
+        }
+        return ServiceCalendarRouting.routeOptions(from: accessibleCalendars)
             .map { (id: $0.id, label: $0.label) }
     }
 }
@@ -5164,6 +5199,8 @@ struct EditServiceCallView: View {
     @State private var followUpAction: String
     @State private var followUpDueDate: Date
     @State private var accessibleCalendars: [GoogleCalendar] = []
+    @State private var calendarListVerified = false
+    @State private var calendarAccessMessage: String?
     @State private var selectedCalendarID: String
 
     init(call: ServiceCall) {
@@ -5442,9 +5479,21 @@ struct EditServiceCallView: View {
                     }
                 }
                 Picker("Calendar", selection: $selectedCalendarID) {
+                    if calendarListVerified && selectedCalendarID.isEmpty {
+                        Text("Choose a writable calendar").tag("")
+                    }
                     ForEach(availableCalendars, id: \.id) { calendar in
                         Text(calendar.label).tag(calendar.id)
                     }
+                }
+                if GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call),
+                   let issue = ServiceCalendarRouting.routeIssue(
+                    selectedCalendarID: selectedCalendarID, calendars: accessibleCalendars,
+                    verified: calendarListVerified
+                   ) {
+                    Text(issue).font(.caption).foregroundStyle(.orange)
+                } else if let calendarAccessMessage {
+                    Text(calendarAccessMessage).font(.caption).foregroundStyle(.orange)
                 }
                 Text(ServiceCalendarRouting.routingMessage(for: technician, selectedCalendarID: selectedCalendarID, calendars: accessibleCalendars))
                     .font(.caption)
@@ -5757,6 +5806,14 @@ struct EditServiceCallView: View {
         guard !workLogBlocksRequestedStatus else { return }
         guard let customer else { return }
         guard !serviceRestrictionBlocksSave else { return }
+        if GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call),
+           let routeIssue = ServiceCalendarRouting.routeIssue(
+            selectedCalendarID: selectedCalendarID, calendars: accessibleCalendars,
+            verified: calendarListVerified
+           ) {
+            jobSaveMessage = routeIssue
+            return
+        }
         let originalBillingTarget: JobBillingTarget
         let restoreFailedEdit: () -> Void
         do {
@@ -5791,11 +5848,7 @@ struct EditServiceCallView: View {
             call.cancellationReason = cancellationReason.nilIfBlank
         }
         if GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call) {
-            call.googleCalendarID = ServiceCalendarRouting.validSelection(
-                selectedCalendarID,
-                technician: technician,
-                calendars: accessibleCalendars
-            )
+            call.googleCalendarID = calendarListVerified ? selectedCalendarID : (call.googleCalendarID ?? "primary")
         }
         if !preserveExternalCalendarDetails {
             call.siteAddress = siteAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? customer.address : siteAddress.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -5915,26 +5968,35 @@ struct EditServiceCallView: View {
     }
 
     private func loadAccessibleCalendarsIfNeeded() {
-        guard googleAuth.isAuthenticated else { return }
+        guard googleAuth.isAuthenticated else {
+            calendarAccessMessage = "Google is disconnected. Saving keeps this appointment local and pending until Calendar access is restored."
+            return
+        }
         googleAuth.fetchCalendars { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success(let calendars):
                     accessibleCalendars = calendars
+                    calendarListVerified = true
+                    calendarAccessMessage = nil
                     selectedCalendarID = ServiceCalendarRouting.validSelection(
                         selectedCalendarID,
                         technician: technician,
                         calendars: calendars
-                    )
+                    ) ?? ""
                 case .failure:
-                    break
+                    calendarAccessMessage = "Google calendar access could not be checked. Saving now keeps the appointment local and pending until Google reconnects."
                 }
             }
         }
     }
 
     private var availableCalendars: [(id: String, label: String)] {
-        ServiceCalendarRouting.routeOptions(from: accessibleCalendars)
+        guard calendarListVerified else {
+            let route = selectedCalendarID.isEmpty ? "primary" : selectedCalendarID
+            return [(id: route, label: "\(route == "primary" ? "Primary Calendar" : route) (pending verification)")]
+        }
+        return ServiceCalendarRouting.routeOptions(from: accessibleCalendars)
             .map { (id: $0.id, label: $0.label) }
     }
 }

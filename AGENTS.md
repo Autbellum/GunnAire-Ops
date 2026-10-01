@@ -20,7 +20,6 @@ at the start of every turn; append to it rather than rewriting it.
 
 ## Claims
 
-
 ## Shared rules
 
 1. The project sets `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`. A helper reached
@@ -43,6 +42,10 @@ at the start of every turn; append to it rather than rewriting it.
    pins the old behavior and the new one.
 
 ## Status log
+
+- 2026-10-01 Codex root: build 2026100115 combines the verified writable-calendar route fix with the already published 0114 QBO/Drive recovery. Final `generated/omni_runner.py` passed zero warnings, signed full iPad units passed 2,882/2,882 with zero failures/skips/warnings (`build-2026100115/Full iPad Units.xcresult`), Tools Python passed 94/94, focused Calendar/provider route tests passed 117/117 logical and 4/4. Current-build screenshot UI tests passed 1/1 each on iPad/iPhone; twelve images have verified dimensions and SHA-256 digests in the 0115 manifest. Build 0114 was separately confirmed VALID in the GunnAire Private Use internal TestFlight group; the 0115 exact-source archive/upload and the user's live device/calendar delivery remain separate checks.
+
+- 2026-10-01 Codex calendar_0114_postrelease_audit: A fetched Google calendar list no longer invents writable Primary Calendar or silently redirects a read-only/missing selection there. Add/Edit show the route problem and block that save until a writable calendar is chosen; disconnected/unverified access remains explicitly labeled as a local pending appointment. Technician primary access is writable only when the fetched primary proves it. A provider-shaped route-to-publication regression confirmed a POST to the selected writable calendar and saved confirmation. Final `python3 generated/omni_runner.py` passed zero warnings; signed iPad Calendar workflow suite passed 117 logical / 119 executions and four focused routing cases passed 4/4, all zero failures/skips/warnings (`/tmp/gunnaire-calendar-route-20261001.xcresult`, `/tmp/gunnaire-calendar-route-focused-r2-20261001.xcresult`). Swift parse and `git diff --check` passed. No live Google event, physical-device delivery, commit, push, archive or upload by this agent; source/test claims released to root.
 
 - 2026-10-01 Codex root: final 2026100114 source passed `generated/omni_runner.py` with zero compiler warnings and the signed full iPad unit suite 2,880/2,880 with zero failures, skips, expected failures or compiler warnings (`build-2026100114/Full iPad Units Final.xcresult`). The first combined run exposed an unsaved catalog item temporary-to-permanent SwiftData identity transition in `BillingMilestoneIdentityTests`; QBO revision tracking now permits that exact original item's transition once and the final focused milestone/recovery suites passed 25/25. Google Drive lost-reply recovery focused tests passed 4/4. Full Tools Python suite passed 94/94 and release-preflight unit tests passed 23/23. Current-build signed screenshot UI tests passed 1/1 on iPad and 1/1 on iPhone; twelve PNGs were dimension-checked, visually sampled, and hashed in the 2026100114 manifest. Exact-source archive and TestFlight upload remain underway; physical iPad/provider delivery is not yet verified.
 

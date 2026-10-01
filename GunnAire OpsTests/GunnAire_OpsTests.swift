@@ -17404,17 +17404,22 @@ struct GunnAire_OpsTests {
         #expect(assessment.detail.contains("cannot write"))
     }
 
-    @Test func technicianCalendarAssessmentUsesPrimaryAsWritableFallback() async throws {
+    @Test func technicianCalendarAssessmentDoesNotAssumePrimaryIsWritable() async throws {
         let assessment = TechnicianCalendarAccessAssessment.evaluate(
             calendarID: "primary",
             availableCalendars: []
         )
 
-        #expect(assessment.state == .writable)
+        #expect(assessment.state == .noCalendar)
         #expect(assessment.calendarLabel == "Primary Calendar")
+        var readOnly = GoogleCalendar(id: "owner@example.com", summary: "Owner", timeZone: nil, accessRole: "reader")
+        readOnly.primary = true
+        #expect(TechnicianCalendarAccessAssessment.evaluate(
+            calendarID: "primary", availableCalendars: [readOnly]
+        ).state == .readOnly)
     }
 
-    @Test func serviceCalendarRoutingOnlyOffersWritableCalendars() async throws {
+    @Test func serviceCalendarRoutingOnlyOffersVerifiedWritableCalendars() async throws {
         let calendars = [
             GoogleCalendar(id: "writer@example.com", summary: "Writer", timeZone: nil, accessRole: "writer"),
             GoogleCalendar(id: "reader@example.com", summary: "Reader", timeZone: nil, accessRole: "reader")
@@ -17422,12 +17427,15 @@ struct GunnAire_OpsTests {
 
         let options = ServiceCalendarRouting.routeOptions(from: calendars)
 
-        #expect(options.contains(ServiceCalendarRouteOption(id: "primary", label: "Primary Calendar")))
+        #expect(options.contains(where: { $0.id == "primary" }) == false)
         #expect(options.contains(where: { $0.id == "writer@example.com" }))
         #expect(options.contains(where: { $0.id == "reader@example.com" }) == false)
+        #expect(ServiceCalendarRouting.validSelection("primary", technician: nil, calendars: calendars) == nil)
+        #expect(ServiceCalendarRouting.routeIssue(selectedCalendarID: "primary", calendars: calendars, verified: true) != nil)
+        #expect(ServiceCalendarRouting.routeIssue(selectedCalendarID: "primary", calendars: calendars, verified: false) == nil)
     }
 
-    @Test func serviceCalendarRoutingSanitizesReadOnlySelection() async throws {
+    @Test func serviceCalendarRoutingRejectsReadOnlySelectionWithoutRetargeting() async throws {
         let technician = Technician(name: "Tech", contactInfo: "reader@example.com")
         let calendars = [
             GoogleCalendar(id: "reader@example.com", summary: "Reader", timeZone: nil, accessRole: "reader")
@@ -17439,7 +17447,22 @@ struct GunnAire_OpsTests {
             calendars: calendars
         )
 
-        #expect(selected == "primary")
+        #expect(selected == nil)
+        #expect(ServiceCalendarRouting.routeOptions(from: calendars).isEmpty)
+        #expect(ServiceCalendarRouting.routeIssue(
+            selectedCalendarID: "reader@example.com", calendars: calendars, verified: true
+        )?.contains("No writable calendar") == true)
+    }
+
+    @Test func serviceCalendarRoutingOffersPrimaryOnlyWithVerifiedWriteAccess() async throws {
+        var writablePrimary = GoogleCalendar(id: "owner@example.com", summary: "Owner", timeZone: nil, accessRole: "owner")
+        writablePrimary.primary = true
+        var readOnlyPrimary = GoogleCalendar(id: "owner@example.com", summary: "Owner", timeZone: nil, accessRole: "reader")
+        readOnlyPrimary.primary = true
+
+        #expect(ServiceCalendarRouting.routeOptions(from: [writablePrimary]).contains(where: { $0.id == "primary" }))
+        #expect(ServiceCalendarRouting.validSelection("primary", technician: nil, calendars: [writablePrimary]) == "primary")
+        #expect(ServiceCalendarRouting.routeOptions(from: [readOnlyPrimary]).isEmpty)
     }
 
     @Test func serviceCalendarRoutingUsesTechnicianAssignmentTarget() async throws {

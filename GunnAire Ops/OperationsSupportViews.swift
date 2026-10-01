@@ -815,10 +815,19 @@ struct TechnicianCalendarAccessAssessment {
         }
 
         if normalizedCalendarID == "primary" {
+            guard let primary = availableCalendars.first(where: { $0.primary == true || $0.id == "primary" }) else {
+                return TechnicianCalendarAccessAssessment(
+                    state: .noCalendar,
+                    calendarLabel: "Primary Calendar",
+                    detail: "Primary Calendar write access has not been verified for the connected Google account."
+                )
+            }
             return TechnicianCalendarAccessAssessment(
-                state: .writable,
+                state: primary.isWritable ? .writable : .readOnly,
                 calendarLabel: "Primary Calendar",
-                detail: "Jobs can be exported to the signed-in user's primary calendar."
+                detail: primary.isWritable
+                    ? "Jobs can be exported to the signed-in user's primary calendar."
+                    : "The connected Google account cannot write events on its primary calendar."
             )
         }
 
