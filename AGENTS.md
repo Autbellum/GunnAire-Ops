@@ -44,6 +44,13 @@ at the start of every turn; append to it rather than rewriting it.
 
 ## Status log
 
+- 2026-10-01 Codex root: regenerated the twelve iPad/iPhone App Store screenshots
+  from build 2026100112 using the Debug-only fictional fixture. Both capture UI
+  tests passed 1/1; selected images were visually reviewed. The screenshot
+  manifest now binds the exact build and captured PNG digests. Release preflight,
+  exact-source archive/export, TestFlight upload, and live Google Calendar
+  delivery still require separate verification.
+
 - 2026-10-01 Codex root and Claude PR #28 integration: scoped Calendar sends no longer
   fail on unrelated saved job/customer changes; imported events accept explicit
   time/staff write-back on their original ID, with a durable pending marker,
