@@ -21,7 +21,6 @@ at the start of every turn; append to it rather than rewriting it.
 ## Claims
 
 
-
 ## Shared rules
 
 1. The project sets `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`. A helper reached
@@ -44,6 +43,8 @@ at the start of every turn; append to it rather than rewriting it.
    pins the old behavior and the new one.
 
 ## Status log
+
+- 2026-10-01 Codex root: build 2026100109 fixes QuickBooks Management's fixed black Form background in light mode, restores readable navigation/title contrast, and regenerates 12 versioned App Store screenshots from current source. Signed iPad and iPhone screenshot UI tests passed 1/1 each; the selected iPad set came from a successful post-reset reacquisition after rejecting a transition-clipped Schedule image. Full signed iPad units passed 2,852/2,852 with zero failures/skips; `python3 generated/omni_runner.py` passed with zero compiler warnings; 55 relevant Python release/CloudKit/device contracts passed. Source release preflight verified the screenshot manifest/assets but expectedly lacks the 0109 archive. Physical-device installed build, exact Google event, live QBO/Drive delivery, and CloudKit Production schema remain unverified. Root owns commit, push, exact-source archive/upload, and provider acceptance.
 
 - 2026-10-01 Codex root and Claude: isolated Claude QBO v5 changes were merged onto build 2026100107 after its clean 124-test focused run and independent review of realm, source, identity, and uncertain-send fences. The merged checkout passed the same 124 focused tests and a full signed iPad Pro M5 suite of 2,852/2,852 logical tests, zero failures/skips (`/tmp/gunnaire-3010-qbo-v5-merged-full.xcresult`); `python3 generated/omni_runner.py` passed with zero compiler warnings. The implementation moves document snapshots, file hashing, journal crypto, and session/client checks off the main actor, while recording a send-started marker before QBO email delivery and reconciling uncertain results without another send. This is simulator evidence, not a live QBO posting or a measured zero-latency device result. Build 2026100108 final versioned validation, exact-commit push/archive/upload, and physical-device/provider acceptance remain with root.
 

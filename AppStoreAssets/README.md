@@ -51,7 +51,7 @@ capture production customer records for App Store assets.
 - `Screenshots/iPhone-6.9-inch`: six 1320 x 2868 portrait PNG files.
 
 Every checked-in PNG has no alpha channel. These sizes are accepted by Apple's
-13-inch iPad and 6.9-inch iPhone screenshot slots as of 2026-09-05. Reconfirm
+13-inch iPad and 6.9-inch iPhone screenshot slots as of 2026-10-01. Reconfirm
 the current requirements before a later release:
 https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications
 
@@ -73,35 +73,22 @@ silently passing release preparation after the app interface changes.
 
 ## Current-source verification
 
-The retained screenshot set was regenerated and inspected at full production
-dimensions on 2026-09-05 from current build `1.0 (2026090504)`. All twelve
-iPad and iPhone captures retain a clear hierarchy, complete content,
-progressive disclosure, and natural Command Center, schedule, customer-system,
-job-billing, field-collection, and QuickBooks transitions. The 13-inch iPad
-Schedule capture now shows the current concise closeout cue
-(`2/14 complete • Next: Complete technical report`) and direct **Closeout**
-action. No clipping, exposed account email, raw provider detail, keyboard,
-alert, spinner, notification banner, or new overload/navigation defect was
-found. The metadata/privacy and screenshot-integrity contracts were also
-revalidated against the current source by the release preflight.
+The retained screenshot set was regenerated from build `1.0 (2026100109)` on
+2026-10-01. Both the iPad Pro 13-inch (M5) and iPhone 17 Pro Max capture tests
+passed **1/1** on iOS 26.5. The iPad set uses the successful reacquisition after
+a simulator reset; the initial capture caught the system-owned sidebar before
+its clipping mask settled and was rejected. The selected images show the current
+Command Center, Schedule, customer equipment, job billing, payment entry, and
+QuickBooks publication review. The QuickBooks light-mode background and title
+were corrected in this build and verified in both device captures.
 
-The iPad workflow passed **1/1** on an iPad Pro 13-inch (M5) simulator with
-iOS 26.5, and the size-class-safe iPhone workflow passed **1/1** on an iPhone
-17 Pro Max simulator with iOS 26.5. Primary evidence is retained at
-`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-05/GunnAire Ops 1.0 (2026090504 Current iPad App Store Screenshots).xcresult`
-and
-`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-05/GunnAire Ops 1.0 (2026090504 Current iPhone App Store Screenshots).xcresult`.
-The exported attachments were mapped by their manifests and inspected. The
-iPad Schedule image was reacquired from the same current app source after the
-native split-view sidebar was closed, reopened, and allowed to settle; its
-passing result is retained as
-`GunnAire Ops 1.0 (2026090504 Current iPad Schedule Reacquisition).xcresult`
-beside the primary result. The retained iPhone set is the clean passing capture
-before a later diagnostic rerun reproduced a simulator-only status-bar shift.
-All twelve selected files were visually reviewed and mechanically verified at
-2064 x 2752 or 1320 x 2868 with no alpha channel before replacing this set.
-None exposes a signed-in account email, and none contains clipped navigation,
-a keyboard, alert, spinner, or notification banner.
+The retained result bundles and exported attachment manifests are in
+`/Users/gunnaire/Documents/GunnAireCompletion/2026-10-01-calendar-publication-recovery/build-2026100109/`.
+All twelve selected images were visually reviewed and mechanically checked at
+2064 x 2752 or 1320 x 2868 with no alpha channel. The fixtures show disconnected
+Google Calendar and QuickBooks Payments states honestly; they do not represent
+live provider delivery. No selected image exposes a signed-in account email,
+keyboard, alert, spinner, or notification banner.
 
 The capture contract disables animation only for the Debug screenshot fixture,
 waits through a four-second app-and-system quiescence window, and refreshes an

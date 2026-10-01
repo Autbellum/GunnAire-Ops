@@ -3245,7 +3245,7 @@ struct QuickBooksManagementView: View {
                     }
                 }
                 .scrollContentBackground(.hidden)
-                .background(Color.primaryBlack)
+                .background(Color(uiColor: .systemGroupedBackground))
                 .overlay(alignment: .bottom) {
                     if let actionMessage {
                         Text(actionMessage)
