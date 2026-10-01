@@ -1865,6 +1865,7 @@ GunnAire
                                     .disabled(!canAttemptSharedBilling || billingSyncLifecycles["\(document.label)-\(document.id)"] != nil)
                                 if case .estimate(let estimate) = document {
                                     estimateDeliveryAction(estimate)
+                                    estimateQuickBooksDeliveryAction(estimate)
                                 }
                                 if case .invoice(let invoice) = document {
                                     invoiceDeliveryAction(invoice)
@@ -1878,6 +1879,12 @@ GunnAire
                             Section { Text(actionMessage).accessibilityIdentifier("ManagementBillingSavedStatus") }
                         }
                     } else {
+                        if startsNewDocument, !actionMessage.isEmpty {
+                            Section {
+                                Text(actionMessage)
+                                    .accessibilityIdentifier("ManagementBillingDraftStatus")
+                            }
+                        }
                         if !startsNewDocument, focusedInvoiceID == nil { AnyView(stackSafeInvoiceLanePickerSection) }
                         AnyView(builderDetailsWorkspaceSection)
                     }

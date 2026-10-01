@@ -14,6 +14,27 @@ import Testing
         return try #require(CatalogLineItemSnapshot.encoded(from: [item]))
     }
 
+    @Test func repeatedSnapshotEncodingKeepsCanonicalBytesAcrossFirstSave() throws {
+        let item = Item(quickBooksID: "42", name: "Original labor", unitPrice: 125)
+        let line = CatalogLineItemSnapshot(item: item, quantity: 2)
+        let discount = AuthorizedDocumentDiscount(kind: .percentage, value: 10,
+            grossSubtotalAtAuthorization: 250, reason: "Approved discount",
+            authorizedByEmail: "office@example.invalid",
+            authorizedAt: Date(timeIntervalSinceReferenceDate: 810_000_000))
+        let discounts: [AuthorizedDocumentDiscount?] = [nil, discount]
+        for appliedDiscount in discounts {
+            let original = try #require(CatalogLineItemSnapshot.encoded(
+                snapshots: [line], documentDiscount: appliedDiscount))
+            for _ in 0..<32 {
+                #expect(CatalogLineItemSnapshot.encoded(
+                    snapshots: [line], documentDiscount: appliedDiscount) == original)
+            }
+            let decoded = try #require(try P.read(original))
+            #expect(decoded.lines == [line])
+            #expect(decoded.discount == appliedDiscount)
+        }
+    }
+
     @Test func publicationRejectsUnknownEnvelopeVersionWithoutReinterpretingSoldLines() throws {
         let json = try "{\"version\":999,\"lines\":" + snapshot() + "}"
         #expect(throws: (any Error).self) {
