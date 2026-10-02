@@ -207,3 +207,9 @@ at the start of every turn; append to it rather than rewriting it.
   and the rotation test passed twice at normal size on 0ebcd56. Full unit suite running on
   3120503 as the pre-merge bar: 2576 passed, 7 failed, all seven in the known-flaky
   `FieldCollectionNavigationTests` and none outside it. CI is running on the same commit.
+- 2026-10-02 Claude (PR #43, `GunnAire Ops/FieldFormDraftEditor.swift`): Eric reported that
+  Schedule → job → Work → HVAC Safety Check ends the app. `FieldFormResponseEditor` was the only
+  pushed view in the app that wraps its body in its own `NavigationStack` (static scan: 105 such
+  views, every other one is presented as a sheet or cover). The nested stack is removed. Two new
+  iPad UI tests cover both entry paths; the test-only commit runs first so CI shows the pre-fix
+  behaviour. No crash log from the device yet; cause is a hypothesis until CI or a log confirms it.
