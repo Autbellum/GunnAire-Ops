@@ -20,6 +20,8 @@ at the start of every turn; append to it rather than rewriting it.
 
 ## Claims
 
+- 2026-10-02 Codex root full 0124 candidate: Claims only this isolated `integrate/0124-full-candidate` worktree for composition of already pushed 0123, PR #60 native QBO and PR #59 backend source. No other worktree or production service is changed by this claim. Release after integrated validation or abort.
+
 ## Shared rules
 
 1. The project sets `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`. A helper reached
