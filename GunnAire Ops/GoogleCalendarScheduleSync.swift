@@ -92,6 +92,7 @@ enum GoogleCalendarScheduleSync {
     struct GoogleLinkCheck {
         let missingEventReview: MissingEventReview?
         let verifiedLink: VerifiedGoogleEventLink?
+        let alertGuidance: String?
     }
 
     fileprivate struct LinkRevision: Equatable {
@@ -381,7 +382,12 @@ enum GoogleCalendarScheduleSync {
         var review: MissingEventReview?
         var verifiedRemote: GoogleCalendarEvent?
         let result = await workflow.run { current in
-            let (calendar, id, remote) = try await inspectStoredEvent(call: call, workflow: current)
+            let (calendar, id, remote): (GoogleCalendar, String, GoogleCalendarEvent?)
+            if call.googleEventManagedByApp {
+                (calendar, id, remote) = try await inspectStoredEvent(call: call, workflow: current)
+            } else {
+                (calendar, id, remote) = try await inspectExternalStoredEvent(call: call, workflow: current)
+            }
             if remote == nil {
                 guard let accountEmail = current.auth.signedInEmail,
                       !accountEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -403,8 +409,66 @@ enum GoogleCalendarScheduleSync {
                     VerifiedGoogleEventLink(remote: $0, call: call,
                         connectedEmail: workflow.auth.signedInEmail,
                         workspaceStamp: workspaceStamp)
-                })
+                }, alertGuidance: verifiedRemote.flatMap { alertGuidance(for: $0, call: call) })
         }
+    }
+
+    /// A saved imported route can be inspected without adopting the event or
+    /// granting publication authority. A missing or changed route is review-only.
+    private static func inspectExternalStoredEvent(call: ServiceCall, workflow: GoogleCalendarWorkflow)
+        async throws -> (GoogleCalendar, String, GoogleCalendarEvent?) {
+        try requireCall(call, workflow: workflow)
+        guard !call.googleEventManagedByApp,
+              call.status == .scheduled || call.status == .inProgress,
+              let id = normalizedOptional(call.googleEventID),
+              GoogleAuthManager.calendarPathComponent(id) != nil else {
+            throw GoogleCalendarWorkflowError.needsReview
+        }
+        let list = try await calendars(workflow: workflow)
+        guard list.count <= 25 else { throw GoogleCalendarWorkflowError.needsReview }
+        let calendar = try canonicalCalendar(call.googleCalendarID, in: list, email: workflow.signedInEmail)
+        var descriptor = FetchDescriptor<ServiceCall>(predicate: #Predicate { $0.googleEventID == id })
+        descriptor.fetchLimit = 2
+        let linked = try workflow.context.fetch(descriptor)
+        guard linked.count == 1, linked.first === call else { throw GoogleCalendarWorkflowError.identity }
+        let remote: GoogleCalendarEvent
+        do {
+            remote = try await workflow.receive {
+                workflow.auth.fetchCalendarEvent(calendarID: calendar.id, eventID: id,
+                    operation: workflow.operation, completion: $0)
+            }
+        } catch GoogleAuthError.http(statusCode: 404) {
+            throw GoogleCalendarWorkflowError.alertReview(
+                "The saved Google event was not found on its original calendar. Review that calendar; no replacement was created.")
+        }
+        try requireCall(call, workflow: workflow)
+        guard remote.id == id, remote.status != "cancelled" else {
+            throw GoogleCalendarWorkflowError.needsReview
+        }
+        guard remoteEventMatchesExactSchedule(call: call, remoteEvent: remote) else {
+            throw GoogleCalendarWorkflowError.alertReview(scheduleMismatchGuidance(for: remote, call: call))
+        }
+        return (calendar, id, remote)
+    }
+
+    private static func alertGuidance(for remote: GoogleCalendarEvent, call: ServiceCall) -> String? {
+        var warnings: [String] = []
+        if remote.start.date != nil || remote.end.date != nil {
+            let localHasSpecificTime = call.promisedArrivalWindow != nil ||
+                !remoteEventMatchesExactSchedule(call: call, remoteEvent: remote)
+            warnings.append(localHasSpecificTime
+                ? "Google lists this as an all-day event, but GunnAire has a specific appointment time or arrival window. A time in notes does not make the Google event timed; review it in Google Calendar."
+                : "Google lists this as an all-day event. A time in notes does not make it a timed appointment; review the event time in Google Calendar.")
+        }
+        if remote.reminders?.useDefault == false && remote.reminders?.overrides?.isEmpty != false {
+            warnings.append("Google event reminders are turned off. Turn one on in Google Calendar if you want an event alert.")
+        }
+        return warnings.isEmpty ? nil : warnings.joined(separator: " ")
+    }
+
+    private static func scheduleMismatchGuidance(for remote: GoogleCalendarEvent, call: ServiceCall) -> String {
+        let alert = alertGuidance(for: remote, call: call).map { " \($0)" } ?? ""
+        return "The saved Google event does not match the appointment time. Review the original event in Google Calendar; no event was created or changed.\(alert)"
     }
 
     static func checkMissingEvent(call: ServiceCall, workflow: GoogleCalendarWorkflow) async
@@ -1013,7 +1077,7 @@ enum GoogleCalendarScheduleSync {
         if let original {
             try validateRemote(original, id: id, call: call)
             guard remoteEventMatchesExactSchedule(call: call, remoteEvent: original) else {
-                throw GoogleCalendarWorkflowError.needsReview
+                throw GoogleCalendarWorkflowError.alertReview(scheduleMismatchGuidance(for: original, call: call))
             }
         }
         return (calendar, id, original)
