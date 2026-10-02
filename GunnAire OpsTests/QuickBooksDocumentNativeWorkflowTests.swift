@@ -449,11 +449,25 @@ private actor RetainedMediaReadGate {
         let files = try QuickBooksDocumentWorkflowFixture(); defer { files.cleanup() }
         let call = try job(app), bytes = Data([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3])
         let url = try files.file("Before repair.png", data: bytes)
+        var archiveWakes = 0
+        let wakeArchive: @MainActor @Sendable (ServiceDocumentAttachment, ModelContext) -> Void = { attachment, savedContext in
+            archiveWakes += 1
+            #expect(attachment.customer?.id == app.customer.id)
+            #expect(attachment.needsGoogleDriveArchive)
+            let reader = ModelContext(savedContext.container)
+            let attachmentID = attachment.id
+            let saved = try? reader.fetch(FetchDescriptor<ServiceDocumentAttachment>(
+                predicate: #Predicate { $0.id == attachmentID }))
+            #expect(saved?.count == 1, "The Drive wake must follow a durable attachment save.")
+        }
         let row = try await QBODocumentNativeWorkflow.captureManual(access: files.access(), url: url, call: call,
-            stage: "before", targets: targets, context: app.context, store: files.store, directory: files.root)
+            stage: "before", targets: targets, context: app.context, store: files.store, directory: files.root,
+            wakeArchive: wakeArchive)
         let repeated = try await QBODocumentNativeWorkflow.captureManual(access: files.access(), url: url, call: call,
-            stage: "before", targets: targets, context: app.context, store: files.store, directory: files.root)
+            stage: "before", targets: targets, context: app.context, store: files.store, directory: files.root,
+            wakeArchive: wakeArchive)
         #expect(repeated == row)
+        #expect(archiveWakes == 1, "Reusing an already saved job file must not enqueue a duplicate archive wake.")
         #expect(call.beforePhotoCount == 1 && call.afterPhotoCount == 0)
         #expect(call.documentationCompletedAt == nil)
         #expect(try app.context.fetch(FetchDescriptor<ServiceDocumentAttachment>()).count == 1)
@@ -552,11 +566,14 @@ private actor RetainedMediaReadGate {
         let app = try QuickBooksBillingWorkflowTests.Fixture(linkedInvoice: true)
         let files = try QuickBooksDocumentWorkflowFixture(); defer { files.cleanup() }
         let call = try job(app), url = try files.file()
+        var archiveWakes = 0
         await #expect(throws: QBODocumentError.storage) {
             try await QBODocumentNativeWorkflow.captureManual(access: files.access(), url: url, call: call,
                 stage: "supporting", targets: targets, context: app.context, store: files.store, directory: files.root,
-                save: { _ in throw QBODocumentError.storage })
+                save: { _ in throw QBODocumentError.storage },
+                wakeArchive: { _, _ in archiveWakes += 1 })
         }
+        #expect(archiveWakes == 0, "A failed local save must not claim a Drive archive wake.")
         let rows = try await files.store.list(files.owner)
         #expect(rows.count == 1)
         let original = try #require(rows.first)

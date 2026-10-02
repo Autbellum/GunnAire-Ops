@@ -20,6 +20,11 @@ enum GoogleCalendarScheduleSync {
         let nextOffset: Int
     }
 
+    struct BackgroundCandidatePage {
+        let calls: [ServiceCall]
+        let nextOffset: Int
+    }
+
     private final class VerifiedLinkEvidence {
         var notFoundIDs: [UUID: String] = [:]
     }
@@ -92,6 +97,7 @@ enum GoogleCalendarScheduleSync {
     struct GoogleLinkCheck {
         let missingEventReview: MissingEventReview?
         let verifiedLink: VerifiedGoogleEventLink?
+        let alertGuidance: String?
     }
 
     fileprivate struct LinkRevision: Equatable {
@@ -381,7 +387,12 @@ enum GoogleCalendarScheduleSync {
         var review: MissingEventReview?
         var verifiedRemote: GoogleCalendarEvent?
         let result = await workflow.run { current in
-            let (calendar, id, remote) = try await inspectStoredEvent(call: call, workflow: current)
+            let (calendar, id, remote): (GoogleCalendar, String, GoogleCalendarEvent?)
+            if call.googleEventManagedByApp {
+                (calendar, id, remote) = try await inspectStoredEvent(call: call, workflow: current)
+            } else {
+                (calendar, id, remote) = try await inspectExternalStoredEvent(call: call, workflow: current)
+            }
             if remote == nil {
                 guard let accountEmail = current.auth.signedInEmail,
                       !accountEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -403,8 +414,66 @@ enum GoogleCalendarScheduleSync {
                     VerifiedGoogleEventLink(remote: $0, call: call,
                         connectedEmail: workflow.auth.signedInEmail,
                         workspaceStamp: workspaceStamp)
-                })
+                }, alertGuidance: verifiedRemote.flatMap { alertGuidance(for: $0, call: call) })
         }
+    }
+
+    /// A saved imported route can be inspected without adopting the event or
+    /// granting publication authority. A missing or changed route is review-only.
+    private static func inspectExternalStoredEvent(call: ServiceCall, workflow: GoogleCalendarWorkflow)
+        async throws -> (GoogleCalendar, String, GoogleCalendarEvent?) {
+        try requireCall(call, workflow: workflow)
+        guard !call.googleEventManagedByApp,
+              call.status == .scheduled || call.status == .inProgress,
+              let id = normalizedOptional(call.googleEventID),
+              GoogleAuthManager.calendarPathComponent(id) != nil else {
+            throw GoogleCalendarWorkflowError.needsReview
+        }
+        let list = try await calendars(workflow: workflow)
+        guard list.count <= 25 else { throw GoogleCalendarWorkflowError.needsReview }
+        let calendar = try canonicalCalendar(call.googleCalendarID, in: list, email: workflow.signedInEmail)
+        var descriptor = FetchDescriptor<ServiceCall>(predicate: #Predicate { $0.googleEventID == id })
+        descriptor.fetchLimit = 2
+        let linked = try workflow.context.fetch(descriptor)
+        guard linked.count == 1, linked.first === call else { throw GoogleCalendarWorkflowError.identity }
+        let remote: GoogleCalendarEvent
+        do {
+            remote = try await workflow.receive {
+                workflow.auth.fetchCalendarEvent(calendarID: calendar.id, eventID: id,
+                    operation: workflow.operation, completion: $0)
+            }
+        } catch GoogleAuthError.http(statusCode: 404) {
+            throw GoogleCalendarWorkflowError.alertReview(
+                "The saved Google event was not found on its original calendar. Review that calendar; no replacement was created.")
+        }
+        try requireCall(call, workflow: workflow)
+        guard remote.id == id, remote.status != "cancelled" else {
+            throw GoogleCalendarWorkflowError.needsReview
+        }
+        guard remoteEventMatchesExactSchedule(call: call, remoteEvent: remote) else {
+            throw GoogleCalendarWorkflowError.alertReview(scheduleMismatchGuidance(for: remote, call: call))
+        }
+        return (calendar, id, remote)
+    }
+
+    private static func alertGuidance(for remote: GoogleCalendarEvent, call: ServiceCall) -> String? {
+        var warnings: [String] = []
+        if remote.start.date != nil || remote.end.date != nil {
+            let localHasSpecificTime = call.promisedArrivalWindow != nil ||
+                !remoteEventMatchesExactSchedule(call: call, remoteEvent: remote)
+            warnings.append(localHasSpecificTime
+                ? "Google lists this as an all-day event, but GunnAire has a specific appointment time or arrival window. A time in notes does not make the Google event timed; review it in Google Calendar."
+                : "Google lists this as an all-day event. A time in notes does not make it a timed appointment; review the event time in Google Calendar.")
+        }
+        if remote.reminders?.useDefault == false && remote.reminders?.overrides?.isEmpty != false {
+            warnings.append("Google event reminders are turned off. Turn one on in Google Calendar if you want an event alert.")
+        }
+        return warnings.isEmpty ? nil : warnings.joined(separator: " ")
+    }
+
+    private static func scheduleMismatchGuidance(for remote: GoogleCalendarEvent, call: ServiceCall) -> String {
+        let alert = alertGuidance(for: remote, call: call).map { " \($0)" } ?? ""
+        return "The saved Google event does not match the appointment time. Review the original event in Google Calendar; no event was created or changed.\(alert)"
     }
 
     static func checkMissingEvent(call: ServiceCall, workflow: GoogleCalendarWorkflow) async
@@ -1013,7 +1082,7 @@ enum GoogleCalendarScheduleSync {
         if let original {
             try validateRemote(original, id: id, call: call)
             guard remoteEventMatchesExactSchedule(call: call, remoteEvent: original) else {
-                throw GoogleCalendarWorkflowError.needsReview
+                throw GoogleCalendarWorkflowError.alertReview(scheduleMismatchGuidance(for: original, call: call))
             }
         }
         return (calendar, id, original)
@@ -1189,11 +1258,26 @@ enum GoogleCalendarScheduleSync {
         }
         try workflow.focus(on: nil)
         let imported = try await importSchedule(workflow: workflow)
+        let hasVisibleUnlinkedJob = verifyConfirmedCalls.contains { call in
+            !call.googleEventManagedByApp && normalizedOptional(call.googleEventID) == nil &&
+                (call.status == .scheduled || call.status == .inProgress)
+        }
         let review = reviewErrors.first.map { " \(reviewErrors.count) update(s) still need review. \($0)" } ?? ""
         let linkCheck = verifyConfirmedCalls.isEmpty ? "" :
             " Checked \(checked) confirmed selected-day/upcoming Google link(s) (up to 25 per sync)." +
             (confirmed.count > 25 ? " \(confirmed.count - 25) more link(s) were not checked; use Check Google Link on those appointments." : "")
-        return "Published \(outcome.published) pending calendar update(s).\(review)\(linkCheck) \(imported)"
+        let unlinkedReview: String
+        if hasVisibleUnlinkedJob {
+            unlinkedReview = " Some displayed scheduled jobs have no Google event link and were not published. Open each affected job in Schedule and choose Review Google publication before creating an event."
+        } else if outcome.published == 0 {
+            unlinkedReview = " Older scheduled jobs without a Google event link are not included in automatic publication; check their Schedule cards for review."
+        } else {
+            unlinkedReview = ""
+        }
+        let publication = outcome.published == 0
+            ? "No pending app-managed calendar updates were published."
+            : "Published \(outcome.published) pending calendar update(s)."
+        return "\(publication)\(review)\(linkCheck)\(unlinkedReview) \(imported)"
     }
 
     struct PendingOutcome {
@@ -1204,23 +1288,40 @@ enum GoogleCalendarScheduleSync {
         }
     }
 
-    static func publishPending(workflow: GoogleCalendarWorkflow) async throws -> PendingOutcome {
+    static func publishPending(workflow: GoogleCalendarWorkflow, pageSize: Int = 100,
+                               maximumPages: Int? = nil, maximumPublications: Int? = nil,
+                               startingOffset: Int = 0, backgroundCandidatesOnly: Bool = false,
+                               onBackgroundPage: ((Int) -> Void)? = nil) async throws -> PendingOutcome {
+        guard pageSize > 0, maximumPages.map({ $0 > 0 }) ?? true,
+              maximumPublications.map({ $0 > 0 }) ?? true else {
+            return PendingOutcome(published: 0, reviewErrors: [])
+        }
         try workflow.focus(on: nil)
         try workflow.check()
         guard !workflow.context.hasChanges else { throw GoogleCalendarWorkflowError.changed }
         var published = 0
         var reviewErrors: [String] = []
-        var offset = 0
+        var offset = max(0, startingOffset)
+        var pages = 0
         while true {
             try workflow.focus(on: nil)
             try workflow.check()
-            var descriptor = FetchDescriptor<ServiceCall>(
-                predicate: #Predicate { $0.googleEventManagedByApp || $0.googleCalendarPendingAt != nil },
-                sortBy: [SortDescriptor(\.scheduledDate), SortDescriptor(\.id)])
-            descriptor.fetchLimit = 100
-            descriptor.fetchOffset = offset
-            let page = try workflow.context.fetch(descriptor)
+            let page: [ServiceCall]
+            if backgroundCandidatesOnly {
+                let candidatePage = try backgroundCandidatePage(context: workflow.context,
+                                                                offset: offset, pageSize: pageSize)
+                page = candidatePage.calls
+                onBackgroundPage?(candidatePage.nextOffset)
+            } else {
+                var descriptor = FetchDescriptor<ServiceCall>(
+                    predicate: #Predicate { $0.googleEventManagedByApp || $0.googleCalendarPendingAt != nil },
+                    sortBy: [SortDescriptor(\.scheduledDate), SortDescriptor(\.id)])
+                descriptor.fetchLimit = pageSize
+                descriptor.fetchOffset = offset
+                page = try workflow.context.fetch(descriptor)
+            }
             guard !page.isEmpty else { break }
+            pages += 1
             for call in page where needsOutboundSync(call) {
                 try workflow.focus(on: [call])
                 // Keep the same company/provider operation throughout the batch.
@@ -1237,6 +1338,9 @@ enum GoogleCalendarScheduleSync {
                         }
                     }
                     published += 1
+                    if maximumPublications.map({ published >= $0 }) == true {
+                        return PendingOutcome(published: published, reviewErrors: reviewErrors)
+                    }
                 } catch {
                     // A stale route or legacy guest review must not starve unrelated
                     // pending jobs. Session changes and uncertain transport stop all.
@@ -1247,9 +1351,86 @@ enum GoogleCalendarScheduleSync {
                 }
             }
             offset += page.count
+            if maximumPages.map({ pages >= $0 }) == true { break }
             await Task.yield()
         }
         return PendingOutcome(published: published, reviewErrors: reviewErrors)
+    }
+
+    /// The short refresh scans only durable outbound candidates. A rotating
+    /// cursor also advances past stale/review-only rows and survives relaunches.
+    static func backgroundCandidatePage(context: ModelContext, offset: Int, pageSize: Int = 8,
+                                        now: Date = Date()) throws -> BackgroundCandidatePage {
+        guard pageSize > 0 else { return BackgroundCandidatePage(calls: [], nextOffset: 0) }
+        let today = Calendar.current.startOfDay(for: now)
+        var descriptor = FetchDescriptor<ServiceCall>(
+            predicate: #Predicate {
+                $0.googleCalendarPendingAt != nil ||
+                    ($0.googleEventManagedByApp && $0.googleEventConfirmedAt == nil &&
+                     $0.scheduledDate >= today)
+            }, sortBy: [SortDescriptor(\.scheduledDate), SortDescriptor(\.id)])
+        descriptor.fetchLimit = pageSize
+        var start = max(0, offset)
+        descriptor.fetchOffset = start
+        var calls = try context.fetch(descriptor)
+        if calls.isEmpty, start > 0 {
+            start = 0
+            descriptor.fetchOffset = 0
+            calls = try context.fetch(descriptor)
+        }
+        return BackgroundCandidatePage(calls: calls,
+            nextOffset: calls.count < pageSize ? 0 : start + calls.count)
+    }
+
+    /// A short iOS refresh handles at most one saved outbound appointment.
+    /// The original workspace/provider operation and reservation rules are the
+    /// same as the foreground publisher; cancellation belongs to this task.
+    static func backgroundPublishPending(auth: GoogleAuthManager, context: ModelContext,
+                                         signedInEmail: String?,
+                                         isExpired: @escaping () -> Bool) async -> Result<PendingOutcome, Error> {
+        guard auth.googleCalendarAuthorizationState == .ready,
+              hasPotentialOutboundSync(in: context) else {
+            return .success(PendingOutcome(published: 0, reviewErrors: []))
+        }
+        do {
+            guard let companyID = CompanyWorkspaceAccessController.shared.verifiedCompanyID else {
+                return .failure(GoogleCalendarWorkflowError.accessDenied)
+            }
+            let cursorKey = "GunnAireCalendarBackgroundCursor.v1.\(companyID.uuidString)." +
+                "\(AppAccess.normalizedEmail(signedInEmail)).\(AppAccess.normalizedEmail(auth.signedInEmail))"
+            let startingOffset = UserDefaults.standard.integer(forKey: cursorKey)
+            let workflow = try GoogleCalendarWorkflow(auth: auth, context: context,
+                                                       signedInEmail: signedInEmail)
+            installBackgroundExpirationFence(on: workflow, isExpired: isExpired)
+            var outcome: PendingOutcome?
+            let result = await workflow.run { active in
+                let published = try await publishPending(workflow: active, pageSize: 8,
+                                                         maximumPages: 1, maximumPublications: 1,
+                                                         startingOffset: startingOffset,
+                                                         backgroundCandidatesOnly: true,
+                                                         onBackgroundPage: { nextOffset in
+                                                             UserDefaults.standard.set(nextOffset, forKey: cursorKey)
+                                                         })
+                outcome = published
+                return "Published \(published.published) pending calendar update(s)."
+            }
+            switch result {
+            case .success:
+                guard let outcome else { return .failure(GoogleCalendarWorkflowError.changed) }
+                return .success(outcome)
+            case .failure(let error):
+                return .failure(error)
+            }
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    static func installBackgroundExpirationFence(on workflow: GoogleCalendarWorkflow,
+                                                 isExpired: @escaping () -> Bool) {
+        workflow.setAdditionalValidation {
+            guard !isExpired() else { throw CancellationError() }
+        }
     }
 
     /// Read the saved route first. Only its 404 triggers a bounded same-ID

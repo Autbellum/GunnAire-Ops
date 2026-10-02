@@ -64,6 +64,9 @@ struct GunnAire_OpsApp: App {
             // App-level phase is active while ANY window is active. Never use
             // one scene's inactivity to clear another scene's staff workspace.
             StaffReplicaReceiveController.shared.applicationActivityChanged(phase == .active)
+            if phase == .background {
+                BackgroundProviderRecovery.shared.scheduleAfterBackgrounding()
+            }
         }
         .commands {
             GunnAireNavigationCommands()

@@ -66,7 +66,7 @@ struct GoogleDriveFile: Codable, Equatable, Identifiable {
     }
 }
 
-struct GoogleDriveUploadMetadata: Codable, Equatable {
+nonisolated struct GoogleDriveUploadMetadata: Codable, Equatable {
     let id: String
     let name: String
     let mimeType: String
@@ -92,7 +92,7 @@ struct GoogleDriveUploadMetadata: Codable, Equatable {
     }
 }
 
-enum GoogleDriveRequestFactory {
+nonisolated enum GoogleDriveRequestFactory {
     static let returnedFileFields = "id,name,mimeType,webViewLink,trashed,appProperties"
 
     static func generateFileID(accessToken: String) throws -> URLRequest {
@@ -371,23 +371,27 @@ final class GoogleDriveAPI {
 
         for _ in 0..<4 {
             do {
-                let request: URLRequest
-                if shouldQueryStatus {
-                    request = try GoogleDriveRequestFactory.queryUploadStatus(
+                let currentOffset = offset
+                let queryStatus = shouldQueryStatus
+                // A resumed upload can copy the entire document into its
+                // request body. Construct that body off the UI actor.
+                let request = try await Task.detached(priority: .utility) {
+                    if queryStatus {
+                        return try GoogleDriveRequestFactory.queryUploadStatus(
+                            sessionURL: sessionURL,
+                            totalLength: data.count,
+                            accessToken: accessToken
+                        )
+                    }
+                    return try GoogleDriveRequestFactory.uploadContent(
                         sessionURL: sessionURL,
+                        data: Data(data.dropFirst(currentOffset)),
                         totalLength: data.count,
-                        accessToken: accessToken
-                    )
-                } else {
-                    request = try GoogleDriveRequestFactory.uploadContent(
-                        sessionURL: sessionURL,
-                        data: Data(data.dropFirst(offset)),
-                        totalLength: data.count,
-                        offset: offset,
+                        offset: currentOffset,
                         mimeType: mimeType,
                         accessToken: accessToken
                     )
-                }
+                }.value
 
                 let (responseData, response) = try await send(request, operation: operation)
                 switch response.statusCode {
@@ -505,6 +509,7 @@ enum GoogleDriveAPIError: Error, LocalizedError, Equatable {
     case missingGeneratedFileID
     case missingUploadSession
     case emptyFile
+    case backgroundFileTooLarge
     case fileIsTrashed
     case archiveIdentityMismatch
     case invalidFileMetadata
@@ -527,6 +532,7 @@ enum GoogleDriveAPIError: Error, LocalizedError, Equatable {
         case .missingGeneratedFileID: "Google Drive did not reserve a file identifier."
         case .missingUploadSession: "Google Drive did not start a resumable upload session."
         case .emptyFile: "The selected document is empty and was not uploaded."
+        case .backgroundFileTooLarge: "The document exceeds the short background upload limit. Open the app to finish archiving it."
         case .fileIsTrashed: "The existing Drive copy is in Trash. The next explicit retry will reserve a new archive copy."
         case .archiveIdentityMismatch: "The saved Drive file does not belong to this GunnAire attachment. Archive recovery stopped without linking it."
         case .invalidFileMetadata: "Google Drive returned an untrusted or incomplete file link."

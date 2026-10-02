@@ -3,6 +3,7 @@ import SwiftData
 
 nonisolated enum GoogleCalendarWorkflowError: LocalizedError, Equatable {
     case busy, accessDenied, changed, identity, readOnly, saveFailed, needsReview, invalidDates, hasJobHistory, remoteChanged, unconfirmedWrite
+    case alertReview(String)
 
     var errorDescription: String? {
         switch self {
@@ -13,6 +14,7 @@ nonisolated enum GoogleCalendarWorkflowError: LocalizedError, Equatable {
         case .readOnly: "The selected calendar is unavailable or read-only. Choose a writable calendar before publishing."
         case .saveFailed: "The calendar result could not be saved. Review the original event before retrying; your local appointment was retained."
         case .needsReview: "The original Google event needs review before it can be changed. Its identity, ownership, or version could not be confirmed."
+        case .alertReview(let detail): detail
         case .invalidDates: "The appointment needs a valid start time and positive duration before calendar publication."
         case .hasJobHistory: "This job has work or billing history. Open job details and use Cancel Job to preserve its records."
         case .remoteChanged: "This event changed in Google Calendar. Your local appointment was retained. Review the latest event before trying again."

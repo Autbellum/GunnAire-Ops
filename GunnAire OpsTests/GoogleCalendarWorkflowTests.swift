@@ -171,6 +171,7 @@ struct GoogleCalendarWorkflowTests {
         try f.context.save()
         let result = await (try f.flow()).run { try await GoogleCalendarScheduleSync.synchronize(workflow: $0) }
         #expect(try result.get().contains("Published 1"))
+        #expect(try !result.get().contains("Review Google publication"))
         #expect(f.writes.count == 1)
         #expect(!GoogleCalendarScheduleSync.needsOutboundSync(f.call))
         _ = try await (try f.flow()).run { try await GoogleCalendarScheduleSync.synchronize(workflow: $0) }.get()
@@ -393,11 +394,20 @@ struct GoogleCalendarWorkflowTests {
         #expect(!queued)
         #expect(f.call.googleCalendarPendingAt == nil)
 
-        _ = try await (try f.flow()).run {
-            try await GoogleCalendarScheduleSync.synchronize(workflow: $0)
+        let result = try await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.synchronize(workflow: $0, verifyConfirmedCalls: [f.call])
         }.get()
         #expect(f.writes.isEmpty)
         #expect(f.call.googleEventID == nil)
+        #expect(result.contains("Review Google publication"))
+        #expect(result.contains("not published"))
+
+        let background = try await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.synchronize(workflow: $0)
+        }.get()
+        #expect(background.contains("No pending app-managed calendar updates were published"))
+        #expect(background.contains("Older scheduled jobs without a Google event link are not included"))
+        #expect(f.writes.isEmpty)
 
         f.call.googleEventID = "existing-external-event"
         #expect(!ScheduleGoogleLinkStatus.needsUnlinkedReview(f.call))
@@ -406,6 +416,19 @@ struct GoogleCalendarWorkflowTests {
         f.call.googleEventID = nil
         f.call.status = .completed
         #expect(!ScheduleGoogleLinkStatus.needsUnlinkedReview(f.call))
+    }
+
+    @Test func completedUnlinkedJobDoesNotWarnAboutCurrentGooglePublication() async throws {
+        let f = try Fixture()
+        f.call.googleEventManagedByApp = false
+        f.call.status = .completed
+        try f.context.save()
+
+        let message = try await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.synchronize(workflow: $0, verifyConfirmedCalls: [f.call])
+        }.get()
+        #expect(!message.contains("Review Google publication"))
+        #expect(f.writes.isEmpty)
     }
 
     @Test func legacyInspectionFindsGoogleChosenIDAtSavedTimeWithoutWriting() async throws {
@@ -1677,6 +1700,7 @@ struct GoogleCalendarWorkflowTests {
         let check = try await GoogleCalendarScheduleSync.checkGoogleLink(
             call: f.call, workflow: f.flow(), workspaceStamp: stamp).get()
         #expect(check.missingEventReview == nil)
+        #expect(check.alertGuidance == nil)
         let link = try #require(check.verifiedLink)
         #expect(link.url.absoluteString == url)
         #expect(link.matches(call: f.call, connectedEmail: f.email, workspaceStamp: stamp))
@@ -1686,6 +1710,87 @@ struct GoogleCalendarWorkflowTests {
         #expect(!link.matches(call: f.call, connectedEmail: f.email, workspaceStamp: changedWorkspace))
         f.call.scheduledDate.addTimeInterval(60)
         #expect(!link.matches(call: f.call, connectedEmail: f.email, workspaceStamp: stamp))
+        #expect(f.writes.isEmpty)
+    }
+
+    @Test func exactLinkedEventReportsExplicitReminderOptOutWithoutChangingGoogle() async throws {
+        let f = try Fixture(linked: true)
+        f.remote[f.key(f.email, "fixture-event")]?["reminders"] =
+            ["useDefault": false, "overrides": []] as [String: Any]
+
+        let check = try await GoogleCalendarScheduleSync.checkGoogleLink(
+            call: f.call, workflow: f.flow()).get()
+
+        #expect(check.missingEventReview == nil)
+        #expect(check.alertGuidance?.contains("reminders are turned off") == true)
+        #expect(check.alertGuidance?.contains("Google Calendar") == true)
+        #expect(f.writes.isEmpty)
+        #expect(f.remote[f.key(f.email, "fixture-event")]?["reminders"] as? [String: Any] != nil)
+    }
+
+    @Test func allDayGoogleEventWithTimedAppointmentNeedsSpecificReview() async throws {
+        let f = try Fixture(linked: true)
+        f.remote[f.key(f.email, "fixture-event")]?["htmlLink"] =
+            "https://www.google.com/calendar/event?eid=all-day"
+        f.remote[f.key(f.email, "fixture-event")]?["start"] = ["date": "2027-01-15"]
+        f.remote[f.key(f.email, "fixture-event")]?["end"] = ["date": "2027-01-16"]
+        f.remote[f.key(f.email, "fixture-event")]?["reminders"] =
+            ["useDefault": false, "overrides": []] as [String: Any]
+
+        let result = await GoogleCalendarScheduleSync.checkGoogleLink(
+            call: f.call, workflow: try f.flow())
+        switch result {
+        case .success:
+            Issue.record("An all-day remote event must not verify a different timed appointment.")
+        case .failure(let error):
+            #expect(error.localizedDescription.contains("all-day event"))
+            #expect(error.localizedDescription.contains("reminders are turned off"))
+        }
+        #expect(f.writes.isEmpty)
+    }
+
+    @Test func importedLinkedEventCanReportReminderOptOutReadOnly() async throws {
+        let f = try Fixture(linked: true)
+        f.call.googleEventManagedByApp = false
+        try f.context.save()
+        f.remote[f.key(f.email, "fixture-event")] = f.event(id: "fixture-event", managed: false)
+        f.remote[f.key(f.email, "fixture-event")]?["reminders"] =
+            ["useDefault": false, "overrides": []] as [String: Any]
+
+        let check = try await GoogleCalendarScheduleSync.checkGoogleLink(
+            call: f.call, workflow: f.flow()).get()
+
+        #expect(check.missingEventReview == nil)
+        #expect(check.alertGuidance?.contains("reminders are turned off") == true)
+        #expect(f.call.googleEventManagedByApp == false)
+        #expect(f.writes.isEmpty)
+    }
+
+    @Test func importedAllDayEventDoesNotHideStructuredArrivalWindowOrReminderOptOut() async throws {
+        let f = try Fixture(linked: true)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        let start = try #require(formatter.date(from: "2027-01-15"))
+        f.call.googleEventManagedByApp = false
+        f.call.scheduledDate = start
+        f.call.duration = 86_400
+        f.call.promisedArrivalWindowStart = start.addingTimeInterval(10 * 3600)
+        f.call.promisedArrivalWindowEnd = start.addingTimeInterval(11 * 3600)
+        try f.context.save()
+        var event = f.event(id: "fixture-event", managed: false)
+        event["start"] = ["date": "2027-01-15"]
+        event["end"] = ["date": "2027-01-16"]
+        event["reminders"] = ["useDefault": false, "overrides": []] as [String: Any]
+        f.remote[f.key(f.email, "fixture-event")] = event
+
+        let check = try await GoogleCalendarScheduleSync.checkGoogleLink(
+            call: f.call, workflow: f.flow()).get()
+
+        #expect(check.alertGuidance?.contains("all-day event") == true)
+        #expect(check.alertGuidance?.contains("arrival window") == true)
+        #expect(check.alertGuidance?.contains("reminders are turned off") == true)
+        #expect(f.call.googleEventManagedByApp == false)
         #expect(f.writes.isEmpty)
     }
 
@@ -1884,6 +1989,45 @@ struct GoogleCalendarWorkflowTests {
         #expect(f.requests.count == 1)
         #expect(f.writes.isEmpty)
         #expect(f.auth.accessToken == nil)
+    }
+
+    @Test func expiredBackgroundRefreshCannotWriteAfterCalendarCallbackRead() async throws {
+        let f = try Fixture(linked: true)
+        f.call.scheduledDate = f.call.scheduledDate.addingTimeInterval(3600)
+        f.call.googleCalendarPendingAt = Date()
+        try f.context.save()
+        var expired = false
+        let workflow = try f.flow()
+        GoogleCalendarScheduleSync.installBackgroundExpirationFence(on: workflow) { expired }
+        f.beforeReply = { request in
+            if request.httpMethod == "GET", request.url?.path.hasSuffix("fixture-event") == true {
+                expired = true
+            }
+        }
+        failed(await workflow.run { try await GoogleCalendarScheduleSync.publish(call: f.call, workflow: $0) })
+        #expect(f.writes.isEmpty)
+        #expect(f.call.googleCalendarPendingAt != nil)
+    }
+
+    @Test func expiredBackgroundRefreshRetainsExactReservationDuringSuspendedCreate() async throws {
+        let f = try Fixture()
+        var expired = false
+        let workflow = try f.flow()
+        GoogleCalendarScheduleSync.installBackgroundExpirationFence(on: workflow) { expired }
+        f.beforeReply = { request in
+            guard request.httpMethod == "POST" else { return }
+            // The request has left the app; iOS can expire the refresh while
+            // the transport waits for a response it cannot safely recall.
+            expired = true
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        failed(await workflow.run { try await GoogleCalendarScheduleSync.publish(call: f.call, workflow: $0) })
+        let reservedID = GoogleCalendarScheduleSync.eventID(for: f.call.id)
+        #expect(f.call.googleEventID == reservedID)
+        #expect(f.call.googleCalendarPendingAt != nil)
+        #expect(f.call.googleEventConfirmedAt == nil)
+        #expect(f.writes.map(\.httpMethod) == ["POST"])
+        #expect(f.remote[f.key(f.email, reservedID)] != nil)
     }
 
     @Test func localEditDuringReadIsPreservedWithoutPublishingStaleValues() async throws {
