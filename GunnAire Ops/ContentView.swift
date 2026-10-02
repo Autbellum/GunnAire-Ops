@@ -4195,7 +4195,7 @@ enum ServiceCallCalendarOutbox {
         let previous = PreviousState(confirmedAt: call.googleEventConfirmedAt,
                                      pendingAt: call.googleCalendarPendingAt)
         call.googleEventConfirmedAt = nil
-        call.googleCalendarPendingAt = Date()
+        call.googleCalendarPendingAt = GoogleCalendarScheduleSync.pendingDateAfterLocalEdit(call)
         return previous
     }
 
