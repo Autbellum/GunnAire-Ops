@@ -38,7 +38,7 @@ try:
     from Backend import customer_accounts, transactional_email
     from Backend.customer_account_portal import PORTAL_HTML as CUSTOMER_ACCOUNT_PORTAL_HTML
     from Backend.billing_provider import BillingQBOProvider
-    from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads
+    from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads, billing_pdf_archive_ledger, billing_pdf_archive_routes
     from Backend import document_storage
     from Backend import backup_backend
     from Backend import staff_owner_field_edits
@@ -71,6 +71,8 @@ except ModuleNotFoundError:
     import google_mail
     import qbo_change_capture
     import qbo_document_uploads
+    import billing_pdf_archive_ledger
+    import billing_pdf_archive_routes
     from qbo_document_provider import DocumentQBOProvider
     import time_worker_mappings
     import time_publications
@@ -2693,6 +2695,7 @@ def initialize_database() -> None:
         billing_publications.initialize_schema(connection)
         qbo_link_adoption.initialize_schema(connection)
         google_connections.initialize_schema(connection)
+        billing_pdf_archive_ledger.initialize_schema(connection)
         google_mail.initialize_schema(connection)
         qbo_change_capture.initialize_schema(connection)
         qbo_document_uploads.initialize_schema(connection)
@@ -3990,6 +3993,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/api/google/mail/"):
             self.handle_google_mail(parsed, method="GET")
             return
+        if parsed.path == "/api/google/drive/billing-pdf-intents":
+            self.handle_billing_pdf_archive(parsed, method="GET")
+            return
         if parsed.path == "/api/payment-attempts" or parsed.path.startswith("/api/payment-attempts/"):
             self.handle_payment_attempt(parsed, method="GET")
             return
@@ -4246,6 +4252,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path.startswith("/api/google/mail/"):
             self.handle_google_mail(parsed, method="POST")
+            return
+        if parsed.path.startswith("/api/google/drive/billing-pdf-intents"):
+            self.handle_billing_pdf_archive(parsed, method="POST")
             return
         if parsed.path == "/api/payment-attempts" or parsed.path.startswith("/api/payment-attempts/"):
             self.handle_payment_attempt(parsed, method="POST")
@@ -7234,6 +7243,37 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
 
     def google_mail_service(self):
         return google_mail.GoogleMail(self.google_connection_service())
+
+    def handle_billing_pdf_archive(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        try:
+            if method == "GET":
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, max_num_fields=10)
+                if any(len(values) != 1 for values in query.values()):
+                    raise billing_pdf_archive_routes.RouteFailure("invalid_request", 400,
+                        "Review the PDF archive request.")
+                payload = {key: values[0] for key, values in query.items()}
+            else:
+                if parsed.query:
+                    raise billing_pdf_archive_routes.RouteFailure("invalid_request", 400,
+                        "Review the PDF archive request.")
+                payload = google_connections.strict_json(self.read_limited_body(8192).decode("utf-8"))
+            service = billing_pdf_archive_routes.BillingPDFArchiveRoutes(
+                db, self.google_connection_service(), primary_admin_email=PRIMARY_ADMIN_EMAIL,
+                container_id=CLOUDKIT_CONTAINER_ID,
+                ledger=billing_pdf_archive_ledger.BillingPDFArchiveLedger(DB_PATH))
+            result = service.dispatch(method, parsed.path, payload, self._application_session_id)
+            self.write_json(result)
+        except billing_pdf_archive_routes.RouteFailure as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except google_connections.ConnectionError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError, KeyError, AttributeError, RecursionError):
+            self.write_json({"error": "Review the PDF archive request.", "code": "invalid_request"}, status=400)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "PDF archive storage is unavailable. Keep the original request for recovery.",
+                             "code": "storage_unavailable"}, status=503)
 
     def handle_google_mail(self, parsed, *, method):
         if not self.require_application_session():
