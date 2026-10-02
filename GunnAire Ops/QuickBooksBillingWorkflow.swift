@@ -228,6 +228,19 @@ enum QuickBooksBillingAccessPolicy {
         let assigned: Bool
     }
 
+    nonisolated static func allows(mirror: Mirror, verifiedRole: AppUserRole?,
+                                   isInvoice: Bool) -> Bool {
+        guard let role = verifiedRole, !mirror.roles.isEmpty, mirror.allActive,
+              mirror.roles.allSatisfy({ $0 == role }) else { return false }
+        switch role {
+        case .admin: return true
+        case .accounting: return isInvoice
+        case .dispatcher: return !isInvoice
+        case .fieldTechnician: return mirror.assigned
+        case .standard: return false
+        }
+    }
+
     /// This synchronous fence is deliberately limited to values already held
     /// by the operation. The normalized CloudKit census belongs to checkOffMain.
     static func checkLocalFence(context: ModelContext, document: QuickBooksBillingDocument,
@@ -295,16 +308,11 @@ enum QuickBooksBillingAccessPolicy {
         let fixture = GunnAireCloudKit.usesTestDatabase
         let role = fixture ? (Set(mirror.roles).count == 1 ? mirror.roles.first : nil)
             : CompanyWorkspaceAccessController.shared.verifiedRole
-        guard let role, !mirror.roles.isEmpty, mirror.allActive,
-              mirror.roles.allSatisfy({ $0 == role }), requiredRole == nil || requiredRole == role else {
+        let isInvoice: Bool
+        switch document { case .invoice: isInvoice = true; case .estimate: isInvoice = false }
+        guard allows(mirror: mirror, verifiedRole: role, isInvoice: isInvoice),
+              requiredRole == nil || requiredRole == role else {
             throw QuickBooksBillingWorkflowError.accessDenied
-        }
-        switch role {
-        case .admin: break
-        case .accounting: guard case .invoice = document else { throw QuickBooksBillingWorkflowError.accessDenied }
-        case .dispatcher: guard case .estimate = document else { throw QuickBooksBillingWorkflowError.accessDenied }
-        case .fieldTechnician: guard mirror.assigned else { throw QuickBooksBillingWorkflowError.accessDenied }
-        case .standard: throw QuickBooksBillingWorkflowError.accessDenied
         }
     }
 

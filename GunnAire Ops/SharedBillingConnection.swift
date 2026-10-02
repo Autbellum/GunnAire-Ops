@@ -219,7 +219,7 @@ final class SharedBillingPreparation {
         let workspaceStamp = CompanyWorkspaceAccessController.shared.operationStamp
         let offMainAccess: (() async throws -> Void)?
         let access: () throws -> Void
-        if case .estimate = document, requiresAdministrator {
+        if requiresAdministrator {
             access = {
                 try QuickBooksBillingAccessPolicy.checkLocalFence(context: context, document: document,
                     email: staffEmail, stamp: workspaceStamp)
@@ -244,8 +244,14 @@ final class SharedBillingPreparation {
                     email: staffEmail, stamp: workspaceStamp)
             }
         } else {
-            access = { try QuickBooksBillingAccessPolicy.validate(context: context, document: document) }
-            offMainAccess = nil
+            access = {
+                try QuickBooksBillingAccessPolicy.checkLocalFence(context: context, document: document,
+                    email: staffEmail, stamp: workspaceStamp)
+            }
+            offMainAccess = {
+                try await QuickBooksBillingAccessPolicy.checkOffMain(context: context, document: document,
+                    email: staffEmail, stamp: workspaceStamp)
+            }
         }
         try access()
         guard let companyID = fixtureCompanyID ?? CompanyWorkspaceAccessController.shared.verifiedCompanyID,
