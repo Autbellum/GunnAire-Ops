@@ -14,27 +14,27 @@
       "files": [
         {
           "name": "01-command-center.png",
-          "sha256": "63184880288df30e8754ae5f36adee8f2fd44742090a648bdc2b29675b0c0d34"
+          "sha256": "dcfe493f161e3ed4900d0637c23116cc4ba3854ce21fe266c536d9bc09328319"
         },
         {
           "name": "02-schedule.png",
-          "sha256": "e9730a714b5acf5d266daebb3d0cb003e62f84bdf9338bb8b4ba98e2646a86b9"
+          "sha256": "64bb582d74f39d02cf54d25475b343f686a63d2c3e02adc01a52dbd7d86692ef"
         },
         {
           "name": "03-customer-systems.png",
-          "sha256": "1bdc89df4bcb8936b163a80df7204a1eff5bbbedea96f568b706e0cfb70ddb56"
+          "sha256": "e599c55d11bf0c93d7c57d95cfd48e532d01a84d12c3cc0845b198bc5d9ee319"
         },
         {
           "name": "04-job-billing.png",
-          "sha256": "b22c18c46f5f96b6f290730379a0180e1896711793ce45d38e6ba1ac8777489b"
+          "sha256": "fb7c8d0c49af6c1201d9fe069389046cf39cfdba4560f22c0b9c63265db0974e"
         },
         {
           "name": "05-field-collection.png",
-          "sha256": "da2f3ea015c92258b101b295d42e03ec0cfd405eefc02849e3a3f6bd8373ca69"
+          "sha256": "a9b23902e846bf2e36ad1b7cee5399a55c0edec30e7f8aaf448dbf483eeb052c"
         },
         {
           "name": "06-quickbooks-sales.png",
-          "sha256": "4391682cc09c404f037d28b43e12b0cc49627573492b0cb3f5ccdb4fcea112f9"
+          "sha256": "2cce6a0c0b420d306371d84f339412696571e48a164f9383847df22d7740c3d0"
         }
       ]
     },
