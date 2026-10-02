@@ -102,6 +102,82 @@ class StaffPushNotificationTests(unittest.TestCase):
         thread.start()
         return server, thread, f"http://127.0.0.1:{server.server_port}"
 
+    @staticmethod
+    def apns_response(
+        status: HTTPStatus,
+        *,
+        reason: str | None = None,
+        apns_id: str | None = None,
+    ) -> mock.Mock:
+        response = mock.Mock()
+        response.status_code = int(status)
+        response.headers = {"apns-id": apns_id} if apns_id is not None else {}
+        response.content = b"" if reason is None else json.dumps({"reason": reason}).encode("utf-8")
+        response.json.return_value = {"reason": reason} if reason is not None else {}
+        return response
+
+    def test_apns_provider_jwt_cache_refreshes_before_apple_expiry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.configured_backend(root):
+                backend.clear_apns_authentication_token_cache()
+                issued = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+
+                first = backend.apns_authentication_token(now=issued)
+                cached = backend.apns_authentication_token(now=issued + timedelta(minutes=49))
+                refreshed = backend.apns_authentication_token(now=issued + timedelta(minutes=51))
+                forced = backend.apns_authentication_token(
+                    now=issued + timedelta(minutes=52),
+                    force_refresh=True,
+                )
+
+        self.assertEqual(first, cached)
+        self.assertNotEqual(first, refreshed)
+        self.assertNotEqual(refreshed, forced)
+
+    def test_expired_apns_provider_token_is_refreshed_and_retried_once(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.configured_backend(root):
+                now = datetime.now(timezone.utc)
+                backend.APNS_AUTH_TOKEN_CACHE.update(
+                    {
+                        "configuration_fingerprint": backend.apns_configuration_fingerprint(),
+                        "issued_at": int(now.timestamp()),
+                        "token": "stale-provider-token",
+                    }
+                )
+                expired = self.apns_response(
+                    HTTPStatus.FORBIDDEN,
+                    reason="ExpiredProviderToken",
+                )
+                accepted_id = str(uuid.uuid4())
+                accepted = self.apns_response(HTTPStatus.OK, apns_id=accepted_id)
+                client_class = mock.MagicMock()
+                client = client_class.return_value.__enter__.return_value
+                client.post.side_effect = [expired, accepted]
+                fake_httpx = mock.Mock(Client=client_class)
+
+                with mock.patch.dict("sys.modules", {"httpx": fake_httpx}):
+                    status, reason, apns_id = backend.send_apns_request(
+                        device_token="ab" * 32,
+                        environment="production",
+                        payload={"aps": {"alert": "test"}},
+                        collapse_id="field-payment-test",
+                    )
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertIsNone(reason)
+        self.assertEqual(apns_id, accepted_id)
+        self.assertEqual(client.post.call_count, 2)
+        authorization_headers = [
+            call.kwargs["headers"]["authorization"]
+            for call in client.post.call_args_list
+        ]
+        self.assertEqual(authorization_headers[0], "bearer stale-provider-token")
+        self.assertTrue(authorization_headers[1].startswith("bearer "))
+        self.assertNotEqual(authorization_headers[0], authorization_headers[1])
+
     def test_registration_is_session_bound_encrypted_and_assignment_delivery_is_private(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
