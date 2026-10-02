@@ -1,6 +1,39 @@
 import Foundation
 import SwiftData
 
+/// Checks the one job attached to a PDF without enumerating unrelated jobs.
+/// Only field access needs the technician census to resolve crew assignments.
+@MainActor
+enum CustomerDocumentServiceCallAccess {
+    @discardableResult
+    static func require(callID: UUID, customer: Customer, context: ModelContext,
+                        email: String?, users: [AppUser]) throws -> ServiceCall {
+        var query = FetchDescriptor<ServiceCall>(predicate: #Predicate { $0.id == callID })
+        query.fetchLimit = 2
+        let matches = try context.fetch(query)
+        guard matches.count == 1, let call = matches.first, call.customer === customer else {
+            throw GmailComposeError.access
+        }
+        try require(call: call, context: context, email: email, users: users)
+        return call
+    }
+
+    static func require(call: ServiceCall, context: ModelContext,
+                        email: String?, users: [AppUser]) throws {
+        let role = AppAccess.activeRole(email: email, users: users)
+        let technicians: [Technician]
+        if role == .fieldTechnician {
+            technicians = try context.fetch(FetchDescriptor<Technician>())
+        } else {
+            technicians = []
+        }
+        guard AppAccess.canAccessServiceCall(call, email: email, users: users,
+                                             serviceCalls: [call], technicians: technicians) else {
+            throw GmailComposeError.access
+        }
+    }
+}
+
 /// Owns only a newly rendered URL until a caller adopts it for a preview,
 /// attachment or draft. A later source change cannot erase a retained export.
 @MainActor
