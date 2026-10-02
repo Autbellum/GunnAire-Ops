@@ -5109,6 +5109,14 @@ GunnAire
                         onOpenVisit: { visit in GunnAireAppIntentRouter.storeScheduleCallRoute(visit.id) }
                     )
                 }
+
+                // Job documentation has no other status surface, so a refused
+                // progress invoice would otherwise leave the screen unchanged.
+                if !actionMessage.isEmpty {
+                    Text(actionMessage)
+                        .font(.caption)
+                        .accessibilityIdentifier("ProjectBillingStatus")
+                }
             }
         }
     }
@@ -5506,25 +5514,50 @@ GunnAire
             _ = try BillingTaxAddressContext.forPublication(.invoice(invoice))
             let firstSave = await prepareNewBillingDocument(.invoice(invoice))
             guard firstSave.ready else { return }
-            guard activeServiceCall === call, projectEstimate === estimate,
-                  isCurrentRecord(call), isCurrentRecord(estimate), isCurrentRecord(milestone),
-                  call.customer === invoice.customer,
-                  call.serviceLocationID == invoice.serviceLocationID,
-                  call.siteAddress == invoice.siteAddress,
-                  currentProjectMilestones.contains(where: { $0 === milestone }),
-                  AppAccess.canIssueProjectProgressInvoices(email: currentUserEmail, users: users),
-                  AppAccess.canAccessServiceCall(call, email: currentUserEmail, users: users,
-                    serviceCalls: serviceCalls, technicians: technicians),
-                  ProjectBillingPolicy.canInvoice(milestone, estimate: estimate,
-                    scheduledVisit: milestone.scheduledVisitID.flatMap { visitID in
-                        serviceCalls.first { $0.id == visitID }
-                    }),
-                  !invoices.contains(where: { $0.id == invoiceID }),
-                  (try? ProjectBillingPolicy.progressDocumentSnapshotJSON(
-                    for: milestone, estimate: estimate,
-                    milestones: currentProjectMilestones, invoices: invoices
-                  )) == snapshotJSON else {
-                actionMessage = "The approved milestone or job changed while preparing this invoice. Review it and try again."
+            // Same checks, same order, same refusal - each one now carries the
+            // name it reports when it is the one that stopped the invoice.
+            if let changed = ProgressInvoiceChangeAudit.firstChange(in: [
+                .init("the open job") { activeServiceCall === call },
+                .init("the approved estimate") { projectEstimate === estimate },
+                .init("the job record") { isCurrentRecord(call) },
+                .init("the estimate record") { isCurrentRecord(estimate) },
+                .init("the milestone record") { isCurrentRecord(milestone) },
+                .init("the job customer") { call.customer === invoice.customer },
+                .init("the service location") { call.serviceLocationID == invoice.serviceLocationID },
+                .init("the site address") { call.siteAddress == invoice.siteAddress },
+                .init("the project milestone list") {
+                    currentProjectMilestones.contains(where: { $0 === milestone })
+                },
+                .init("your progress invoice access") {
+                    AppAccess.canIssueProjectProgressInvoices(email: currentUserEmail, users: users)
+                },
+                .init("your access to this job") {
+                    AppAccess.canAccessServiceCall(call, email: currentUserEmail, users: users,
+                        serviceCalls: serviceCalls, technicians: technicians)
+                },
+                .init("the milestone's readiness to bill") {
+                    ProjectBillingPolicy.canInvoice(milestone, estimate: estimate,
+                        scheduledVisit: milestone.scheduledVisitID.flatMap { visitID in
+                            serviceCalls.first { $0.id == visitID }
+                        })
+                },
+                .init("an invoice already issued for this milestone") {
+                    !invoices.contains(where: { $0.id == invoiceID })
+                },
+                .init("the approved milestone allocation") {
+                    // Canonical bytes, not raw: the allocation is re-derived
+                    // here, and the two snapshot producers disagree on key
+                    // order. Every key still has to match, malformed included.
+                    CatalogSnapshotCanonicalJSON.describesSameSnapshot(
+                        try? ProjectBillingPolicy.progressDocumentSnapshotJSON(
+                            for: milestone, estimate: estimate,
+                            milestones: currentProjectMilestones, invoices: invoices
+                        ),
+                        snapshotJSON)
+                }
+            ]) {
+                actionMessage = "The approved milestone or job changed while preparing this invoice "
+                    + "(\(changed)). Review it and try again."
                 return
             }
             let priorStatus = milestone.status
@@ -10006,6 +10039,15 @@ GunnAire
             actionMessage = documentDiscountValidationMessage
             return
         }
+        // Lines are already required above, so an absent snapshot means the
+        // encoding or the tax-address attachment failed. Refuse here, before any
+        // customer or job is touched, rather than saving a billing document with
+        // no line provenance to audit or publish.
+        guard selectedCatalogSnapshotJSON != nil else {
+            actionMessage = "The catalog lines for this document could not be recorded. "
+                + "Reopen the lines, confirm the service address, and save again."
+            return
+        }
 
         isCreatingDocument = true
         let customer = resolveCustomerForDocument()
@@ -10077,7 +10119,8 @@ GunnAire
                   sourceCall?.customer === customer || sourceCall == nil,
                   (sourceCall?.serviceLocationID ?? selectedServiceLocationID) == estimate.serviceLocationID,
                   selectedLineItems.map(\.id) == sourceLineItemIDs,
-                  selectedCatalogSnapshotJSON == estimate.catalogSnapshotJSON,
+                  CatalogSnapshotCanonicalJSON.describesSameSnapshot(
+                    selectedCatalogSnapshotJSON, estimate.catalogSnapshotJSON),
                   selectedSummary == estimate.lineItemSummary,
                   selectedTotal == estimate.amount,
                   selectedSiteAddressSnapshot == estimate.siteAddress,
@@ -10213,7 +10256,8 @@ GunnAire
                       currentJobInvoice == nil,
                       sourceCall?.canCreateInvoiceDocument ?? true,
                       selectedLineItems.map(\.id) == sourceLineItemIDs,
-                      selectedCatalogSnapshotJSON == invoice.catalogSnapshotJSON,
+                      CatalogSnapshotCanonicalJSON.describesSameSnapshot(
+                    selectedCatalogSnapshotJSON, invoice.catalogSnapshotJSON),
                       selectedSummary == invoice.lineItemSummary,
                       selectedTotal == invoice.amount,
                       selectedSiteAddressSnapshot == invoice.siteAddress,

@@ -1524,3 +1524,30 @@ at the start of every turn; append to it rather than rewriting it.
   Lesson recorded for both agents: a helper reached from `.onAppear` is an entry path as well as a
   wake path. Check every call site before adding a condition to a shared one, and do not describe
   untested call sites as unaffected.
+
+- 2026-10-01 Claude, Autofix on PR #27: shard 1's five failures are the billing-save cluster and
+  nothing else, so the two earlier fixes are confirmed holding — the log has **zero** `-34018`
+  keychain errors (`d8e0be2`) and **zero** empty-inbox Mail failures (`ac60729`). The remaining five
+  are `GunnAire_OpsUITests.swift:4591`, `:5078`, `:5119`, `:5252`, `:5425`, all "tap Save, the
+  confirmation never appears", whose fix already existed on
+  `fix/progress-invoice-visible-failure-20261001` but had never reached this branch.
+  Cherry-picked exactly the two **natively validated** commits from that branch:
+  `da90fed` (clause 14 compares canonical snapshot bytes; `ProgressInvoiceChangeAudit` names the
+  first failed revalidation; `projectBillingSection` renders it as `ProjectBillingStatus`) — this
+  agent ran both progress-invoice UI cases plus four unit suites green on simulator F4ECDEC1 — and
+  `c5d86c4` (the same canonical comparison at both composer guards, plus the fail-closed refusal
+  when `selectedCatalogSnapshotJSON` is nil, before any customer or job is touched) — root ran the
+  three management-billing UI cases 3/3 green on combined 0119 with that guard.
+  Deliberately **excluded** `8e1411f`, the `FieldFormJSON.parse` gate: it has no native validation
+  yet and carries an assertion root already corrected on the release branch. Verified absent here —
+  `FieldFormJSON.parse` appears zero times in `CatalogSnapshotCanonicalJSON.swift` — so this branch
+  keeps the version whose behaviour was measured, and its duplicate-key caveat is unreachable at
+  these three call sites because both sides of every comparison are in-process encoder output.
+  Only `AGENTS.md` conflicted (append-only log); every Swift file applied cleanly, `BillingDocumentsView.swift`
+  auto-merged, and the resolution kept this branch's log and appended this entry instead of replaying
+  the release branch's. All five changed Swift files pass `swiftc -frontend -parse` (iOS simulator
+  target) and `git diff --check`. Not compiled in the app target here: the shared DerivedData is in
+  use for root's 0119 release validation, so CI is the gate.
+  Open question for root, unchanged from the last report and not decided by this agent: with 0119
+  carrying the release, is PR #27 still the integration target or superseded? If superseded, its CI
+  cycles are not worth chasing.
