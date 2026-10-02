@@ -4,6 +4,24 @@ import Testing
 @testable import GunnAire_Ops
 
 @MainActor struct CloudKitStaffSetupTests {
+    @Test func accountChangeNotificationLatchesRelaunchAndWorkspaceGateCannotBeBypassed() async {
+        let notifications = NotificationCenter()
+        let fence = CloudKitStaffAccountFence(center: notifications)
+        let originalGeneration = fence.generation
+        #expect(!fence.mustRestart)
+
+        notifications.post(name: .CKAccountChanged, object: nil)
+        await Task.yield()
+
+        #expect(fence.mustRestart)
+        #expect(fence.generation != originalGeneration)
+        #expect(CloudKitStaffRelaunchPolicy.requiresRestart(staffAccountChanged: fence.mustRestart, workspacePhase: .ready))
+        #expect(CloudKitStaffRelaunchPolicy.requiresRestart(staffAccountChanged: false, workspacePhase: .blocked(.restartRequired)))
+        #expect(!CloudKitStaffRelaunchPolicy.requiresRestart(staffAccountChanged: false, workspacePhase: .blocked(.configuration)))
+        #expect(CloudKitStaffRelaunchPolicy.message.contains("Close and reopen"))
+        #expect(CloudKitStaffRelaunchPolicy.message.contains("saved work is retained"))
+    }
+
     @MainActor final class Fixture {
         let base = CloudKitStaffSharingTests()
         var stamp: CloudKitStaffSetupStamp?
