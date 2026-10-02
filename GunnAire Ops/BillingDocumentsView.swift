@@ -57,6 +57,7 @@ struct BillingDocumentsView: View {
     @State private var expandedInvoiceIDs: Set<UUID> = []
     @State private var completedNewDocument: QuickBooksBillingDocument?
     @State private var completedNewDocumentHadWriteAheadMarker = false
+    @State private var estimateSyncGate = QuickBooksSelectedItemCaptureGate()
     @State private var newDocumentSaveConfirmed = false
     @State private var standaloneInvoiceWorkType: InvoiceWorkType = .service
     @State private var showingNewDocumentDismissConfirmation = false
@@ -1860,7 +1861,7 @@ GunnAire
                                     Text(document.snapshotJSON.map { CatalogLineItemSnapshot.decoded(from: $0).map(\.customerSummary).joined(separator: "\n") } ?? "")
                                         .accessibilityIdentifier("ManagementBillingSavedItems")
                                 }
-                                BillingPublicationReviewLink(document: document, context: modelContext)
+                                BillingPublicationReviewLink(document: document, context: modelContext, availableItems: items)
                                 Button("Sync Saved \(document.label)") { publishBillingDocument(document, explicitReview: true) }
                                     .disabled(!canAttemptSharedBilling || billingSyncLifecycles["\(document.label)-\(document.id)"] != nil)
                                 if case .estimate(let estimate) = document {
@@ -2222,11 +2223,13 @@ GunnAire
               completedNewDocument?.id == document.id else { return }
         isCreatingDocument = true
         defer { isCreatingDocument = false }
+        let itemCapture = try? selectedItemCapture(for: document)
         guard saveBillingContext(failureMessage: "Could not save the original draft") else { return }
         newDocumentSaveConfirmed = true
         actionMessage = "\(document.label) saved locally."
         recordNewlySavedBillingDocument(document, publishWhenAvailable: true,
-            hadWriteAheadMarker: completedNewDocumentHadWriteAheadMarker)
+            hadWriteAheadMarker: completedNewDocumentHadWriteAheadMarker,
+            selectedItemCapture: itemCapture)
     }
 
     @ViewBuilder
@@ -3061,7 +3064,7 @@ GunnAire
                                 }
                                 .buttonStyle(.bordered)
 
-                                BillingPublicationReviewLink(document: .estimate(estimate), context: modelContext)
+                                BillingPublicationReviewLink(document: .estimate(estimate), context: modelContext, availableItems: items)
                                 if !QuickBooksEstimatePublicationRecovery.queuedEstimates(from: [estimate]).isEmpty {
                                     Button("Sync Saved Estimate") {
                                         publishBillingDocument(.estimate(estimate), explicitReview: true)
@@ -3920,7 +3923,7 @@ GunnAire
                                                 .font(.caption2)
                                                 .foregroundColor(.secondary)
                                         }
-                                        BillingPublicationReviewLink(document: .estimate(estimate), context: modelContext)
+                                        BillingPublicationReviewLink(document: .estimate(estimate), context: modelContext, availableItems: items)
                                         if !QuickBooksEstimatePublicationRecovery.queuedEstimates(from: [estimate]).isEmpty {
                                             Button("Sync Saved Estimate") {
                                                 publishBillingDocument(.estimate(estimate), explicitReview: true)
@@ -4057,7 +4060,7 @@ GunnAire
                                                 .font(.caption2)
                                                 .foregroundColor(.green)
                                         }
-                                        BillingPublicationReviewLink(document: .invoice(invoice), context: modelContext)
+                                        BillingPublicationReviewLink(document: .invoice(invoice), context: modelContext, availableItems: items)
                                             .buttonStyle(.plain)
                                         if invoice.quickBooksSyncState != "synced" {
                                             Button("Sync Saved Invoice") { publishBillingDocument(.invoice(invoice), explicitReview: true) }
@@ -4568,7 +4571,7 @@ GunnAire
                         }
                         if selectedJobStage == .billing {
                             if let invoice = currentJobInvoice {
-                                BillingPublicationReviewLink(document: .invoice(invoice), context: modelContext)
+                                BillingPublicationReviewLink(document: .invoice(invoice), context: modelContext, availableItems: items)
                             }
                         }
                         jobMaterialsSection(for: call)
@@ -10115,6 +10118,7 @@ GunnAire
                 amount: selectedTotal,
                 notes: trimmedNotes.isEmpty ? nil : trimmedNotes
             )
+            let itemCapture = try? selectedItemCapture(for: .estimate(estimate))
             let firstSave = await prepareNewBillingDocument(.estimate(estimate))
             guard firstSave.ready, isCreatingDocument else {
                 isCreatingDocument = false
@@ -10169,7 +10173,7 @@ GunnAire
             }
             if startsNewDocument { newDocumentSaveConfirmed = true }
             recordNewlySavedBillingDocument(.estimate(estimate), publishWhenAvailable: true,
-                hadWriteAheadMarker: firstSave.markerIssue == nil)
+                hadWriteAheadMarker: firstSave.markerIssue == nil, selectedItemCapture: itemCapture)
             if openInvoiceAfterEstimateCreation {
                 selectedDocumentKind = .invoice
                 if firstSave.markerIssue == nil {
@@ -10454,12 +10458,27 @@ GunnAire
 
     private func recordNewlySavedBillingDocument(_ document: QuickBooksBillingDocument,
                                                  publishWhenAvailable: Bool,
-                                                 hadWriteAheadMarker: Bool = false) {
+                                                 hadWriteAheadMarker: Bool = false,
+                                                 selectedItemCapture: QuickBooksSelectedItemCapture? = nil) {
+        if case .estimate = document, publishWhenAvailable, canAttemptSharedBilling,
+           let selectedItemCapture {
+            do {
+                try AutomaticOutboundSync.shared.stageNewlySavedEstimate(document, context: modelContext,
+                    selectedItemCapture: selectedItemCapture)
+            } catch {
+                actionMessage = "Estimate is saved locally. Automatic QuickBooks preparation stopped: \(error.localizedDescription) Review the saved estimate before syncing."
+                return
+            }
+        }
         Task { @MainActor in
             do {
                 let bound = try await AutomaticOutboundSync.shared.recordNewlySaved(document, context: modelContext)
                 if bound && publishWhenAvailable && canAttemptSharedBilling {
-                    publishBillingDocument(document)
+                    if case .estimate = document, selectedItemCapture == nil {
+                        actionMessage = "Estimate saved locally. Its selected items could not be captured at save time. Review the saved estimate before sending it to QuickBooks."
+                    } else {
+                        publishBillingDocument(document, selectedItemCapture: selectedItemCapture)
+                    }
                 } else if !bound && hadWriteAheadMarker {
                     actionMessage = "\(document.label) is saved locally. QuickBooks company verification will retry automatically when connected; delivery is not yet confirmed."
                 } else if !bound {
@@ -10474,17 +10493,52 @@ GunnAire
     }
 
     private func publishBillingDocument(_ document: QuickBooksBillingDocument,
-                                        explicitReview: Bool = false) {
+                                        explicitReview: Bool = false,
+                                        selectedItemCapture: QuickBooksSelectedItemCapture? = nil) {
         guard canAttemptSharedBilling else { return }
+        let captured: QuickBooksSelectedItemCapture?
+        if case .estimate = document {
+            do {
+                if let selectedItemCapture {
+                    captured = selectedItemCapture
+                } else if explicitReview {
+                    guard let ready = try estimateSyncGate.takeOrPrepare(document: document, context: modelContext,
+                        prepare: { try self.selectedItemCapture(for: document) }) else {
+                        actionMessage = "Selected estimate items are prepared. Tap Sync Saved Estimate again to send this unchanged draft to QuickBooks."
+                        return
+                    }
+                    captured = ready
+                } else {
+                    actionMessage = "Estimate saved locally. Its save-time item capture is unavailable; review the saved estimate before syncing."
+                    return
+                }
+            }
+            catch {
+                actionMessage = "Estimate is saved locally. Its selected items need review before QuickBooks can receive it: \(error.localizedDescription)"
+                return
+            }
+        } else { captured = nil }
         actionMessage = document.label + " saved. Checking the business connection…"
         AutomaticOutboundSync.shared.publish(document, context: modelContext,
-            explicitReview: explicitReview) { result in
+            explicitReview: explicitReview, selectedItemCapture: captured) { result in
             switch result {
             case .success(let message): actionMessage = message
             case .failure(let error):
                 actionMessage = document.label + " is saved locally. " + error.localizedDescription
             }
         }
+    }
+
+    private func selectedItemCapture(for document: QuickBooksBillingDocument) throws -> QuickBooksSelectedItemCapture {
+        let selected = Set(CatalogLineItemSnapshot.decoded(from: document.snapshotJSON)
+            .flatMap { [$0.catalogItemID] + $0.soldLeaves.map(\.catalogItemID) })
+        guard !selected.isEmpty, selected.count <= 20 else { throw QuickBooksBillingWorkflowError.changed }
+        var available: [UUID: Item] = [:]
+        for item in items where selected.contains(item.id) { available[item.id] = item }
+        for item in newlyCreatedLineItems.values where selected.contains(item.id) { available[item.id] = item }
+        guard available.count == selected.count else { throw QuickBooksBillingWorkflowError.changed }
+        return try QuickBooksSelectedItemCapture(document: document,
+            items: selected.sorted { $0.uuidString < $1.uuidString }.compactMap { available[$0] }, context: modelContext)
     }
 
     private func itemNeedsQuickBooksSync(_ item: Item) -> Bool {
