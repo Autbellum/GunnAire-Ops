@@ -2,7 +2,7 @@ import Foundation
 import SwiftData
 
 nonisolated enum GoogleCalendarWorkflowError: LocalizedError, Equatable {
-    case busy, accessDenied, changed, identity, readOnly, saveFailed, needsReview, invalidDates, hasJobHistory, remoteChanged, unconfirmedWrite
+    case busy, accessDenied, changed, identity, readOnly, saveFailed, needsReview, invalidDates, hasJobHistory, remoteChanged, unconfirmedWrite, unconfirmedReadback
     case alertReview(String)
 
     var errorDescription: String? {
@@ -19,6 +19,7 @@ nonisolated enum GoogleCalendarWorkflowError: LocalizedError, Equatable {
         case .hasJobHistory: "This job has work or billing history. Open job details and use Cancel Job to preserve its records."
         case .remoteChanged: "This event changed in Google Calendar. Your local appointment was retained. Review the latest event before trying again."
         case .unconfirmedWrite: "Google may have received the request. The original event link and appointment were retained; review the original calendar before retrying."
+        case .unconfirmedReadback: "Google accepted the event request, but the original event could not be read back from its calendar. The saved event ID was retained; check the original event before retrying."
         }
     }
 }

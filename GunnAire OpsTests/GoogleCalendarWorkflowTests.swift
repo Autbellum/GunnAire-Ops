@@ -18,6 +18,7 @@ struct GoogleCalendarWorkflowTests {
         var failPatch = false
         var rejectedCreateStatus: Int?
         var deniedEventCalendarID: String?
+        var createdEventReadbackStatus: Int?
         var inspectionNextPageToken: String?
         var inspectionCalendarListNextPageToken: String?
         var excludedWindowCalendarIDs: Set<String> = []
@@ -123,7 +124,10 @@ struct GoogleCalendarWorkflowTests {
                     payload["nextPageToken"] = inspectionNextPageToken
                 }
             } else if request.httpMethod == "GET" {
-                if calendar == deniedEventCalendarID { status = 403 }
+                if remote[key(calendar, id)] != nil,
+                   requests.contains(where: { $0.httpMethod == "POST" }),
+                   let createdEventReadbackStatus { status = createdEventReadbackStatus }
+                else if calendar == deniedEventCalendarID { status = 403 }
                 else if let existing = remote[key(calendar, id)] { payload = existing }
                 else { status = 404 }
             } else if request.httpMethod == "POST" {
@@ -1441,6 +1445,68 @@ struct GoogleCalendarWorkflowTests {
         #expect(f.call.notes == "Saved field observations")
         #expect(f.customer.address == "Local service address")
         #expect(f.requests.allSatisfy { !$0.url!.path.contains("/primary/") })
+        #expect(f.requests.contains { $0.httpMethod == "GET" &&
+            $0.url?.path.hasSuffix("/calendars/\(f.email)/events/\(id)") == true })
+        let reminders = try #require(f.remote[f.key(f.email, id)]?["reminders"] as? [String: Any])
+        #expect(reminders["useDefault"] as? Bool == false)
+        let overrides = try #require(reminders["overrides"] as? [[String: Any]])
+        #expect(overrides.contains { $0["method"] as? String == "popup" && $0["minutes"] as? Int == 30 })
+    }
+
+    @Test func acceptedCreateWithoutExactReadbackRetainsReservationAndNeverPostsAgain() async throws {
+        let f = try Fixture()
+        f.createdEventReadbackStatus = 404
+        let result = try await f.publish()
+        failed(result)
+        if case .failure(let error) = result {
+            #expect(error as? GoogleCalendarWorkflowError == .unconfirmedReadback)
+        }
+        let reserved = try #require(f.call.googleEventID)
+        #expect(f.call.googleEventConfirmedAt == nil)
+        #expect(f.call.googleCalendarPendingAt != nil)
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+        f.createdEventReadbackStatus = nil
+        _ = try await f.publish().get()
+        #expect(f.call.googleEventID == reserved)
+        #expect(f.call.googleEventConfirmedAt != nil)
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+    }
+
+    @Test func deniedReadbackAfterAcceptedCreateCannotReleaseReservedIdentity() async throws {
+        let f = try Fixture()
+        f.createdEventReadbackStatus = 403
+        failed(try await f.publish())
+        let reserved = try #require(f.call.googleEventID)
+        #expect(f.call.googleCalendarID == f.email)
+        #expect(f.call.googleEventConfirmedAt == nil)
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+        f.createdEventReadbackStatus = nil
+        _ = try await f.publish().get()
+        #expect(f.call.googleEventID == reserved)
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+    }
+
+    @Test func strippedPopupCannotBeReportedAsConfirmedDelivery() async throws {
+        let f = try Fixture()
+        let id = GoogleCalendarScheduleSync.eventID(for: f.call.id)
+        f.afterWrite = { request in
+            if request.httpMethod == "POST" {
+                f.remote[f.key(f.email, id)]?["reminders"] =
+                    ["useDefault": false, "overrides": []] as [String: Any]
+            }
+        }
+        let result = try await f.publish()
+        failed(result)
+        if case .failure(let error) = result {
+            #expect(error.localizedDescription.contains("30-minute popup"))
+        }
+        #expect(f.call.googleEventID == id)
+        #expect(f.call.googleEventConfirmedAt == nil)
+        #expect(f.call.googleCalendarPendingAt != nil)
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+        f.afterWrite = nil
+        failed(try await f.publish())
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
     }
 
     @Test func lostCreateResponseRecoversOriginalEventWithoutAnotherPost() async throws {

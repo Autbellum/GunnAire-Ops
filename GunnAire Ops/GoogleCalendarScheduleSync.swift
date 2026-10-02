@@ -1762,8 +1762,9 @@ enum GoogleCalendarScheduleSync {
             properties[GoogleCalendarStaffDelivery.managedEmailsKey] = (proposal.attendees ?? []).map(\.email).sorted().joined(separator: ",")
             proposal.extendedProperties = .init(privateProperties: properties)
             proposal.id = id
+            let created: GoogleCalendarEvent
             do {
-                saved = try await workflow.receive {
+                created = try await workflow.receive {
                     workflow.auth.createCalendarEvent(calendarID: calendar.id, event: proposal,
                         operation: workflow.operation, completion: $0)
                 }
@@ -1790,14 +1791,35 @@ enum GoogleCalendarScheduleSync {
                 }
                 throw GoogleAuthError.http(statusCode: code)
             }
+            try requireCall(call, workflow: workflow)
+            try validateRemote(created, id: id, call: call)
+            guard remoteEventMatchesExactSchedule(call: call, remoteEvent: created) else {
+                throw GoogleCalendarWorkflowError.needsReview
+            }
+            // A POST response is not evidence that the event is visible on
+            // the selected Google calendar. Read back only the reserved ID;
+            // a failed read retains it so recovery cannot create twice.
+            do {
+                saved = try await workflow.receive {
+                    workflow.auth.fetchCalendarEvent(calendarID: calendar.id, eventID: id,
+                        operation: workflow.operation, completion: $0)
+                }
+            } catch GoogleAuthError.http(statusCode: 404) {
+                throw GoogleCalendarWorkflowError.unconfirmedReadback
+            }
         }
         try requireCall(call, workflow: workflow)
         try validateRemote(saved, id: id, call: call)
         guard remoteEventMatchesExactSchedule(call: call, remoteEvent: saved) else {
             throw GoogleCalendarWorkflowError.needsReview
         }
-        if recipients != nil {
-            _ = try await deliverToStaff(call: call, remote: saved, calendarID: calendar.id, workflow: workflow)
+        let delivered = recipients != nil
+            ? try await deliverToStaff(call: call, remote: saved, calendarID: calendar.id, workflow: workflow)
+            : saved
+        if id == eventID(for: call.id), call.googleEventConfirmedAt == nil,
+           !hasExplicitAppointmentPopup(delivered) {
+            throw GoogleCalendarWorkflowError.alertReview(
+                "The Google event exists, but its 30-minute popup reminder was not confirmed. Check the original event in Google Calendar before relying on an alert.")
         }
         try requireCall(call, workflow: workflow)
         let previousCalendar = call.googleCalendarID, previousID = call.googleEventID
@@ -1825,6 +1847,11 @@ enum GoogleCalendarScheduleSync {
         clearStaffInvitationReview(for: call)
         clearCalendarCallLocallyEdited(call)
         return "Schedule confirmed in Google Calendar. Assigned staff invitations, if any, use each recipient's Google Calendar notification settings; enable this calendar and alerts in your calendar app."
+    }
+
+    private static func hasExplicitAppointmentPopup(_ event: GoogleCalendarEvent) -> Bool {
+        guard let reminders = event.reminders, !reminders.useDefault else { return false }
+        return reminders.overrides?.contains { $0.method == "popup" && $0.minutes == 30 } == true
     }
 
     /// Adopt only the original, explicitly edited imported event. A marker
