@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import CryptoKit
 
 nonisolated enum BillingPDFArchiveClientError: Error, LocalizedError, Equatable {
     case access
@@ -44,6 +45,8 @@ nonisolated struct BillingPDFArchiveReservation: Decodable, Equatable, Sendable 
     let contentDigest: String?
     let driveFileID: String?
     let confirmedLink: String?
+    let artifactReady: Bool?
+    let artifactBytes: Int?
 
     enum CodingKeys: String, CodingKey {
         case key
@@ -54,11 +57,23 @@ nonisolated struct BillingPDFArchiveReservation: Decodable, Equatable, Sendable 
         case contentDigest = "content_digest"
         case driveFileID = "drive_file_id"
         case confirmedLink = "confirmed_link"
+        case artifactReady = "artifact_ready"
+        case artifactBytes = "artifact_bytes"
     }
 }
 
 nonisolated struct BillingPDFArchiveResponse: Decodable, Sendable {
     let reservation: BillingPDFArchiveReservation?
+}
+
+nonisolated struct BillingPDFArtifactReceipt: Decodable, Sendable {
+    let fileSizeBytes: Int
+    let fileSHA256: String
+}
+
+nonisolated struct BillingPDFArtifactResponse: Decodable, Sendable {
+    let reservation: BillingPDFArchiveReservation
+    let artifact: BillingPDFArtifactReceipt
 }
 
 nonisolated struct BillingPDFArchiveIdentity: Decodable, Sendable {
@@ -205,7 +220,8 @@ actor BillingPDFArchiveClient {
     }
 
     func bindFile(_ reservation: BillingPDFArchiveReservation, fileID: String) async throws -> BillingPDFArchiveReservation {
-        guard let token = reservation.leaseToken, Self.validFileID(fileID) else { throw BillingPDFArchiveClientError.changed }
+        guard let token = reservation.leaseToken, reservation.artifactReady == true,
+              Self.validFileID(fileID) else { throw BillingPDFArchiveClientError.changed }
         guard let result = try await perform("POST", operation: "file", kind: reservation.key.documentKind,
             documentID: reservation.key.documentID, sourceDigest: reservation.key.sourceDigest,
             rendererVersion: reservation.key.rendererVersion,
@@ -216,7 +232,7 @@ actor BillingPDFArchiveClient {
     }
 
     func confirm(_ reservation: BillingPDFArchiveReservation) async throws -> BillingPDFArchiveReservation {
-        guard let token = reservation.leaseToken,
+        guard let token = reservation.leaseToken, reservation.artifactReady == true,
               let fileID = reservation.driveFileID,
               let digest = reservation.contentDigest else { throw BillingPDFArchiveClientError.changed }
         guard let result = try await perform("POST", operation: "confirm", kind: reservation.key.documentKind,
@@ -225,6 +241,63 @@ actor BillingPDFArchiveClient {
             extra: ["leaseToken": token.uuidString.lowercased(), "fileID": fileID,
                     "contentDigest": digest]) else { throw BillingPDFArchiveClientError.invalid }
         return result
+    }
+
+    /// Accepts immutable PDF bytes from a background rendering checkpoint. The
+    /// server keeps one copy under its reservation ID, so another device can
+    /// recover without inserting a duplicate CloudKit attachment record.
+    func storeArtifact(_ data: Data, for reservation: BillingPDFArchiveReservation) async throws -> BillingPDFArchiveReservation {
+        guard let token = reservation.leaseToken, data.count >= 5,
+              data.count <= 25 * 1024 * 1024, data.starts(with: Data("%PDF-".utf8)) else {
+            throw BillingPDFArchiveClientError.invalid
+        }
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        guard reservation.contentDigest == nil || reservation.contentDigest == digest else {
+            throw BillingPDFArchiveClientError.changed
+        }
+        try validate(reservation.key)
+        try await check()
+        var fields = identityFields(for: reservation.key)
+        fields["leaseToken"] = token.uuidString.lowercased()
+        fields["contentDigest"] = digest
+        fields["dataBase64"] = data.base64EncodedString()
+        let body = try JSONEncoder().encode(fields)
+        guard body.count <= 35_000_000 else { throw BillingPDFArchiveClientError.invalid }
+        let response = try await request(Self.endpoint + "/artifact", "POST", body)
+        try await check()
+        guard response.count <= 32_768,
+              let decoded = try? JSONDecoder().decode(BillingPDFArtifactResponse.self, from: response),
+              decoded.reservation.key == reservation.key,
+              decoded.reservation.attachmentID == reservation.attachmentID,
+              decoded.reservation.renderedAt == reservation.renderedAt,
+              decoded.reservation.leaseToken == reservation.leaseToken,
+              decoded.reservation.contentDigest == digest,
+              decoded.reservation.artifactReady == true,
+              decoded.reservation.artifactBytes == data.count,
+              decoded.artifact.fileSizeBytes == data.count,
+              decoded.artifact.fileSHA256 == digest else { throw BillingPDFArchiveClientError.changed }
+        return decoded.reservation
+    }
+
+    func readArtifact(for reservation: BillingPDFArchiveReservation) async throws -> Data {
+        try validate(reservation.key)
+        guard let digest = reservation.contentDigest, Self.validDigest(digest) else {
+            throw BillingPDFArchiveClientError.invalid
+        }
+        try await check()
+        var components = URLComponents()
+        components.path = Self.endpoint + "/artifact"
+        components.queryItems = identityFields(for: reservation.key).sorted { $0.key < $1.key }.map {
+            URLQueryItem(name: $0.key, value: $0.value)
+        }
+        guard let path = components.string else { throw BillingPDFArchiveClientError.invalid }
+        let data = try await request(path, "GET", nil)
+        try await check()
+        guard (5...25 * 1024 * 1024).contains(data.count), data.starts(with: Data("%PDF-".utf8)),
+              SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == digest else {
+            throw BillingPDFArchiveClientError.changed
+        }
+        return data
     }
 
     private func perform(_ method: String, operation: String?,
@@ -236,19 +309,10 @@ actor BillingPDFArchiveClient {
             throw BillingPDFArchiveClientError.invalid
         }
         try await check()
-        var fields: [String: String] = [
-            "companyID": binding.companyID.uuidString.lowercased(),
-            "grantID": grantID.uuidString.lowercased(),
-            "containerID": binding.containerID,
-            "environment": binding.environment,
-            "replicaID": binding.replicaID.uuidString.lowercased(),
-            "cloudAccountHash": binding.cloudAccountHash,
-            "expectedDriveAccount": driveAccount,
-            "documentKind": kind.rawValue,
-            "documentID": documentID.uuidString.lowercased(),
-            "sourceDigest": sourceDigest,
-            "rendererVersion": rendererVersion,
-        ]
+        let key = BillingPDFArchiveKey(companyID: binding.companyID, driveAccount: driveAccount,
+            documentKind: kind, documentID: documentID, sourceDigest: sourceDigest,
+            rendererVersion: rendererVersion)
+        var fields = identityFields(for: key)
         let path: String
         let body: Data?
         if method == "GET" {
@@ -273,17 +337,40 @@ actor BillingPDFArchiveClient {
             throw BillingPDFArchiveClientError.invalid
         }
         guard let reservation = decoded.reservation else { return nil }
-        let expected = BillingPDFArchiveKey(companyID: binding.companyID,
-            driveAccount: driveAccount, documentKind: kind, documentID: documentID,
-            sourceDigest: sourceDigest, rendererVersion: rendererVersion)
-        guard reservation.key == expected,
+        guard reservation.key == key,
               !reservation.renderedAt.isEmpty,
               reservation.contentDigest.map(Self.validDigest) != false,
+              (reservation.artifactReady != true ||
+                (reservation.contentDigest != nil && (reservation.artifactBytes ?? 0) >= 5)),
               reservation.driveFileID.map(Self.validFileID) != false,
               reservation.confirmedLink == nil || reservation.driveFileID != nil else {
             throw BillingPDFArchiveClientError.changed
         }
         return reservation
+    }
+
+    private func identityFields(for key: BillingPDFArchiveKey) -> [String: String] {
+        [
+            "companyID": binding.companyID.uuidString.lowercased(),
+            "grantID": grantID.uuidString.lowercased(),
+            "containerID": binding.containerID,
+            "environment": binding.environment,
+            "replicaID": binding.replicaID.uuidString.lowercased(),
+            "cloudAccountHash": binding.cloudAccountHash,
+            "expectedDriveAccount": driveAccount,
+            "documentKind": key.documentKind.rawValue,
+            "documentID": key.documentID.uuidString.lowercased(),
+            "sourceDigest": key.sourceDigest,
+            "rendererVersion": key.rendererVersion,
+        ]
+    }
+
+    private func validate(_ key: BillingPDFArchiveKey) throws {
+        guard key.companyID == binding.companyID, key.driveAccount == driveAccount,
+              Self.validDigest(key.sourceDigest),
+              key.rendererVersion.range(of: "^[A-Za-z0-9_.-]{1,40}$", options: .regularExpression) != nil else {
+            throw BillingPDFArchiveClientError.changed
+        }
     }
 
     private nonisolated static func validDigest(_ value: String) -> Bool {

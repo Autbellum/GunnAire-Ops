@@ -13,6 +13,7 @@ try:
         ReservationBusy, ReservationChanged,
     )
     from .billing_pdf_drive_readback import BillingPDFDriveReadback, ProviderReadbackError
+    from .billing_pdf_artifacts import BillingPDFArtifactStore, ArtifactError
 except ImportError:
     import google_connections
     from billing_pdf_archive_ledger import (
@@ -20,6 +21,7 @@ except ImportError:
         ReservationBusy, ReservationChanged,
     )
     from billing_pdf_drive_readback import BillingPDFDriveReadback, ProviderReadbackError
+    from billing_pdf_artifacts import BillingPDFArtifactStore, ArtifactError
 
 
 _DRIVE_SCOPE = google_connections.FEATURE_SCOPES["drive"]
@@ -39,13 +41,53 @@ class RouteFailure(Exception):
 class BillingPDFArchiveRoutes:
     def __init__(self, database, google_service, *, primary_admin_email: str,
                  container_id: str, ledger: BillingPDFArchiveLedger,
-                 readback: BillingPDFDriveReadback | None = None):
+                 readback: BillingPDFDriveReadback | None = None,
+                 artifacts: BillingPDFArtifactStore | None = None):
         self.database = database
         self.google_service = google_service
         self.primary_admin_email = primary_admin_email
         self.container_id = container_id
         self.ledger = ledger
         self.readback = readback or BillingPDFDriveReadback()
+        self.artifacts = artifacts
+
+    def artifact(self, method: str, payload: dict, session_id: str,
+                 data: bytes | None = None) -> bytes | dict:
+        """Authorized immutable server copy; Google upload remains separate."""
+        extra = {"leaseToken", "contentDigest"} if method == "POST" else set()
+        if (method not in {"GET", "POST"} or not isinstance(payload, dict) or
+                set(payload) != _IDENTITY | extra or
+                any(not isinstance(value, str) for value in payload.values())):
+            raise RouteFailure("invalid_request", 400, "Review the PDF artifact request.")
+        if self.artifacts is None:
+            raise RouteFailure("storage_unavailable", 503, "PDF artifact storage is unavailable.")
+        key = self._authorized_key(payload, session_id)
+        try:
+            if method == "POST":
+                if data is None:
+                    raise RouteFailure("invalid_request", 400, "PDF bytes are required.")
+                reservation = self.ledger.bind_content_digest(key, payload["leaseToken"],
+                    payload["contentDigest"], now=datetime.now(timezone.utc))
+                size, digest = self.artifacts.save(reservation, data)
+                if self._authorized_key(payload, session_id) != key:
+                    raise ReservationChanged("Google account or workspace changed during artifact storage")
+                reservation = self.ledger.mark_artifact(key, payload["leaseToken"], size,
+                    now=datetime.now(timezone.utc))
+                return {"reservation": self._public(reservation, include_token=True),
+                        "artifact": {"fileSizeBytes": size, "fileSHA256": digest}}
+            reservation = self.ledger.read(key)
+            if reservation is None or reservation.content_digest is None:
+                raise ReservationChanged("Reserved PDF artifact is not available")
+            result = self.artifacts.read(reservation)
+            if self._authorized_key(payload, session_id) != key:
+                raise ReservationChanged("Google account or workspace changed during artifact read")
+            return result
+        except InvalidReservation as error:
+            raise RouteFailure("invalid_request", 400, str(error)) from error
+        except ReservationChanged as error:
+            raise RouteFailure("reservation_changed", 409, str(error)) from error
+        except ArtifactError as error:
+            raise RouteFailure("artifact_unavailable", 503, str(error)) from error
 
     def dispatch(self, method: str, path: str, payload: dict,
                  session_id: str) -> dict:

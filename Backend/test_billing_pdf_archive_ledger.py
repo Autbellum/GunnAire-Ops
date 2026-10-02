@@ -6,6 +6,7 @@ import unittest
 import uuid
 
 from Backend import backup_backend
+from Backend.billing_pdf_artifacts import BillingPDFArtifactStore
 from Backend.billing_pdf_archive_ledger import (
     BillingPDFArchiveLedger,
     BillingPDFKey,
@@ -43,6 +44,7 @@ class BillingPDFArchiveLedgerTests(unittest.TestCase):
     def test_expired_owner_recovers_original_file_id_after_lost_response(self):
         first = self.first.reserve(self.key, now=self.now, lease_seconds=10)
         self.first.bind_content_digest(self.key, first.lease_token, "b" * 64, now=self.now)
+        self.first.mark_artifact(self.key, first.lease_token, 12, now=self.now)
         self.first.bind_drive_file_id(self.key, first.lease_token, "reserved-google-id", now=self.now)
         restarted = self.second.reserve(self.key, now=self.now + timedelta(seconds=11))
         self.assertEqual(restarted.attachment_id, first.attachment_id)
@@ -89,6 +91,9 @@ class BillingPDFArchiveLedgerTests(unittest.TestCase):
         with self.assertRaises(ReservationChanged):
             self.first.bind_drive_file_id(self.key, reservation.lease_token, "saved-id", now=self.now)
         self.first.bind_content_digest(self.key, reservation.lease_token, "b" * 64, now=self.now)
+        with self.assertRaises(ReservationChanged):
+            self.first.bind_drive_file_id(self.key, reservation.lease_token, "saved-id", now=self.now)
+        self.first.mark_artifact(self.key, reservation.lease_token, 12, now=self.now)
         self.first.bind_drive_file_id(self.key, reservation.lease_token, "saved-id", now=self.now)
         with self.assertRaises(ReservationChanged):
             self.first.confirm(self.key, reservation.lease_token, file_id="saved-id",
@@ -115,10 +120,13 @@ class BillingPDFArchiveLedgerTests(unittest.TestCase):
 
     def test_existing_backup_and_restore_preserve_reservation(self):
         original = self.first.reserve(self.key, now=self.now)
-        self.first.bind_content_digest(self.key, original.lease_token, "b" * 64, now=self.now)
-        self.first.bind_drive_file_id(self.key, original.lease_token, "reserved-id", now=self.now)
+        pdf = b"%PDF-1.7\nbacked-up revision\n%%EOF\n"
+        digest = hashlib.sha256(pdf).hexdigest()
+        bound = self.first.bind_content_digest(self.key, original.lease_token, digest, now=self.now)
         storage = Path(self.temporary.name) / "storage"
-        storage.mkdir()
+        BillingPDFArtifactStore(storage).save(bound, pdf)
+        self.first.mark_artifact(self.key, original.lease_token, len(pdf), now=self.now)
+        self.first.bind_drive_file_id(self.key, original.lease_token, "reserved-id", now=self.now)
         artifact = Path(self.temporary.name) / "backup"
         restored = Path(self.temporary.name) / "restored"
         backup_backend.create_backup(self.database, storage, artifact)
@@ -127,7 +135,27 @@ class BillingPDFArchiveLedgerTests(unittest.TestCase):
         self.assertIsNotNone(recovered)
         self.assertEqual(recovered.attachment_id, original.attachment_id)
         self.assertEqual(recovered.drive_file_id, "reserved-id")
+        self.assertTrue(recovered.artifact_ready)
+        self.assertEqual(recovered.artifact_bytes, len(pdf))
+        self.assertEqual(BillingPDFArtifactStore(restored / "storage").read(recovered), pdf)
         self.assertIsNone(recovered.lease_token)
+
+    def test_existing_ledger_schema_migrates_without_claiming_artifact_ready(self):
+        with self.first._connection() as connection:
+            connection.execute("DROP TABLE billing_pdf_archive_intents")
+            connection.execute("""
+                CREATE TABLE billing_pdf_archive_intents (
+                    company_id TEXT, drive_account TEXT, document_kind TEXT, document_id TEXT,
+                    source_digest TEXT, renderer_version TEXT, attachment_id TEXT, rendered_at TEXT,
+                    lease_token TEXT, lease_until TEXT, content_digest TEXT, drive_file_id TEXT,
+                    confirmed_link TEXT,
+                    PRIMARY KEY(company_id, drive_account, document_kind, document_id, source_digest, renderer_version)
+                )
+            """)
+        self.first.install()
+        reserved = self.first.reserve(self.key, now=self.now)
+        self.assertFalse(reserved.artifact_ready)
+        self.assertIsNone(reserved.artifact_bytes)
 
 
 if __name__ == "__main__":

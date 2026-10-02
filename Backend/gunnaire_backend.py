@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import hmac
 import html
@@ -38,7 +39,7 @@ try:
     from Backend import customer_accounts, transactional_email
     from Backend.customer_account_portal import PORTAL_HTML as CUSTOMER_ACCOUNT_PORTAL_HTML
     from Backend.billing_provider import BillingQBOProvider
-    from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads, billing_pdf_archive_ledger, billing_pdf_archive_routes
+    from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads, billing_pdf_archive_ledger, billing_pdf_archive_routes, billing_pdf_artifacts
     from Backend import document_storage
     from Backend import backup_backend
     from Backend import staff_owner_field_edits
@@ -73,6 +74,7 @@ except ModuleNotFoundError:
     import qbo_document_uploads
     import billing_pdf_archive_ledger
     import billing_pdf_archive_routes
+    import billing_pdf_artifacts
     from qbo_document_provider import DocumentQBOProvider
     import time_worker_mappings
     import time_publications
@@ -3994,7 +3996,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             self.handle_google_mail(parsed, method="GET")
             return
         if parsed.path in ("/api/google/drive/billing-pdf-intents",
-                           "/api/google/drive/billing-pdf-intents/identity"):
+                           "/api/google/drive/billing-pdf-intents/identity",
+                           "/api/google/drive/billing-pdf-intents/artifact"):
             self.handle_billing_pdf_archive(parsed, method="GET")
             return
         if parsed.path == "/api/payment-attempts" or parsed.path.startswith("/api/payment-attempts/"):
@@ -7249,8 +7252,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if not self.require_application_session():
             return
         try:
+            is_artifact = parsed.path == "/api/google/drive/billing-pdf-intents/artifact"
             if method == "GET":
-                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, max_num_fields=10)
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, max_num_fields=14)
                 if any(len(values) != 1 for values in query.values()):
                     raise billing_pdf_archive_routes.RouteFailure("invalid_request", 400,
                         "Review the PDF archive request.")
@@ -7259,11 +7263,30 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 if parsed.query:
                     raise billing_pdf_archive_routes.RouteFailure("invalid_request", 400,
                         "Review the PDF archive request.")
-                payload = google_connections.strict_json(self.read_limited_body(8192).decode("utf-8"))
+                maximum = ((billing_pdf_artifacts.MAX_PDF_BYTES * 4) // 3) + 8192 if is_artifact else 8192
+                payload = google_connections.strict_json(self.read_limited_body(maximum).decode("utf-8"))
             service = billing_pdf_archive_routes.BillingPDFArchiveRoutes(
                 db, self.google_connection_service(), primary_admin_email=PRIMARY_ADMIN_EMAIL,
                 container_id=CLOUDKIT_CONTAINER_ID,
-                ledger=billing_pdf_archive_ledger.BillingPDFArchiveLedger(DB_PATH))
+                ledger=billing_pdf_archive_ledger.BillingPDFArchiveLedger(DB_PATH),
+                artifacts=billing_pdf_artifacts.BillingPDFArtifactStore(STORAGE_ROOT))
+            if is_artifact:
+                if method == "POST":
+                    encoded = payload.pop("dataBase64", None) if isinstance(payload, dict) else None
+                    if not isinstance(encoded, str):
+                        raise billing_pdf_archive_routes.RouteFailure("invalid_request", 400,
+                            "PDF bytes are required.")
+                    try:
+                        content = base64.b64decode(encoded, validate=True)
+                    except (ValueError, binascii.Error):
+                        raise billing_pdf_archive_routes.RouteFailure("invalid_request", 400,
+                            "PDF bytes are invalid.") from None
+                    result = service.artifact(method, payload, self._application_session_id, content)
+                    self.write_json(result)
+                else:
+                    result = service.artifact(method, payload, self._application_session_id)
+                    self.write_media_bytes(result, "application/pdf", "GunnAire-Billing-Document.pdf")
+                return
             result = service.dispatch(method, parsed.path, payload, self._application_session_id)
             self.write_json(result)
         except billing_pdf_archive_routes.RouteFailure as error:
@@ -8022,6 +8045,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         message = redact_capability_tokens(format % args)
         # Search terms and provider resource IDs can identify customer mail.
         message = re.sub(r"/api/google/mail/[^\s\"]*", "/api/google/mail/[redacted]", message)
+        message = re.sub(r"/api/google/drive/billing-pdf-intents(?:[^\s\"]*)?",
+                         "/api/google/drive/billing-pdf-intents/[redacted]", message)
         message = re.sub(r"/api/qbo/change-capture(?:\?[^\s\"]*)?", "/api/qbo/change-capture", message)
         message = re.sub(r"/api/qbo-document-uploads(?:[/?][^\s\"]*)?", "/api/qbo-document-uploads/[redacted]", message)
         message = re.sub(r"/api/field-payment-review(?:/context)?(?:\?[^\s\"]*)?", "/api/field-payment-review", message)

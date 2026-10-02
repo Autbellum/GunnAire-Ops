@@ -71,6 +71,8 @@ class BillingPDFReservation:
     content_digest: str | None
     drive_file_id: str | None
     confirmed_link: str | None
+    artifact_ready: bool = False
+    artifact_bytes: int | None = None
 
 
 def initialize_schema(connection: sqlite3.Connection) -> None:
@@ -89,12 +91,19 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
                     content_digest TEXT,
                     drive_file_id TEXT,
                     confirmed_link TEXT,
+                    artifact_ready INTEGER NOT NULL DEFAULT 0,
+                    artifact_bytes INTEGER,
                     PRIMARY KEY (company_id, drive_account, document_kind,
                                  document_id, source_digest, renderer_version),
                     UNIQUE (attachment_id),
                     UNIQUE (drive_file_id)
                 )
             """)
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(billing_pdf_archive_intents)")}
+    if "artifact_ready" not in columns:
+        connection.execute("ALTER TABLE billing_pdf_archive_intents ADD COLUMN artifact_ready INTEGER NOT NULL DEFAULT 0")
+    if "artifact_bytes" not in columns:
+        connection.execute("ALTER TABLE billing_pdf_archive_intents ADD COLUMN artifact_bytes INTEGER")
 
 
 class BillingPDFArchiveLedger:
@@ -162,7 +171,15 @@ class BillingPDFArchiveLedger:
             raise InvalidReservation("Invalid Google Drive file ID")
         return self._update_with_lease(key, lease_token, now,
             "drive_file_id = ?", (file_id,), expected_file_id=file_id,
-            require_content_digest=True)
+            require_content_digest=True, require_artifact_ready=True)
+
+    def mark_artifact(self, key: BillingPDFKey, lease_token: str,
+                      byte_count: int, *, now: datetime) -> BillingPDFReservation:
+        if type(byte_count) is not int or not 5 <= byte_count <= 25 * 1024 * 1024:
+            raise InvalidReservation("Invalid retained PDF size")
+        return self._update_with_lease(key, lease_token, now,
+            "artifact_ready = 1, artifact_bytes = ?", (byte_count,),
+            require_content_digest=True, expected_artifact_bytes=byte_count)
 
     def confirm(self, key: BillingPDFKey, lease_token: str, *, file_id: str,
                 link: str, content_digest: str, now: datetime) -> BillingPDFReservation:
@@ -173,13 +190,16 @@ class BillingPDFArchiveLedger:
         return self._update_with_lease(key, lease_token, now,
             "confirmed_link = ?, lease_token = NULL, lease_until = NULL", (link,),
             expected_file_id=file_id, require_file_id=True,
-            expected_content_digest=content_digest, require_content_digest=True)
+            expected_content_digest=content_digest, require_content_digest=True,
+            require_artifact_ready=True)
 
     def _update_with_lease(self, key: BillingPDFKey, lease_token: str, now: datetime,
                            assignment: str, values: tuple, *, expected_file_id: str | None = None,
                            require_file_id: bool = False,
                            expected_content_digest: str | None = None,
-                           require_content_digest: bool = False) -> BillingPDFReservation:
+                           require_content_digest: bool = False,
+                           expected_artifact_bytes: int | None = None,
+                           require_artifact_ready: bool = False) -> BillingPDFReservation:
         key = key.normalized()
         now = self._utc(now)
         try:
@@ -199,9 +219,14 @@ class BillingPDFArchiveLedger:
                     raise ReservationChanged("Drive file ID cannot change after reservation")
                 if require_content_digest and row["content_digest"] is None:
                     raise ReservationChanged("PDF bytes must be recorded before Drive upload")
+                if require_artifact_ready and not row["artifact_ready"]:
+                    raise ReservationChanged("Retained PDF must be durable before Drive upload")
                 if (expected_content_digest is not None and row["content_digest"] is not None
                         and row["content_digest"] != expected_content_digest):
                     raise ReservationChanged("PDF content digest cannot change for this revision")
+                if (expected_artifact_bytes is not None and row["artifact_bytes"] is not None
+                        and row["artifact_bytes"] != expected_artifact_bytes):
+                    raise ReservationChanged("Retained PDF size cannot change for this revision")
                 connection.execute(f"""
                     UPDATE billing_pdf_archive_intents SET {assignment}
                     WHERE company_id = ? AND drive_account = ? AND document_kind = ?
@@ -249,4 +274,5 @@ class BillingPDFArchiveLedger:
                      *, include_token: bool = False) -> BillingPDFReservation:
         return BillingPDFReservation(key, row["attachment_id"], row["rendered_at"],
             row["lease_token"] if include_token else None,
-            row["lease_until"], row["content_digest"], row["drive_file_id"], row["confirmed_link"])
+            row["lease_until"], row["content_digest"], row["drive_file_id"], row["confirmed_link"],
+            bool(row["artifact_ready"]), row["artifact_bytes"])

@@ -2188,12 +2188,14 @@ enum GunnAireBackendService {
     static func billingPDFArchiveRequest(path: String, method: String, body: Data?) async throws -> Data {
         let base = "/api/google/drive/billing-pdf-intents"
         let posts: Set<String> = Set(["reserve", "content", "file", "confirm"].map { base + "/" + $0 })
+        let artifact = base + "/artifact"
         guard let endpoint = URLComponents(string: path), endpoint.scheme == nil,
               endpoint.host == nil, endpoint.fragment == nil,
-              (method == "GET" && [base, base + "/identity"].contains(endpoint.path) &&
+              (method == "GET" && [base, base + "/identity", artifact].contains(endpoint.path) &&
                 body == nil && endpoint.query != nil) ||
-                (method == "POST" && posts.contains(endpoint.path) && endpoint.query == nil && body != nil),
-              (body?.count ?? 0) <= 8_192,
+                (method == "POST" && (posts.contains(endpoint.path) || endpoint.path == artifact) &&
+                 endpoint.query == nil && body != nil),
+              (body?.count ?? 0) <= (endpoint.path == artifact ? 35_000_000 : 8_192),
               let identity = CompanyWorkspaceSession.current else {
             throw GunnAireBackendError.missingBusinessIdentity
         }
@@ -2209,7 +2211,8 @@ enum GunnAireBackendService {
         let controller = CompanyWorkspaceAccessController.shared
         let generation = controller.generation
         do {
-            let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: 32_768)
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request,
+                maximum: endpoint.path == artifact && method == "GET" ? 25 * 1024 * 1024 : 32_768)
             guard CompanyWorkspaceSession.current == identity, controller.generation == generation,
                   controller.authorizedContainer != nil else { throw GunnAireBackendError.missingBusinessIdentity }
             return data

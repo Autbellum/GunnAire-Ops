@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import Testing
 @testable import GunnAire_Ops
 
@@ -37,6 +38,31 @@ actor BillingPDFArchiveLostReplyFixture {
     }
 }
 
+actor BillingPDFArtifactTransportFixture {
+    let pdf: Data
+    let receipt: Data
+    private(set) var methods: [String] = []
+    private(set) var postedDigest: String?
+
+    init(pdf: Data, receipt: Data) { self.pdf = pdf; self.receipt = receipt }
+
+    func send(path: String, method: String, body: Data?) throws -> Data {
+        guard path.contains("/artifact") else { throw BillingPDFArchiveClientError.invalid }
+        methods.append(method)
+        if method == "GET" {
+            guard body == nil else { throw BillingPDFArchiveClientError.invalid }
+            return pdf
+        }
+        guard method == "POST", let body,
+              let fields = try JSONSerialization.jsonObject(with: body) as? [String: String],
+              let encoded = fields["dataBase64"], Data(base64Encoded: encoded) == pdf else {
+            throw BillingPDFArchiveClientError.invalid
+        }
+        postedDigest = fields["contentDigest"]
+        return receipt
+    }
+}
+
 struct BillingPDFArchiveClientTests {
     private let company = UUID()
     private let replica = UUID()
@@ -53,7 +79,8 @@ struct BillingPDFArchiveClientTests {
             approvedAt: "2026-10-02T12:00:00Z")
     }
 
-    private func response(account: String, leaseToken: String?, fileID: String? = nil) throws -> Data {
+    private func response(account: String, leaseToken: String?, fileID: String? = nil,
+                          contentDigest: String? = nil, artifactBytes: Int? = nil) throws -> Data {
         let reservation: [String: Any] = [
             "key": ["company_id": company.uuidString.lowercased(), "drive_account": account,
                     "document_kind": "invoice", "document_id": document.uuidString.lowercased(),
@@ -62,9 +89,11 @@ struct BillingPDFArchiveClientTests {
             "rendered_at": "2026-10-02T12:00:00+00:00",
             "lease_token": leaseToken.map { $0 as Any } ?? NSNull(),
             "lease_until": "2026-10-02T12:05:00+00:00",
-            "content_digest": NSNull(),
+            "content_digest": contentDigest.map { $0 as Any } ?? NSNull(),
             "drive_file_id": fileID.map { $0 as Any } ?? NSNull(),
             "confirmed_link": NSNull(),
+            "artifact_ready": artifactBytes != nil,
+            "artifact_bytes": artifactBytes.map { $0 as Any } ?? NSNull(),
         ]
         return try JSONSerialization.data(withJSONObject: ["reservation": reservation])
     }
@@ -150,9 +179,18 @@ struct BillingPDFArchiveClientTests {
             key: original.key, attachmentID: original.attachmentID, renderedAt: original.renderedAt,
             leaseToken: original.leaseToken, leaseUntil: original.leaseUntil,
             contentDigest: String(repeating: "e", count: 64), driveFileID: original.driveFileID,
-            confirmedLink: nil)
+            confirmedLink: nil, artifactReady: true, artifactBytes: 12)
         let metadata = try GoogleDriveUploadMetadata.automaticBillingPDF(
             reservation: reservation, displayName: "Invoice.pdf")
+        let unretained = BillingPDFArchiveReservation(
+            key: original.key, attachmentID: original.attachmentID, renderedAt: original.renderedAt,
+            leaseToken: original.leaseToken, leaseUntil: original.leaseUntil,
+            contentDigest: String(repeating: "e", count: 64), driveFileID: original.driveFileID,
+            confirmedLink: nil, artifactReady: false, artifactBytes: nil)
+        #expect(throws: GoogleDriveAPIError.authorizationChanged) {
+            try GoogleDriveUploadMetadata.automaticBillingPDF(
+                reservation: unretained, displayName: "Invoice.pdf")
+        }
         #expect(metadata.appProperties["gunnaireSchema"] == "2")
         #expect(metadata.appProperties["gunnaireDocumentID"] == document.uuidString.lowercased())
         #expect(metadata.appProperties["gunnaireSourceDigest"] == String(repeating: "c", count: 64))
@@ -167,6 +205,82 @@ struct BillingPDFArchiveClientTests {
             mimeType: "application/pdf", webViewLink: nil, trashed: false,
             appProperties: changed)
         #expect(!wrongRevision.matchesArchiveIdentity(metadata))
+    }
+
+    @Test func serverArtifactTransportProvesExactBytesAndAllowsReadback() async throws {
+        let pdf = Data("%PDF-1.7\ncustomer revision\n%%EOF\n".utf8)
+        let digest = SHA256.hash(data: pdf).map { String(format: "%02x", $0) }.joined()
+        let base = try response(account: account, leaseToken: lease.uuidString.lowercased())
+        guard let object = try JSONSerialization.jsonObject(with: base) as? [String: Any],
+              var reservationObject = object["reservation"] as? [String: Any] else {
+            throw BillingPDFArchiveClientError.invalid
+        }
+        reservationObject["content_digest"] = digest
+        reservationObject["artifact_ready"] = true
+        reservationObject["artifact_bytes"] = pdf.count
+        let receipt = try JSONSerialization.data(withJSONObject: [
+            "reservation": reservationObject,
+            "artifact": ["fileSizeBytes": pdf.count, "fileSHA256": digest]
+        ])
+        let fixture = BillingPDFArtifactTransportFixture(pdf: pdf, receipt: receipt)
+        let client = try BillingPDFArchiveClient(binding: binding(), grantID: grant,
+            driveAccount: account, check: {}, request: {
+                try await fixture.send(path: $0, method: $1, body: $2)
+            })
+        let reservation = try JSONDecoder().decode(BillingPDFArchiveResponse.self, from: base)
+        guard let saved = reservation.reservation else { throw BillingPDFArchiveClientError.invalid }
+        let stored = try await client.storeArtifact(pdf, for: saved)
+        #expect(stored.contentDigest == digest)
+        #expect(await fixture.postedDigest == digest)
+        let recovered = try await client.readArtifact(for: stored)
+        #expect(recovered == pdf)
+        #expect(await fixture.methods == ["POST", "GET"])
+    }
+
+    @Test func artifactAccountMismatchAndChangedBytesFailBeforeNetwork() async throws {
+        let pdf = Data("%PDF-1.7\ncustomer revision\n%%EOF\n".utf8)
+        let fixture = BillingPDFArchiveTransportFixture(body: Data())
+        let client = try BillingPDFArchiveClient(binding: binding(), grantID: grant,
+            driveAccount: account, check: {}, request: {
+                try await fixture.send(path: $0, method: $1, data: $2)
+            })
+        let base = try response(account: account, leaseToken: lease.uuidString.lowercased(),
+            contentDigest: String(repeating: "d", count: 64), artifactBytes: pdf.count)
+        guard let saved = try JSONDecoder().decode(BillingPDFArchiveResponse.self, from: base).reservation else {
+            throw BillingPDFArchiveClientError.invalid
+        }
+        await #expect(throws: BillingPDFArchiveClientError.changed) {
+            try await client.storeArtifact(pdf, for: saved)
+        }
+        let wrong = try response(account: "google-subject:" + String(repeating: "e", count: 64),
+            leaseToken: lease.uuidString.lowercased())
+        guard let otherAccount = try JSONDecoder().decode(BillingPDFArchiveResponse.self,
+            from: wrong).reservation else { throw BillingPDFArchiveClientError.invalid }
+        await #expect(throws: BillingPDFArchiveClientError.changed) {
+            try await client.storeArtifact(pdf, for: otherAccount)
+        }
+        #expect(await fixture.calls.isEmpty)
+    }
+
+    @Test func lostArtifactReplyRecoversByExactReadWithoutSecondWrite() async throws {
+        let pdf = Data("%PDF-1.7\ncustomer revision\n%%EOF\n".utf8)
+        let digest = SHA256.hash(data: pdf).map { String(format: "%02x", $0) }.joined()
+        let fixture = BillingPDFArchiveLostReplyFixture(original: pdf)
+        let client = try BillingPDFArchiveClient(binding: binding(), grantID: grant,
+            driveAccount: account, check: {}, request: {
+                try await fixture.send(path: $0, method: $1, body: $2)
+            })
+        let base = try response(account: account, leaseToken: lease.uuidString.lowercased(),
+            contentDigest: digest, artifactBytes: pdf.count)
+        guard let saved = try JSONDecoder().decode(BillingPDFArchiveResponse.self, from: base).reservation else {
+            throw BillingPDFArchiveClientError.invalid
+        }
+        await #expect(throws: BillingPDFArchiveClientError.changed) {
+            try await client.storeArtifact(pdf, for: saved)
+        }
+        let recovered = try await client.readArtifact(for: saved)
+        #expect(recovered == pdf)
+        #expect(await fixture.methods == ["POST", "GET"])
     }
 
 }

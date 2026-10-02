@@ -95,6 +95,8 @@ nonisolated struct GoogleDriveUploadMetadata: Codable, Equatable {
     ) throws -> Self {
         guard reservation.leaseToken != nil,
               reservation.confirmedLink == nil,
+              reservation.artifactReady == true,
+              (reservation.artifactBytes ?? 0) >= 5,
               let fileID = reservation.driveFileID,
               let contentDigest = reservation.contentDigest,
               reservation.key.driveAccount.range(of: "^google-subject:[0-9a-f]{64}$", options: .regularExpression) != nil,
