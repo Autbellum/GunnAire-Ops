@@ -73,6 +73,7 @@ class NativeBilling:
             return {**{key: value[key] for key in (
                 "companyID", "realmID", "environment", "documentType", "localDocumentID", "localCustomerID",
                 "serviceCallID", "connectionRevision")}, "protocolVersion": 1,
+                "estimateQueueVersion": 1,
                 "projectMilestoneID": intent.get("project_milestone_id")}
 
     def inspect(self, connection, session, intent, *, require_customer=True):

@@ -337,7 +337,7 @@ enum BillingDocumentDiscountAudit {
         return String(entries.joined(separator: "\n").prefix(4_000))
     }
 
-    static func customerDocumentSummary(snapshotJSON: String?) -> String? {
+    nonisolated static func customerDocumentSummary(snapshotJSON: String?) -> String? {
         guard let discount = CatalogLineItemSnapshot.documentDiscount(from: snapshotJSON),
               let grossSubtotal = BillingDocumentDiscountPolicy.grossSubtotal(snapshotJSON: snapshotJSON),
               let amount = discount.amount(for: grossSubtotal) else { return nil }
@@ -433,7 +433,7 @@ enum BillingPriceAdjustmentAudit {
         return String(entries.joined(separator: "\n").prefix(4_000))
     }
 
-    static func customerDocumentSummary(snapshotJSON: String?) -> String? {
+    nonisolated static func customerDocumentSummary(snapshotJSON: String?) -> String? {
         let summaries = CatalogLineItemSnapshot.decoded(from: snapshotJSON)
             .flatMap(\.soldLeaves)
             .filter(\.hasAuthorizedPriceAdjustment)
@@ -1461,7 +1461,7 @@ enum QuickBooksCatalogMappingIntegrity {
         value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
-    static func linkedItems(to quickBooksID: String, in items: [Item]) -> [Item] {
+    nonisolated static func linkedItems(to quickBooksID: String, in items: [Item]) -> [Item] {
         let normalizedID = normalizedIdentifier(quickBooksID)
         guard !normalizedID.isEmpty else { return [] }
         return items
@@ -1506,7 +1506,7 @@ enum QuickBooksCatalogMappingIntegrity {
         }
     }
 
-    static func validateAssignment(
+    nonisolated static func validateAssignment(
         of quickBooksID: String,
         to item: Item,
         in catalogItems: [Item]
@@ -1557,7 +1557,7 @@ enum QuickBooksCatalogMappingIntegrity {
         return unlinkedItems
     }
 
-    private static func stableItemOrder(_ lhs: Item, _ rhs: Item) -> Bool {
+    nonisolated private static func stableItemOrder(_ lhs: Item, _ rhs: Item) -> Bool {
         let nameOrder = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
         if nameOrder != .orderedSame {
             return nameOrder == .orderedAscending

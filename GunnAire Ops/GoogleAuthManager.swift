@@ -426,6 +426,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
             calendarSyncMessage = nil
         }
     }
+    var driveArchiveConnectionGeneration: UUID { connectionGeneration }
     private var restoredGeneration: UUID?
     private let requestTransport: WorkspaceProviderOperation.Transport
     private let persistsCredentials: Bool

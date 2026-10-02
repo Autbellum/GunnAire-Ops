@@ -41,6 +41,20 @@ private struct LegacyGooglePublicationConfirmation: ViewModifier {
 }
 
 enum ScheduleGoogleLinkStatus {
+    static func selectedPendingRouteLabel(_ call: ServiceCall) -> String? {
+        guard call.googleEventManagedByApp,
+              call.googleCalendarPendingAt != nil,
+              call.status == .scheduled || call.status == .inProgress,
+              call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false else {
+            return nil
+        }
+        let route = call.googleCalendarID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if route.isEmpty || route.caseInsensitiveCompare("primary") == .orderedSame {
+            return "Selected Google calendar: Primary (pending)"
+        }
+        return "Selected Google calendar: \(route) (pending)"
+    }
+
     static func shouldWakePendingCalendar(canManageDispatch: Bool, sceneIsActive: Bool,
                                           authorization: GoogleCalendarAuthorizationState) -> Bool {
         canManageDispatch && sceneIsActive && authorization == .ready
@@ -1998,6 +2012,12 @@ struct ScheduleView: View {
                 Text(GoogleCalendarScheduleSync.calendarRouteLabel(
                     for: call, connectedEmail: googleAuth.signedInEmail
                 ))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .accessibilityIdentifier("ScheduleGoogleCalendarRoute-\(call.id.uuidString)")
+            } else if let pendingRoute = ScheduleGoogleLinkStatus.selectedPendingRouteLabel(call) {
+                Text(pendingRoute)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)

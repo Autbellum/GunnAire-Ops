@@ -268,6 +268,8 @@ final class AutomaticOutboundSync {
     nonisolated enum EstimateReviewState: Equatable, Sendable {
         case published
         case automaticPending
+        case queueUnconfirmed
+        case serverQueued
         case reviewRequired
         case unavailable
     }
@@ -309,6 +311,7 @@ final class AutomaticOutboundSync {
 
     private var pending: [DocumentKey] = []
     private var preparations: [DocumentKey: SharedBillingPreparation] = [:]
+    private var firstSavePreparedKeys: Set<DocumentKey> = []
     private var explicitReviewKeys: Set<DocumentKey> = []
     private var deferredUntil: [DocumentKey: Date] = [:]
     private var proofChecksInFlight: Set<DocumentKey> = []
@@ -361,6 +364,18 @@ final class AutomaticOutboundSync {
         return deferred == Date.distantFuture ? .enqueue : .ignore
     }
 
+    nonisolated static func firstSaveProofWakeDisposition(_ deferred: Date?,
+        isEstimate: Bool, hasPreparedCapture: Bool, sameGeneration: Bool,
+        sameContainer: Bool, proofMatches: Bool, checkingProof: Bool) -> ProofWakeDisposition {
+        guard !isEstimate || hasPreparedCapture else { return .ignore }
+        return proofWakeDisposition(deferred, sameGeneration: sameGeneration,
+            sameContainer: sameContainer, proofMatches: proofMatches, checkingProof: checkingProof)
+    }
+
+    nonisolated static func mayStageFirstSave(existingKey: Bool, retainedCount: Int) -> Bool {
+        existingKey || retainedCount < 16
+    }
+
     static func requeueAfterProofCheck(_ key: DocumentKey, pending: inout [DocumentKey],
                                        handoffs: inout Set<DocumentKey>,
                                        explicitReviews: Set<DocumentKey>) -> Bool {
@@ -374,11 +389,15 @@ final class AutomaticOutboundSync {
                                             context: ModelContext, generation: UUID,
                                             stamp: CompanyWorkspaceOperationStamp?) {
         let key: DocumentKey = document.label == "Invoice" ? .invoice(document.id) : .estimate(document.id)
+        // A first-save estimate must not wake a deferred fallback that would
+        // recapture today's Items instead of the Items pinned at the save tap.
         let sameGeneration = queueGeneration == generation && queueStamp == stamp &&
             queueRealmID == QuickBooksDataAPI.shared.realmID
         let sameContainer = queueContainer == ObjectIdentifier(context.container) && isAuthorized(context)
-        switch Self.proofWakeDisposition(deferredUntil[key], sameGeneration: sameGeneration,
-            sameContainer: sameContainer, proofMatches: true,
+        switch Self.firstSaveProofWakeDisposition(deferredUntil[key],
+            isEstimate: document.label == "Estimate",
+            hasPreparedCapture: firstSavePreparedKeys.contains(key) && preparations[key] != nil,
+            sameGeneration: sameGeneration, sameContainer: sameContainer, proofMatches: true,
             checkingProof: proofChecksInFlight.contains(key)) {
         case .ignore:
             return
@@ -472,6 +491,24 @@ final class AutomaticOutboundSync {
               realmRecord(for: .estimate(estimate), realmID: nil, environment: nil)?.sameDocument(as: identity) == true else {
             return .unavailable
         }
+        if let bound = stored?.boundScope,
+           stored?.intendedScope == nil || stored?.intendedScope == bound {
+            let actorEmail = AppAccess.normalizedEmail(AppIdentity.currentEmail)
+            if !actorEmail.isEmpty {
+                let scope = BillingNativeJournalScope(document: .init(companyID: identity.companyID,
+                    realmID: bound.realmID, environment: bound.environment, documentType: .estimate,
+                    localDocumentID: identity.documentID), actorEmail: actorEmail)
+                do {
+                    let background = try await Task.detached(priority: .utility) {
+                        try BillingNativeJournalStore.device.read(scope).pending?.backgroundState
+                    }.value
+                    guard isAuthorized(context), CompanyWorkspaceAccessController.shared.operationStamp == stamp,
+                          estimate.quickBooksID == originalQuickBooksID else { return .unavailable }
+                    if background == .queueRequested { return .queueUnconfirmed }
+                    if background == .queued { return .serverQueued }
+                } catch { return .unavailable }
+            }
+        }
         return Self.estimateReviewState(quickBooksID: originalQuickBooksID, stored: stored,
             identity: identity, activeScope: activeScope)
     }
@@ -508,6 +545,38 @@ final class AutomaticOutboundSync {
         case .estimate(let value): modelID = value.persistentModelID
         }
         return context.insertedModelsArray.contains { $0.persistentModelID == modelID }
+    }
+
+    /// Pin the first-save preparation before company binding can suspend and
+    /// wake a previously deferred recovery. The saved estimate and its loaded
+    /// selected Items must still be the exact action-time objects; an already
+    /// running recovery cannot silently take over this new save.
+    func stageNewlySavedEstimate(_ document: QuickBooksBillingDocument, context: ModelContext,
+                                 selectedItemCapture: QuickBooksSelectedItemCapture) throws {
+        guard case .estimate = document, isAuthorized(context) else {
+            throw BillingPublicationError.accessRequired
+        }
+        adopt(context)
+        let key = DocumentKey.estimate(document.id)
+        guard currentKey != key, !pending.contains(key) else {
+            throw BillingPublicationError.reviewRequired
+        }
+        // Retain every older staged estimate. If the bounded in-memory queue is
+        // full, the new saved estimate remains available for explicit review.
+        guard Self.mayStageFirstSave(existingKey: preparations[key] != nil,
+                                     retainedCount: preparations.count) else {
+            throw BillingPublicationError.reviewRequired
+        }
+        let generation = queueGeneration
+        let stamp = queueStamp
+        let preparation = try SharedBillingPreparation(document: document, context: context,
+            isCurrent: { [weak self] in
+                self?.queueGeneration == generation && self?.isAuthorized(context) == true &&
+                    CompanyWorkspaceAccessController.shared.operationStamp == stamp &&
+                    self?.queueRealmID == QuickBooksDataAPI.shared.realmID
+            }, selectedItemCapture: selectedItemCapture)
+        preparations[key] = preparation
+        firstSavePreparedKeys.insert(key)
     }
 
     @discardableResult
@@ -608,6 +677,15 @@ final class AutomaticOutboundSync {
             realmID: realmID, environment: workflow.run.workflow.environment)
     }
 
+    static func requireBoundProof(for workflow: QuickBooksBillingWorkflow) async throws {
+        try workflow.check()
+        let record = try realmRecord(for: workflow)
+        if !GunnAireCloudKit.usesTestDatabase {
+            try await QuickBooksDocumentRealmProofStore.shared.requireProceed([record])
+        }
+        try workflow.check()
+    }
+
     /// Operator-started publication (manual retry or the review page) binds or
     /// verifies the original company before any provider write, exactly as an
     /// explicit Sync Saved Document does. A document first prepared for another
@@ -657,6 +735,7 @@ final class AutomaticOutboundSync {
 
     func publish(_ document: QuickBooksBillingDocument, context: ModelContext,
                  explicitReview: Bool = false,
+                 selectedItemCapture: QuickBooksSelectedItemCapture? = nil,
                  completion: ((Result<String, Error>) -> Void)? = nil) {
         let key: DocumentKey = document.label == "Invoice" ? .invoice(document.id) : .estimate(document.id)
         guard isAuthorized(context) else {
@@ -678,7 +757,7 @@ final class AutomaticOutboundSync {
                     self?.queueGeneration == generation && self?.isAuthorized(context) == true &&
                         CompanyWorkspaceAccessController.shared.operationStamp == stamp &&
                         self?.queueRealmID == QuickBooksDataAPI.shared.realmID
-                })
+                }, selectedItemCapture: selectedItemCapture)
         } catch {
             completion?(.failure(error))
             return
@@ -927,6 +1006,7 @@ final class AutomaticOutboundSync {
             attachmentDeferredUntil.removeAll()
             pending.removeAll()
             preparations.removeAll()
+            firstSavePreparedKeys.removeAll()
             explicitReviewKeys.removeAll()
             deferredUntil.removeAll()
             proofChecksInFlight.removeAll()
@@ -1001,6 +1081,7 @@ final class AutomaticOutboundSync {
                 }
                 guard let document = try document(for: next, context: context) else {
                     preparations.removeValue(forKey: next)
+                    firstSavePreparedKeys.remove(next)
                     let callbacks = completions.removeValue(forKey: next) ?? []
                     callbacks.forEach { $0(.failure(QuickBooksBillingWorkflowError.changed)) }
                     currentKey = nil
@@ -1046,6 +1127,7 @@ final class AutomaticOutboundSync {
                     explicitReviewKeys.remove(next)
                 }
                 let capturedPreparation = preparations.removeValue(forKey: next)
+                firstSavePreparedKeys.remove(next)
                 let result = try await publish(document, context: context,
                     preparation: capturedPreparation, explicitReview: explicitReview,
                     allowNewMarker: !explicitReview && hasNewMarkerForCurrentDocument)
@@ -1160,6 +1242,7 @@ final class AutomaticOutboundSync {
             let configuration = QuickBooksAccountingConfigurationStore.shared.configuration(
                 for: workflow.run.workflow.realmID, environment: workflow.run.workflow.environment)
             let outcome = try await workflow.execute(configuration: configuration)
+            if outcome.queued { return outcome.message }
             do {
                 try await workflow.uploadLinkedAttachments()
                 return outcome.message

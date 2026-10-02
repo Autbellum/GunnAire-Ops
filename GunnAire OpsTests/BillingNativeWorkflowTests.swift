@@ -15,6 +15,10 @@ import Testing
         var writes = 0
         var failReply = false
         var reserveOnly = false
+        var queueUnavailable = false
+        var malformedQueueReply = false
+        var queueJobMissing = false
+        var backgroundJobState = "pending"
         var failJournal = false
         var beforeReply: (() -> Void)?
         let attempt = UUID()
@@ -37,6 +41,23 @@ import Testing
         func object<T: Encodable>(_ value: T) throws -> Any { try JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) }
         func response() throws -> Data { try encoded(["publication": record!, "document": remote!]) }
 
+        func queuedResponse() throws -> Data {
+            if malformedQueueReply { return Data("{}".utf8) }
+            return try encoded(["publication": record!, "background": ["publicationID": attempt.uuidString,
+                "state": record?["state"] as? String == "confirmed" ? "confirmed" : backgroundJobState,
+                "attempts": 0, "lastErrorCode": NSNull(), "updatedAt": "2026-09-07T12:00:00Z"]])
+        }
+
+        func confirmQueuedEstimate() throws {
+            let proposal = try #require(request)
+            record?["state"] = "confirmed"; record?["providerID"] = "D1"
+            let total = QuickBooksSalesLineContract.double(try QuickBooksSalesLineContract.totals(proposal.document.Line).net)
+            remote = try object(proposal.document) as? [String: Any]
+            remote?.merge(["Id": "D1", "SyncToken": "8", "TotalAmt": total, "TxnTaxDetail": ["TotalTax": 0],
+                "PrivateNote": [proposal.document.PrivateNote, "GunnAire Estimate ID: \(proposal.localDocumentID.uuidString.uppercased())\nGunnAire Publication: \(attempt.uuidString.lowercased())"].compactMap { $0 }.joined(separator: "\n")]) { _, new in new }
+            writes += 1
+        }
+
         func reply(_ path: String, _ method: String, _ body: Data?) throws -> Data {
             calls.append((path, method)); beforeReply?()
             let url = URLComponents(string: path)!
@@ -53,6 +74,10 @@ import Testing
             if method == "GET", url.path == "/api/billing-publications" {
                 return try encoded(["publications": record.map { [$0] } ?? [], "nextCursor": NSNull()])
             }
+            if method == "GET", url.path.hasPrefix("/api/billing-publications/background-estimate/") {
+                if queueJobMissing { throw GunnAireBackendError.server(statusCode: 404, message: "no job") }
+                return try queuedResponse()
+            }
             if method == "GET", let request {
                 return try encoded(["publication": record!, "proposal": object(request), "reviewableByOffice": reserveOnly])
             }
@@ -62,6 +87,22 @@ import Testing
                 return try encoded(["publication": record!])
             }
             if path.hasSuffix("/approve") { return try encoded(["id": UUID().uuidString]) }
+            if path == "/api/billing-publications/background-estimate", method == "POST" {
+                let proposal = try JSONDecoder().decode(BillingPublicationRequest.self, from: #require(body))
+                #expect(try journals.values.contains { try $0.pending?.request.matches(proposal) == true &&
+                    [.queueRequested, .queued].contains($0.pending?.backgroundState) })
+                request = proposal
+                record = ["id": attempt.uuidString, "companyID": proposal.companyID.uuidString,
+                    "realmID": proposal.realmID, "environment": proposal.environment,
+                    "documentType": "Estimate", "localDocumentID": proposal.localDocumentID.uuidString,
+                    "localCustomerID": proposal.localCustomerID.uuidString, "operation": "create",
+                    "state": "reserved", "providerID": NSNull(), "updatedAt": "2026-09-07T12:00:00Z"]
+                if queueUnavailable { throw GunnAireBackendError.server(statusCode: 404, message: "missing queue") }
+                queueJobMissing = false
+                backgroundJobState = "pending"
+                if failReply { throw URLError(.timedOut) }
+                return try queuedResponse()
+            }
             #expect(path == "/api/billing-publications" && method == "POST")
             let request = try JSONDecoder().decode(BillingPublicationRequest.self, from: body!)
             // The exact proposal must already be durable before the POST.
@@ -96,19 +137,146 @@ import Testing
             }
             let flow = try f.flow(estimate: estimate)
             let outcome = try await flow.execute()
-            #expect(f.writes == 1); #expect(f.app.requests.isEmpty)
-            #expect(outcome.invoice?.Id == "D1" || outcome.estimate?.Id == "D1")
+            #expect(f.writes == (estimate ? 0 : 1)); #expect(f.app.requests.isEmpty)
+            #expect(estimate ? outcome.queued : outcome.invoice?.Id == "D1")
             #expect(f.request?.document.Line.first?.SalesItemLineDetail.UnitPrice == 190)
             #expect(f.request?.connectionRevision == f.epoch)
             let settled = try #require(f.journals.values.first?.pending)
-            #expect(settled.settled)
+            #expect(settled.settled == !estimate)
+            #expect(settled.backgroundState == (estimate ? .queued : nil))
             #expect(settled.draftRevision == (try flow.billingDraftRevision()))
+            if estimate {
+                let proof = try #require(settled.queueProof)
+                #expect(proof.customerID == f.app.customer.id)
+                #expect(proof.itemRevisions.keys.contains(f.app.item.id))
+                let original = try BillingNativeQueueProof.capture(
+                    customer: QuickBooksCustomerCreateOperation.draft(for: f.app.customer),
+                    items: [f.app.item.id: QuickBooksCatalogItemRevision(f.app.item)])
+                #expect(proof == original)
+                f.app.item.unitPrice = 191
+                let changed = try BillingNativeQueueProof.capture(
+                    customer: QuickBooksCustomerCreateOperation.draft(for: f.app.customer),
+                    items: [f.app.item.id: QuickBooksCatalogItemRevision(f.app.item)])
+                #expect(changed != proof)
+            } else {
+                #expect(settled.queueProof == nil)
+            }
             if !estimate {
                 #expect(f.app.invoice.status == "unpaid")
                 #expect(settled.draftRevision != f.request?.draftRevision)
             }
             f.finish(flow)
         }
+    }
+
+    @Test func queuedEstimateConfirmsAfterAppWorkflowRestartWithoutSecondCreate() async throws {
+        let f = try Fixture()
+        let first = try f.flow(estimate: true)
+        #expect(try await first.execute().queued)
+        #expect(f.writes == 0); #expect(f.app.estimate.quickBooksID == nil)
+        f.finish(first)
+        try f.confirmQueuedEstimate()
+        let second = try f.flow(estimate: true)
+        let result = try await second.execute()
+        #expect(result.recovered); #expect(result.estimate?.Id == "D1")
+        #expect(f.app.estimate.quickBooksID == "D1"); #expect(f.writes == 1)
+        #expect(f.calls.filter { $0.0 == "/api/billing-publications/background-estimate" && $0.1 == "POST" }.count == 1)
+        f.finish(second)
+    }
+
+    @Test func queuedConfirmationRejectsWhitespaceAliasedProviderOwnerOffMain() async throws {
+        let f = try Fixture()
+        let first = try f.flow(estimate: true)
+        #expect(try await first.execute().queued)
+        f.finish(first)
+        let conflicting = Estimate(customer: f.app.customer, quickBooksID: " D1 ",
+            catalogSnapshotJSON: f.app.estimate.catalogSnapshotJSON, amount: 190)
+        f.app.context.insert(conflicting)
+        try f.app.context.save()
+        try f.confirmQueuedEstimate()
+        let second = try f.flow(estimate: true)
+        await #expect(throws: QuickBooksBillingWorkflowError.remoteIdentity) { try await second.execute() }
+        #expect(f.app.estimate.quickBooksID == nil)
+        #expect(f.calls.filter { $0.0 == "/api/billing-publications/background-estimate" && $0.1 == "POST" }.count == 1)
+        f.finish(second)
+    }
+
+    @Test func unavailableQueueRetainsOriginalAndNeverFallsBackToDirectCreate() async throws {
+        let f = try Fixture(); f.queueUnavailable = true
+        let flow = try f.flow(estimate: true)
+        await #expect(throws: BillingPublicationError.unavailable) { try await flow.execute() }
+        #expect(f.writes == 0); #expect(f.app.estimate.quickBooksID == nil)
+        #expect(f.journals.values.first?.pending?.backgroundState == .queueRequested)
+        #expect(!f.calls.contains { $0.0 == "/api/billing-publications" && $0.1 == "POST" })
+        f.finish(flow)
+    }
+
+    @Test func malformedQueueAcknowledgmentRetainsOriginalWithoutDirectProviderWrite() async throws {
+        let f = try Fixture(); f.malformedQueueReply = true
+        let flow = try f.flow(estimate: true)
+        await #expect(throws: BillingPublicationError.invalidResponse) { try await flow.execute() }
+        #expect(f.writes == 0 && f.app.estimate.quickBooksID == nil)
+        #expect(f.journals.values.first?.pending?.backgroundState == .queueRequested)
+        #expect(!f.calls.contains { $0.0 == "/api/billing-publications" && $0.1 == "POST" })
+        f.finish(flow)
+    }
+
+    @Test func lostQueueReplyReadsOriginalJobOnRestartWithoutSecondPost() async throws {
+        let f = try Fixture(); f.failReply = true
+        let first = try f.flow(estimate: true)
+        await #expect(throws: BillingPublicationError.unavailable) { try await first.execute() }
+        #expect(f.journals.values.first?.pending?.backgroundState == .queueRequested)
+        f.finish(first); f.failReply = false
+        let second = try f.flow(estimate: true)
+        #expect(try await second.execute().queued)
+        #expect(f.journals.values.first?.pending?.backgroundState == .queued)
+        #expect(f.calls.filter { $0.0 == "/api/billing-publications/background-estimate" && $0.1 == "POST" }.count == 1)
+        #expect(f.writes == 0)
+        f.finish(second)
+    }
+
+    @Test func exactOldReservationWithoutJobAttachesOneWithoutDirectQBOCreate() async throws {
+        let f = try Fixture(); f.failReply = true
+        let first = try f.flow(estimate: true)
+        await #expect(throws: BillingPublicationError.unavailable) { try await first.execute() }
+        f.finish(first)
+        f.failReply = false; f.queueJobMissing = true
+        let second = try f.flow(estimate: true)
+        #expect(try await second.execute().queued)
+        #expect(f.calls.filter { $0.0 == "/api/billing-publications/background-estimate" && $0.1 == "POST" }.count == 2)
+        #expect(f.writes == 0)
+        f.finish(second)
+    }
+
+    @Test func reviewedQueueRetryUsesOnlyItsOriginalRequest() async throws {
+        let f = try Fixture()
+        let first = try f.flow(estimate: true)
+        #expect(try await first.execute().queued)
+        f.finish(first)
+        f.backgroundJobState = "review"
+        let second = try f.flow(estimate: true)
+        await #expect(throws: BillingNativeError.pending) { try await second.execute() }
+        let shared = try #require(second.sharedPublication)
+        let revision = try second.billingDraftRevision()
+        let result = try await shared.enqueueOriginal(revision: revision,
+            checkRevision: second.billingDraftRevision, checkProof: {}, retryReview: true)
+        #expect(result.background.state == .pending)
+        #expect(f.calls.filter { $0.0 == "/api/billing-publications/background-estimate" && $0.1 == "POST" }.count == 2)
+        #expect(f.writes == 0)
+        f.finish(second)
+    }
+
+    @Test func changedQueuedDraftStopsBeforeAnyStatusOrSecondPost() async throws {
+        let f = try Fixture()
+        let first = try f.flow(estimate: true)
+        #expect(try await first.execute().queued)
+        f.finish(first)
+        f.app.estimate.notes = "Changed while server job is pending"
+        let calls = f.calls.count
+        let second = try f.flow(estimate: true)
+        await #expect(throws: BillingNativeError.originalDraft) { try await second.execute() }
+        #expect(f.calls.count == calls); #expect(f.writes == 0)
+        f.finish(second)
     }
 
     @Test func lostReplyAfterAcceptanceRecoversAcrossOwnerRestartWithoutAnotherPublish() async throws {
@@ -237,6 +405,7 @@ import Testing
     @Test func importedMappedEstimateRecoversWithoutRequiringForgedLineageOrWriting() async throws {
         let f = try Fixture()
         f.app.estimate.quickBooksID = "D1"
+        try f.app.context.save()
         var remote = try f.app.documentResponse(estimate: true)
         remote["TxnDate"] = "2026-07-02"; remote["PrivateNote"] = "Imported estimate"
         f.remote = remote
@@ -315,5 +484,71 @@ import Testing
         try bytes.dropLast().write(to: file)
         #expect(throws: BillingNativeError.storage) { try store.read(journal.scope) }
         f.finish(flow)
+    }
+
+    @Test func encryptedEstimateQueueProofSurvivesRestartAndRejectsEditedCustomer() async throws {
+        let f = try Fixture(), flow = try f.flow(estimate: true)
+        #expect(try await flow.execute().queued)
+        let journal = try #require(f.journals.values.first)
+        let proof = try #require(journal.pending?.queueProof)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("billing-estimate-proof-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = BillingNativeJournalStore.encrypted(directory: directory, key: { _ in Data(repeating: 9, count: 32) })
+        try store.write(journal)
+        #expect(try store.read(journal.scope).pending?.queueProof == proof)
+        var malformed = journal
+        malformed.pending?.queueProof = .init(customerID: proof.customerID,
+            customerRevision: "not-a-digest", itemRevisions: proof.itemRevisions,
+            actorRole: proof.actorRole)
+        #expect(throws: BillingNativeError.storage) { try store.write(malformed) }
+        let request = try #require(journal.pending?.request)
+        try await proof.checkPersisted(container: f.app.context.container, request: request)
+        f.app.customer.name = "Edited after queue"
+        try f.app.context.save()
+        await #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try await proof.checkPersisted(container: f.app.context.container, request: request)
+        }
+        f.finish(flow)
+    }
+
+    @Test func preparedBackgroundProofRejectsEditedSelectedItemAndEstimate() async throws {
+        let f = try Fixture(), flow = try f.flow(estimate: true)
+        #expect(try await flow.execute().queued)
+        let pending = try #require(f.journals.values.first?.pending)
+        let proof = try #require(pending.queueProof)
+        try await proof.checkPersisted(container: f.app.context.container, request: pending.request)
+        f.app.item.unitPrice += 1
+        try f.app.context.save()
+        await #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try await proof.checkPersisted(container: f.app.context.container, request: pending.request)
+        }
+        f.app.item.unitPrice -= 1
+        try f.app.context.save()
+        f.app.estimate.notes = "Changed after original queue request"
+        try f.app.context.save()
+        await #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try await proof.checkPersisted(container: f.app.context.container, request: pending.request)
+        }
+        f.finish(flow)
+    }
+
+    @Test func queuedEstimateRejectsChangedCapturedRoleBeforeAnotherBackendRequest() async throws {
+        let f = try Fixture(), first = try f.flow(estimate: true)
+        #expect(try await first.execute().queued)
+        f.finish(first)
+        let current = CompanyWorkspaceAccessController.shared.verifiedRole
+        let differentRole: AppUserRole = current == .admin ? .dispatcher : .admin
+        let proof = try BillingNativeQueueProof.capture(
+            customer: QuickBooksCustomerCreateOperation.draft(for: f.app.customer),
+            items: [f.app.item.id: QuickBooksCatalogItemRevision(f.app.item)], actorRole: differentRole)
+        let key = try #require(f.journals.keys.first)
+        var journal = try #require(f.journals[key])
+        journal.pending?.queueProof = proof
+        f.journals[key] = journal
+        let attempts = f.calls.filter { $0.0 == "/api/billing-publications/background-estimate" && $0.1 == "POST" }.count
+        let second = try f.flow(estimate: true)
+        await #expect(throws: BillingPublicationError.accessRequired) { try await second.execute() }
+        #expect(f.calls.filter { $0.0 == "/api/billing-publications/background-estimate" && $0.1 == "POST" }.count == attempts)
+        f.finish(second)
     }
 }

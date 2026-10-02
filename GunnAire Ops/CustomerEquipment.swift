@@ -14,7 +14,7 @@ struct EquipmentLifecycleSnapshot: Equatable, Sendable {
     let attention: EquipmentLifecycleAttention
     let validationMessage: String?
 
-    var summary: String? {
+    nonisolated var summary: String? {
         if validationMessage != nil {
             return "Review equipment dates"
         }

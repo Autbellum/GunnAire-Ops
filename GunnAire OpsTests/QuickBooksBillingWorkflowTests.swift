@@ -27,7 +27,8 @@ struct QuickBooksBillingWorkflowTests {
         lazy var api = QuickBooksDataAPI(testTokens: .init(accessToken: "billing-fixture", expiration: .distantFuture),
             realmID: "billing-realm", environment: Config.QuickBooks.environment,
             catalogCompanyID: UUID(uuidString: "10000000-0000-4000-8000-000000000001"),
-            customerPublisher: customerPublisher, billingPublisher: billingPublisher) { [unowned self] request in
+            customerPublisher: customerPublisher, billingPublisher: billingPublisher,
+            estimateQueueVersion: 1) { [unowned self] request in
                 self.requests.append(request)
                 try self.beforeResponse?(request)
                 return try self.reply(request)
@@ -648,6 +649,184 @@ struct QuickBooksBillingWorkflowTests {
             isInvoice: true, assignedToJob: true))
         #expect(!QuickBooksBillingAccessPolicy.allows(email: AppAccess.primaryAdminEmail, users: [], verifiedRole: .admin,
             isInvoice: true, assignedToJob: true))
+        let canonical = AppUser(email: "admin@example.invalid", role: .admin)
+        let legacy = AppUser(email: "admin@example.invalid", role: .standard, isActive: false)
+        legacy.email = " Admin@Example.Invalid "
+        #expect(!QuickBooksBillingAccessPolicy.allows(email: canonical.email, users: [canonical, legacy],
+            verifiedRole: .admin, isInvoice: false, assignedToJob: false))
+    }
+
+    @Test func officeDocumentRolesDoNotUseCrewAssignmentButFieldRoleStillDoes() {
+        let email = "office@fixture.invalid"
+        for (role, invoice, estimate) in [
+            (AppUserRole.admin, true, true),
+            (.accounting, true, false),
+            (.dispatcher, false, true),
+            (.fieldTechnician, false, false)
+        ] {
+            let user = AppUser(email: email, role: role)
+            #expect(QuickBooksBillingAccessPolicy.allows(email: email, users: [user],
+                verifiedRole: role, isInvoice: true, assignedToJob: false) == invoice)
+            #expect(QuickBooksBillingAccessPolicy.allows(email: email, users: [user],
+                verifiedRole: role, isInvoice: false, assignedToJob: false) == estimate)
+        }
+        let field = AppUser(email: email, role: .fieldTechnician)
+        #expect(QuickBooksBillingAccessPolicy.allows(email: email, users: [field],
+            verifiedRole: .fieldTechnician, isInvoice: true, assignedToJob: true))
+        let conflicting = AppUser(email: " OTHER@fixture.invalid ", role: .standard, isActive: false)
+        conflicting.email = " Office@Fixture.Invalid "
+        #expect(!QuickBooksBillingAccessPolicy.allows(email: email, users: [field, conflicting],
+            verifiedRole: .fieldTechnician, isInvoice: true, assignedToJob: true))
+    }
+
+    @Test func reusedUserCensusRejectsAnotherModelContext() throws {
+        let first = try Fixture()
+        let second = try Fixture()
+        first.context.insert(AppUser(email: "admin@fixture.invalid", role: .admin))
+        try first.context.save()
+        let census = try QuickBooksBillingAccessPolicy.userCensus(context: first.context)
+        #expect(census.users.count == 1)
+        #expect(throws: QuickBooksBillingWorkflowError.accessDenied) {
+            try QuickBooksBillingAccessPolicy.validate(context: second.context,
+                document: .invoice(second.invoice), census: census)
+        }
+    }
+
+    @Test func detachedMirrorPreservesInvoiceAndEstimateRoleBoundaries() {
+        let accounting = QuickBooksBillingAccessPolicy.Mirror(roles: [.accounting], allActive: true, assigned: false)
+        #expect(QuickBooksBillingAccessPolicy.allows(mirror: accounting, verifiedRole: .accounting, isInvoice: true))
+        #expect(!QuickBooksBillingAccessPolicy.allows(mirror: accounting, verifiedRole: .accounting, isInvoice: false))
+        #expect(!QuickBooksBillingAccessPolicy.allows(mirror: accounting, verifiedRole: .admin, isInvoice: true))
+        let administrator = QuickBooksBillingAccessPolicy.Mirror(roles: [.admin], allActive: true, assigned: false)
+        #expect(QuickBooksBillingAccessPolicy.allows(mirror: administrator, verifiedRole: .admin, isInvoice: true))
+        #expect(QuickBooksBillingAccessPolicy.allows(mirror: administrator, verifiedRole: .admin, isInvoice: false))
+        let dispatcher = QuickBooksBillingAccessPolicy.Mirror(roles: [.dispatcher], allActive: true, assigned: false)
+        #expect(!QuickBooksBillingAccessPolicy.allows(mirror: dispatcher, verifiedRole: .dispatcher, isInvoice: true))
+        #expect(QuickBooksBillingAccessPolicy.allows(mirror: dispatcher, verifiedRole: .dispatcher, isInvoice: false))
+        let crew = QuickBooksBillingAccessPolicy.Mirror(roles: [.fieldTechnician], allActive: true, assigned: true)
+        #expect(QuickBooksBillingAccessPolicy.allows(mirror: crew, verifiedRole: .fieldTechnician, isInvoice: true))
+        #expect(!QuickBooksBillingAccessPolicy.allows(mirror: .init(roles: crew.roles, allActive: true, assigned: false),
+            verifiedRole: .fieldTechnician, isInvoice: true))
+        let conflicting = QuickBooksBillingAccessPolicy.Mirror(roles: [.admin, .standard], allActive: true, assigned: false)
+        #expect(!QuickBooksBillingAccessPolicy.allows(mirror: conflicting, verifiedRole: .admin, isInvoice: true))
+        #expect(!QuickBooksBillingAccessPolicy.allows(mirror: .init(roles: [.admin, .admin], allActive: false, assigned: false),
+            verifiedRole: .admin, isInvoice: true))
+        #expect(!QuickBooksBillingAccessPolicy.allows(mirror: .init(roles: [], allActive: true, assigned: false),
+            verifiedRole: .admin, isInvoice: true))
+    }
+
+    @Test func detachedBillingMirrorIncludesNoncanonicalConflictsAndCrewAssignment() async throws {
+        let f = try Fixture()
+        let canonical = AppUser(email: "tech@fixture.invalid", role: .fieldTechnician)
+        let conflicting = AppUser(email: "other@fixture.invalid", role: .standard, isActive: false)
+        conflicting.email = " Tech@Fixture.Invalid "
+        let technician = Technician(name: "Assigned crew", contactInfo: " TECH@fixture.invalid ")
+        let call = ServiceCall(type: .service, scheduledDate: .now,
+            additionalTechnicianIDs: [technician.id], customer: f.customer)
+        f.context.insert(canonical); f.context.insert(conflicting)
+        f.context.insert(technician); f.context.insert(call)
+        try f.context.save()
+        let container = f.context.container
+        let customerID = f.customer.persistentModelID
+        let callID = call.id
+        let denied = try await Task.detached {
+            try QuickBooksBillingAccessPolicy.readMirror(container: container, email: "tech@fixture.invalid",
+                jobID: callID, customerID: customerID)
+        }.value
+        #expect(denied.roles.count == 2)
+        #expect(!denied.allActive)
+        #expect(denied.assigned)
+        conflicting.isActive = true
+        conflicting.role = .fieldTechnician
+        try f.context.save()
+        let allowed = try await Task.detached {
+            try QuickBooksBillingAccessPolicy.readMirror(container: container, email: "tech@fixture.invalid",
+                jobID: callID, customerID: customerID)
+        }.value
+        #expect(allowed.roles == [AppUserRole.fieldTechnician, .fieldTechnician])
+        #expect(allowed.allActive && allowed.assigned)
+    }
+
+    @Test func selectedEstimateItemChangeStopsBeforeAnyProviderCall() async throws {
+        let f = try Fixture()
+        let flow = try f.flow(estimate: true)
+        f.item.unitPrice = 205
+        try f.context.save()
+        await fails { _ = try await flow.execute() }
+        #expect(f.requests.isEmpty)
+        #expect(f.estimate.quickBooksID == nil)
+    }
+
+    @Test func detachedSelectedItemRevisionRejectsChangeAndDuplicateIdentity() async throws {
+        let f = try Fixture()
+        let container = f.context.container
+        let ids: Set<UUID> = [f.item.id]
+        let original = try await Task.detached {
+            try QuickBooksBillingReads.selectedRevisions(container: container, ids: ids)
+        }.value
+        f.item.unitPrice = 205
+        try f.context.save()
+        let changed = try await Task.detached {
+            try QuickBooksBillingReads.selectedRevisions(container: container, ids: ids)
+        }.value
+        #expect(changed != original)
+        f.context.insert(Item(id: f.item.id, quickBooksID: "I2", name: "Duplicate", unitPrice: 205))
+        try f.context.save()
+        await #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try await Task.detached {
+                try QuickBooksBillingReads.selectedRevisions(container: container, ids: ids)
+            }.value
+        }
+    }
+
+    @Test func selectedItemBatchKeepsExactTwentyIdentitiesAndRejectsMissingOrDuplicate() async throws {
+        let f = try Fixture()
+        var ids: Set<UUID> = [f.item.id]
+        for index in 1..<20 {
+            let item = Item(quickBooksID: "I\(index + 1)", name: "Selected \(index)", unitPrice: Double(index))
+            f.context.insert(item)
+            ids.insert(item.id)
+        }
+        let unrelated = Item(quickBooksID: "UNRELATED", name: "Unrelated", unitPrice: 1)
+        f.context.insert(unrelated)
+        try f.context.save()
+        let selected = try QuickBooksBillingReads.items(ids, context: f.context)
+        #expect(selected.count == 20)
+        #expect(Set(selected.map(\.id)) == ids)
+        #expect(!selected.contains { $0.id == unrelated.id })
+        let container = f.context.container
+        let original = try await Task.detached {
+            try QuickBooksBillingReads.selectedRevisions(container: container, ids: ids)
+        }.value
+        #expect(original.count == 20)
+        selected[0].unitPrice += 1
+        try f.context.save()
+        let changed = try await Task.detached {
+            try QuickBooksBillingReads.selectedRevisions(container: container, ids: ids)
+        }.value
+        #expect(changed != original)
+        let removedID = selected[1].id
+        f.context.delete(selected[1])
+        try f.context.save()
+        #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try QuickBooksBillingReads.items(ids, context: f.context)
+        }
+        await #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try await Task.detached {
+                try QuickBooksBillingReads.selectedRevisions(container: container, ids: ids)
+            }.value
+        }
+        f.context.insert(Item(id: removedID, quickBooksID: "DUPLICATE", name: "Replacement", unitPrice: 1))
+        f.context.insert(Item(id: removedID, quickBooksID: "DUPLICATE2", name: "Duplicate", unitPrice: 1))
+        try f.context.save()
+        #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try QuickBooksBillingReads.items(ids, context: f.context)
+        }
+        await #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try await Task.detached {
+                try QuickBooksBillingReads.selectedRevisions(container: container, ids: ids)
+            }.value
+        }
     }
 
     @Test func overlappingDocumentRunDoesNotReplaceTheOriginal() throws {

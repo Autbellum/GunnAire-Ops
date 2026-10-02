@@ -49,11 +49,12 @@ final class QuickBooksCustomerEmailWorkflow {
     }
 
     static func requireAccess(context: ModelContext, document: QuickBooksBillingDocument) throws {
-        let users = try context.fetch(FetchDescriptor<AppUser>())
+        let census = try QuickBooksBillingAccessPolicy.userCensus(context: context)
+        let users = census.users
         guard AppAccess.canAccessSidebarItem(.mail, email: AppIdentity.currentEmail, users: users) else {
             throw GmailComposeError.access
         }
-        try QuickBooksBillingAccessPolicy.validate(context: context, document: document)
+        try QuickBooksBillingAccessPolicy.validate(context: context, document: document, census: census)
     }
 
     /// Stop before document preparation, retaining a suppression audit when

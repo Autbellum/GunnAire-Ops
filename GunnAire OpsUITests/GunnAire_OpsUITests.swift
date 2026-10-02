@@ -1428,6 +1428,30 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testStaffICloudAccountChangeRequiresRelaunchInsteadOfRetrying() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-uiTestAuthenticatedAdmin",
+                               "-uiTestWorkspaceProofMismatch", "-uiTestStaffCloudKitSetup", "-uiTestStaffAsParticipant",
+                               "-uiTestStaffAccountChanged"]
+        app.launchEnvironment["GUNNAIRE_STAFF_SETUP_FIXTURE"] = UUID().uuidString
+        app.launch()
+
+        let open = app.buttons["OpenStaffCloudKitSetup"]
+        XCTAssertTrue(open.waitForExistence(timeout: 8))
+        open.tap()
+        XCTAssertTrue(app.navigationBars["Staff iCloud"].waitForExistence(timeout: 5))
+        let restart = app.staticTexts["StaffCloudKitRestartRequired"]
+        XCTAssertTrue(restart.waitForExistence(timeout: 8))
+        XCTAssertTrue(restart.label.contains("Close and reopen"))
+        XCTAssertTrue(restart.label.contains("saved work is retained"))
+        XCTAssertFalse(app.buttons["Check Again"].exists)
+        XCTAssertFalse(app.buttons["StaffCloudKitRequestAccess"].exists)
+        XCTAssertFalse(app.buttons["StaffCloudKitRecoverOriginal"].exists)
+        XCTAssertFalse(app.buttons["StaffCloudKitAcceptInvitation"].exists)
+        XCTAssertTrue(app.navigationBars["Staff iCloud"].buttons["Close"].exists)
+    }
+
+    @MainActor
     func testStaffCloudKitRequestRecoversAfterRelaunchWithoutOpeningAnotherWorkspace() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-uiTestAuthenticatedAdmin",
@@ -5088,6 +5112,11 @@ final class GunnAire_OpsUITests: XCTestCase {
             evidence.name = "Management - original \(kind.lowercased()) saved offline"
             evidence.lifetime = .keepAlways; self.add(evidence)
             XCTAssertEqual(savedCustomer.label, "Blue Ridge Dental")
+            let pdfStatus = app.staticTexts["BillingPDFQueueStatus"].firstMatch
+            XCTAssertTrue(pdfStatus.waitForExistence(timeout: 5),
+                          "Saving the original \(kind.lowercased()) must report the external PDF archive state.")
+            XCTAssertFalse(pdfStatus.label.contains("archived to Google Drive"),
+                           "An offline save cannot claim that Google Drive confirmed an archive.")
             if kind == "Invoice" {
                 let workType = app.descendants(matching: .any)["ManagementBillingSavedWorkType"]
                 XCTAssertTrue(workType.exists)

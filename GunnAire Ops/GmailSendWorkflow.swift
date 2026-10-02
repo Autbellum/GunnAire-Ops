@@ -491,7 +491,8 @@ final class GmailSendWorkflow {
 
     static func requireAccess(context: ModelContext, business: GmailBusinessContext?, sender: String?) throws {
         let controller = CompanyWorkspaceAccessController.shared
-        let users = try context.fetch(FetchDescriptor<AppUser>())
+        let census = try QuickBooksBillingAccessPolicy.userCensus(context: context)
+        let users = census.users
         let fixture = GunnAireCloudKit.usesTestDatabase
         let role = fixture ? users.first(where: { AppAccess.normalizedEmail($0.email) == AppAccess.normalizedEmail(sender) })?.role : controller.verifiedRole
         let email = AppAccess.normalizedEmail(sender)
@@ -501,13 +502,17 @@ final class GmailSendWorkflow {
               fixture || controller.authorizedContainer === context.container,
               allowsBusinessWorkflow(role: role, business: business) else { throw GmailComposeError.access }
         if let business, let id = business.invoiceID {
-            let values = try context.fetch(FetchDescriptor<Invoice>()).filter { $0.id == id }
+            var query = FetchDescriptor<Invoice>(predicate: #Predicate { $0.id == id })
+            query.fetchLimit = 2
+            let values = try context.fetch(query)
             guard values.count == 1, values[0].customer?.id == business.customerID else { throw GmailComposeError.access }
-            try QuickBooksBillingAccessPolicy.validate(context: context, document: .invoice(values[0]))
+            try QuickBooksBillingAccessPolicy.validate(context: context, document: .invoice(values[0]), census: census)
         } else if let business, let id = business.estimateID {
-            let values = try context.fetch(FetchDescriptor<Estimate>()).filter { $0.id == id }
+            var query = FetchDescriptor<Estimate>(predicate: #Predicate { $0.id == id })
+            query.fetchLimit = 2
+            let values = try context.fetch(query)
             guard values.count == 1, values[0].customer?.id == business.customerID else { throw GmailComposeError.access }
-            try QuickBooksBillingAccessPolicy.validate(context: context, document: .estimate(values[0]))
+            try QuickBooksBillingAccessPolicy.validate(context: context, document: .estimate(values[0]), census: census)
         } else if role == .fieldTechnician, let id = business?.serviceCallID {
             let calls = try context.fetch(FetchDescriptor<ServiceCall>()).filter { $0.id == id }
             let technicians = try context.fetch(FetchDescriptor<Technician>())
