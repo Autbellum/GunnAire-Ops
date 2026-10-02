@@ -20,7 +20,6 @@ at the start of every turn; append to it rather than rewriting it.
 
 ## Claims
 
-
 ## Shared rules
 
 1. The project sets `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`. A helper reached
@@ -43,6 +42,8 @@ at the start of every turn; append to it rather than rewriting it.
    pins the old behavior and the new one.
 
 ## Status log
+
+- 2026-10-01 Codex qbo_estimate_auto_acceptance: Isolated `fix/0121-qbo-email-fence` adds a backend-hosted durable document-email attempt fence and native explicit-send routing, with office-role, realm, customer, recipient, and ambiguous-result checks. The endpoint is disabled by default until the server can verify customer transactional-email consent; this branch is groundwork only, not a production email feature. The authenticated 501 gate performs zero provider calls and writes zero attempt rows. Backend QBO/billing tests passed 63/63 and signed iPad QBO email/customer workflow tests passed 36/36, zero failures/skips (`/tmp/gunnaire-qbo-email-fence-final.xcresult`). Final-source `omni_runner.py` passed with zero compiler warnings (`/tmp/gunnaire-qbo-email-fence-omni-final.log`). No live QBO email, deployment, or closed-app estimate publication was verified. Claim released for review.
 
 - 2026-10-01 Codex 0121 integration: The combined legacy Google Calendar link/publish/recovery flow and current-job guarded QuickBooks estimate delivery passed 140/140 focused signed iPad tests (143 executions), zero failures/skips. The exact 0121 source passed `generated/omni_runner.py` with zero compiler warnings and 2,943/2,943 full signed iPad logical unit tests (3,024 executions), zero failures/skips; evidence at `/private/tmp/GunnAire-0121-focused-r1.xcresult`, `/private/tmp/GunnAire-0121-omni-r1.log`, and `/private/tmp/GunnAire-0121-full-ipad-r1.xcresult`. Signed 0121 iPad/iPhone screenshot tests each passed 1/1; twelve PNGs were visually reviewed and SHA-256 checked in `AppStoreAssets/ScreenshotManifest.json`. This is source and simulator evidence, not a live user-specific Google alert, physical-iPad sign-in, customer QuickBooks delivery, Google Drive publication, or TestFlight upload.
 

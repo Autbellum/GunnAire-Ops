@@ -202,6 +202,7 @@ final class QuickBooksDataAPI: ObservableObject {
     private var credentialPersistenceTask: Task<Void, Never>?
     private let requestTransport: WorkspaceProviderOperation.Transport
     private var documentEmailJournal = QuickBooksDocumentEmailJournal.device
+    private let documentEmailTransport: ((Data) async throws -> Data)?
     private let persistsCredentials: Bool
     private let revokeConnection: () async -> Bool
     let catalogPublicationTransport: CatalogPublicationBoundary.Transport?
@@ -228,6 +229,7 @@ final class QuickBooksDataAPI: ObservableObject {
     private init() {
         requestTransport = { try await URLSession.shared.data(for: $0) }
         persistsCredentials = true
+        documentEmailTransport = GunnAireBackendService.qboDocumentEmailRequest
         revokeConnection = { (try? await GunnAireBackendService.revokeQuickBooksConnection()) != nil }
         catalogPublicationTransport = GunnAireBackendService.publishCatalog
         customerPublicationTransport = GunnAireBackendService.publishCustomer
@@ -246,17 +248,20 @@ final class QuickBooksDataAPI: ObservableObject {
         self.init(sharedCompanyID: connection.identity.companyID, realmID: connection.realmID,
             environment: connection.environment, connectionRevision: connection.connectionRevision,
             operation: operation, billingPublisher: billingPublisher,
-            catalogPublisher: catalogPublisher, customerPublisher: customerPublisher)
+            catalogPublisher: catalogPublisher, customerPublisher: customerPublisher,
+            emailTransport: GunnAireBackendService.qboDocumentEmailRequest)
     }
 
     init(sharedCompanyID: UUID, realmID: String, environment: String, connectionRevision: String,
          operation: WorkspaceProviderOperation, billingPublisher: BillingPublicationClient,
          catalogPublisher: @escaping CatalogPublicationBoundary.Transport = { _ in throw CatalogPublicationError.accessRequired },
          customerPublisher: @escaping CustomerPublicationBoundary.Transport = { _ in throw CustomerPublicationError.accessRequired },
+         emailTransport: ((Data) async throws -> Data)? = nil,
          catalogRecovery: @escaping (UUID) async throws -> CatalogPublicationResponse = { _ in throw CatalogPublicationError.needsReview },
          catalogRead: ((String) async throws -> QuickBooksItem)? = nil) {
         requestTransport = { _ in throw BillingPublicationError.accessRequired }
         persistsCredentials = false
+        documentEmailTransport = emailTransport
         requiresCredentialOwnership = false
         revokeConnection = { false }
         catalogFixtureCompanyID = sharedCompanyID
@@ -282,12 +287,14 @@ final class QuickBooksDataAPI: ObservableObject {
          catalogRecovery: @escaping (UUID) async throws -> CatalogPublicationResponse = { _ in throw CatalogPublicationError.unavailable },
          revokeConnection: @escaping () async -> Bool = { false },
          emailJournal: QuickBooksDocumentEmailJournal? = nil,
+         emailTransport: ((Data) async throws -> Data)? = nil,
          credentialOwner: QuickBooksCredentialOwner? = nil,
          currentCredentialOwner: (() -> QuickBooksCredentialOwner?)? = nil,
          transport: @escaping WorkspaceProviderOperation.Transport) {
         precondition(GunnAireCloudKit.usesTestDatabase)
         requestTransport = transport
         documentEmailJournal = emailJournal ?? QuickBooksDocumentEmailJournal(directory: nil, memoryOnly: true)
+        documentEmailTransport = emailTransport
         persistsCredentials = false
         requiresCredentialOwnership = currentCredentialOwner != nil
         self.currentCredentialOwner = currentCredentialOwner ?? { nil }
@@ -896,6 +903,21 @@ final class QuickBooksDataAPI: ObservableObject {
 
     private struct DecodableTypeBox<T: Decodable>: @unchecked Sendable {
         let type: T.Type
+    }
+
+    private struct BackendDocumentEmailReply<T: Decodable>: Decodable {
+        let state: String
+        let document: T?
+    }
+
+    private struct BackendDocumentEmailRequest: Encodable {
+        let companyID: UUID
+        let realmID: String
+        let environment: String
+        let documentType: String
+        let providerID: String
+        let customerProviderID: String
+        let recipient: String
     }
 
     private var retryContext: QuickBooksRetryContext {
@@ -1596,12 +1618,12 @@ final class QuickBooksDataAPI: ObservableObject {
     private func sendDocumentEmail<T: Decodable>(kind: String, id: String, to emailAddress: String?, expectedCustomerID: String?,
         validateSend: @escaping () throws -> Void, decode: T.Type, observe: @escaping (T) -> QuickBooksDocumentEmailObservation,
         completion: @escaping (Result<T, Error>) -> Void) {
-        guard sharedBillingOperation == nil else {
+        guard sharedBillingOperation == nil || documentEmailTransport != nil else {
             completion(.failure(BillingPublicationError.savedDocumentRequired)); return
         }
         let trimmedID = id.trimmingCharacters(in: .whitespacesAndNewlines)
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
-        guard !trimmedID.isEmpty, trimmedID.count <= 256,
+        guard ["estimate", "invoice"].contains(kind), !trimmedID.isEmpty, trimmedID.count <= 256,
               trimmedID.unicodeScalars.allSatisfy({ allowed.contains($0) }) else {
             completion(.failure(QuickBooksDocumentEmailError.invalidDocument)); return
         }
@@ -1613,6 +1635,13 @@ final class QuickBooksDataAPI: ObservableObject {
             }
         }
         catch { completion(.failure(error)); return }
+        if let documentEmailTransport {
+            sendDocumentEmailThroughBusinessServer(kind: kind, id: trimmedID, emailAddress: emailAddress,
+                expectedCustomerID: expectedCustomerID, validateSend: validateSend,
+                observe: observe, operation: operation, transport: documentEmailTransport,
+                completion: completion)
+            return
+        }
         let key = QuickBooksDocumentEmailAttempt.digest([
             storedCredentialOwner?.companyID.uuidString ?? "fixture",
             storedCredentialOwner?.backendOrigin ?? Config.Backend.normalizedBaseURL,
@@ -1694,6 +1723,96 @@ final class QuickBooksDataAPI: ObservableObject {
             } catch {
                 completion(.failure(accepted ? QuickBooksDocumentEmailError.acceptedInOriginalWorkspace :
                     (operation.mayHaveReachedProvider ? QuickBooksDocumentEmailError.reviewRequired : error)))
+            }
+        }
+    }
+
+    private func sendDocumentEmailThroughBusinessServer<T: Decodable>(kind: String, id: String,
+        emailAddress: String?, expectedCustomerID: String?, validateSend: @escaping () throws -> Void,
+        observe: @escaping (T) -> QuickBooksDocumentEmailObservation,
+        operation: WorkspaceProviderOperation, transport: @escaping (Data) async throws -> Data,
+        completion: @escaping (Result<T, Error>) -> Void) {
+        let body: Data
+        let recipient: String
+        do {
+            try operation.check()
+            try validateSend()
+            let companyID: UUID
+            if let sharedBillingOperation {
+                try sharedBillingOperation.check()
+                guard let sharedCompanyID = catalogFixtureCompanyID else {
+                    throw QuickBooksDocumentEmailError.storage
+                }
+                companyID = sharedCompanyID
+            } else {
+                guard let owner = storedCredentialOwner,
+                      owner.backendOrigin == Config.Backend.normalizedBaseURL else {
+                    throw QuickBooksDocumentEmailError.storage
+                }
+                companyID = owner.companyID
+            }
+            guard let realm = realmID, QuickBooksProviderReference.isValid(realm),
+                  ["sandbox", "production"].contains(currentEnvironment),
+                  let customerID = expectedCustomerID, QuickBooksProviderReference.isValid(customerID),
+                  let addresses = try? GmailAddressList.parse(emailAddress ?? ""),
+                  addresses.count == 1, let address = addresses.first else {
+                throw QuickBooksDocumentEmailError.invalidDocument
+            }
+            recipient = address.lowercased()
+            body = try JSONEncoder().encode(BackendDocumentEmailRequest(companyID: companyID,
+                realmID: realm, environment: currentEnvironment, documentType: kind.capitalized,
+                providerID: id, customerProviderID: customerID, recipient: recipient))
+        } catch {
+            completion(.failure(error)); return
+        }
+        Task { @MainActor in
+            do {
+                try operation.check()
+                try validateSend()
+                if persistsCredentials {
+                    let oldKey = QuickBooksDocumentEmailAttempt.digest([
+                        storedCredentialOwner?.companyID.uuidString ?? "fixture",
+                        storedCredentialOwner?.backendOrigin ?? Config.Backend.normalizedBaseURL,
+                        currentEnvironment, realmID ?? "", kind, id
+                    ].joined(separator: "\n"))
+                    let previous = try await documentEmailJournal.acquire(oldKey)
+                    await documentEmailJournal.release(oldKey)
+                    guard previous?.state != .pending else {
+                        throw QuickBooksDocumentEmailError.reviewRequired
+                    }
+                    try operation.check()
+                }
+                let data = try await operation.performExternalMutation {
+                    try await transport(body)
+                }
+                let reply = try JSONDecoder().decode(BackendDocumentEmailReply<T>.self, from: data)
+                try operation.check()
+                do { try validateSend() }
+                catch { throw QuickBooksDocumentEmailError.acceptedInOriginalWorkspace }
+                if reply.state == "reconciled" {
+                    completion(.failure(QuickBooksDocumentEmailError.reconciled)); return
+                }
+                if reply.state == "observed" {
+                    completion(.failure(QuickBooksDocumentEmailError.matchingEmailObserved)); return
+                }
+                guard reply.state == "accepted", let document = reply.document else {
+                    throw QuickBooksDocumentEmailError.reviewRequired
+                }
+                let sent = observe(document)
+                guard sent.id == id, sent.customerID == expectedCustomerID,
+                      sent.emailStatus == "EmailSent",
+                      sent.recipient?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == recipient else {
+                    throw QuickBooksDocumentEmailError.reviewRequired
+                }
+                completion(.success(document))
+            } catch {
+                if let emailError = error as? QuickBooksDocumentEmailError,
+                   emailError == .acceptedInOriginalWorkspace || emailError == .reconciled ||
+                   emailError == .matchingEmailObserved || emailError == .backendUpgradeRequired {
+                    completion(.failure(emailError))
+                } else {
+                    completion(.failure(QuickBooksDocumentEmailError.reviewRequired))
+                }
             }
         }
     }

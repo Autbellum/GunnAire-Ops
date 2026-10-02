@@ -80,6 +80,24 @@ struct QuickBooksCustomerEmailWorkflowTests {
         }
     }
 
+    @Test func matchingLaterEmailStaysUnconfirmedAndServerUpgradeFailureStaysUnsent() throws {
+        let observed = try Fixture()
+        let first = try observed.flow()
+        try first.prepare()
+        let observedMessage = first.finish(.failure(QuickBooksDocumentEmailError.matchingEmailObserved))
+        #expect(try observed.history().first?.deliveryStatus == "unconfirmed")
+        #expect(observed.estimate.status != "sent")
+        #expect(observedMessage.contains("cannot attribute"))
+
+        let unavailable = try Fixture()
+        let second = try unavailable.flow()
+        try second.prepare()
+        let unavailableMessage = second.finish(.failure(QuickBooksDocumentEmailError.backendUpgradeRequired))
+        #expect(try unavailable.history().first?.deliveryStatus == "failed")
+        #expect(unavailable.estimate.status != "sent")
+        #expect(unavailableMessage.contains("No email was sent"))
+    }
+
     @Test func interruptedPendingQuickBooksEmailIsVisibleWithoutAssumingAProviderFailure() throws {
         let fixture = try Fixture()
         let flow = try fixture.flow()

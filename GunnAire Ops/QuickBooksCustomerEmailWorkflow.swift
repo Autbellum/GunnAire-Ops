@@ -111,8 +111,10 @@ final class QuickBooksCustomerEmailWorkflow {
             switch error as? QuickBooksDocumentEmailError {
             case .reconciled:
                 status = "sent"; detail = error.localizedDescription
-            case .reviewRequired, .acceptedInOriginalWorkspace, .storage:
+            case .reviewRequired, .matchingEmailObserved, .acceptedInOriginalWorkspace, .storage:
                 status = "unconfirmed"; detail = error.localizedDescription
+            case .backendUpgradeRequired:
+                status = "failed"; detail = error.localizedDescription
             default:
                 status = "failed"; detail = "QuickBooks did not confirm a new email. \(error.localizedDescription)"
             }

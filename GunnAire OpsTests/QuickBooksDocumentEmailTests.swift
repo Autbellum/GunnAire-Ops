@@ -237,6 +237,103 @@ struct QuickBooksDocumentEmailTests {
         #expect(owner.postCount == 1)
     }
 
+    @Test func businessServerEmailReplyUsesOriginalDocumentAndNeverPostsDirectlyToQuickBooks() async throws {
+        let company = UUID()
+        var requests: [[String: String]] = []
+        let fixture = Fixture()
+        fixture.owner = .init(companyID: company, backendOrigin: Config.Backend.normalizedBaseURL)
+        let api = QuickBooksDataAPI(testTokens: .init(accessToken: "synthetic-email-token", expiration: .distantFuture),
+            realmID: fixture.realm, environment: "sandbox", emailJournal: fixture.journal,
+            emailTransport: { body in
+                let request = try #require(JSONSerialization.jsonObject(with: body) as? [String: String])
+                requests.append(request)
+                let document: [String: Any] = ["Id": "42", "CustomerRef": ["value": "synthetic-customer"],
+                    "TotalAmt": 10, "BillEmail": ["Address": "customer@example.test"], "EmailStatus": "EmailSent"]
+                return try JSONSerialization.data(withJSONObject: ["state": requests.count == 1 ? "accepted" : "reconciled",
+                    "document": ["Estimate": document]])
+            }, credentialOwner: fixture.owner) { _ in
+                Issue.record("A business-server email attempted a direct QuickBooks request")
+                throw QuickBooksDocumentEmailError.reviewRequired
+            }
+        if case .failure(let error) = await fixture.send(using: api, expectedCustomerID: "synthetic-customer") {
+            Issue.record("Server acceptance was not shown: \(error)")
+        }
+        expectFailure(await fixture.send(using: api, expectedCustomerID: "synthetic-customer"), .reconciled)
+        #expect(requests.count == 2)
+        #expect(requests.first?["companyID"]?.lowercased() == company.uuidString.lowercased())
+        #expect(requests.first?["documentType"] == "Estimate")
+        #expect(requests.first?["recipient"] == "customer@example.test")
+        #expect(fixture.postCount == 0)
+    }
+
+    @Test func uncertainBusinessServerReplyNeverFallsBackToDirectQuickBooksSend() async {
+        let fixture = Fixture()
+        fixture.owner = .init(companyID: UUID(), backendOrigin: Config.Backend.normalizedBaseURL)
+        var requests = 0
+        let api = QuickBooksDataAPI(testTokens: .init(accessToken: "synthetic-email-token", expiration: .distantFuture),
+            realmID: fixture.realm, environment: "sandbox", emailJournal: fixture.journal,
+            emailTransport: { _ in
+                requests += 1
+                throw URLError(.timedOut)
+            }, credentialOwner: fixture.owner) { _ in
+                Issue.record("An uncertain server result fell back to direct QuickBooks")
+                throw QuickBooksDocumentEmailError.reviewRequired
+            }
+        expectFailure(await fixture.send(using: api, expectedCustomerID: "synthetic-customer"), .reviewRequired)
+        #expect(requests == 1)
+        #expect(fixture.postCount == 0)
+    }
+
+    @Test func sharedBusinessConnectionCanSendOnlyThroughInjectedServerFence() async throws {
+        let fixture = Fixture()
+        let company = UUID()
+        var acceptedCompany: String?
+        let shared = QuickBooksDataAPI(sharedCompanyID: company, realmID: "shared-email-realm",
+            environment: "sandbox", connectionRevision: "fixture",
+            operation: .init(isCurrent: { true }),
+            billingPublisher: .init { _, _, _ in throw BillingPublicationError.unavailable },
+            emailTransport: { body in
+                let request = try #require(JSONSerialization.jsonObject(with: body) as? [String: String])
+                acceptedCompany = request["companyID"]
+                let document: [String: Any] = ["Id": "42", "CustomerRef": ["value": "synthetic-customer"],
+                    "TotalAmt": 10, "BillEmail": ["Address": "customer@example.test"], "EmailStatus": "EmailSent"]
+                return try JSONSerialization.data(withJSONObject: ["state": "accepted", "document": ["Estimate": document]])
+            })
+        if case .failure(let error) = await fixture.send(using: shared, expectedCustomerID: "synthetic-customer") {
+            Issue.record("Shared server acceptance was not shown: \(error)")
+        }
+        #expect(acceptedCompany?.lowercased() == company.uuidString.lowercased())
+        #expect(fixture.postCount == 0)
+    }
+
+    @Test func matchingLaterServerEmailRemainsUnconfirmedAndNeverFallsBackToQuickBooks() async throws {
+        let fixture = Fixture()
+        fixture.owner = .init(companyID: UUID(), backendOrigin: Config.Backend.normalizedBaseURL)
+        let api = QuickBooksDataAPI(testTokens: .init(accessToken: "synthetic-email-token", expiration: .distantFuture),
+            realmID: fixture.realm, environment: "sandbox", emailJournal: fixture.journal,
+            emailTransport: { _ in try JSONSerialization.data(withJSONObject: ["state": "observed"]) },
+            credentialOwner: fixture.owner) { _ in
+                Issue.record("A matching later email triggered direct QuickBooks")
+                throw QuickBooksDocumentEmailError.reviewRequired
+            }
+        expectFailure(await fixture.send(using: api, expectedCustomerID: "synthetic-customer"), .matchingEmailObserved)
+        #expect(fixture.postCount == 0)
+    }
+
+    @Test func unavailableServerEmailRouteShowsUpgradeRequiredWithoutDirectSend() async {
+        let fixture = Fixture()
+        fixture.owner = .init(companyID: UUID(), backendOrigin: Config.Backend.normalizedBaseURL)
+        let api = QuickBooksDataAPI(testTokens: .init(accessToken: "synthetic-email-token", expiration: .distantFuture),
+            realmID: fixture.realm, environment: "sandbox", emailJournal: fixture.journal,
+            emailTransport: { _ in throw QuickBooksDocumentEmailError.backendUpgradeRequired },
+            credentialOwner: fixture.owner) { _ in
+                Issue.record("An undeployed server route triggered direct QuickBooks")
+                throw QuickBooksDocumentEmailError.reviewRequired
+            }
+        expectFailure(await fixture.send(using: api, expectedCustomerID: "synthetic-customer"), .backendUpgradeRequired)
+        #expect(fixture.postCount == 0)
+    }
+
     @Test func companyBackendAndRealmChangesNeverAdoptAnotherPendingAttempt() async {
         let journal = QuickBooksDocumentEmailJournal(directory: nil, memoryOnly: true)
         let original = Fixture(journal: journal)
