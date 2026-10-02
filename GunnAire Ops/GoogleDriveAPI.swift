@@ -59,10 +59,8 @@ struct GoogleDriveFile: Codable, Equatable, Identifiable {
     let appProperties: [String: String]?
 
     func matchesArchiveIdentity(_ metadata: GoogleDriveUploadMetadata) -> Bool {
-        id == metadata.id &&
-        appProperties?["gunnaireAttachmentID"] == metadata.appProperties["gunnaireAttachmentID"] &&
-        appProperties?["gunnaireDocumentKind"] == metadata.appProperties["gunnaireDocumentKind"] &&
-        appProperties?["gunnaireSchema"] == metadata.appProperties["gunnaireSchema"]
+        guard id == metadata.id, let appProperties else { return false }
+        return metadata.appProperties.allSatisfy { appProperties[$0.key] == $0.value }
     }
 }
 
@@ -87,6 +85,39 @@ nonisolated struct GoogleDriveUploadMetadata: Codable, Equatable {
                 "gunnaireAttachmentID": attachmentID.uuidString.lowercased(),
                 "gunnaireDocumentKind": String(documentKind.prefix(80)),
                 "gunnaireSchema": "1"
+            ]
+        )
+    }
+
+    static func automaticBillingPDF(
+        reservation: BillingPDFArchiveReservation,
+        displayName: String
+    ) throws -> Self {
+        guard reservation.leaseToken != nil,
+              reservation.confirmedLink == nil,
+              reservation.artifactReady == true,
+              (reservation.artifactBytes ?? 0) >= 5,
+              let fileID = reservation.driveFileID,
+              let contentDigest = reservation.contentDigest,
+              reservation.key.driveAccount.range(of: "^google-subject:[0-9a-f]{64}$", options: .regularExpression) != nil,
+              reservation.key.sourceDigest.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
+              contentDigest.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
+              reservation.key.rendererVersion.range(of: "^[A-Za-z0-9_.-]{1,40}$", options: .regularExpression) != nil else {
+            throw GoogleDriveAPIError.authorizationChanged
+        }
+        return Self(
+            id: try GoogleDriveRequestFactory.validatedFileID(fileID),
+            name: GoogleDriveRequestFactory.sanitizedFileName(displayName),
+            mimeType: "application/pdf",
+            appProperties: [
+                "gunnaireSchema": "2",
+                "gunnaireAttachmentID": reservation.attachmentID.uuidString.lowercased(),
+                "gunnaireCompanyID": reservation.key.companyID.uuidString.lowercased(),
+                "gunnaireDocumentKind": reservation.key.documentKind.rawValue,
+                "gunnaireDocumentID": reservation.key.documentID.uuidString.lowercased(),
+                "gunnaireSourceDigest": reservation.key.sourceDigest,
+                "gunnaireRendererVersion": reservation.key.rendererVersion,
+                "gunnaireContentSHA256": contentDigest
             ]
         )
     }
@@ -292,10 +323,6 @@ final class GoogleDriveAPI {
         documentKind: String,
         data: Data
     ) async throws -> GoogleDriveFile {
-        guard !data.isEmpty else { throw GoogleDriveAPIError.emptyFile }
-        let operation = try authManager.captureProviderOperation()
-        let token = try await validAccessToken(operation: operation)
-
         let metadata = GoogleDriveUploadMetadata.document(
             fileID: try GoogleDriveRequestFactory.validatedFileID(fileID),
             displayName: displayName,
@@ -303,6 +330,24 @@ final class GoogleDriveAPI {
             attachmentID: attachmentID,
             documentKind: documentKind
         )
+        return try await uploadFile(metadata: metadata, data: data)
+    }
+
+    func uploadAutomaticBillingPDF(
+        reservation: BillingPDFArchiveReservation,
+        displayName: String,
+        data: Data
+    ) async throws -> GoogleDriveFile {
+        let metadata = try GoogleDriveUploadMetadata.automaticBillingPDF(
+            reservation: reservation, displayName: displayName)
+        return try await uploadFile(metadata: metadata, data: data)
+    }
+
+    private func uploadFile(metadata: GoogleDriveUploadMetadata, data: Data) async throws -> GoogleDriveFile {
+        guard !data.isEmpty else { throw GoogleDriveAPIError.emptyFile }
+        let operation = try authManager.captureProviderOperation()
+        let token = try await validAccessToken(operation: operation)
+        let fileID = metadata.id
 
         if let existing = try await fetchFileIfPresent(fileID: fileID, accessToken: token, operation: operation) {
             return try validatedArchiveFile(existing, expected: metadata)

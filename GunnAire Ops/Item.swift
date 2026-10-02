@@ -337,7 +337,7 @@ enum BillingDocumentDiscountAudit {
         return String(entries.joined(separator: "\n").prefix(4_000))
     }
 
-    static func customerDocumentSummary(snapshotJSON: String?) -> String? {
+    nonisolated static func customerDocumentSummary(snapshotJSON: String?) -> String? {
         guard let discount = CatalogLineItemSnapshot.documentDiscount(from: snapshotJSON),
               let grossSubtotal = BillingDocumentDiscountPolicy.grossSubtotal(snapshotJSON: snapshotJSON),
               let amount = discount.amount(for: grossSubtotal) else { return nil }
@@ -433,7 +433,7 @@ enum BillingPriceAdjustmentAudit {
         return String(entries.joined(separator: "\n").prefix(4_000))
     }
 
-    static func customerDocumentSummary(snapshotJSON: String?) -> String? {
+    nonisolated static func customerDocumentSummary(snapshotJSON: String?) -> String? {
         let summaries = CatalogLineItemSnapshot.decoded(from: snapshotJSON)
             .flatMap(\.soldLeaves)
             .filter(\.hasAuthorizedPriceAdjustment)

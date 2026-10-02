@@ -498,6 +498,11 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         return activeLease?.binding.companyID
     }
 
+    var verifiedBinding: CompanyCloudKitBinding? {
+        guard authorizedContainer != nil else { return nil }
+        return activeLease?.binding
+    }
+
     var verifiedRole: AppUserRole? {
         verifiedUser.flatMap { AppUserRole(rawValue: $0.role) }
     }
