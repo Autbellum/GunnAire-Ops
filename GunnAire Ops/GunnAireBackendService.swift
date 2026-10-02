@@ -443,6 +443,15 @@ enum GunnAireBackendError: LocalizedError {
     }
 }
 
+private actor QuickBooksDocumentEmailTransferActor {
+    static let shared = QuickBooksDocumentEmailTransferActor()
+
+    func send(_ request: URLRequest) async throws -> Data {
+        let (data, _) = try await GmailServerHTTPTransfer.data(for: request, maximum: 2 * 1024 * 1024)
+        return data
+    }
+}
+
 enum GunnAireBackendService {
     private struct AppleIdentityPayload: Codable {
         let identityToken: String
@@ -853,6 +862,45 @@ enum GunnAireBackendService {
 
     static var billingPublicationClient: BillingPublicationClient {
         .init(transport: billingPublicationRequest)
+    }
+
+    static func qboDocumentEmailRequest(body: Data) async throws -> Data {
+        guard !body.isEmpty, body.count <= 8192,
+              let identity = CompanyWorkspaceSession.current else {
+            throw QuickBooksDocumentEmailError.storage
+        }
+        let path = "/api/qbo-document-emails"
+        var request = try makeRequest(path: path, method: "POST", body: body)
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        guard bearer.hasPrefix("Bearer "),
+              CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == identity.tokenFingerprint,
+              request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil else {
+            throw QuickBooksDocumentEmailError.storage
+        }
+        request.timeoutInterval = 35
+        let controller = CompanyWorkspaceAccessController.shared
+        let generation = controller.generation
+        func check() throws {
+            try Task.checkCancellation()
+            guard CompanyWorkspaceSession.current == identity,
+                  controller.generation == generation,
+                  controller.authorizedContainer != nil else {
+                throw QuickBooksDocumentEmailError.acceptedInOriginalWorkspace
+            }
+        }
+        try check()
+        do {
+            let data = try await QuickBooksDocumentEmailTransferActor.shared.send(request)
+            try check()
+            return data
+        } catch {
+            try check()
+            if case GmailServerHTTPError.status(let status) = error,
+               status == 404 || status == 501 {
+                throw QuickBooksDocumentEmailError.backendUpgradeRequired
+            }
+            throw QuickBooksDocumentEmailError.reviewRequired
+        }
     }
 
     static func billingPublicationRequest(path: String, method: String, body: Data?) async throws -> Data {

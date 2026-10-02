@@ -2,7 +2,7 @@ import Foundation
 import CryptoKit
 
 nonisolated enum QuickBooksDocumentEmailError: LocalizedError, Equatable {
-    case busy, storage, invalidDocument, recipientRequired, reviewRequired, reconciled, acceptedInOriginalWorkspace
+    case busy, storage, invalidDocument, recipientRequired, reviewRequired, matchingEmailObserved, backendUpgradeRequired, reconciled, acceptedInOriginalWorkspace
     var errorDescription: String? {
         switch self {
         case .busy: "This document already has an email operation in progress."
@@ -10,8 +10,10 @@ nonisolated enum QuickBooksDocumentEmailError: LocalizedError, Equatable {
         case .invalidDocument: "QuickBooks returned a different or incomplete document. Refresh the document before sending."
         case .recipientRequired: "Choose one valid customer email address before sending through QuickBooks."
         case .reviewRequired: "QuickBooks may have accepted the earlier email. Another copy was not sent. Use this action again to check its status, or review the document's email history in QuickBooks."
+        case .matchingEmailObserved: "QuickBooks reports a matching later email, but this app cannot attribute it to your original request. Another copy was not sent. Review its history in QuickBooks; recipient delivery is not verified."
+        case .backendUpgradeRequired: "QuickBooks email is unavailable until the business server supports this action and can verify the customer's email permission. No email was sent by this app."
         case .acceptedInOriginalWorkspace: "QuickBooks accepted the email in the original workspace, but your workspace changed before its local history could be updated. Review the original document in QuickBooks; do not send another copy as a retry."
-        case .reconciled: "QuickBooks now reports the earlier email as sent. Another copy was not sent. Recipient delivery is not verified."
+        case .reconciled: "QuickBooks accepted the original email request. Another copy was not sent. Recipient delivery is not verified."
         }
     }
 }

@@ -34,7 +34,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 
 try:
-    from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications, billing_native, qbo_link_adoption, field_payment_review
+    from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications, billing_native, qbo_link_adoption, field_payment_review, qbo_document_email
     from Backend import customer_accounts, transactional_email
     from Backend.customer_account_portal import PORTAL_HTML as CUSTOMER_ACCOUNT_PORTAL_HTML
     from Backend.billing_provider import BillingQBOProvider
@@ -46,6 +46,7 @@ try:
     from Backend import staff_invoice_lines
     from Backend import staff_owner_invoice_applications
     from Backend.qbo_document_provider import DocumentQBOProvider
+    from Backend.qbo_document_email_provider import DocumentEmailQBOProvider
     from Backend import time_worker_mappings, time_publications, cloudkit_staff_shares, staff_replica, staff_workspace_source, staff_workspace_selections, staff_billing_delivery, staff_workspace_delivery, staff_workspace_cloud, staff_workspace_media, staff_workspace_commands
     from Backend.time_worker_provider import TimeWorkerQBOProvider
     from Backend.time_publication_provider import TimeQBOProvider
@@ -56,6 +57,7 @@ except ModuleNotFoundError:
     import customer_publications
     import billing_publications
     import billing_native
+    import qbo_document_email
     import qbo_link_adoption
     import customer_accounts
     import transactional_email
@@ -72,6 +74,7 @@ except ModuleNotFoundError:
     import qbo_change_capture
     import qbo_document_uploads
     from qbo_document_provider import DocumentQBOProvider
+    from qbo_document_email_provider import DocumentEmailQBOProvider
     import time_worker_mappings
     import time_publications
     import cloudkit_staff_shares
@@ -199,6 +202,9 @@ CUSTOMER_PORTAL_RESPONSE_MAX_BYTES = min(
 QBO_TOKEN_ENDPOINT = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
 QBO_REVOCATION_ENDPOINT = "https://developer.api.intuit.com/v2/oauth2/tokens/revoke"
 QBO_PAYMENT_READ_LOCK = threading.Lock()
+# Keep the new email route dormant until a server-authoritative customer
+# transactional-email preference is bound to the mapped billing customer.
+QBO_DOCUMENT_EMAIL_ENABLED = False
 QBO_ACCOUNTING_REFERENCE_PATTERN = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 QBO_SALES_ITEM_TYPES = {
     "service": "Service",
@@ -2691,6 +2697,7 @@ def initialize_database() -> None:
         customer_publications.initialize_schema(connection)
         customer_accounts.initialize_schema(connection, ensure_column)
         billing_publications.initialize_schema(connection)
+        qbo_document_email.initialize_schema(connection)
         qbo_link_adoption.initialize_schema(connection)
         google_connections.initialize_schema(connection)
         google_mail.initialize_schema(connection)
@@ -4273,6 +4280,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/billing-publications" or parsed.path.startswith("/api/billing-publications/") or parsed.path == "/api/job-billing-assignments":
             self.handle_billing_publication(parsed, method="POST")
+            return
+        if parsed.path == "/api/qbo-document-emails":
+            self.handle_qbo_document_email(parsed)
             return
         if parsed.path == "/api/workspace/bind":
             if not self.require_application_session() or not self.require_admin():
@@ -7145,6 +7155,47 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             self.write_json({"error": "Invalid link review request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
         except (sqlite3.Error, RuntimeError):
             self.write_json({"error": "Link review storage is unavailable. Keep the original operation for recovery.",
+                             "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+
+    def handle_qbo_document_email(self, parsed):
+        if not self.require_application_session():
+            return
+        if not QBO_DOCUMENT_EMAIL_ENABLED:
+            self.write_json({"error": "Business server email needs a verified customer consent policy before release.",
+                             "code": "backend_upgrade_required"}, status=HTTPStatus.NOT_IMPLEMENTED)
+            return
+        if parsed.query:
+            self.write_json({"error": "Query parameters are not supported", "code": "invalid_request"},
+                            status=HTTPStatus.BAD_REQUEST)
+            return
+        publisher = billing_publications.BillingPublisher(
+            db, lambda context, authorize: BillingQBOProvider(context, authorize, qbo_authorized_bearer),
+            encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
+        )
+        journal = qbo_document_email.DocumentEmailJournal(
+            db, publisher,
+            lambda context, authorize: DocumentEmailQBOProvider(context, authorize, qbo_authorized_bearer),
+            record_audit_event,
+        )
+        try:
+            def unique_object(pairs):
+                value = {}
+                for key, item in pairs:
+                    if key in value:
+                        raise ValueError()
+                    value[key] = item
+                return value
+            payload = json.loads(self.read_limited_body(8192).decode("utf-8"),
+                                 object_pairs_hook=unique_object,
+                                 parse_constant=lambda value: (_ for _ in ()).throw(ValueError()))
+            self.write_json(journal.run(self._application_session_id, payload))
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError):
+            self.write_json({"error": "Invalid QuickBooks email request", "code": "invalid_request"},
+                            status=HTTPStatus.BAD_REQUEST)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "The original email attempt could not be checked. Review QuickBooks before retrying.",
                              "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
 
     def handle_billing_publication(self, parsed, *, method):

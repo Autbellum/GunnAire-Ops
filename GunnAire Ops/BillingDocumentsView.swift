@@ -3240,7 +3240,12 @@ GunnAire
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .tint(.blue)
-                                .disabled(!QuickBooksDataAPI.shared.isAuthenticated || invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false)
+                                .disabled(!QuickBooksDataAPI.shared.isAuthenticated || invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false || !canSendQuickBooksInvoiceEmail)
+                                if !canSendQuickBooksInvoiceEmail {
+                                    Text("Only accounting or an administrator can send an invoice through QuickBooks. The Mail draft option remains available according to your role.")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
 
                                 invoiceDeliveryAction(invoice)
 
@@ -8816,6 +8821,9 @@ GunnAire
     }
 
     private func estimateQuickBooksSendBlocker(for estimate: Estimate) -> String? {
+        guard canSendQuickBooksEstimateEmail else {
+            return "Only a dispatcher or administrator can send an estimate through QuickBooks. The email draft option above remains available according to your role."
+        }
         guard isQuickBooksConnected else {
             return "Connect QuickBooks in Settings to send this estimate through QuickBooks. The email draft option above remains available."
         }
@@ -8843,6 +8851,21 @@ GunnAire
             return "Your business role cannot send customer email. Ask an administrator to review access."
         }
         return nil
+    }
+
+    private var quickBooksEmailOfficeRole: AppUserRole? {
+        let controller = CompanyWorkspaceAccessController.shared
+        return GunnAireCloudKit.usesTestDatabase
+            ? AppAccess.activeRole(email: currentUserEmail, users: users)
+            : controller.verifiedRole
+    }
+
+    private var canSendQuickBooksEstimateEmail: Bool {
+        quickBooksEmailOfficeRole == .admin || quickBooksEmailOfficeRole == .dispatcher
+    }
+
+    private var canSendQuickBooksInvoiceEmail: Bool {
+        quickBooksEmailOfficeRole == .admin || quickBooksEmailOfficeRole == .accounting
     }
 
     private func prepareEstimateEmail(_ estimate: Estimate) async {
@@ -9212,6 +9235,10 @@ GunnAire
     private func sendEstimateThroughQuickBooks(_ estimate: Estimate) {
         guard !isPreparingCustomerDocument, !isCreatingDocument else { return }
         guard isCurrentRecord(estimate), isCurrentRecord(estimate.customer) else { return }
+        if let blocker = estimateQuickBooksSendBlocker(for: estimate) {
+            actionMessage = blocker
+            return
+        }
         guard QuickBooksDataAPI.shared.isAuthenticated else {
             actionMessage = "Connect QuickBooks before sending the estimate."
             return
@@ -9282,6 +9309,10 @@ GunnAire
     private func sendInvoiceThroughQuickBooks(_ invoice: Invoice) {
         guard !isPreparingCustomerDocument, !isCreatingDocument else { return }
         guard isCurrentRecord(invoice), isCurrentRecord(invoice.customer) else { return }
+        guard canSendQuickBooksInvoiceEmail else {
+            actionMessage = "Only accounting or an administrator can send an invoice through QuickBooks."
+            return
+        }
         guard QuickBooksDataAPI.shared.isAuthenticated else {
             actionMessage = "Connect QuickBooks before sending the invoice."
             return

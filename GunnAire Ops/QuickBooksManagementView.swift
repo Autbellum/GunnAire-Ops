@@ -2763,7 +2763,12 @@ struct QuickBooksManagementView: View {
                                             sendEstimateEmail(estimate)
                                         }
                                         .buttonStyle(.bordered)
-                                        .disabled(activeEmailEstimateID != nil || estimateEmailAddress(for: estimate) == nil)
+                                        .disabled(activeEmailEstimateID != nil || estimateEmailAddress(for: estimate) == nil || !canSendQuickBooksEstimateEmail)
+                                        if !canSendQuickBooksEstimateEmail {
+                                            Text("Only a dispatcher or administrator can send an estimate through QuickBooks.")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
                                     }
                                 }
                             }
@@ -2819,7 +2824,13 @@ struct QuickBooksManagementView: View {
                                                 sendInvoiceEmail(invoice)
                                             }
                                             .buttonStyle(.bordered)
-                                            .disabled(activeEmailInvoiceID != nil || invoiceEmailAddress(for: invoice) == nil)
+                                            .disabled(activeEmailInvoiceID != nil || invoiceEmailAddress(for: invoice) == nil || !canSendQuickBooksInvoiceEmail)
+
+                                            if !canSendQuickBooksInvoiceEmail {
+                                                Text("Only accounting or an administrator can send an invoice through QuickBooks.")
+                                                    .font(.caption)
+                                                    .foregroundColor(.secondary)
+                                            }
 
                                             if let localInvoice = localInvoice(for: invoice) {
                                                 Button("Open Local Collections") {
@@ -5296,6 +5307,21 @@ struct QuickBooksManagementView: View {
         customers.first { $0.Id == estimate.CustomerRef.value }
     }
 
+    private var quickBooksEmailOfficeRole: AppUserRole? {
+        let controller = CompanyWorkspaceAccessController.shared
+        return GunnAireCloudKit.usesTestDatabase
+            ? AppAccess.activeRole(email: AppIdentity.currentEmail, users: users)
+            : controller.verifiedRole
+    }
+
+    private var canSendQuickBooksEstimateEmail: Bool {
+        quickBooksEmailOfficeRole == .admin || quickBooksEmailOfficeRole == .dispatcher
+    }
+
+    private var canSendQuickBooksInvoiceEmail: Bool {
+        quickBooksEmailOfficeRole == .admin || quickBooksEmailOfficeRole == .accounting
+    }
+
     private func estimateEmailAddress(for estimate: QuickBooksEstimate) -> String? {
         let candidates = [
             estimate.BillEmail?.Address,
@@ -5307,6 +5333,10 @@ struct QuickBooksManagementView: View {
     }
 
     private func sendEstimateEmail(_ estimate: QuickBooksEstimate) {
+        guard canSendQuickBooksEstimateEmail else {
+            actionMessage = "Only a dispatcher or administrator can send an estimate through QuickBooks."
+            return
+        }
         guard let emailAddress = estimateEmailAddress(for: estimate) else {
             actionMessage = "Add an email address to this QuickBooks customer before sending the estimate."
             return
@@ -5354,6 +5384,10 @@ struct QuickBooksManagementView: View {
     }
 
     private func sendInvoiceEmail(_ invoice: QuickBooksInvoice) {
+        guard canSendQuickBooksInvoiceEmail else {
+            actionMessage = "Only accounting or an administrator can send an invoice through QuickBooks."
+            return
+        }
         guard let emailAddress = invoiceEmailAddress(for: invoice) else {
             actionMessage = "Add an email address to this QuickBooks customer before sending the invoice."
             return
