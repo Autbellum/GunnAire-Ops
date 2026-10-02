@@ -16,7 +16,7 @@ enum QuickBooksInventoryError: LocalizedError, Equatable {
 
 /// A draft may be incomplete offline. Publication requires all explicit fields
 /// and the same business/realm/environment; no default service account is used.
-struct QuickBooksInventorySetup: Codable, Equatable {
+nonisolated struct QuickBooksInventorySetup: Codable, Equatable, Sendable {
     var scope: QuickBooksChangeHistoryScope?
     var openingQuantity: Double?
     var openingDate: String?
@@ -160,7 +160,7 @@ enum QuickBooksCatalogJSON {
         let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
         return (try? encoder.encode(value)).map { String(decoding: $0, as: UTF8.self) }
     }
-    static func decode<T: Decodable>(_ type: T.Type, _ json: String?) -> T? {
+    nonisolated static func decode<T: Decodable>(_ type: T.Type, _ json: String?) -> T? {
         guard let json, json.utf8.count <= 262_144 else { return nil }
         return try? JSONDecoder().decode(type, from: Data(json.utf8))
     }

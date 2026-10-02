@@ -5231,7 +5231,8 @@ struct QuickBooksManagementView: View {
         do {
             let preparation = try SharedBillingPreparation(document: document, context: modelContext,
                 isCurrent: { billingPublicationLifecycles[key] === owner },
-                validateAccess: { try QuickBooksSyncAccessPolicy.validate(context: modelContext) })
+                validateAccess: { try QuickBooksSyncAccessPolicy.validate(context: modelContext) },
+                requiresAdministrator: true)
             switch document {
             case .invoice: activeLocalInvoicePublicationID = document.id
             case .estimate: activeLocalEstimatePublicationID = document.id

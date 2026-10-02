@@ -656,6 +656,70 @@ struct QuickBooksBillingWorkflowTests {
             verifiedRole: .admin, isInvoice: false, assignedToJob: false))
     }
 
+    @Test func detachedBillingMirrorIncludesNoncanonicalConflictsAndCrewAssignment() async throws {
+        let f = try Fixture()
+        let canonical = AppUser(email: "tech@fixture.invalid", role: .fieldTechnician)
+        let conflicting = AppUser(email: "other@fixture.invalid", role: .standard, isActive: false)
+        conflicting.email = " Tech@Fixture.Invalid "
+        let technician = Technician(name: "Assigned crew", contactInfo: " TECH@fixture.invalid ")
+        let call = ServiceCall(type: .service, scheduledDate: .now,
+            additionalTechnicianIDs: [technician.id], customer: f.customer)
+        f.context.insert(canonical); f.context.insert(conflicting)
+        f.context.insert(technician); f.context.insert(call)
+        try f.context.save()
+        let container = f.context.container
+        let customerID = f.customer.persistentModelID
+        let callID = call.id
+        let denied = try await Task.detached {
+            try QuickBooksBillingAccessPolicy.readMirror(container: container, email: "tech@fixture.invalid",
+                jobID: callID, customerID: customerID)
+        }.value
+        #expect(denied.roles.count == 2)
+        #expect(!denied.allActive)
+        #expect(denied.assigned)
+        conflicting.isActive = true
+        conflicting.role = .fieldTechnician
+        try f.context.save()
+        let allowed = try await Task.detached {
+            try QuickBooksBillingAccessPolicy.readMirror(container: container, email: "tech@fixture.invalid",
+                jobID: callID, customerID: customerID)
+        }.value
+        #expect(allowed.roles == [AppUserRole.fieldTechnician, .fieldTechnician])
+        #expect(allowed.allActive && allowed.assigned)
+    }
+
+    @Test func selectedEstimateItemChangeStopsBeforeAnyProviderCall() async throws {
+        let f = try Fixture()
+        let flow = try f.flow(estimate: true)
+        f.item.unitPrice = 205
+        try f.context.save()
+        await fails { _ = try await flow.execute() }
+        #expect(f.requests.isEmpty)
+        #expect(f.estimate.quickBooksID == nil)
+    }
+
+    @Test func detachedSelectedItemRevisionRejectsChangeAndDuplicateIdentity() async throws {
+        let f = try Fixture()
+        let container = f.context.container
+        let ids: Set<UUID> = [f.item.id]
+        let original = try await Task.detached {
+            try QuickBooksBillingReads.selectedRevisions(container: container, ids: ids)
+        }.value
+        f.item.unitPrice = 205
+        try f.context.save()
+        let changed = try await Task.detached {
+            try QuickBooksBillingReads.selectedRevisions(container: container, ids: ids)
+        }.value
+        #expect(changed != original)
+        f.context.insert(Item(id: f.item.id, quickBooksID: "I2", name: "Duplicate", unitPrice: 205))
+        try f.context.save()
+        await #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try await Task.detached {
+                try QuickBooksBillingReads.selectedRevisions(container: container, ids: ids)
+            }.value
+        }
+    }
+
     @Test func overlappingDocumentRunDoesNotReplaceTheOriginal() throws {
         let f = try Fixture()
         let flow = try f.flow()

@@ -3445,7 +3445,7 @@ enum QuickBooksCatalogSnapshotApplication {
     }
 }
 
-struct QuickBooksItemCreate: Codable, Equatable {
+nonisolated struct QuickBooksItemCreate: Codable, Equatable, Sendable {
     let Name: String
     let ItemType: String
     let Description: String?
@@ -3478,12 +3478,13 @@ enum QuickBooksCatalogCreateOperation {
         "ga-item-\(localItemID.uuidString.lowercased())"
     }
 
-    static func payload(
+    nonisolated static func payload(
         for item: Item,
         incomeAccountRef: QuickBooksReference,
         expenseAccountRef: QuickBooksReference?
     ) -> QuickBooksItemCreate {
-        let setup = item.itemType == .inventory ? item.inventorySetup : nil
+        let setup = item.itemType == .inventory
+            ? QuickBooksCatalogJSON.decode(QuickBooksInventorySetup.self, item.quickBooksInventorySetupJSON) : nil
         return QuickBooksItemCreate(
             Name: item.name,
             ItemType: item.itemType.rawValue,

@@ -128,6 +128,36 @@ import Testing
         f.finish(flow)
     }
 
+    @Test func changedSelectedItemAfterServerReadStopsBeforeCatalogPrerequisiteWrite() async throws {
+        let f = try BillingNativeWorkflowTests.Fixture()
+        f.app.item.quickBooksID = nil
+        try f.app.context.save()
+        var catalogWrites = 0
+        let client = BillingPublicationClient { path, method, body in
+            if path.hasPrefix("/api/billing-publications/connection?") {
+                return try connectionData(f, path: path)
+            }
+            if path.hasPrefix("/api/billing-publications?") && method == "GET" {
+                f.app.item.unitPrice = 205
+                try f.app.context.save()
+            }
+            return try f.reply(path, method, body)
+        }
+        let preparation = try SharedBillingPreparation(document: .estimate(f.app.estimate),
+            context: f.app.context, isCurrent: { true },
+            validateAccess: { if !f.app.authorized { throw QuickBooksBillingWorkflowError.accessDenied } },
+            client: client, catalog: { _ in
+                catalogWrites += 1
+                throw CatalogPublicationError.unavailable
+            }, customer: { _ in throw CustomerPublicationError.accessRequired }, fixtureCompanyID: f.company)
+        let flow = try await preparation.makeWorkflow(lifecycle: f.app.owner,
+            billingJournal: f.app.billingJournal)
+        await #expect(throws: (any Error).self) { try await flow.execute(configuration: f.app.configuration) }
+        #expect(catalogWrites == 0)
+        #expect(!f.calls.contains { $0.1 == "POST" })
+        f.finish(flow)
+    }
+
     @Test func staleOrMalformedDiscoveryCannotStartAWorkflow() async throws {
         for changes: [String: Any] in [["companyID": UUID().uuidString], ["localDocumentID": UUID().uuidString],
             ["localCustomerID": UUID().uuidString], ["documentType": "Estimate"], ["realmID": ""],

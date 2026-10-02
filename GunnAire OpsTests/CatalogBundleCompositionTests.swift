@@ -304,14 +304,25 @@ import Testing
             let first = try f.flow(estimate: estimate)
             await #expect(throws: (any Error).self) { try await first.execute() }
             f.finish(first)
-            #expect(f.writes == 1 && f.request?.document.Line.first?.GroupLineDetail?.Line.count == 2)
+            #expect(f.writes == (estimate ? 0 : 1))
+            #expect(f.request?.document.Line.first?.GroupLineDetail?.Line.count == 2)
             items[2].unitPrice = 700; try f.app.context.save()
             f.failReply = false
             let second = try f.flow(estimate: estimate)
             let outcome = try await second.execute()
-            #expect(outcome.recovered && f.writes == 1 && f.app.requests.isEmpty)
+            if estimate {
+                #expect(outcome.queued && f.writes == 0 && f.app.requests.isEmpty)
+                f.finish(second)
+                try f.confirmQueuedEstimate()
+                let third = try f.flow(estimate: true)
+                let confirmation = try await third.execute()
+                #expect(confirmation.recovered && f.writes == 1 && f.app.requests.isEmpty)
+                f.finish(third)
+            } else {
+                #expect(outcome.recovered && f.writes == 1 && f.app.requests.isEmpty)
+                f.finish(second)
+            }
             #expect(f.request?.document.Line.first?.GroupLineDetail?.Line.map { $0.SalesItemLineDetail.UnitPrice } == [94.5, 94.5])
-            f.finish(second)
         }
     }
 

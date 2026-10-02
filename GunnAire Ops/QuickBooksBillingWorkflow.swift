@@ -213,6 +213,92 @@ enum QuickBooksBillingDocument {
 }
 
 enum QuickBooksBillingAccessPolicy {
+    nonisolated struct Mirror: Equatable, Sendable {
+        let roles: [AppUserRole]
+        let allActive: Bool
+        let assigned: Bool
+    }
+
+    /// This synchronous fence is deliberately limited to values already held
+    /// by the operation. The normalized CloudKit census belongs to checkOffMain.
+    static func checkLocalFence(context: ModelContext, document: QuickBooksBillingDocument,
+                                email: String?, stamp: CompanyWorkspaceOperationStamp?) throws {
+        let controller = CompanyWorkspaceAccessController.shared
+        guard !AppAccess.normalizedEmail(email).isEmpty,
+              AppAccess.normalizedEmail(email) == AppAccess.normalizedEmail(AppIdentity.currentEmail),
+              (GunnAireCloudKit.usesTestDatabase ||
+                (controller.authorizedContainer === context.container && controller.operationStamp == stamp)),
+              !(context.changedModelsArray + context.insertedModelsArray + context.deletedModelsArray)
+                .contains(where: { $0 is AppUser || $0 is Technician || $0 is ServiceCall }) else {
+            throw QuickBooksBillingWorkflowError.accessDenied
+        }
+        try document.validation(context: context)()
+    }
+
+    nonisolated static func readMirror(container: ModelContainer, email: String,
+                                               jobID: UUID?, customerID: PersistentIdentifier) throws -> Mirror {
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        var userQuery = FetchDescriptor<AppUser>()
+        userQuery.fetchLimit = 5_001
+        let users = try context.fetch(userQuery)
+        guard users.count <= 5_000 else { throw QuickBooksBillingWorkflowError.accessDenied }
+        let matches = users.filter { AppAccess.normalizedEmail($0.email) == email }
+        let roles = matches.map { AppUserRole(rawValue: $0.roleRawValue) ?? .standard }
+            .sorted { $0.rawValue < $1.rawValue }
+        let allActive = !matches.isEmpty && matches.allSatisfy { $0.isActive && AppUserRole(rawValue: $0.roleRawValue) != nil }
+        var technicianQuery = FetchDescriptor<Technician>()
+        technicianQuery.fetchLimit = 5_001
+        let technicians = try context.fetch(technicianQuery)
+        guard technicians.count <= 5_000 else { throw QuickBooksBillingWorkflowError.accessDenied }
+        let technicianIDs = Set(technicians.filter { AppAccess.normalizedEmail($0.contactInfo) == email }.map(\.id))
+        var assigned = false
+        if let jobID {
+            var callQuery = FetchDescriptor<ServiceCall>(predicate: #Predicate { $0.id == jobID })
+            callQuery.fetchLimit = 2
+            let calls = try context.fetch(callQuery)
+            assigned = calls.count == 1 && calls.first.map {
+                $0.customer?.persistentModelID == customerID &&
+                (AppAccess.normalizedEmail($0.assignedTechnician?.contactInfo) == email ||
+                    !technicianIDs.isDisjoint(with: $0.assignedCrewTechnicianIDs))
+            } == true
+        }
+        return Mirror(roles: roles, allActive: allActive, assigned: assigned)
+    }
+
+    static func checkOffMain(context: ModelContext, document: QuickBooksBillingDocument,
+                             email: String?, stamp: CompanyWorkspaceOperationStamp?,
+                             requiredRole: AppUserRole? = nil) async throws {
+        try checkLocalFence(context: context, document: document, email: email, stamp: stamp)
+        let normalized = AppAccess.normalizedEmail(email)
+        let jobID = document.serviceCallID
+        guard let customerID = document.customer?.persistentModelID, !context.hasChanges else {
+            throw QuickBooksBillingWorkflowError.accessDenied
+        }
+        let mirror = try await Task.detached(priority: .userInitiated) { [container = context.container] in
+            let first = try readMirror(container: container, email: normalized, jobID: jobID, customerID: customerID)
+            let second = try readMirror(container: container, email: normalized, jobID: jobID, customerID: customerID)
+            guard first == second else { throw QuickBooksBillingWorkflowError.accessDenied }
+            return second
+        }.value
+        try checkLocalFence(context: context, document: document, email: email, stamp: stamp)
+        guard !context.hasChanges else { throw QuickBooksBillingWorkflowError.accessDenied }
+        let fixture = GunnAireCloudKit.usesTestDatabase
+        let role = fixture ? (Set(mirror.roles).count == 1 ? mirror.roles.first : nil)
+            : CompanyWorkspaceAccessController.shared.verifiedRole
+        guard let role, !mirror.roles.isEmpty, mirror.allActive,
+              mirror.roles.allSatisfy({ $0 == role }), requiredRole == nil || requiredRole == role else {
+            throw QuickBooksBillingWorkflowError.accessDenied
+        }
+        switch role {
+        case .admin: break
+        case .accounting: guard case .invoice = document else { throw QuickBooksBillingWorkflowError.accessDenied }
+        case .dispatcher: guard case .estimate = document else { throw QuickBooksBillingWorkflowError.accessDenied }
+        case .fieldTechnician: guard mirror.assigned else { throw QuickBooksBillingWorkflowError.accessDenied }
+        case .standard: throw QuickBooksBillingWorkflowError.accessDenied
+        }
+    }
+
     static func allows(email: String?, users: [AppUser], verifiedRole: AppUserRole?,
                        isInvoice: Bool, assignedToJob: Bool) -> Bool {
         let normalized = AppAccess.normalizedEmail(email)
@@ -288,6 +374,23 @@ struct QuickBooksBillingPaymentRevision: Equatable {
 }
 
 @MainActor enum QuickBooksBillingReads {
+    nonisolated static func selectedRevisions(container: ModelContainer,
+                                               ids: Set<UUID>) throws -> [PersistentIdentifier: QuickBooksCatalogItemRevision] {
+        guard !ids.isEmpty, ids.count <= 20 else { throw QuickBooksBillingWorkflowError.changed }
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        var result: [PersistentIdentifier: QuickBooksCatalogItemRevision] = [:]
+        for id in ids.sorted(by: { $0.uuidString < $1.uuidString }) {
+            var query = FetchDescriptor<Item>(predicate: #Predicate { $0.id == id })
+            query.fetchLimit = 2
+            let values = try context.fetch(query)
+            guard values.count == 1, let item = values.first else { throw QuickBooksBillingWorkflowError.changed }
+            result[item.persistentModelID] = QuickBooksCatalogItemRevision(item)
+        }
+        guard result.count == ids.count else { throw QuickBooksBillingWorkflowError.changed }
+        return result
+    }
+
     static func customer(_ id: UUID, context: ModelContext) throws -> [Customer] {
         var query = FetchDescriptor<Customer>(predicate: #Predicate { $0.id == id })
         query.fetchLimit = 2
@@ -367,6 +470,7 @@ final class QuickBooksBillingWorkflow {
          billingJournal: BillingNativeJournalStore? = nil,
          documentUploads: QBODocumentNativeWorkflow.Dependencies? = nil,
          preparedLineEvidence: QuickBooksSavedLineEvidence? = nil,
+         preparedItems: [Item]? = nil,
          save: @escaping (ModelContext) throws -> Void = { try $0.save() },
          actorEmail: String? = nil) throws {
         guard lifecycle.activeID == nil else { throw QuickBooksBillingWorkflowError.busy }
@@ -396,8 +500,9 @@ final class QuickBooksBillingWorkflow {
         if case .estimate = document, evidence.selectedItemIDs.count > 20 {
             throw QuickBooksBillingWorkflowError.changed
         }
-        items = try QuickBooksBillingReads.items(evidence.selectedItemIDs, context: context)
-        guard Set(items.map(\.id)).count == items.count else { throw QuickBooksBillingWorkflowError.changed }
+        items = try preparedItems ?? QuickBooksBillingReads.items(evidence.selectedItemIDs, context: context)
+        guard Set(items.map(\.id)) == evidence.selectedItemIDs,
+              items.count == evidence.selectedItemIDs.count else { throw QuickBooksBillingWorkflowError.changed }
         itemRevisions = Dictionary(uniqueKeysWithValues: items.map { ($0.id, QuickBooksCatalogItemRevision($0)) })
         itemRecordIDs = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0.persistentModelID) })
         newlyInsertedItemIDs = Set(items.filter { item in
@@ -422,7 +527,15 @@ final class QuickBooksBillingWorkflow {
         if let customerID, !customerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             try validateCustomerAssignment(customerID)
         }
-        let currentItems = try QuickBooksBillingReads.items(lineEvidence.selectedItemIDs, context: context)
+        let queuedEstimate: Bool
+        if case .estimate = document, api.billingPublicationClient != nil { queuedEstimate = true }
+        else { queuedEstimate = false }
+        let currentItems = queuedEstimate ? items : try QuickBooksBillingReads.items(lineEvidence.selectedItemIDs, context: context)
+        if queuedEstimate,
+           (context.changedModelsArray + context.insertedModelsArray + context.deletedModelsArray)
+            .contains(where: { ($0 as? Item).map { lineEvidence.selectedItemIDs.contains($0.id) } == true }) {
+            throw QuickBooksBillingWorkflowError.changed
+        }
         for item in items {
             let persistentID = item.persistentModelID
             guard let revision = itemRevisions[item.id],
@@ -788,6 +901,30 @@ final class QuickBooksBillingWorkflow {
         guard !context.hasChanges, observed == expected else { throw QuickBooksBillingWorkflowError.changed }
     }
 
+    func checkEstimateSelectedItemsOffMain() async throws {
+        try check()
+        guard !context.hasChanges, lineEvidence.selectedItemIDs.count <= 20 else {
+            throw QuickBooksBillingWorkflowError.changed
+        }
+        var expected: [PersistentIdentifier: QuickBooksCatalogItemRevision] = [:]
+        for item in items {
+            guard let recordID = itemRecordIDs[item.id], let revision = itemRevisions[item.id] else {
+                throw QuickBooksBillingWorkflowError.changed
+            }
+            expected[recordID] = revision
+        }
+        guard expected.count == lineEvidence.selectedItemIDs.count else { throw QuickBooksBillingWorkflowError.changed }
+        let selected = lineEvidence.selectedItemIDs
+        let observed = try await Task.detached(priority: .userInitiated) { [container = context.container] in
+            let first = try QuickBooksBillingReads.selectedRevisions(container: container, ids: selected)
+            let second = try QuickBooksBillingReads.selectedRevisions(container: container, ids: selected)
+            guard first == second else { throw QuickBooksBillingWorkflowError.changed }
+            return second
+        }.value
+        try check()
+        guard !context.hasChanges, observed == expected else { throw QuickBooksBillingWorkflowError.changed }
+    }
+
     nonisolated private static func readEstimateProviderOwners(container: ModelContainer,
         providerID: String) throws -> [UUID] {
         let context = ModelContext(container)
@@ -830,7 +967,13 @@ final class QuickBooksBillingWorkflow {
             throw BillingNativeError.milestoneOriginal(original.localDocumentID)
         }
         guard evidence.customerProviderID == customerID else { throw BillingNativeError.mapping }
-        let catalog = try QuickBooksBillingReads.items(lineEvidence.selectedItemIDs, context: context)
+        let catalog: [Item]
+        if case .estimate = document {
+            try await checkEstimateSelectedItemsOffMain()
+            catalog = items
+        } else {
+            catalog = try QuickBooksBillingReads.items(lineEvidence.selectedItemIDs, context: context)
+        }
         let tax = try BillingTaxAddressContext.forPublication(document)
         let proposal: BillingPublicationProposal
         let operation: BillingPublicationOperation

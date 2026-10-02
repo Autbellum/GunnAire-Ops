@@ -19,7 +19,7 @@ enum QuickBooksCatalogWorkflowError: LocalizedError, Equatable {
 
 /// Exact reviewed values, not the pricebook's approximate display comparison.
 /// Also restores only the fields this workflow can mutate on a failed save.
-struct QuickBooksCatalogItemRevision: Equatable {
+nonisolated struct QuickBooksCatalogItemRevision: Equatable, Sendable {
     let id: UUID
     let quickBooksID: String?
     let values: QuickBooksItemCreate
@@ -38,7 +38,7 @@ struct QuickBooksCatalogItemRevision: Equatable {
     let catalogDetailsJSON: String?
     let catalogReceiptJSON: String?
 
-    init(_ item: Item) {
+    nonisolated init(_ item: Item) {
         id = item.id
         quickBooksID = item.quickBooksID
         values = QuickBooksCatalogCreateOperation.payload(for: item,
@@ -59,7 +59,7 @@ struct QuickBooksCatalogItemRevision: Equatable {
         catalogReceiptJSON = item.quickBooksCatalogReceiptJSON
     }
 
-    func restore(_ item: Item) {
+    @MainActor func restore(_ item: Item) {
         item.quickBooksID = quickBooksID
         item.name = values.Name
         item.itemTypeRawValue = rawType
@@ -103,6 +103,7 @@ final class QuickBooksCatalogWorkflow {
     private let context: ModelContext
     private let item: Item
     private let revision: QuickBooksCatalogItemRevision
+    private let itemRecordID: PersistentIdentifier
     private let mode: Mode
     private let configuration: BackendQuickBooksAccountingConfiguration?
     private let save: (ModelContext) throws -> Void
@@ -126,9 +127,12 @@ final class QuickBooksCatalogWorkflow {
         self.configuration = configuration
         self.save = save
         revision = QuickBooksCatalogItemRevision(item)
+        itemRecordID = item.persistentModelID
         try Self.validateItemValues(item)
         let id = item.id
-        let matches = try context.fetch(FetchDescriptor<Item>(predicate: #Predicate { $0.id == id }))
+        var query = FetchDescriptor<Item>(predicate: #Predicate { $0.id == id })
+        query.fetchLimit = 2
+        let matches = try context.fetch(query)
         guard matches.count == 1, matches.first === item else { throw QuickBooksCatalogWorkflowError.itemChanged }
         if case .publish = mode {
             guard item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
@@ -165,7 +169,9 @@ final class QuickBooksCatalogWorkflow {
     func checkItem() throws {
         try run.check()
         let id = revision.id
-        let matches = try context.fetch(FetchDescriptor<Item>(predicate: #Predicate { $0.id == id }))
+        var query = FetchDescriptor<Item>(predicate: #Predicate { $0.id == id })
+        query.fetchLimit = 2
+        let matches = try context.fetch(query)
         guard matches.count == 1, matches.first === item,
               QuickBooksCatalogItemRevision(item) == revision else {
             throw QuickBooksCatalogWorkflowError.itemChanged
@@ -185,10 +191,13 @@ final class QuickBooksCatalogWorkflow {
                         itemID: self.revision.id, payload: .create(self.revision.values))
                     try setup.validate(scope: .init(companyID: boundary.companyID,
                         realmID: boundary.realmID, environment: boundary.environment))
+                    guard let incomeAccount = setup.incomeAccount else {
+                        throw QuickBooksInventoryError.setupRequired
+                    }
                     // Inventory uses explicit original-business accounts. Only
                     // the shared server may verify and dispatch opening stock.
                     let payload = QuickBooksCatalogCreateOperation.payload(for: self.item,
-                        incomeAccountRef: setup.incomeAccount!, expenseAccountRef: setup.expenseAccount)
+                        incomeAccountRef: incomeAccount, expenseAccountRef: setup.expenseAccount)
                     return try await self.publishOnServer(.create(payload))
                 }
                 if self.api.catalogPublicationTransport != nil {
@@ -291,11 +300,10 @@ final class QuickBooksCatalogWorkflow {
         if remote.ItemType == CatalogItemType.inventory.rawValue {
             try QuickBooksCatalogDetails(remote).validateInventory()
         }
+        try await checkMappingOffMain(remoteID: remote.Id)
         var link = ApprovedPricebookLinkOutcome.synchronized
         try run.commit {
             try self.checkItem()
-            try QuickBooksCatalogMappingIntegrity.validateAssignment(of: remote.Id, to: self.item,
-                in: self.context.fetch(FetchDescriptor<Item>()))
             if case .useProvider = self.mode {
                 QuickBooksCatalogSnapshotApplication.apply(remote, to: self.item)
             } else {
@@ -311,6 +319,46 @@ final class QuickBooksCatalogWorkflow {
         }
         committedRevision = QuickBooksCatalogItemRevision(item)
         return Outcome(remote: remote, link: link, created: evidence.1)
+    }
+
+    nonisolated private static func readMapping(container: ModelContainer, remoteID: String,
+                                                revision: QuickBooksCatalogItemRevision,
+                                                recordID: PersistentIdentifier,
+                                                requireSavedRevision: Bool) throws {
+        let background = ModelContext(container)
+        background.autosaveEnabled = false
+        var query = FetchDescriptor<Item>()
+        query.fetchLimit = 5_001
+        let catalog = try background.fetch(query)
+        guard catalog.count <= 5_000 else { throw QuickBooksCatalogWorkflowError.remoteIdentity }
+        let target = catalog.filter { $0.id == revision.id }
+        guard target.count == 1, let item = target.first,
+              item.persistentModelID == recordID,
+              (!requireSavedRevision || QuickBooksCatalogItemRevision(item) == revision) else {
+            throw QuickBooksCatalogWorkflowError.itemChanged
+        }
+        try QuickBooksCatalogMappingIntegrity.validateAssignment(of: remoteID, to: item, in: catalog)
+    }
+
+    private func checkMappingOffMain(remoteID: String) async throws {
+        try checkItem()
+        let container = context.container
+        let revision = revision
+        let recordID = itemRecordID
+        // A legacy catalog action may deliberately publish an unsaved local
+        // edit. Its in-memory revision is still guarded by checkItem(); the
+        // private store can compare that revision only for saved targets.
+        let requireSavedRevision = !context.hasChanges
+        try await Task.detached(priority: .userInitiated) {
+            try Self.readMapping(container: container, remoteID: remoteID, revision: revision,
+                recordID: recordID, requireSavedRevision: requireSavedRevision)
+            try Self.readMapping(container: container, remoteID: remoteID, revision: revision,
+                recordID: recordID, requireSavedRevision: requireSavedRevision)
+        }.value
+        try checkItem()
+        if requireSavedRevision && context.hasChanges { throw QuickBooksCatalogWorkflowError.itemChanged }
+        let unsavedItems = (context.insertedModelsArray + context.changedModelsArray).compactMap { $0 as? Item }
+        try QuickBooksCatalogMappingIntegrity.validateAssignment(of: remoteID, to: item, in: unsavedItems)
     }
 
     func failureMessage(_ error: Error) -> String {
