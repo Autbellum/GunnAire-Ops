@@ -1886,6 +1886,45 @@ struct GoogleCalendarWorkflowTests {
         #expect(f.auth.accessToken == nil)
     }
 
+    @Test func expiredBackgroundRefreshCannotWriteAfterCalendarCallbackRead() async throws {
+        let f = try Fixture(linked: true)
+        f.call.scheduledDate = f.call.scheduledDate.addingTimeInterval(3600)
+        f.call.googleCalendarPendingAt = Date()
+        try f.context.save()
+        var expired = false
+        let workflow = try f.flow()
+        GoogleCalendarScheduleSync.installBackgroundExpirationFence(on: workflow) { expired }
+        f.beforeReply = { request in
+            if request.httpMethod == "GET", request.url?.path.hasSuffix("fixture-event") == true {
+                expired = true
+            }
+        }
+        failed(await workflow.run { try await GoogleCalendarScheduleSync.publish(call: f.call, workflow: $0) })
+        #expect(f.writes.isEmpty)
+        #expect(f.call.googleCalendarPendingAt != nil)
+    }
+
+    @Test func expiredBackgroundRefreshRetainsExactReservationDuringSuspendedCreate() async throws {
+        let f = try Fixture()
+        var expired = false
+        let workflow = try f.flow()
+        GoogleCalendarScheduleSync.installBackgroundExpirationFence(on: workflow) { expired }
+        f.beforeReply = { request in
+            guard request.httpMethod == "POST" else { return }
+            // The request has left the app; iOS can expire the refresh while
+            // the transport waits for a response it cannot safely recall.
+            expired = true
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        failed(await workflow.run { try await GoogleCalendarScheduleSync.publish(call: f.call, workflow: $0) })
+        let reservedID = GoogleCalendarScheduleSync.eventID(for: f.call.id)
+        #expect(f.call.googleEventID == reservedID)
+        #expect(f.call.googleCalendarPendingAt != nil)
+        #expect(f.call.googleEventConfirmedAt == nil)
+        #expect(f.writes.map(\.httpMethod) == ["POST"])
+        #expect(f.remote[f.key(f.email, reservedID)] != nil)
+    }
+
     @Test func localEditDuringReadIsPreservedWithoutPublishingStaleValues() async throws {
         let f = try Fixture()
         f.beforeReply = { _ in f.call.notes = "New technician findings during sync" }

@@ -505,6 +505,7 @@ enum GoogleDriveAPIError: Error, LocalizedError, Equatable {
     case missingGeneratedFileID
     case missingUploadSession
     case emptyFile
+    case backgroundFileTooLarge
     case fileIsTrashed
     case archiveIdentityMismatch
     case invalidFileMetadata
@@ -527,6 +528,7 @@ enum GoogleDriveAPIError: Error, LocalizedError, Equatable {
         case .missingGeneratedFileID: "Google Drive did not reserve a file identifier."
         case .missingUploadSession: "Google Drive did not start a resumable upload session."
         case .emptyFile: "The selected document is empty and was not uploaded."
+        case .backgroundFileTooLarge: "The document exceeds the short background upload limit. Open the app to finish archiving it."
         case .fileIsTrashed: "The existing Drive copy is in Trash. The next explicit retry will reserve a new archive copy."
         case .archiveIdentityMismatch: "The saved Drive file does not belong to this GunnAire attachment. Archive recovery stopped without linking it."
         case .invalidFileMetadata: "Google Drive returned an untrusted or incomplete file link."

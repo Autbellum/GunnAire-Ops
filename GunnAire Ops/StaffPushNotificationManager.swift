@@ -533,6 +533,7 @@ final class GunnAireApplicationDelegate: NSObject, UIApplicationDelegate {
         // Started first so the launch stopwatch sees as much of startup as the
         // app can observe, and so a crash during startup is still recorded.
         AppPerformanceDiagnostics.shared.start()
+        BackgroundProviderRecovery.shared.registerAtLaunch()
         StaffPushNotificationManager.shared.configureAtLaunch()
         return true
     }
