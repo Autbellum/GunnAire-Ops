@@ -703,6 +703,12 @@ struct QuickBooksBillingWorkflowTests {
         let dispatcher = QuickBooksBillingAccessPolicy.Mirror(roles: [.dispatcher], allActive: true, assigned: false)
         #expect(!QuickBooksBillingAccessPolicy.allows(mirror: dispatcher, verifiedRole: .dispatcher, isInvoice: true))
         #expect(QuickBooksBillingAccessPolicy.allows(mirror: dispatcher, verifiedRole: .dispatcher, isInvoice: false))
+        #expect(QuickBooksBillingAccessPolicy.allows(mirror: dispatcher, verifiedRole: .dispatcher,
+            isInvoice: false, requiresMailAccess: true))
+        #expect(QuickBooksBillingAccessPolicy.allows(mirror: administrator, verifiedRole: .admin,
+            isInvoice: true, requiresMailAccess: true))
+        #expect(!QuickBooksBillingAccessPolicy.allows(mirror: accounting, verifiedRole: .accounting,
+            isInvoice: true, requiresMailAccess: true))
         let crew = QuickBooksBillingAccessPolicy.Mirror(roles: [.fieldTechnician], allActive: true, assigned: true)
         #expect(QuickBooksBillingAccessPolicy.allows(mirror: crew, verifiedRole: .fieldTechnician, isInvoice: true))
         #expect(!QuickBooksBillingAccessPolicy.allows(mirror: .init(roles: crew.roles, allActive: true, assigned: false),
