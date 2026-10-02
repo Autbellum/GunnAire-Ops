@@ -656,6 +656,42 @@ struct QuickBooksBillingWorkflowTests {
             verifiedRole: .admin, isInvoice: false, assignedToJob: false))
     }
 
+    @Test func officeDocumentRolesDoNotUseCrewAssignmentButFieldRoleStillDoes() {
+        let email = "office@fixture.invalid"
+        for (role, invoice, estimate) in [
+            (AppUserRole.admin, true, true),
+            (.accounting, true, false),
+            (.dispatcher, false, true),
+            (.fieldTechnician, false, false)
+        ] {
+            let user = AppUser(email: email, role: role)
+            #expect(QuickBooksBillingAccessPolicy.allows(email: email, users: [user],
+                verifiedRole: role, isInvoice: true, assignedToJob: false) == invoice)
+            #expect(QuickBooksBillingAccessPolicy.allows(email: email, users: [user],
+                verifiedRole: role, isInvoice: false, assignedToJob: false) == estimate)
+        }
+        let field = AppUser(email: email, role: .fieldTechnician)
+        #expect(QuickBooksBillingAccessPolicy.allows(email: email, users: [field],
+            verifiedRole: .fieldTechnician, isInvoice: true, assignedToJob: true))
+        let conflicting = AppUser(email: " OTHER@fixture.invalid ", role: .standard, isActive: false)
+        conflicting.email = " Office@Fixture.Invalid "
+        #expect(!QuickBooksBillingAccessPolicy.allows(email: email, users: [field, conflicting],
+            verifiedRole: .fieldTechnician, isInvoice: true, assignedToJob: true))
+    }
+
+    @Test func reusedUserCensusRejectsAnotherModelContext() throws {
+        let first = try Fixture()
+        let second = try Fixture()
+        first.context.insert(AppUser(email: "admin@fixture.invalid", role: .admin))
+        try first.context.save()
+        let census = try QuickBooksBillingAccessPolicy.userCensus(context: first.context)
+        #expect(census.users.count == 1)
+        #expect(throws: QuickBooksBillingWorkflowError.accessDenied) {
+            try QuickBooksBillingAccessPolicy.validate(context: second.context,
+                document: .invoice(second.invoice), census: census)
+        }
+    }
+
     @Test func detachedMirrorPreservesInvoiceAndEstimateRoleBoundaries() {
         let accounting = QuickBooksBillingAccessPolicy.Mirror(roles: [.accounting], allActive: true, assigned: false)
         #expect(QuickBooksBillingAccessPolicy.allows(mirror: accounting, verifiedRole: .accounting, isInvoice: true))

@@ -222,6 +222,19 @@ enum QuickBooksBillingDocument {
 }
 
 enum QuickBooksBillingAccessPolicy {
+    struct UserCensus {
+        let users: [AppUser]
+        fileprivate let context: ModelContext
+
+        fileprivate init(users: [AppUser], context: ModelContext) {
+            self.users = users; self.context = context
+        }
+    }
+
+    static func userCensus(context: ModelContext) throws -> UserCensus {
+        try UserCensus(users: context.fetch(FetchDescriptor<AppUser>()), context: context)
+    }
+
     nonisolated struct Mirror: Equatable, Sendable {
         let roles: [AppUserRole]
         let allActive: Bool
@@ -332,6 +345,22 @@ enum QuickBooksBillingAccessPolicy {
     }
 
     static func validate(context: ModelContext, document: QuickBooksBillingDocument) throws {
+        try requireDocumentPresent(context: context, document: document)
+        let census = try userCensus(context: context)
+        try authorize(context: context, document: document, users: census.users)
+    }
+
+    /// Reuse a user census already read by another synchronous access fence.
+    /// Callers must not suspend between that fetch and this check.
+    static func validate(context: ModelContext, document: QuickBooksBillingDocument,
+                         census: UserCensus) throws {
+        guard census.context === context else { throw QuickBooksBillingWorkflowError.accessDenied }
+        try requireDocumentPresent(context: context, document: document)
+        try authorize(context: context, document: document, users: census.users)
+    }
+
+    private static func requireDocumentPresent(context: ModelContext,
+                                               document: QuickBooksBillingDocument) throws {
         // CloudKit may delete/invalidate a retained model while a request awaits.
         // Establish live object membership before reading any of its fields.
         let present: Bool
@@ -348,28 +377,34 @@ enum QuickBooksBillingAccessPolicy {
             present = matches.count == 1 && matches.first === value
         }
         guard present else { throw QuickBooksBillingWorkflowError.accessDenied }
+    }
+
+    private static func authorize(context: ModelContext, document: QuickBooksBillingDocument,
+                                  users: [AppUser]) throws {
         let controller = CompanyWorkspaceAccessController.shared
-        let users = try context.fetch(FetchDescriptor<AppUser>())
         let email = AppIdentity.currentEmail
         let normalized = AppAccess.normalizedEmail(email)
-        let calls: [ServiceCall]
-        if let jobID = document.serviceCallID {
-            var query = FetchDescriptor<ServiceCall>(predicate: #Predicate { $0.id == jobID }); query.fetchLimit = 2
-            calls = try context.fetch(query)
-        } else { calls = [] }
-        let technicianIDs = Set(try context.fetch(FetchDescriptor<Technician>())
-            .filter { AppAccess.normalizedEmail($0.contactInfo) == normalized }.map(\.id))
-        let assigned = calls.count == 1 && calls.first.map {
-            $0.customer === document.customer &&
-            (AppAccess.normalizedEmail($0.assignedTechnician?.contactInfo) == normalized ||
-             !technicianIDs.isDisjoint(with: $0.assignedCrewTechnicianIDs))
-        } == true
         let isInvoice: Bool
         switch document { case .invoice: isInvoice = true; case .estimate: isInvoice = false }
         let fixture = GunnAireCloudKit.usesTestDatabase
-        guard (fixture || controller.authorizedContainer === context.container),
-              allows(email: email, users: users,
-                     verifiedRole: fixture ? AppAccess.activeRole(email: email, users: users) : controller.verifiedRole,
+        guard fixture || controller.authorizedContainer === context.container else {
+            throw QuickBooksBillingWorkflowError.accessDenied
+        }
+        let role = fixture ? AppAccess.activeRole(email: email, users: users) : controller.verifiedRole
+        let assigned: Bool
+        if role == .fieldTechnician, let jobID = document.serviceCallID {
+            var query = FetchDescriptor<ServiceCall>(predicate: #Predicate { $0.id == jobID }); query.fetchLimit = 2
+            let calls = try context.fetch(query)
+            let technicianIDs = Set(try context.fetch(FetchDescriptor<Technician>())
+                .filter { AppAccess.normalizedEmail($0.contactInfo) == normalized }.map(\.id))
+            assigned = calls.count == 1 && calls.first.map {
+                $0.customer === document.customer &&
+                (AppAccess.normalizedEmail($0.assignedTechnician?.contactInfo) == normalized ||
+                 !technicianIDs.isDisjoint(with: $0.assignedCrewTechnicianIDs))
+            } == true
+        } else { assigned = false }
+        guard allows(email: email, users: users,
+                     verifiedRole: role,
                      isInvoice: isInvoice, assignedToJob: assigned) else {
             throw QuickBooksBillingWorkflowError.accessDenied
         }
