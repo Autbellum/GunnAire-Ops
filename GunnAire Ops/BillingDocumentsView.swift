@@ -8776,11 +8776,12 @@ GunnAire
             Button {
                 scheduleCustomerDocumentExport(document: .estimate(estimate)) { await prepareEstimateEmail(estimate) }
             } label: {
-                Label("Prepare Estimate Email Draft", systemImage: "envelope")
+                Label("Send Estimate by Email", systemImage: "paperplane")
             }
             .buttonStyle(.borderedProminent)
+            .disabled(isPreparingCustomerDocument || isCreatingDocument)
             .accessibilityIdentifier("SendEstimate-\(estimate.id.uuidString)")
-            Text("Opens an email draft with the estimate PDF. Review it and tap Send in Mail; nothing is sent from this button.")
+            Text("Opens Mail with a fresh estimate PDF and the customer's address. Review both, then tap Send Estimate. Earlier unfinished sends reopen for review instead of creating another copy.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if !googleAuth.canUseCurrentBusinessIdentity {
@@ -8860,6 +8861,11 @@ GunnAire
                 estimateSendIssue = actionMessage
                 return
             }
+            guard customer.allowsTransactionalEmail else {
+                actionMessage = "This customer has declined transactional email. Review communication preferences before sending the estimate. Nothing was sent."
+                estimateSendIssue = actionMessage
+                return
+            }
             let email = customer.email?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard let recipients = try? GmailAddressList.parse(email),
                   recipients.count == 1,
@@ -8899,6 +8905,9 @@ GunnAire
                 throw GmailComposeError.attachment
             }
             adoptExport()
+            guard let origin = GunnAireMailDraftRouteOrigin.current() else {
+                throw GmailDraftError.access
+            }
             GunnAireAppIntentRouter.storeMailDraftRoute(
                 to: email,
                 subject: "GunnAire Estimate - \(customer.name)",
@@ -8915,7 +8924,8 @@ GunnAire
                 serviceCallID: linkedCall?.id,
                 estimateID: estimate.id,
                 workflow: .customerDocument,
-                sourceSnapshot: sourceSnapshot
+                sourceSnapshot: sourceSnapshot,
+                origin: origin
             )
             if showsDismissButton { dismiss() }
         } catch {

@@ -76,6 +76,47 @@ import Testing
         #expect(throws: GmailDraftError.locked) { try reopened.begin() }
     }
 
+    @Test func estimateRouteReopensTheOriginalAttemptAfterAnUncertainSend() throws {
+        let f = Fixture()
+        let customerID = UUID(), estimateID = UUID()
+        var content = f.content
+        content.to = "office@example.com"
+        content.reply = nil
+        content.business = .init(customerID: customerID, estimateID: estimateID, workflow: .customerDocument)
+        content.businessSnapshot = ["original-estimate-revision"]
+        content.files = [.init(.init(fileName: "Estimate.pdf", mimeType: "application/pdf", data: Data("fixture PDF".utf8)))]
+        let original = try f.session(content)
+        #expect(try f.store.activeEstimateDraft(scope: f.scope, customerID: customerID, estimateID: estimateID)?.id == original.record.id)
+        try original.begin()
+        #expect(try f.store.activeEstimateDraft(scope: f.scope, customerID: customerID, estimateID: estimateID)?.state == .sending)
+        try original.finish(.uncertain)
+        let reopened = try #require(try f.store.activeEstimateDraft(scope: f.scope, customerID: customerID, estimateID: estimateID))
+        #expect(reopened.id == original.record.id)
+        #expect(reopened.messageID == original.record.messageID)
+        #expect(reopened.state == .review)
+        #expect(reopened.content.files == content.files)
+        #expect(throws: GmailDraftError.locked) { try f.open(reopened).begin() }
+        #expect(try f.store.activeEstimateDraft(scope: f.scope, customerID: customerID, estimateID: UUID()) == nil)
+    }
+
+    @Test func estimateRouteRefusesAmbiguousEarlierDraftsAndWrongMailbox() throws {
+        let f = Fixture()
+        let customerID = UUID(), estimateID = UUID()
+        var content = f.content
+        content.to = "office@example.com"
+        content.reply = nil
+        content.business = .init(customerID: customerID, estimateID: estimateID, workflow: .customerDocument)
+        let first = try f.session(content)
+        #expect(try f.store.activeEstimateDraft(scope: f.scope, customerID: customerID, estimateID: estimateID)?.id == first.record.id)
+        let other = GmailDraftScope(companyID: UUID(), backendOrigin: f.scope.backendOrigin,
+            actorEmail: f.scope.actorEmail, googleEmail: f.scope.googleEmail)
+        #expect(try f.store.activeEstimateDraft(scope: other, customerID: customerID, estimateID: estimateID) == nil)
+        _ = try f.session(content)
+        #expect(throws: GmailDraftError.locked) {
+            try f.store.activeEstimateDraft(scope: f.scope, customerID: customerID, estimateID: estimateID)
+        }
+    }
+
     @Test func definiteRejectionAllowsExplicitEditButNotAnAutomaticSend() throws {
         let f = Fixture(); let session = try f.session()
         try session.begin(); try session.finish(.notSent(GmailComposeError.recipients))

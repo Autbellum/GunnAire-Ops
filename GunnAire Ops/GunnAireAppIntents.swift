@@ -256,6 +256,46 @@ enum GunnAireMailWorkflow: String, Codable, Sendable, CaseIterable {
     }
 }
 
+nonisolated struct GunnAireMailDraftRouteOrigin: Codable, Equatable {
+    let companyID: UUID
+    let backendOrigin: String
+    let actorEmail: String
+    let workspaceGeneration: UUID
+    let sessionDigest: String
+    let connectedGoogleEmail: String
+
+    @MainActor func matches(_ scope: GmailDraftScope) -> Bool {
+        companyID == scope.companyID && backendOrigin == scope.backendOrigin &&
+        actorEmail == scope.actorEmail && actorEmail == scope.googleEmail
+    }
+
+    @MainActor static func current() -> Self? {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-uiTestSeedMailInbox") {
+            guard let companyID = UUID(uuidString: "3BF63F8D-C536-4BC2-826B-EF5CA1B1C9DA") else { return nil }
+            return Self(companyID: companyID, backendOrigin: "https://fixture.example.invalid",
+                actorEmail: "mail-fixture@gunnaire.com",
+                workspaceGeneration: companyID, sessionDigest: "mail-fixture-session", connectedGoogleEmail: "mail-fixture@gunnaire.com")
+        }
+        #endif
+        let controller = CompanyWorkspaceAccessController.shared
+        guard controller.authorizedContainer != nil,
+              let companyID = controller.verifiedCompanyID,
+              let generation = controller.operationStamp?.generation,
+              let session = CompanyWorkspaceSession.current,
+              session.email == AppAccess.normalizedEmail(AppIdentity.currentEmail) else { return nil }
+        let scope = GmailDraftScope(companyID: companyID, backendOrigin: session.backendOrigin,
+            actorEmail: session.email, googleEmail: session.email)
+        guard (try? scope.validate()) != nil else { return nil }
+        let google = GoogleAuthManager.shared
+        let connectedGoogleEmail = google.isAuthenticated ? AppAccess.normalizedEmail(google.signedInEmail) : ""
+        return Self(companyID: scope.companyID, backendOrigin: scope.backendOrigin,
+            actorEmail: scope.actorEmail, workspaceGeneration: generation,
+            sessionDigest: CompanyWorkspaceSession.digest(session.tokenFingerprint + "\n" + companyID.uuidString),
+            connectedGoogleEmail: connectedGoogleEmail)
+    }
+}
+
 enum GunnAireAppIntentRouter {
     struct PaymentCollectionRoute: Equatable {
         let invoiceID: UUID
@@ -304,6 +344,7 @@ enum GunnAireAppIntentRouter {
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailMaintenanceContractID")
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailWorkflow")
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailSourceSnapshot")
+            UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailOrigin")
         case .quickBooks:
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingQuickBooksWorkspace")
         case .commandCenter, .timeClock, .estimates, .invoicesEstimates, .reports, .receiptsBills, .sync:
@@ -339,6 +380,7 @@ enum GunnAireAppIntentRouter {
             "GunnAirePendingMailMaintenanceContractID",
             "GunnAirePendingMailWorkflow",
             "GunnAirePendingMailSourceSnapshot",
+            "GunnAirePendingMailOrigin",
             "GunnAirePendingQuickBooksWorkspace"
         ]
         for key in keys {
@@ -557,7 +599,8 @@ enum GunnAireAppIntentRouter {
         estimateID: UUID? = nil,
         maintenanceContractID: UUID? = nil,
         workflow: GunnAireMailWorkflow = .general,
-        sourceSnapshot: [String]? = nil
+        sourceSnapshot: [String]? = nil,
+        origin: GunnAireMailDraftRouteOrigin? = nil
     ) {
         UserDefaults.standard.set(to, forKey: "GunnAirePendingMailTo")
         UserDefaults.standard.set(subject, forKey: "GunnAirePendingMailSubject")
@@ -570,7 +613,40 @@ enum GunnAireAppIntentRouter {
         UserDefaults.standard.set(maintenanceContractID?.uuidString, forKey: "GunnAirePendingMailMaintenanceContractID")
         UserDefaults.standard.set(workflow.rawValue, forKey: "GunnAirePendingMailWorkflow")
         UserDefaults.standard.set(sourceSnapshot, forKey: "GunnAirePendingMailSourceSnapshot")
+        #if DEBUG
+        let persistedOrigin: GunnAireMailDraftRouteOrigin? = if ProcessInfo.processInfo.arguments.contains("-uiTestMailOriginSwitch"),
+            let origin {
+            .init(companyID: origin.companyID, backendOrigin: origin.backendOrigin,
+                actorEmail: origin.actorEmail, workspaceGeneration: origin.workspaceGeneration,
+                sessionDigest: origin.sessionDigest + "-previous-session",
+                connectedGoogleEmail: origin.connectedGoogleEmail)
+        } else { origin }
+        #else
+        let persistedOrigin = origin
+        #endif
+        UserDefaults.standard.set(try? persistedOrigin.map(JSONEncoder().encode), forKey: "GunnAirePendingMailOrigin")
         store(.mail)
+    }
+
+    nonisolated static func hasPendingMailDraft() -> Bool {
+        UserDefaults.standard.string(forKey: "GunnAirePendingMailTo") != nil &&
+        UserDefaults.standard.string(forKey: "GunnAirePendingMailSubject") != nil &&
+        UserDefaults.standard.string(forKey: "GunnAirePendingMailBody") != nil
+    }
+
+    nonisolated static func pendingMailDraftRequiresOrigin() -> Bool {
+        UserDefaults.standard.string(forKey: "GunnAirePendingMailWorkflow") == GunnAireMailWorkflow.customerDocument.rawValue &&
+        UserDefaults.standard.string(forKey: "GunnAirePendingMailEstimateID") != nil
+    }
+
+    nonisolated static func hasPendingMailDraftOrigin() -> Bool {
+        UserDefaults.standard.data(forKey: "GunnAirePendingMailOrigin") != nil
+    }
+
+    @MainActor static func pendingMailDraftOriginMatches(_ expected: GunnAireMailDraftRouteOrigin) -> Bool {
+        guard let data = UserDefaults.standard.data(forKey: "GunnAirePendingMailOrigin"),
+              let original = try? JSONDecoder().decode(GunnAireMailDraftRouteOrigin.self, from: data) else { return false }
+        return original == expected
     }
 
     nonisolated static func consumePendingMailDraft() -> (to: String, subject: String, body: String, attachmentPaths: [String], customerID: UUID?, serviceCallID: UUID?, invoiceID: UUID?, estimateID: UUID?, maintenanceContractID: UUID?, workflow: GunnAireMailWorkflow, sourceSnapshot: [String]?)? {
@@ -599,6 +675,7 @@ enum GunnAireAppIntentRouter {
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailMaintenanceContractID")
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailWorkflow")
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailSourceSnapshot")
+        UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailOrigin")
         return (to, subject, body, attachmentPaths, customerID, serviceCallID, invoiceID, estimateID, maintenanceContractID, workflow, sourceSnapshot)
     }
 }
