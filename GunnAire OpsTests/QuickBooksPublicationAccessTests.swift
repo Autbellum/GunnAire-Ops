@@ -451,6 +451,12 @@ struct QuickBooksPublicationAccessTests {
         #expect(try AutomaticOutboundSync.hasPersistedDocument(for: .invoice(retry), context: writer))
     }
 
+    @Test func firstSaveStagingCapacityRejectsNewKeyWithoutBlockingAnExistingOne() {
+        #expect(AutomaticOutboundSync.mayStageFirstSave(existingKey: false, retainedCount: 15))
+        #expect(!AutomaticOutboundSync.mayStageFirstSave(existingKey: false, retainedCount: 16))
+        #expect(AutomaticOutboundSync.mayStageFirstSave(existingKey: true, retainedCount: 16))
+    }
+
     @Test func proofBindingWakesOnlyMatchingEarlyScanAndConsumesHandoffOnce() throws {
         let schema = GunnAireModelSchema.schema
         let store = try ModelContainer(for: schema, configurations: [
@@ -487,6 +493,20 @@ struct QuickBooksPublicationAccessTests {
         #expect(AutomaticOutboundSync.proofWakeDisposition(deferred,
             sameGeneration: true, sameContainer: true, proofMatches: proofMatches,
             checkingProof: false) == .enqueue)
+        // The same valid proof and deferred recovery must not wake an estimate
+        // without the action-time selected-Item preparation, even mid-check.
+        #expect(AutomaticOutboundSync.firstSaveProofWakeDisposition(deferred,
+            isEstimate: true, hasPreparedCapture: false, sameGeneration: true,
+            sameContainer: true, proofMatches: proofMatches, checkingProof: false) == .ignore)
+        #expect(AutomaticOutboundSync.firstSaveProofWakeDisposition(nil,
+            isEstimate: true, hasPreparedCapture: false, sameGeneration: true,
+            sameContainer: true, proofMatches: proofMatches, checkingProof: true) == .ignore)
+        #expect(AutomaticOutboundSync.firstSaveProofWakeDisposition(deferred,
+            isEstimate: true, hasPreparedCapture: true, sameGeneration: true,
+            sameContainer: true, proofMatches: proofMatches, checkingProof: false) == .enqueue)
+        #expect(AutomaticOutboundSync.firstSaveProofWakeDisposition(deferred,
+            isEstimate: false, hasPreparedCapture: false, sameGeneration: true,
+            sameContainer: true, proofMatches: proofMatches, checkingProof: false) == .enqueue)
         #expect(AutomaticOutboundSync.proofWakeDisposition(nil,
             sameGeneration: true, sameContainer: true, proofMatches: proofMatches,
             checkingProof: true) == .handoff)
