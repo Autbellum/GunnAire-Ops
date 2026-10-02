@@ -2342,6 +2342,27 @@ struct GoogleCalendarWorkflowTests {
                 "Google calendar: Riley (riley@example.invalid)")
     }
 
+    @Test func pendingAppManagedJobShowsSavedCalendarWithoutClaimingPublication() throws {
+        let f = try Fixture()
+        f.call.status = .scheduled
+        f.call.googleCalendarPendingAt = Date()
+        #expect(ScheduleGoogleLinkStatus.selectedPendingRouteLabel(f.call) ==
+                "Selected Google calendar: Primary (pending)")
+
+        f.call.googleCalendarID = "dispatch@group.calendar.google.com"
+        #expect(ScheduleGoogleLinkStatus.selectedPendingRouteLabel(f.call) ==
+                "Selected Google calendar: dispatch@group.calendar.google.com (pending)")
+
+        f.call.googleEventManagedByApp = false
+        #expect(ScheduleGoogleLinkStatus.selectedPendingRouteLabel(f.call) == nil)
+        f.call.googleEventManagedByApp = true
+        f.call.googleCalendarPendingAt = nil
+        #expect(ScheduleGoogleLinkStatus.selectedPendingRouteLabel(f.call) == nil)
+        f.call.googleCalendarPendingAt = Date()
+        f.call.googleEventID = "confirmed-event"
+        #expect(ScheduleGoogleLinkStatus.selectedPendingRouteLabel(f.call) == nil)
+    }
+
     /// The schedule's immediate send failed on-device with "The appointment or
     /// related records changed during sync" because any record in the store
     /// changing mid-request (a CloudKit merge from another device) aborted it.
