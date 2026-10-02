@@ -129,6 +129,61 @@ class BillingPDFArchiveLedgerTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertIn(rows[0]["source_digest"], {self.key.source_digest, divergent.source_digest})
 
+    def test_legacy_divergent_rows_cannot_advance_any_original_lease_stage(self):
+        original = self.first.reserve(self.key, now=self.now)
+        divergent_digest = "f" * 64
+
+        def inject_legacy_conflict():
+            with self.first._connection() as connection:
+                connection.execute("""
+                    INSERT INTO billing_pdf_archive_intents
+                      (company_id, drive_account, document_kind, document_id,
+                       source_digest, renderer_version, attachment_id, rendered_at,
+                       lease_token, lease_until)
+                    SELECT company_id, drive_account, document_kind, document_id,
+                           ?, renderer_version, ?, rendered_at, ?, lease_until
+                    FROM billing_pdf_archive_intents
+                    WHERE company_id = ? AND drive_account = ? AND document_kind = ?
+                      AND document_id = ? AND source_digest = ? AND renderer_version = ?
+                """, (divergent_digest, str(uuid.uuid4()), str(uuid.uuid4()),
+                      *self.first._parts(self.key)))
+
+        def remove_legacy_conflict():
+            with self.first._connection() as connection:
+                connection.execute("DELETE FROM billing_pdf_archive_intents WHERE source_digest=?",
+                                   (divergent_digest,))
+
+        inject_legacy_conflict()
+        with self.assertRaises(ReservationChanged):
+            self.first.bind_content_digest(self.key, original.lease_token, "b" * 64,
+                                           now=self.now)
+        self.assertIsNone(self.first.read(self.key).content_digest)
+        remove_legacy_conflict()
+        self.first.bind_content_digest(self.key, original.lease_token, "b" * 64,
+                                       now=self.now)
+        inject_legacy_conflict()
+        with self.assertRaises(ReservationChanged):
+            self.first.mark_artifact(self.key, original.lease_token, 12, now=self.now)
+        self.assertFalse(self.first.read(self.key).artifact_ready)
+        remove_legacy_conflict()
+        self.first.mark_artifact(self.key, original.lease_token, 12, now=self.now)
+        inject_legacy_conflict()
+        with self.assertRaises(ReservationChanged):
+            self.first.bind_drive_file_id(self.key, original.lease_token, "original-id",
+                                          now=self.now)
+        self.assertIsNone(self.first.read(self.key).drive_file_id)
+        remove_legacy_conflict()
+        self.first.bind_drive_file_id(self.key, original.lease_token, "original-id",
+                                      now=self.now)
+        inject_legacy_conflict()
+        with self.assertRaises(ReservationChanged):
+            self.first.confirm(self.key, original.lease_token, file_id="original-id",
+                link="https://drive.google.com/file/d/original-id/view",
+                content_digest="b" * 64, now=self.now)
+        self.assertIsNone(self.first.read(self.key).confirmed_link)
+        with self.assertRaises(ReservationChanged):
+            self.second.reserve(self.key, now=self.now + timedelta(seconds=301))
+
     def test_confirmation_requires_saved_id_and_current_lease(self):
         reservation = self.first.reserve(self.key, now=self.now, lease_seconds=10)
         with self.assertRaises(ReservationChanged):

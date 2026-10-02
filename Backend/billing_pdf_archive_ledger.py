@@ -125,17 +125,7 @@ class BillingPDFArchiveLedger:
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
-                other = connection.execute("""
-                    SELECT 1 FROM billing_pdf_archive_intents
-                    WHERE company_id = ? AND drive_account = ?
-                      AND document_kind = ? AND document_id = ?
-                      AND (source_digest != ? OR renderer_version != ?)
-                    LIMIT 1
-                """, self._parts(key)).fetchone()
-                if other is not None:
-                    raise ReservationChanged(
-                        "Another PDF revision is already reserved for this document; review supersession"
-                    )
+                self._refuse_conflicting_revision(connection, key)
                 row = self._row(connection, key)
                 if row is None:
                     connection.execute("""
@@ -220,6 +210,7 @@ class BillingPDFArchiveLedger:
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
+                self._refuse_conflicting_revision(connection, key)
                 row = self._row(connection, key)
                 if (row is None or row["lease_token"] != lease_token or row["lease_until"] is None
                         or row["lease_until"] <= now.isoformat() or row["confirmed_link"] is not None):
@@ -272,6 +263,21 @@ class BillingPDFArchiveLedger:
     def _parts(key: BillingPDFKey) -> tuple[str, ...]:
         return (key.company_id, key.drive_account, key.document_kind,
                 key.document_id, key.source_digest, key.renderer_version)
+
+    @classmethod
+    def _refuse_conflicting_revision(cls, connection: sqlite3.Connection,
+                                     key: BillingPDFKey) -> None:
+        other = connection.execute("""
+            SELECT 1 FROM billing_pdf_archive_intents
+            WHERE company_id = ? AND drive_account = ?
+              AND document_kind = ? AND document_id = ?
+              AND (source_digest != ? OR renderer_version != ?)
+            LIMIT 1
+        """, cls._parts(key)).fetchone()
+        if other is not None:
+            raise ReservationChanged(
+                "Another PDF revision is already reserved for this document; review supersession"
+            )
 
     def _row(self, connection: sqlite3.Connection, key: BillingPDFKey) -> sqlite3.Row | None:
         return connection.execute("""

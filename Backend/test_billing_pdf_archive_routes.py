@@ -216,6 +216,35 @@ class BillingPDFArchiveRoutesTests(unittest.TestCase):
         self.assertEqual(failure.exception.code, "reservation_changed")
         self.assertEqual(self.routes.readback.calls, 1)
 
+    def test_legacy_divergent_row_blocks_confirmation_before_provider_read(self):
+        reservation = self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/reserve",
+            self.payload, "approved-session")["reservation"]
+        self.retained(reservation)
+        self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/file",
+            {**self.payload, "leaseToken": reservation["lease_token"], "fileID": "claimed"},
+            "approved-session")
+        with self.database() as connection:
+            connection.execute("""
+                INSERT INTO billing_pdf_archive_intents
+                  (company_id, drive_account, document_kind, document_id,
+                   source_digest, renderer_version, attachment_id, rendered_at,
+                   lease_token, lease_until)
+                SELECT company_id, drive_account, document_kind, document_id,
+                       ?, renderer_version, ?, rendered_at, ?, lease_until
+                FROM billing_pdf_archive_intents WHERE attachment_id = ?
+            """, ("f" * 64, str(uuid.uuid4()), str(uuid.uuid4()),
+                  reservation["attachment_id"]))
+        self.routes.readback = FakeReadback(succeeds=True)
+        with self.assertRaises(RouteFailure) as failure:
+            self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/confirm",
+                {**self.payload, "leaseToken": reservation["lease_token"],
+                 "fileID": "claimed", "contentDigest": self.digest}, "approved-session")
+        self.assertEqual((failure.exception.status, failure.exception.code),
+            (409, "reservation_changed"))
+        self.assertEqual(self.routes.readback.calls, 0)
+        self.assertIsNone(self.ledger.read(self.routes._authorized_key(self.payload,
+            "approved-session")).confirmed_link)
+
     def test_wrong_confirm_digest_does_not_bind_a_file_id(self):
         reservation = self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/reserve",
                                            self.payload, "approved-session")["reservation"]
