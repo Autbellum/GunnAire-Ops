@@ -20,7 +20,6 @@ at the start of every turn; append to it rather than rewriting it.
 
 ## Claims
 
-
 ## Shared rules
 
 1. The project sets `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`. A helper reached
@@ -43,6 +42,8 @@ at the start of every turn; append to it rather than rewriting it.
    pins the old behavior and the new one.
 
 ## Status log
+
+- 2026-10-02 Codex Drive PDF wake: On `fix/0121-drive-pdf-wake` from frozen 0121, successful local saves now immediately wake the existing duplicate-safe Drive archive for onsite reports, generated billing PDFs, customer maintenance agreements, and QBO job attachment copies. Resumable Drive request-body creation, including the potentially full-file `Data` slice, now runs off MainActor. A focused QBO regression verifies the wake sees a durable saved attachment, a duplicate capture does not re-wake, and a failed save never wakes. Exact-source `generated/omni_runner.py` passed with zero compiler warnings (`2026-10-02-drive-pdf-wake/omni-r4.log`); signed iPad simulator QBO document, Drive archive, and Google transport suites passed 45/45, zero failures/skips/warnings (`2026-10-02-drive-pdf-wake/focused-drive-wake-r2.xcresult`). Customerless internal expense receipts remain deliberately excluded from the archive queue; neither live Google Drive publication nor physical-device behavior is claimed.
 
 - 2026-10-01 Codex 0121 integration: The combined legacy Google Calendar link/publish/recovery flow and current-job guarded QuickBooks estimate delivery passed 140/140 focused signed iPad tests (143 executions), zero failures/skips. The exact 0121 source passed `generated/omni_runner.py` with zero compiler warnings and 2,943/2,943 full signed iPad logical unit tests (3,024 executions), zero failures/skips; evidence at `/private/tmp/GunnAire-0121-focused-r1.xcresult`, `/private/tmp/GunnAire-0121-omni-r1.log`, and `/private/tmp/GunnAire-0121-full-ipad-r1.xcresult`. Signed 0121 iPad/iPhone screenshot tests each passed 1/1; twelve PNGs were visually reviewed and SHA-256 checked in `AppStoreAssets/ScreenshotManifest.json`. This is source and simulator evidence, not a live user-specific Google alert, physical-iPad sign-in, customer QuickBooks delivery, Google Drive publication, or TestFlight upload.
 
