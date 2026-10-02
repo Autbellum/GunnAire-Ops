@@ -118,6 +118,32 @@ struct GunnAireIPadKeyCommandBridge: UIViewRepresentable {
 
 // MARK: - ContentView with NavigationSplitView Sidebar
 
+@MainActor
+enum GoogleForegroundSessionRecovery {
+    static func restoreThenWake(
+        restore: () async -> Void,
+        wake: () -> Void
+    ) async {
+        await restore()
+        wake()
+    }
+
+    static func finishIdentityValidation(
+        _ result: Result<GoogleUserProfile, Error>,
+        onVerified: (GoogleUserProfile) -> Void,
+        onFailure: (Error) -> Void,
+        wake: () -> Void
+    ) {
+        switch result {
+        case .success(let profile):
+            onVerified(profile)
+            wake()
+        case .failure(let error):
+            onFailure(error)
+        }
+    }
+}
+
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.gunnaireReduceMotion) private var reduceMotion
@@ -538,8 +564,7 @@ struct ContentView: View {
                 catch { return }
                 AutomaticOutboundSync.shared.recoverPending(context: modelContext, force: true)
                 AutomaticPaymentSync.shared.recoverPending(context: modelContext, force: true)
-                AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
-                AutomaticGoogleDriveArchive.shared.recover(context: modelContext)
+                await restoreGoogleSessionAndRecoverOutboundWork()
                 recoverPendingBillingPDFs()
             }
         }
@@ -637,8 +662,9 @@ struct ContentView: View {
                 AutomaticOutboundSync.shared.recoverPending(context: modelContext)
                 AutomaticPaymentSync.shared.recoverPending(context: modelContext)
             }
-            AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
-            AutomaticGoogleDriveArchive.shared.recover(context: modelContext)
+            Task { @MainActor in
+                await restoreGoogleSessionAndRecoverOutboundWork()
+            }
             recoverPendingBillingPDFs()
             retryPendingSharedCompanyDocumentUploadsIfNeeded()
             retryPendingCustomerCommunicationUploadsIfNeeded()
@@ -667,8 +693,9 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .gunnaireConnectivityRestored)) { _ in
             AutomaticOutboundSync.shared.recoverPending(context: modelContext, force: true)
             AutomaticPaymentSync.shared.recoverPending(context: modelContext, force: true)
-            AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
-            AutomaticGoogleDriveArchive.shared.recover(context: modelContext)
+            Task { @MainActor in
+                await restoreGoogleSessionAndRecoverOutboundWork()
+            }
             recoverPendingBillingPDFs()
         }
         .onReceive(NotificationCenter.default.publisher(for: .CKAccountChanged)) { _ in
@@ -4364,6 +4391,9 @@ struct AddServiceCallView: View {
     
     @State private var callType: ServiceCallType = .service
     @State private var jobSaveMessage: String?
+    @State private var savedCall: ServiceCall?
+    @State private var showingSaveAcknowledgement = false
+    @State private var calendarSaveMessage = ""
     @State private var dispatchUrgency: ServiceRequestUrgency = .normal
     @State private var eventTitle = ""
     @State private var customer: Customer?
@@ -4888,7 +4918,7 @@ struct AddServiceCallView: View {
                 }
                 Toggle("Open Documentation After Save", isOn: $openDocumentationAfterSave)
             }
-            .disabled(!canManageDispatch)
+            .disabled(!canManageDispatch || savedCall != nil)
             .scrollContentBackground(.hidden)
             .background(Color.primaryBlack)
             .navigationTitle("New Service Call")
@@ -4901,7 +4931,7 @@ struct AddServiceCallView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add") {
                         addCall()
-                    }.disabled(!canSaveCall)
+                    }.disabled(!canSaveCall || savedCall != nil)
                     .tint(Color.brandGold)
                 }
             }
@@ -4910,6 +4940,11 @@ struct AddServiceCallView: View {
         .alert("Job not saved", isPresented: Binding(get: { jobSaveMessage != nil }, set: { if !$0 { jobSaveMessage = nil } })) {
             Button("Keep Editing", role: .cancel) { jobSaveMessage = nil }
         } message: { Text(jobSaveMessage ?? "Keep this form open and try Save again.") }
+        .alert("Appointment saved", isPresented: $showingSaveAcknowledgement) {
+            Button("View Schedule") { finishSavedCall() }
+        } message: {
+            Text(calendarSaveMessage)
+        }
         .sheet(isPresented: $showingEquipmentNameplateCapture) {
             EquipmentNameplateCaptureSheet { draft in
                 applyEquipmentNameplateDraft(draft)
@@ -5028,13 +5063,10 @@ struct AddServiceCallView: View {
             jobSaveMessage = (error as? JobBillingDispatchError)?.localizedDescription ?? JobBillingDispatchError.save.localizedDescription
             return
         }
+        savedCall = call
+        calendarSaveMessage = "Saved on this device. Google Calendar publication is pending until the event and its 30-minute reminder are verified. View Schedule for the current status and Sync Google if it needs attention."
+        showingSaveAcknowledgement = true
         publishToGoogleCalendar(call)
-        dismiss()
-        if openDocumentationAfterSave {
-            DispatchQueue.main.async {
-                onCreated?(call)
-            }
-        }
     }
 
     private func applyEquipmentNameplateDraft(_ draft: EquipmentNameplateDraft) {
@@ -5127,7 +5159,26 @@ struct AddServiceCallView: View {
             modelContext: modelContext,
             signedInEmail: signedInEmail,
             isAdminUser: isAdminUser
-        )
+        ) { result in
+            guard savedCall?.id == call.id else { return }
+            switch result {
+            case .success(let message):
+                calendarSaveMessage = message
+            case .failure(let error):
+                calendarSaveMessage = "Saved on this device, but Google Calendar has not confirmed this appointment. \(error.localizedDescription) View Schedule for the current status and use Sync Google to retry."
+            }
+        }
+    }
+
+    private func finishSavedCall() {
+        guard let call = savedCall else { return }
+        savedCall = nil
+        dismiss()
+        if openDocumentationAfterSave {
+            DispatchQueue.main.async {
+                onCreated?(call)
+            }
+        }
     }
 
     private func resetNewCustomerFields() {
@@ -6134,16 +6185,31 @@ extension ContentView {
         }
         GoogleAuthManager.shared.validateSignedInDomain { result in
             DispatchQueue.main.async {
-                switch result {
-                case .success(let profile):
-                    isGoogleAuthenticated = true
-                    renewGoogleApplicationSessionIfNeeded(profile: profile)
-                case .failure(let error):
-                    isGoogleAuthenticated = false
-                    presentAuthAlert(title: "Google Account Needs Attention", message: error.localizedDescription)
-                }
+                GoogleForegroundSessionRecovery.finishIdentityValidation(
+                    result,
+                    onVerified: { profile in
+                        isGoogleAuthenticated = true
+                        renewGoogleApplicationSessionIfNeeded(profile: profile)
+                    },
+                    onFailure: { error in
+                        isGoogleAuthenticated = false
+                        presentAuthAlert(title: "Google Account Needs Attention", message: error.localizedDescription)
+                    },
+                    wake: { recoverOutboundGoogleWork() }
+                )
             }
         }
+    }
+
+    private func restoreGoogleSessionAndRecoverOutboundWork() async {
+        await GoogleForegroundSessionRecovery.restoreThenWake(
+            restore: { await GoogleAuthManager.shared.restoreStoredSession() },
+            wake: {
+                isGoogleAuthenticated = GoogleAuthManager.shared.isAuthenticated
+                refreshGoogleAccountIdentityIfNeeded()
+                recoverOutboundGoogleWork()
+            }
+        )
     }
 
     private func recoverOutboundGoogleWork() {
@@ -6185,6 +6251,7 @@ extension ContentView {
                     currentUsers: users,
                     technicians: technicians
                 )
+                recoverOutboundGoogleWork()
             } catch {
                 // Preserve offline access to already-synchronized local work,
                 // but keep shared-server actions visibly unavailable until the

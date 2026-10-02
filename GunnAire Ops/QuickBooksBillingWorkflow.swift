@@ -222,6 +222,11 @@ enum QuickBooksBillingDocument {
 }
 
 enum QuickBooksBillingAccessPolicy {
+    nonisolated struct ReviewIdentity: Equatable, Sendable {
+        let id: UUID
+        let role: AppUserRole
+    }
+
     struct UserCensus {
         let users: [AppUser]
         fileprivate let context: ModelContext
@@ -242,9 +247,10 @@ enum QuickBooksBillingAccessPolicy {
     }
 
     nonisolated static func allows(mirror: Mirror, verifiedRole: AppUserRole?,
-                                   isInvoice: Bool) -> Bool {
+                                   isInvoice: Bool, requiresMailAccess: Bool = false) -> Bool {
         guard let role = verifiedRole, !mirror.roles.isEmpty, mirror.allActive,
               mirror.roles.allSatisfy({ $0 == role }) else { return false }
+        if requiresMailAccess, role != .admin, role != .dispatcher { return false }
         switch role {
         case .admin: return true
         case .accounting: return isInvoice
@@ -301,13 +307,37 @@ enum QuickBooksBillingAccessPolicy {
         return Mirror(roles: roles, allActive: allActive, assigned: assigned)
     }
 
+    nonisolated static func readSoleReviewIdentity(container: ModelContainer, email: String) throws -> ReviewIdentity {
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        var query = FetchDescriptor<AppUser>()
+        query.fetchLimit = 5_001
+        let users = try context.fetch(query)
+        guard users.count <= 5_000 else { throw QuickBooksBillingWorkflowError.accessDenied }
+        let matches = users.filter { AppAccess.normalizedEmail($0.email) == email }
+        guard matches.count == 1, let user = matches.first, user.isActive,
+              let role = AppUserRole(rawValue: user.roleRawValue) else {
+            throw QuickBooksBillingWorkflowError.accessDenied
+        }
+        return ReviewIdentity(id: user.id, role: role)
+    }
+
+    static func hasOnlyPendingItems(_ context: ModelContext) -> Bool {
+        let pending = context.changedModelsArray + context.insertedModelsArray + context.deletedModelsArray
+        return !pending.isEmpty && pending.allSatisfy { $0 is Item }
+    }
+
     static func checkOffMain(context: ModelContext, document: QuickBooksBillingDocument,
                              email: String?, stamp: CompanyWorkspaceOperationStamp?,
-                             requiredRole: AppUserRole? = nil) async throws {
+                             requiredRole: AppUserRole? = nil,
+                             allowedRoles: Set<AppUserRole>? = nil,
+                             allowsPendingItems: Bool = false,
+                             requiresMailAccess: Bool = false) async throws {
         try checkLocalFence(context: context, document: document, email: email, stamp: stamp)
         let normalized = AppAccess.normalizedEmail(email)
         let jobID = document.serviceCallID
-        guard let customerID = document.customer?.persistentModelID, !context.hasChanges else {
+        guard let customerID = document.customer?.persistentModelID,
+              !context.hasChanges || (allowsPendingItems && hasOnlyPendingItems(context)) else {
             throw QuickBooksBillingWorkflowError.accessDenied
         }
         let mirror = try await Task.detached(priority: .userInitiated) { [container = context.container] in
@@ -317,16 +347,51 @@ enum QuickBooksBillingAccessPolicy {
             return second
         }.value
         try checkLocalFence(context: context, document: document, email: email, stamp: stamp)
-        guard !context.hasChanges else { throw QuickBooksBillingWorkflowError.accessDenied }
+        guard !context.hasChanges || (allowsPendingItems && hasOnlyPendingItems(context)) else {
+            throw QuickBooksBillingWorkflowError.accessDenied
+        }
         let fixture = GunnAireCloudKit.usesTestDatabase
         let role = fixture ? (Set(mirror.roles).count == 1 ? mirror.roles.first : nil)
             : CompanyWorkspaceAccessController.shared.verifiedRole
         let isInvoice: Bool
         switch document { case .invoice: isInvoice = true; case .estimate: isInvoice = false }
-        guard allows(mirror: mirror, verifiedRole: role, isInvoice: isInvoice),
-              requiredRole == nil || requiredRole == role else {
+        guard allows(mirror: mirror, verifiedRole: role, isInvoice: isInvoice,
+                     requiresMailAccess: requiresMailAccess),
+              requiredRole == nil || requiredRole == role,
+              allowedRoles == nil || role.map({ allowedRoles?.contains($0) == true }) == true else {
             throw QuickBooksBillingWorkflowError.accessDenied
         }
+    }
+
+    static func soleOfficeReviewerOffMain(context: ModelContext, document: QuickBooksBillingDocument,
+                                          email: String?, stamp: CompanyWorkspaceOperationStamp?) async throws -> AppUser {
+        let officeRoles: Set<AppUserRole>
+        switch document {
+        case .invoice: officeRoles = [.admin, .accounting]
+        case .estimate: officeRoles = [.admin, .dispatcher]
+        }
+        try await checkOffMain(context: context, document: document, email: email, stamp: stamp,
+            allowedRoles: officeRoles, allowsPendingItems: true)
+        let normalized = AppAccess.normalizedEmail(email)
+        let identity = try await Task.detached(priority: .userInitiated) { [container = context.container] in
+            let first = try readSoleReviewIdentity(container: container, email: normalized)
+            let second = try readSoleReviewIdentity(container: container, email: normalized)
+            guard first == second else { throw QuickBooksBillingWorkflowError.accessDenied }
+            return second
+        }.value
+        try checkLocalFence(context: context, document: document, email: email, stamp: stamp)
+        guard (!context.hasChanges || hasOnlyPendingItems(context)), officeRoles.contains(identity.role),
+              GunnAireCloudKit.usesTestDatabase || CompanyWorkspaceAccessController.shared.verifiedRole == identity.role else {
+            throw QuickBooksBillingWorkflowError.accessDenied
+        }
+        let id = identity.id
+        var query = FetchDescriptor<AppUser>(predicate: #Predicate { $0.id == id })
+        query.fetchLimit = 2
+        let users = try context.fetch(query)
+        guard users.count == 1, let reviewer = users.first, reviewer.isActive,
+              AppAccess.normalizedEmail(reviewer.email) == normalized,
+              reviewer.role == identity.role else { throw QuickBooksBillingWorkflowError.accessDenied }
+        return reviewer
     }
 
     static func allows(email: String?, users: [AppUser], verifiedRole: AppUserRole?,
@@ -501,6 +566,7 @@ final class QuickBooksBillingWorkflow {
     private let customer: Customer
     private let customerDraft: QuickBooksCustomerCreateDraft
     private let actorEmail: String?
+    private let accessStamp: CompanyWorkspaceOperationStamp?
     private var customerID: String?
     private let items: [Item]
     private let lineEvidence: QuickBooksSavedLineEvidence
@@ -535,6 +601,7 @@ final class QuickBooksBillingWorkflow {
         self.document = document; self.context = context; self.api = api; self.lifecycle = lifecycle
         self.customer = customer; self.customerDraft = QuickBooksCustomerCreateOperation.draft(for: customer)
         self.actorEmail = actorEmail ?? AppIdentity.currentEmail
+        accessStamp = CompanyWorkspaceAccessController.shared.operationStamp
         customerID = customer.quickBooksID
         self.save = save
         self.billingJournal = billingJournal ?? .device
@@ -768,20 +835,22 @@ final class QuickBooksBillingWorkflow {
         return evidence.milestone
     }
 
-    var canApproveSharedDraft: Bool {
-        guard let email = actorEmail, let users = try? context.fetch(FetchDescriptor<AppUser>()),
-              let role = users.first(where: { AppAccess.normalizedEmail($0.email) == AppAccess.normalizedEmail(email) && $0.isActive })?.role else { return false }
+    func checkOfficeReviewAccessOffMain() async throws {
+        let roles: Set<AppUserRole>
         switch document {
-        case .invoice: return role == .admin || role == .accounting
-        case .estimate: return role == .admin || role == .dispatcher
+        case .invoice: roles = [.admin, .accounting]
+        case .estimate: roles = [.admin, .dispatcher]
         }
+        try await QuickBooksBillingAccessPolicy.checkOffMain(context: context, document: document,
+            email: actorEmail, stamp: accessStamp, allowedRoles: roles, allowsPendingItems: true)
     }
 
     /// A local bookkeeping decision, not an accounting write. The current
     /// server scope must confirm office authority and the already-issued owner.
     func retainDuplicateMilestoneDraft() async throws {
         guard case .invoice(let draft) = document, let milestoneID = draft.projectMilestoneID,
-              canApproveSharedDraft else { throw BillingMilestoneReconciliationError.accessRequired }
+              actorEmail != nil else { throw BillingMilestoneReconciliationError.accessRequired }
+        try await checkOfficeReviewAccessOffMain()
         let shared = try openSharedReview()
         guard shared.journal.pending == nil else { throw BillingMilestoneReconciliationError.reviewRequired }
         let scope = shared.scope.document
@@ -810,16 +879,21 @@ final class QuickBooksBillingWorkflow {
             jobID: draft.serviceCallID, milestoneID: milestoneID, workflow: run.workflow)
         try check(); try unchangedOriginal()
         guard latest.authority == "office", latest.providerID == nil, latest.milestone == owner,
-              canApproveSharedDraft, let email = actorEmail else {
+              let email = actorEmail else {
             throw BillingMilestoneReconciliationError.accessRequired
         }
-        let users = try context.fetch(FetchDescriptor<AppUser>()).filter {
-            AppAccess.normalizedEmail($0.email) == AppAccess.normalizedEmail(email) && $0.isActive
-        }
-        guard users.count == 1, let reviewer = users.first else { throw BillingMilestoneReconciliationError.accessRequired }
+        let reviewer = try await QuickBooksBillingAccessPolicy.soleOfficeReviewerOffMain(
+            context: context, document: document, email: email, stamp: accessStamp)
+        try check(); try unchangedOriginal()
         try BillingMilestoneReconciliation.save(draft: draft, original: original, evidence: owner,
             publication: publication, scope: scope, reviewer: reviewer, context: context,
-            check: { try self.check(); try unchangedOriginal() }, persist: { try self.save(self.context) })
+            check: {
+                try self.check(); try unchangedOriginal()
+                guard reviewer.isActive, reviewer.role == .admin || reviewer.role == .accounting,
+                      AppAccess.normalizedEmail(reviewer.email) == AppAccess.normalizedEmail(email) else {
+                    throw BillingMilestoneReconciliationError.accessRequired
+                }
+            }, persist: { try self.save(self.context) })
     }
 
     func resumeOriginalFromReview() async throws -> Outcome {

@@ -1446,11 +1446,14 @@ GunnAire
 
     @discardableResult
     private func validateDocumentExportAccess(customerID: UUID?, serviceCallID: UUID?,
-        invoiceID: UUID?, estimateID: UUID?, requiresMail: Bool) throws -> Customer {
+        invoiceID: UUID?, estimateID: UUID?, requiresMail: Bool,
+        priorCensus: QuickBooksBillingAccessPolicy.UserCensus? = nil) throws -> Customer {
         guard GunnAireCloudKit.usesTestDatabase ||
                 CompanyWorkspaceAccessController.shared.authorizedContainer === modelContext.container,
               let customerID else { throw GmailComposeError.access }
-        let census = try QuickBooksBillingAccessPolicy.userCensus(context: modelContext)
+        let census: QuickBooksBillingAccessPolicy.UserCensus
+        if let priorCensus { census = priorCensus }
+        else { census = try QuickBooksBillingAccessPolicy.userCensus(context: modelContext) }
         let currentUsers = census.users
         if requiresMail, !AppAccess.canAccessSidebarItem(.mail, email: currentUserEmail, users: currentUsers) {
             throw GmailComposeError.access
@@ -1478,12 +1481,8 @@ GunnAire
             }
         }
         if let serviceCallID {
-            let calls = try modelContext.fetch(FetchDescriptor<ServiceCall>())
-            let matches = calls.filter { $0.id == serviceCallID }
-            guard matches.count == 1, let call = matches.first, call.customer === customer,
-                  AppAccess.canAccessServiceCall(call, email: currentUserEmail, users: currentUsers,
-                    serviceCalls: calls, technicians: try modelContext.fetch(FetchDescriptor<Technician>()))
-            else { throw GmailComposeError.access }
+            try CustomerDocumentServiceCallAccess.require(callID: serviceCallID, customer: customer,
+                context: modelContext, email: currentUserEmail, users: currentUsers)
         } else if invoiceID == nil && estimateID == nil {
             guard AppAccess.canAccessSidebarItem(.customers, email: currentUserEmail, users: currentUsers)
             else { throw GmailComposeError.access }
@@ -1497,7 +1496,12 @@ GunnAire
         guard !isPreparingCustomerDocument, !isCreatingDocument else { return }
         let generation = documentExportGeneration
         do {
-            if let document { try QuickBooksBillingAccessPolicy.validate(context: modelContext, document: document) }
+            let census: QuickBooksBillingAccessPolicy.UserCensus?
+            if let document {
+                let current = try QuickBooksBillingAccessPolicy.userCensus(context: modelContext)
+                try QuickBooksBillingAccessPolicy.validate(context: modelContext, document: document, census: current)
+                census = current
+            } else { census = nil }
             if let serviceCall, !isCurrentRecord(serviceCall) { throw GmailDraftError.businessChanged }
             guard let customerID = document?.customer?.id ?? serviceCall?.customer?.id else {
                 throw GmailDraftError.businessChanged
@@ -1512,7 +1516,8 @@ GunnAire
                 serviceCallID: serviceCall?.id ?? document?.serviceCallID,
                 invoiceID: invoiceID, estimateID: estimateID, workflow: .customerDocument)
             let originalCustomer = try validateDocumentExportAccess(customerID: customerID, serviceCallID: sourceBusiness.serviceCallID,
-                invoiceID: invoiceID, estimateID: estimateID, requiresMail: requiresGoogleSession)
+                invoiceID: invoiceID, estimateID: estimateID, requiresMail: requiresGoogleSession,
+                priorCensus: census)
             let customerMembership = BillingDocumentPreparation.membership([originalCustomer], in: modelContext)
             let source = try GmailDraftBusinessSnapshot.capture(sourceBusiness, context: modelContext)
             let hadGoogle = googleAuth.isAuthenticated
@@ -9262,57 +9267,60 @@ GunnAire
         guard billingSyncLifecycles[key] == nil else { return }
         let owner = QuickBooksSyncLifecycle()
         billingSyncLifecycles[key] = owner
-        do {
-            let workflow = try QuickBooksCustomerEmailWorkflow(context: modelContext,
-                document: .estimate(estimate), recipient: estimate.customer?.email)
-            try workflow.checkEligibilityAndRecordSuppression()
-            let business = GmailBusinessContext(customerID: estimate.customer.id, serviceCallID: estimate.serviceCallID,
-                invoiceID: nil, estimateID: estimate.id, workflow: .customerDocument)
-            let source = try GmailDraftBusinessSnapshot.capture(business, context: modelContext)
-            let preparation = try BillingDocumentPreparation.capture(
-                isCurrent: { billingSyncLifecycles[key] === owner },
-                validate: workflow.checkEligibilityAndRecordSuppression)
-            isPreparingCustomerDocument = true
-            Task { @MainActor in
-                defer {
-                    if billingSyncLifecycles[key] === owner {
-                        billingSyncLifecycles.removeValue(forKey: key)
-                        isPreparingCustomerDocument = false
-                    }
-                }
-                var providerResult: Result<Void, Error>?
-                var validatePreparedDocuments: (() throws -> Void)?
-                do {
-                    let result: Result<Void, Error> = try await preparation.perform {
-                        try GmailDraftBusinessSnapshot.validate(source, business: business, context: modelContext)
-                        let validateDocuments = try await prepareEstimateDocumentationForQuickBooksSend(estimate, preparation: preparation)
-                        validatePreparedDocuments = validateDocuments
-                        try preparation.check()
-                        try validateDocuments()
-                        try workflow.prepare()
-                        actionMessage = "Checking the estimate email status in QuickBooks…"
-                        let result: Result<Void, Error> = await withCheckedContinuation { continuation in
-                            QuickBooksDataAPI.shared.sendEstimate(id: quickBooksID, to: workflow.recipient,
-                                expectedCustomerID: workflow.quickBooksCustomerID,
-                                validateSend: { try preparation.check(); try validateDocuments(); try workflow.validateSend() }) {
-                                continuation.resume(returning: $0.map { _ in () })
-                            }
-                        }
-                        providerResult = result
-                        return result
-                    }
-                    try preparation.check()
-                    try validatePreparedDocuments?()
-                    actionMessage = workflow.finish(result)
-                } catch {
-                    guard billingSyncLifecycles[key] === owner else { return }
-                    actionMessage = providerResult == nil ? error.localizedDescription
-                        : "QuickBooks returned an email result, but the original access or document changed. Review the original estimate's QuickBooks email status before retrying."
+        isPreparingCustomerDocument = true
+        Task { @MainActor in
+            defer {
+                if billingSyncLifecycles[key] === owner {
+                    billingSyncLifecycles.removeValue(forKey: key)
+                    isPreparingCustomerDocument = false
                 }
             }
-        } catch {
-            billingSyncLifecycles.removeValue(forKey: key)
-            actionMessage = error.localizedDescription
+            var providerResult: Result<Void, Error>?
+            var validatePreparedDocuments: (() throws -> Void)?
+            do {
+                let workflow = try await QuickBooksCustomerEmailWorkflow.authorized(context: modelContext,
+                    document: .estimate(estimate), recipient: estimate.customer?.email)
+                guard billingSyncLifecycles[key] === owner else { return }
+                try workflow.checkEligibilityAndRecordSuppression()
+                let business = GmailBusinessContext(customerID: estimate.customer.id, serviceCallID: estimate.serviceCallID,
+                    invoiceID: nil, estimateID: estimate.id, workflow: .customerDocument)
+                let source = try GmailDraftBusinessSnapshot.capture(business, context: modelContext)
+                let preparation = try BillingDocumentPreparation.capture(
+                    isCurrent: { billingSyncLifecycles[key] === owner },
+                    validate: workflow.checkEligibilityAndRecordSuppression)
+                let result: Result<Void, Error> = try await preparation.perform {
+                    try GmailDraftBusinessSnapshot.validate(source, business: business, context: modelContext)
+                    let validateDocuments = try await prepareEstimateDocumentationForQuickBooksSend(estimate, preparation: preparation)
+                    validatePreparedDocuments = validateDocuments
+                    try preparation.check()
+                    try validateDocuments()
+                    try await workflow.validateAuthorization()
+                    try workflow.prepare()
+                    actionMessage = "Checking the estimate email status in QuickBooks…"
+                    let result: Result<Void, Error> = await withCheckedContinuation { continuation in
+                        QuickBooksDataAPI.shared.sendEstimateAuthorized(id: quickBooksID, to: workflow.recipient,
+                            expectedCustomerID: workflow.quickBooksCustomerID,
+                            validateCurrent: { try preparation.check(); try validateDocuments(); try workflow.validateSend() },
+                            validateSendAsync: {
+                                try preparation.check(); try validateDocuments()
+                                try await workflow.validateSendAsync()
+                                try preparation.check(); try validateDocuments()
+                            }) {
+                            continuation.resume(returning: $0.map { _ in () })
+                        }
+                    }
+                    providerResult = result
+                    return result
+                }
+                try preparation.check()
+                try validatePreparedDocuments?()
+                actionMessage = await workflow.finishAuthorized(result,
+                    validateCurrent: { try preparation.check(); try validatePreparedDocuments?() })
+            } catch {
+                guard billingSyncLifecycles[key] === owner else { return }
+                actionMessage = providerResult == nil ? error.localizedDescription
+                    : "QuickBooks returned an email result, but the original access or document changed. Review the original estimate's QuickBooks email status before retrying."
+            }
         }
     }
 
@@ -9332,57 +9340,60 @@ GunnAire
         guard billingSyncLifecycles[key] == nil else { return }
         let owner = QuickBooksSyncLifecycle()
         billingSyncLifecycles[key] = owner
-        do {
-            let workflow = try QuickBooksCustomerEmailWorkflow(context: modelContext,
-                document: .invoice(invoice), recipient: invoice.customer?.email)
-            try workflow.checkEligibilityAndRecordSuppression()
-            let business = GmailBusinessContext(customerID: invoice.customer.id, serviceCallID: invoice.serviceCallID,
-                invoiceID: invoice.id, estimateID: nil, workflow: .customerDocument)
-            let source = try GmailDraftBusinessSnapshot.capture(business, context: modelContext)
-            let preparation = try BillingDocumentPreparation.capture(
-                isCurrent: { billingSyncLifecycles[key] === owner },
-                validate: workflow.checkEligibilityAndRecordSuppression)
-            isPreparingCustomerDocument = true
-            Task { @MainActor in
-                defer {
-                    if billingSyncLifecycles[key] === owner {
-                        billingSyncLifecycles.removeValue(forKey: key)
-                        isPreparingCustomerDocument = false
-                    }
-                }
-                var providerResult: Result<Void, Error>?
-                var validatePreparedDocuments: (() throws -> Void)?
-                do {
-                    let result: Result<Void, Error> = try await preparation.perform {
-                        try GmailDraftBusinessSnapshot.validate(source, business: business, context: modelContext)
-                        let validateDocuments = try await prepareInvoiceDocumentationForQuickBooksSend(invoice, preparation: preparation)
-                        validatePreparedDocuments = validateDocuments
-                        try preparation.check()
-                        try validateDocuments()
-                        try workflow.prepare()
-                        actionMessage = "Checking the invoice email status in QuickBooks…"
-                        let result: Result<Void, Error> = await withCheckedContinuation { continuation in
-                            QuickBooksDataAPI.shared.sendInvoice(id: quickBooksID, to: workflow.recipient,
-                                expectedCustomerID: workflow.quickBooksCustomerID,
-                                validateSend: { try preparation.check(); try validateDocuments(); try workflow.validateSend() }) {
-                                continuation.resume(returning: $0.map { _ in () })
-                            }
-                        }
-                        providerResult = result
-                        return result
-                    }
-                    try preparation.check()
-                    try validatePreparedDocuments?()
-                    actionMessage = workflow.finish(result)
-                } catch {
-                    guard billingSyncLifecycles[key] === owner else { return }
-                    actionMessage = providerResult == nil ? error.localizedDescription
-                        : "QuickBooks returned an email result, but the original access or document changed. Review the original invoice's QuickBooks email status before retrying."
+        isPreparingCustomerDocument = true
+        Task { @MainActor in
+            defer {
+                if billingSyncLifecycles[key] === owner {
+                    billingSyncLifecycles.removeValue(forKey: key)
+                    isPreparingCustomerDocument = false
                 }
             }
-        } catch {
-            billingSyncLifecycles.removeValue(forKey: key)
-            actionMessage = error.localizedDescription
+            var providerResult: Result<Void, Error>?
+            var validatePreparedDocuments: (() throws -> Void)?
+            do {
+                let workflow = try await QuickBooksCustomerEmailWorkflow.authorized(context: modelContext,
+                    document: .invoice(invoice), recipient: invoice.customer?.email)
+                guard billingSyncLifecycles[key] === owner else { return }
+                try workflow.checkEligibilityAndRecordSuppression()
+                let business = GmailBusinessContext(customerID: invoice.customer.id, serviceCallID: invoice.serviceCallID,
+                    invoiceID: invoice.id, estimateID: nil, workflow: .customerDocument)
+                let source = try GmailDraftBusinessSnapshot.capture(business, context: modelContext)
+                let preparation = try BillingDocumentPreparation.capture(
+                    isCurrent: { billingSyncLifecycles[key] === owner },
+                    validate: workflow.checkEligibilityAndRecordSuppression)
+                let result: Result<Void, Error> = try await preparation.perform {
+                    try GmailDraftBusinessSnapshot.validate(source, business: business, context: modelContext)
+                    let validateDocuments = try await prepareInvoiceDocumentationForQuickBooksSend(invoice, preparation: preparation)
+                    validatePreparedDocuments = validateDocuments
+                    try preparation.check()
+                    try validateDocuments()
+                    try await workflow.validateAuthorization()
+                    try workflow.prepare()
+                    actionMessage = "Checking the invoice email status in QuickBooks…"
+                    let result: Result<Void, Error> = await withCheckedContinuation { continuation in
+                        QuickBooksDataAPI.shared.sendInvoiceAuthorized(id: quickBooksID, to: workflow.recipient,
+                            expectedCustomerID: workflow.quickBooksCustomerID,
+                            validateCurrent: { try preparation.check(); try validateDocuments(); try workflow.validateSend() },
+                            validateSendAsync: {
+                                try preparation.check(); try validateDocuments()
+                                try await workflow.validateSendAsync()
+                                try preparation.check(); try validateDocuments()
+                            }) {
+                            continuation.resume(returning: $0.map { _ in () })
+                        }
+                    }
+                    providerResult = result
+                    return result
+                }
+                try preparation.check()
+                try validatePreparedDocuments?()
+                actionMessage = await workflow.finishAuthorized(result,
+                    validateCurrent: { try preparation.check(); try validatePreparedDocuments?() })
+            } catch {
+                guard billingSyncLifecycles[key] === owner else { return }
+                actionMessage = providerResult == nil ? error.localizedDescription
+                    : "QuickBooks returned an email result, but the original access or document changed. Review the original invoice's QuickBooks email status before retrying."
+            }
         }
     }
 

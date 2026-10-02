@@ -44,6 +44,8 @@ struct QuickBooksCustomerEmailWorkflowTests {
             try QuickBooksCustomerEmailWorkflow(context: context, document: invoice ? .invoice(self.invoice) : .estimate(estimate),
                 recipient: "fixture@example.invalid", validateAccess: {
                     if !self.allowed { throw GmailComposeError.access }
+                }, authorizeAccess: {
+                    if !self.allowed { throw GmailComposeError.access }
                 }, save: save)
         }
 
@@ -78,6 +80,29 @@ struct QuickBooksCustomerEmailWorkflowTests {
             #expect(message.contains("Recipient delivery is not verified"))
             #expect((invoice ? fixture.invoice.status : fixture.estimate.status) == "sent")
         }
+    }
+
+    @Test func asyncAuthorizationRevokedAfterReadStopsBeforeQuickBooksPost() async throws {
+        let fixture = try Fixture()
+        let flow = try fixture.flow()
+        try flow.prepare()
+        var asyncAllowed = true
+        var authorizationChecks = 0
+        fixture.beforeRead = { asyncAllowed = false }
+        let result: Result<QuickBooksEstimate, Error> = await withCheckedContinuation { continuation in
+            fixture.api.sendEstimateAuthorized(id: "42", to: flow.recipient,
+                expectedCustomerID: flow.quickBooksCustomerID,
+                validateCurrent: { try flow.validateSend() },
+                validateSendAsync: {
+                    authorizationChecks += 1
+                    try await flow.validateSendAsync()
+                    guard asyncAllowed else { throw GmailComposeError.access }
+                }) { continuation.resume(returning: $0) }
+        }
+        #expect(throws: GmailComposeError.access) { _ = try result.get() }
+        #expect(authorizationChecks >= 2)
+        #expect(fixture.posts == 0)
+        #expect(try fixture.history().first?.deliveryStatus == "pending")
     }
 
     @Test func interruptedPendingQuickBooksEmailIsVisibleWithoutAssumingAProviderFailure() throws {
@@ -256,7 +281,7 @@ struct QuickBooksCustomerEmailWorkflowTests {
         let fixture = try Fixture()
         #expect(throws: QuickBooksDocumentEmailError.recipientRequired) {
             try QuickBooksCustomerEmailWorkflow(context: fixture.context, document: .estimate(fixture.estimate),
-                recipient: "another@example.invalid", validateAccess: {})
+                recipient: "another@example.invalid", validateAccess: {}, authorizeAccess: {})
         }
         fixture.context.insert(Customer(quickBooksID: "C1", name: "Ambiguous", email: "other@example.invalid"))
         #expect(throws: QuickBooksBillingWorkflowError.customerConflict) { try fixture.flow() }
