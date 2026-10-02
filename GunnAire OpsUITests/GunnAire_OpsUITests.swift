@@ -5174,7 +5174,8 @@ final class GunnAire_OpsUITests: XCTestCase {
         for _ in 0..<6 where !sendEstimate.exists || !sendEstimate.isHittable { app.swipeUp() }
         XCTAssertTrue(waitForHittable(sendEstimate))
         XCTAssertTrue(sendEstimate.isEnabled)
-        XCTAssertEqual(sendEstimate.label, "Prepare Estimate Email Draft")
+        XCTAssertEqual(sendEstimate.label, "Open Estimate Email to Review & Send")
+        XCTAssertTrue(app.staticTexts["Opens an unsent email draft with the estimate PDF attached. Review it and tap Send in Mail to email the customer."].exists)
         let quickBooksSend = app.buttons["SendEstimateQuickBooks-A1000000-0000-4000-8000-000000000016"]
         XCTAssertTrue(quickBooksSend.exists, "Saved estimates must show the QuickBooks send route even when disconnected.")
         XCTAssertFalse(quickBooksSend.isEnabled, "A disconnected account cannot send through QuickBooks.")

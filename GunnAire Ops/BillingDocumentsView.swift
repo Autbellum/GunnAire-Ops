@@ -8776,11 +8776,11 @@ GunnAire
             Button {
                 scheduleCustomerDocumentExport(document: .estimate(estimate)) { await prepareEstimateEmail(estimate) }
             } label: {
-                Label("Prepare Estimate Email Draft", systemImage: "envelope")
+                Label("Open Estimate Email to Review & Send", systemImage: "envelope")
             }
             .buttonStyle(.borderedProminent)
             .accessibilityIdentifier("SendEstimate-\(estimate.id.uuidString)")
-            Text("Opens an email draft with the estimate PDF. Review it and tap Send in Mail; nothing is sent from this button.")
+            Text("Opens an unsent email draft with the estimate PDF attached. Review it and tap Send in Mail to email the customer.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if !googleAuth.canUseCurrentBusinessIdentity {
