@@ -20,8 +20,6 @@ at the start of every turn; append to it rather than rewriting it.
 
 ## Claims
 
-
-
 ## Shared rules
 
 1. The project sets `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`. A helper reached
@@ -44,6 +42,8 @@ at the start of every turn; append to it rather than rewriting it.
    pins the old behavior and the new one.
 
 ## Status log
+
+- 2026-10-02 Codex QBO PR #48 selected Item action capture: New estimates now pin already-loaded selected Item references, including sold bundle leaves, before the first-save await; saved-estimate Sync requires an explicit prepare action and unchanged second action, while Billing Review prepares on entry before publication. An exact document/customer/Item/workspace revision check prevents adopting changed state, and the backend queue remains the only estimate create route. Signed iPad Pro 13-inch M5 focused suites passed 126 logical tests / 132 executions, zero failures/skips/expected (`/private/tmp/GunnAire-0122-qbo-tap-capture-focused-r1.xcresult`); `generated/omni_runner.py` passed a zero-warning simulator compile (`/private/tmp/gunnaire-qbo-tap-capture-omni-r1.log`). This removes the added initial selected Item SwiftData fetch for those UI handoffs, but preexisting full `@Query` catalog loading, MainActor startup/legacy reads and request setup, and closed-app first preparation remain release gates. Backend deployment, physical-device acceptance, live QBO delivery, merge, archive, and upload are not claimed. Claim released.
 
 - 2026-10-02 Codex QBO PR #48 background estimate recovery: A rotating iOS refresh now gives one already-prepared `queueRequested` estimate a bounded chance to reach the compatible backend job even after app suspension. The worker requires an encrypted immutable queue proof, bound realm, captured office role, current business session, unchanged saved estimate/customer/selected items, normalized access mirror, and server `estimateQueueVersion: 1` before replaying the exact original request. It double-checks persisted data in detached private contexts and never directly creates a second QBO estimate. A fast nil/empty-link lane skips large linked history; a separate legacy lane retains whitespace-only IDs. Signed iPad Pro 13-inch M5 focused tests passed 91/91, zero failures/skips/expected or compiler warnings (`/private/tmp/GunnAire-0122-qbo-background-wake-focused-r3.xcresult`); `generated/omni_runner.py` passed zero-warning simulator compile (`/private/tmp/gunnaire-qbo-bg-wake-omni-r1.log`). Draft release gates remain: only a previously foreground-prepared journal can run in BG, the initial up-to-20 selected Item reads remain on MainActor to preserve the tap-time revision fence, other legacy MainActor store paths remain, and iOS may not grant a background refresh. Backend deployment, physical-device acceptance, live QBO delivery, merge, archive and upload are not claimed. Claim released.
 

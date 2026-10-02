@@ -21,6 +21,25 @@ import Testing
         #expect(try CatalogLineItemSnapshot.decoded(from: json(saved)) == [saved])
     }
 
+    @Test func estimateTapCaptureIncludesSoldBundleLeavesAsWellAsItsRoot() throws {
+        let items = try catalog(), saved = try select(items)
+        let customer = Customer(name: "Bundle capture fixture")
+        let estimate = Estimate(customer: customer, catalogSnapshotJSON: try json(saved),
+            amount: saved.extendedAmount)
+        let schema = GunnAireModelSchema.schema
+        let context = ModelContext(try ModelContainer(for: schema, configurations: [
+            ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+        ]))
+        for item in items { context.insert(item) }
+        context.insert(customer); context.insert(estimate)
+        try context.save()
+        let ids = Set([saved.catalogItemID] + saved.soldLeaves.map(\.catalogItemID))
+        let capture = try QuickBooksSelectedItemCapture(document: .estimate(estimate),
+            items: items.filter { ids.contains($0.id) }, context: context)
+        try capture.validate(document: .estimate(estimate), context: context)
+        #expect(Set(capture.items.map(\.id)) == ids)
+    }
+
     @Test func changingBundleQuantityScalesEverySavedMemberWithoutReadingNewPrices() throws {
         let items = try catalog(), saved = try select(items)
         items[2].unitPrice = 999; items[2].purchaseCost = 888

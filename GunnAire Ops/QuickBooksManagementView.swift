@@ -1368,6 +1368,7 @@ struct QuickBooksManagementView: View {
     @Environment(\.modelContext) private var modelContext
     @ObservedObject private var quickBooksDataAPI = QuickBooksDataAPI.shared
     @ObservedObject private var accountingConfigurationStore = QuickBooksAccountingConfigurationStore.shared
+    @State private var estimateSyncGate = QuickBooksSelectedItemCaptureGate()
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
     @Query(sort: \Customer.name, order: .forward) private var localCustomers: [Customer]
     @Query(sort: \Vendor.name, order: .forward) private var localVendors: [Vendor]
@@ -2131,7 +2132,7 @@ struct QuickBooksManagementView: View {
                                             // shared business login.
                                             .disabled(!isAuthenticated || activeLocalEstimatePublicationID != nil)
 
-                                            BillingPublicationReviewLink(document: .estimate(estimate), context: modelContext)
+                                            BillingPublicationReviewLink(document: .estimate(estimate), context: modelContext, availableItems: localCatalogItems)
 
                                             if let call = localServiceCall(for: estimate) {
                                                 Button("Open Job Billing") {
@@ -2171,7 +2172,7 @@ struct QuickBooksManagementView: View {
                                          ? "Estimate \(estimate.id.uuidString.prefix(8))"
                                          : estimate.lineItemSummary)
                                         .font(.caption)
-                                    BillingPublicationReviewLink(document: .estimate(estimate), context: modelContext)
+                                    BillingPublicationReviewLink(document: .estimate(estimate), context: modelContext, availableItems: localCatalogItems)
                                 }
                             }
                         }
@@ -2227,7 +2228,7 @@ struct QuickBooksManagementView: View {
                                             .foregroundStyle(Color.primaryBlack)
                                             .disabled(!isAuthenticated || activeLocalInvoicePublicationID != nil)
 
-                                            BillingPublicationReviewLink(document: .invoice(invoice), context: modelContext)
+                                            BillingPublicationReviewLink(document: .invoice(invoice), context: modelContext, availableItems: localCatalogItems)
 
                                             if let call = localServiceCall(for: invoice) {
                                                 Button("Open Job Billing") {
@@ -5229,10 +5230,26 @@ struct QuickBooksManagementView: View {
         guard billingPublicationLifecycles[key] == nil else { return }
         billingPublicationLifecycles[key] = owner
         do {
+            let selectedItemCapture: QuickBooksSelectedItemCapture?
+            if case .estimate = document {
+                let selected = Set(CatalogLineItemSnapshot.decoded(from: document.snapshotJSON)
+                    .flatMap { [$0.catalogItemID] + $0.soldLeaves.map(\.catalogItemID) })
+                guard !selected.isEmpty, selected.count <= 20 else { throw QuickBooksBillingWorkflowError.changed }
+                guard let ready = try estimateSyncGate.takeOrPrepare(document: document,
+                    context: modelContext, prepare: {
+                        try QuickBooksSelectedItemCapture(document: document,
+                            items: localCatalogItems.filter { selected.contains($0.id) }, context: modelContext)
+                    }) else {
+                    billingPublicationLifecycles.removeValue(forKey: key)
+                    actionMessage = "Selected estimate items are prepared. Tap Sync Saved Estimate again to send this unchanged draft to QuickBooks."
+                    return
+                }
+                selectedItemCapture = ready
+            } else { selectedItemCapture = nil }
             let preparation = try SharedBillingPreparation(document: document, context: modelContext,
                 isCurrent: { billingPublicationLifecycles[key] === owner },
                 validateAccess: { try QuickBooksSyncAccessPolicy.validate(context: modelContext) },
-                requiresAdministrator: true)
+                requiresAdministrator: true, selectedItemCapture: selectedItemCapture)
             switch document {
             case .invoice: activeLocalInvoicePublicationID = document.id
             case .estimate: activeLocalEstimatePublicationID = document.id

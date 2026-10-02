@@ -686,6 +686,7 @@ final class AutomaticOutboundSync {
 
     func publish(_ document: QuickBooksBillingDocument, context: ModelContext,
                  explicitReview: Bool = false,
+                 selectedItemCapture: QuickBooksSelectedItemCapture? = nil,
                  completion: ((Result<String, Error>) -> Void)? = nil) {
         let key: DocumentKey = document.label == "Invoice" ? .invoice(document.id) : .estimate(document.id)
         guard isAuthorized(context) else {
@@ -707,7 +708,7 @@ final class AutomaticOutboundSync {
                     self?.queueGeneration == generation && self?.isAuthorized(context) == true &&
                         CompanyWorkspaceAccessController.shared.operationStamp == stamp &&
                         self?.queueRealmID == QuickBooksDataAPI.shared.realmID
-                })
+                }, selectedItemCapture: selectedItemCapture)
         } catch {
             completion?(.failure(error))
             return

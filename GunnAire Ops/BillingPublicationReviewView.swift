@@ -6,6 +6,7 @@ import SwiftData
 @MainActor struct BillingPublicationReviewView: View {
     let document: QuickBooksBillingDocument
     let context: ModelContext
+    let availableItems: [Item]
     private let customerName: String
     @State private var lifecycle = QuickBooksSyncLifecycle()
     @State private var flow: QuickBooksBillingWorkflow?
@@ -38,8 +39,8 @@ import SwiftData
         return BillingMilestoneReconciliation.original(for: retainedDraft, in: syncedInvoices, payments: reviewPayments)
     }
 
-    init(document: QuickBooksBillingDocument, context: ModelContext) {
-        self.document = document; self.context = context
+    init(document: QuickBooksBillingDocument, context: ModelContext, availableItems: [Item] = []) {
+        self.document = document; self.context = context; self.availableItems = availableItems
         customerName = document.customer?.name ?? "Saved customer"
     }
 
@@ -202,8 +203,16 @@ import SwiftData
                 #endif
             }
             if flow == nil {
+                let selectedItemCapture: QuickBooksSelectedItemCapture?
+                if case .estimate = document {
+                    let selected = Set(CatalogLineItemSnapshot.decoded(from: document.snapshotJSON)
+                        .flatMap { [$0.catalogItemID] + $0.soldLeaves.map(\.catalogItemID) })
+                    guard !selected.isEmpty, selected.count <= 20 else { throw QuickBooksBillingWorkflowError.changed }
+                    selectedItemCapture = try QuickBooksSelectedItemCapture(document: document,
+                        items: availableItems.filter { selected.contains($0.id) }, context: context)
+                } else { selectedItemCapture = nil }
                 let preparation = try SharedBillingPreparation(document: document, context: context,
-                    isCurrent: { visit == visitID })
+                    isCurrent: { visit == visitID }, selectedItemCapture: selectedItemCapture)
                 let value = try await preparation.makeWorkflow(lifecycle: lifecycle)
                 guard visit == visitID else { throw CancellationError() }
                 flow = value; shared = try value.openSharedReview()
@@ -621,13 +630,15 @@ import SwiftData
 @MainActor struct BillingPublicationReviewLink: View {
     let document: QuickBooksBillingDocument
     let context: ModelContext
+    var availableItems: [Item] = []
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if case .estimate(let estimate) = document {
                 EstimateQuickBooksReviewStatus(estimate: estimate, context: context)
             }
             NavigationLink {
-                BillingPublicationReviewView(document: document, context: context)
+                BillingPublicationReviewView(document: document, context: context,
+                    availableItems: availableItems)
             } label: { Label("Billing Review", systemImage: "doc.text.magnifyingglass") }
             .accessibilityIdentifier("BillingReview-\(document.id.uuidString)")
         }

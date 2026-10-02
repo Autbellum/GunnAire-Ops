@@ -91,6 +91,92 @@ nonisolated struct SharedBillingConnection: Decodable, Sendable {
     }
 }
 
+/// A tap-time snapshot of already-loaded main-context Items. Constructing it
+/// never performs a SwiftData fetch; a later preparation may only use these
+/// same objects while their immutable business revisions still match.
+@MainActor
+final class QuickBooksSelectedItemCapture {
+    let items: [Item]
+    private let documentID: UUID
+    private let snapshotJSON: String?
+    private let subtotal: Double
+    private let revisions: [UUID: QuickBooksCatalogItemRevision]
+    private let context: ModelContext
+    private let documentFieldsUnchanged: () -> Bool
+    private let customer: Customer
+    private let customerDraft: QuickBooksCustomerCreateDraft
+    private let workspaceStamp: CompanyWorkspaceOperationStamp?
+    private let actorEmail: String
+
+    init(document: QuickBooksBillingDocument, items: [Item], context: ModelContext) throws {
+        guard case .estimate = document,
+              let customer = document.customer else { throw QuickBooksBillingWorkflowError.changed }
+        let selected = Self.selectedIDs(document.snapshotJSON)
+        guard !selected.isEmpty, selected.count <= 20, items.count == selected.count else {
+            throw QuickBooksBillingWorkflowError.changed
+        }
+        var revisions: [UUID: QuickBooksCatalogItemRevision] = [:]
+        for item in items {
+            guard selected.contains(item.id), item.modelContext === context, !item.isDeleted,
+                  revisions.updateValue(QuickBooksCatalogItemRevision(item), forKey: item.id) == nil else {
+                throw QuickBooksBillingWorkflowError.changed
+            }
+        }
+        self.items = items
+        documentID = document.id
+        snapshotJSON = document.snapshotJSON
+        subtotal = document.subtotal
+        self.revisions = revisions
+        self.context = context
+        documentFieldsUnchanged = document.fieldValidation()
+        self.customer = customer
+        customerDraft = QuickBooksCustomerCreateOperation.draft(for: customer)
+        workspaceStamp = CompanyWorkspaceAccessController.shared.operationStamp
+        actorEmail = AppAccess.normalizedEmail(AppIdentity.currentEmail)
+    }
+
+    func validate(document: QuickBooksBillingDocument, context: ModelContext) throws {
+        guard self.context === context, document.id == documentID,
+              document.snapshotJSON == snapshotJSON, document.subtotal == subtotal,
+              documentFieldsUnchanged(), document.customer === customer,
+              QuickBooksCustomerCreateOperation.draft(for: customer) == customerDraft,
+              CompanyWorkspaceAccessController.shared.operationStamp == workspaceStamp,
+              AppAccess.normalizedEmail(AppIdentity.currentEmail) == actorEmail,
+              Self.selectedIDs(document.snapshotJSON) == Set(revisions.keys),
+              !(context.changedModelsArray + context.insertedModelsArray + context.deletedModelsArray)
+                .contains(where: { ($0 as? Item).map { revisions[$0.id] != nil } == true }),
+              items.allSatisfy({ item in
+                  item.modelContext === context && !item.isDeleted &&
+                  revisions[item.id] == QuickBooksCatalogItemRevision(item)
+              }) else { throw QuickBooksBillingWorkflowError.changed }
+    }
+
+    private static func selectedIDs(_ snapshotJSON: String?) -> Set<UUID> {
+        Set(CatalogLineItemSnapshot.decoded(from: snapshotJSON)
+            .flatMap { [$0.catalogItemID] + $0.soldLeaves.map(\.catalogItemID) })
+    }
+}
+
+/// A saved estimate without a save-time capture needs two deliberate actions:
+/// the first pins already-loaded Items, and the second uses only those pins.
+/// A changed pin is discarded instead of silently adopting a newer revision.
+@MainActor
+final class QuickBooksSelectedItemCaptureGate {
+    private var pending: (id: UUID, capture: QuickBooksSelectedItemCapture)?
+
+    func takeOrPrepare(document: QuickBooksBillingDocument, context: ModelContext,
+                       prepare: () throws -> QuickBooksSelectedItemCapture) throws -> QuickBooksSelectedItemCapture? {
+        guard case .estimate = document else { throw QuickBooksBillingWorkflowError.changed }
+        if let pending, pending.id == document.id {
+            self.pending = nil
+            try pending.capture.validate(document: document, context: context)
+            return pending.capture
+        }
+        pending = (document.id, try prepare())
+        return nil
+    }
+}
+
 /// Capture before scheduling work. Discovery cannot adopt changed drafts, items,
 /// payments, jobs, users or workspaces. The resulting workflow owns its normal
 /// mutation-aware checks; this preflight never rebases a saved document.
@@ -126,7 +212,8 @@ final class SharedBillingPreparation {
          catalog: CatalogPublicationBoundary.Transport? = nil,
          customer: CustomerPublicationBoundary.Transport? = nil,
          fixtureCompanyID: UUID? = nil,
-         requiresAdministrator: Bool = false) throws {
+         requiresAdministrator: Bool = false,
+         selectedItemCapture: QuickBooksSelectedItemCapture? = nil) throws {
         if fixtureCompanyID != nil { precondition(GunnAireCloudKit.usesTestDatabase) }
         let staffEmail = AppIdentity.currentEmail
         let workspaceStamp = CompanyWorkspaceAccessController.shared.operationStamp
@@ -181,7 +268,15 @@ final class SharedBillingPreparation {
         let selected = Set(CatalogLineItemSnapshot.decoded(from: document.snapshotJSON)
             .flatMap { [$0.catalogItemID] + $0.soldLeaves.map(\.catalogItemID) })
         if case .estimate = document, selected.count > 20 { throw QuickBooksBillingWorkflowError.changed }
-        let capturedItems = try QuickBooksBillingReads.items(selected, context: context)
+        let capturedItems: [Item]
+        if let selectedItemCapture {
+            try selectedItemCapture.validate(document: document, context: context)
+            capturedItems = selectedItemCapture.items
+        } else {
+            capturedItems = try QuickBooksBillingReads.items(selected, context: context)
+        }
+        guard Set(capturedItems.map(\.id)) == selected,
+              capturedItems.count == selected.count else { throw QuickBooksBillingWorkflowError.changed }
         self.capturedItems = capturedItems
         let savedItems = Dictionary(uniqueKeysWithValues: capturedItems
             .map { ($0.persistentModelID, QuickBooksCatalogItemRevision($0)) })

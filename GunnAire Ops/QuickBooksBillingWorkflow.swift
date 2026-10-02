@@ -135,18 +135,11 @@ enum QuickBooksBillingDocument {
         return { paths.map { model[keyPath: $0] } == values }
     }
 
-    func validation(context: ModelContext) -> () throws -> Void {
-        let identifier = id
+    func fieldValidation() -> () -> Bool {
         let originalCustomer = customer
         let checks: [() -> Bool]
-        let exists: () throws -> Bool
         switch self {
         case .invoice(let value):
-            exists = {
-                var query = FetchDescriptor<Invoice>(predicate: #Predicate { $0.id == identifier }); query.fetchLimit = 2
-                let matches = try context.fetch(query)
-                return matches.count == 1 && matches.first === value && value.customer === originalCustomer
-            }
             checks = [
                 Self.unchanged(value, [\Invoice.id]),
                 Self.unchanged(value, [\Invoice.serviceCallID, \.serviceLocationID, \.projectMilestoneID]),
@@ -161,11 +154,6 @@ enum QuickBooksBillingDocument {
                 Self.unchanged(value, [\Invoice.createdAt])
             ]
         case .estimate(let value):
-            exists = {
-                var query = FetchDescriptor<Estimate>(predicate: #Predicate { $0.id == identifier }); query.fetchLimit = 2
-                let matches = try context.fetch(query)
-                return matches.count == 1 && matches.first === value && value.customer === originalCustomer
-            }
             checks = [
                 Self.unchanged(value, [\Estimate.id]),
                 Self.unchanged(value, [\Estimate.serviceCallID, \.serviceLocationID, \.scheduledServiceCallID,
@@ -181,8 +169,29 @@ enum QuickBooksBillingDocument {
                 Self.unchanged(value, [\Estimate.createdAt])
             ]
         }
+        return { self.customer === originalCustomer && checks.allSatisfy({ $0() }) }
+    }
+
+    func validation(context: ModelContext) -> () throws -> Void {
+        let identifier = id
+        let fieldsUnchanged = fieldValidation()
+        let exists: () throws -> Bool
+        switch self {
+        case .invoice(let value):
+            exists = {
+                var query = FetchDescriptor<Invoice>(predicate: #Predicate { $0.id == identifier }); query.fetchLimit = 2
+                let matches = try context.fetch(query)
+                return matches.count == 1 && matches.first === value
+            }
+        case .estimate(let value):
+            exists = {
+                var query = FetchDescriptor<Estimate>(predicate: #Predicate { $0.id == identifier }); query.fetchLimit = 2
+                let matches = try context.fetch(query)
+                return matches.count == 1 && matches.first === value
+            }
+        }
         return {
-            guard try exists(), checks.allSatisfy({ $0() }) else { throw QuickBooksBillingWorkflowError.changed }
+            guard try exists(), fieldsUnchanged() else { throw QuickBooksBillingWorkflowError.changed }
         }
     }
 
