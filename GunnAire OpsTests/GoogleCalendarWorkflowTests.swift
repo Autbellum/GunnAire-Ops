@@ -401,6 +401,9 @@ struct GoogleCalendarWorkflowTests {
         #expect(f.call.googleEventID == nil)
         #expect(result.contains("Review Google publication"))
         #expect(result.contains("not published"))
+        #expect(result.contains("1 displayed scheduled job has no Google event link and was not published"))
+        #expect(result.contains(f.email))
+        #expect(result.contains("another account or time slot"))
 
         let background = try await (try f.flow()).run {
             try await GoogleCalendarScheduleSync.synchronize(workflow: $0)
@@ -416,6 +419,37 @@ struct GoogleCalendarWorkflowTests {
         f.call.googleEventID = nil
         f.call.status = .completed
         #expect(!ScheduleGoogleLinkStatus.needsUnlinkedReview(f.call))
+    }
+
+    @Test func legacyReviewCountDeduplicatesVisibleJobsAndExcludesCompletedWork() async throws {
+        let f = try Fixture()
+        f.call.googleEventManagedByApp = false
+        f.call.scheduledDate = Date().addingTimeInterval(3600)
+        let second = ServiceCall(googleCalendarID: "primary", googleEventManagedByApp: false,
+            eventTitle: "Second visit", type: .repair,
+            scheduledDate: Date().addingTimeInterval(7200), duration: 3600,
+            customer: f.customer, notes: "Synthetic appointment")
+        let completed = ServiceCall(googleCalendarID: "primary", googleEventManagedByApp: false,
+            eventTitle: "Completed visit", type: .repair,
+            scheduledDate: Date().addingTimeInterval(10_800), duration: 3600,
+            customer: f.customer, notes: "Synthetic completed appointment")
+        completed.status = .completed
+        f.context.insert(second)
+        f.context.insert(completed)
+        try f.context.save()
+
+        #expect(ScheduleGoogleLinkStatus.unlinkedReviewCount(
+            selectedDay: [f.call, second, completed], upcoming: [second, f.call]) == 2)
+        let result = try await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.synchronize(workflow: $0,
+                verifyConfirmedCalls: [f.call, second, f.call, completed])
+        }.get()
+        #expect(result.contains("2 displayed scheduled jobs have no Google event link and were not published"))
+        #expect(result.contains("another account or time slot"))
+        #expect(f.requests.filter { $0.httpMethod == "GET" }.count > 0)
+        #expect(f.writes.isEmpty)
+        #expect(f.call.googleEventID == nil)
+        #expect(second.googleEventID == nil)
     }
 
     @Test func completedUnlinkedJobDoesNotWarnAboutCurrentGooglePublication() async throws {
