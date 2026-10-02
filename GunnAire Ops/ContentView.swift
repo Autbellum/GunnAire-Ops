@@ -118,6 +118,32 @@ struct GunnAireIPadKeyCommandBridge: UIViewRepresentable {
 
 // MARK: - ContentView with NavigationSplitView Sidebar
 
+@MainActor
+enum GoogleForegroundSessionRecovery {
+    static func restoreThenWake(
+        restore: () async -> Void,
+        wake: () -> Void
+    ) async {
+        await restore()
+        wake()
+    }
+
+    static func finishIdentityValidation(
+        _ result: Result<GoogleUserProfile, Error>,
+        onVerified: (GoogleUserProfile) -> Void,
+        onFailure: (Error) -> Void,
+        wake: () -> Void
+    ) {
+        switch result {
+        case .success(let profile):
+            onVerified(profile)
+            wake()
+        case .failure(let error):
+            onFailure(error)
+        }
+    }
+}
+
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.gunnaireReduceMotion) private var reduceMotion
@@ -538,8 +564,7 @@ struct ContentView: View {
                 catch { return }
                 AutomaticOutboundSync.shared.recoverPending(context: modelContext, force: true)
                 AutomaticPaymentSync.shared.recoverPending(context: modelContext, force: true)
-                AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
-                AutomaticGoogleDriveArchive.shared.recover(context: modelContext)
+                await restoreGoogleSessionAndRecoverOutboundWork()
                 recoverPendingBillingPDFs()
             }
         }
@@ -637,8 +662,9 @@ struct ContentView: View {
                 AutomaticOutboundSync.shared.recoverPending(context: modelContext)
                 AutomaticPaymentSync.shared.recoverPending(context: modelContext)
             }
-            AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
-            AutomaticGoogleDriveArchive.shared.recover(context: modelContext)
+            Task { @MainActor in
+                await restoreGoogleSessionAndRecoverOutboundWork()
+            }
             recoverPendingBillingPDFs()
             retryPendingSharedCompanyDocumentUploadsIfNeeded()
             retryPendingCustomerCommunicationUploadsIfNeeded()
@@ -667,8 +693,9 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .gunnaireConnectivityRestored)) { _ in
             AutomaticOutboundSync.shared.recoverPending(context: modelContext, force: true)
             AutomaticPaymentSync.shared.recoverPending(context: modelContext, force: true)
-            AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
-            AutomaticGoogleDriveArchive.shared.recover(context: modelContext)
+            Task { @MainActor in
+                await restoreGoogleSessionAndRecoverOutboundWork()
+            }
             recoverPendingBillingPDFs()
         }
         .onReceive(NotificationCenter.default.publisher(for: .CKAccountChanged)) { _ in
@@ -6158,16 +6185,31 @@ extension ContentView {
         }
         GoogleAuthManager.shared.validateSignedInDomain { result in
             DispatchQueue.main.async {
-                switch result {
-                case .success(let profile):
-                    isGoogleAuthenticated = true
-                    renewGoogleApplicationSessionIfNeeded(profile: profile)
-                case .failure(let error):
-                    isGoogleAuthenticated = false
-                    presentAuthAlert(title: "Google Account Needs Attention", message: error.localizedDescription)
-                }
+                GoogleForegroundSessionRecovery.finishIdentityValidation(
+                    result,
+                    onVerified: { profile in
+                        isGoogleAuthenticated = true
+                        renewGoogleApplicationSessionIfNeeded(profile: profile)
+                    },
+                    onFailure: { error in
+                        isGoogleAuthenticated = false
+                        presentAuthAlert(title: "Google Account Needs Attention", message: error.localizedDescription)
+                    },
+                    wake: { recoverOutboundGoogleWork() }
+                )
             }
         }
+    }
+
+    private func restoreGoogleSessionAndRecoverOutboundWork() async {
+        await GoogleForegroundSessionRecovery.restoreThenWake(
+            restore: { await GoogleAuthManager.shared.restoreStoredSession() },
+            wake: {
+                isGoogleAuthenticated = GoogleAuthManager.shared.isAuthenticated
+                refreshGoogleAccountIdentityIfNeeded()
+                recoverOutboundGoogleWork()
+            }
+        )
     }
 
     private func recoverOutboundGoogleWork() {
@@ -6209,6 +6251,7 @@ extension ContentView {
                     currentUsers: users,
                     technicians: technicians
                 )
+                recoverOutboundGoogleWork()
             } catch {
                 // Preserve offline access to already-synchronized local work,
                 // but keep shared-server actions visibly unavailable until the
