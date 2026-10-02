@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import hmac
 import html
@@ -34,11 +35,11 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 
 try:
-    from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications, billing_native, qbo_link_adoption, field_payment_review
+    from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications, billing_estimate_jobs, billing_native, qbo_link_adoption, field_payment_review
     from Backend import customer_accounts, transactional_email
     from Backend.customer_account_portal import PORTAL_HTML as CUSTOMER_ACCOUNT_PORTAL_HTML
     from Backend.billing_provider import BillingQBOProvider
-    from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads
+    from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads, billing_pdf_archive_ledger, billing_pdf_archive_routes, billing_pdf_artifacts
     from Backend import document_storage
     from Backend import backup_backend
     from Backend import staff_owner_field_edits
@@ -55,6 +56,7 @@ except ModuleNotFoundError:
     import catalog_publications
     import customer_publications
     import billing_publications
+    import billing_estimate_jobs
     import billing_native
     import qbo_link_adoption
     import customer_accounts
@@ -71,6 +73,9 @@ except ModuleNotFoundError:
     import google_mail
     import qbo_change_capture
     import qbo_document_uploads
+    import billing_pdf_archive_ledger
+    import billing_pdf_archive_routes
+    import billing_pdf_artifacts
     from qbo_document_provider import DocumentQBOProvider
     import time_worker_mappings
     import time_publications
@@ -88,7 +93,7 @@ except ModuleNotFoundError:
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.18.69"
+SERVICE_VERSION = "2026.10.02.1"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -131,6 +136,7 @@ APNS_AUTH_TOKEN_CACHE: dict[str, object] = {
 APNS_AUTH_TOKEN_LOCK = threading.Lock()
 PUSH_DELIVERY_LOCK = threading.Lock()
 PUSH_DELIVERY_WAKE_EVENT = threading.Event()
+BILLING_ESTIMATE_WAKE_EVENT = threading.Event()
 DATA_ROOT_RAW = os.environ.get("GUNNAIRE_BACKEND_DATA_DIR", "").strip()
 DATA_ROOT = Path(DATA_ROOT_RAW).expanduser() if DATA_ROOT_RAW else None
 DB_PATH = Path(
@@ -2691,8 +2697,10 @@ def initialize_database() -> None:
         customer_publications.initialize_schema(connection)
         customer_accounts.initialize_schema(connection, ensure_column)
         billing_publications.initialize_schema(connection)
+        billing_estimate_jobs.initialize_schema(connection)
         qbo_link_adoption.initialize_schema(connection)
         google_connections.initialize_schema(connection)
+        billing_pdf_archive_ledger.initialize_schema(connection)
         google_mail.initialize_schema(connection)
         qbo_change_capture.initialize_schema(connection)
         qbo_document_uploads.initialize_schema(connection)
@@ -3416,6 +3424,40 @@ def start_push_delivery_worker() -> threading.Thread:
     return worker
 
 
+def billing_estimate_queue() -> billing_estimate_jobs.EstimateJobs:
+    # The mobile request only reserves an immutable proposal. This separate
+    # worker is allowed a bounded census before it can reach the existing
+    # billing publication's single-use provider-write fence.
+    publisher = billing_publications.BillingPublisher(
+        db, lambda context, authorize: BillingQBOProvider(
+            context, authorize, qbo_authorized_bearer, maximum_documents=500),
+        encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
+    )
+    return billing_estimate_jobs.EstimateJobs(db, publisher)
+
+
+def billing_estimate_worker() -> None:
+    while True:
+        BILLING_ESTIMATE_WAKE_EVENT.wait(timeout=60)
+        BILLING_ESTIMATE_WAKE_EVENT.clear()
+        try:
+            # Serial work stays bounded per wake. Further due rows wait for the
+            # next tick; unavailable rows keep a durable not-before timestamp.
+            for _ in range(10):
+                if not billing_estimate_queue().run_one():
+                    break
+        except Exception:
+            # The job/attempt fences remain durable. An unexpected failure is
+            # retried only after the worker's next bounded wake.
+            continue
+
+
+def start_billing_estimate_worker() -> threading.Thread:
+    worker = threading.Thread(target=billing_estimate_worker, name="gunnaire-qbo-estimate-worker", daemon=True)
+    worker.start()
+    return worker
+
+
 def scheduled_backup_data_bytes() -> int:
     total = DB_PATH.stat().st_size if DB_PATH.is_file() else 0
     for path in STORAGE_ROOT.rglob("*"):
@@ -3990,6 +4032,11 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/api/google/mail/"):
             self.handle_google_mail(parsed, method="GET")
             return
+        if parsed.path in ("/api/google/drive/billing-pdf-intents",
+                           "/api/google/drive/billing-pdf-intents/identity",
+                           "/api/google/drive/billing-pdf-intents/artifact"):
+            self.handle_billing_pdf_archive(parsed, method="GET")
+            return
         if parsed.path == "/api/payment-attempts" or parsed.path.startswith("/api/payment-attempts/"):
             self.handle_payment_attempt(parsed, method="GET")
             return
@@ -4246,6 +4293,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path.startswith("/api/google/mail/"):
             self.handle_google_mail(parsed, method="POST")
+            return
+        if parsed.path.startswith("/api/google/drive/billing-pdf-intents"):
+            self.handle_billing_pdf_archive(parsed, method="POST")
             return
         if parsed.path == "/api/payment-attempts" or parsed.path.startswith("/api/payment-attempts/"):
             self.handle_payment_attempt(parsed, method="POST")
@@ -7155,6 +7205,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
         )
         native = billing_native.NativeBilling(publisher)
+        estimate_jobs = billing_estimate_queue()
         session_id = self._application_session_id
         assignments = parsed.path == "/api/job-billing-assignments"
         assignment_connection = parsed.path == "/api/job-billing-assignments/connection"
@@ -7176,6 +7227,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                     result = native.connection(session_id, query)
                 else:
                     result = publisher.list_for_document(session_id, query)
+            elif method == "GET" and len(parts) == 2 and parts[0] == "background-estimate" and not parsed.query:
+                result = estimate_jobs.status(session_id, parts[1])
             elif method == "GET" and len(parts) == 1 and not parsed.query:
                 result = native.proposal(session_id, parts[0])
             elif method == "POST" and not parsed.query:
@@ -7196,6 +7249,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                                      object_pairs_hook=unique_object, parse_constant=invalid_constant)
                 if assignments:
                     result = publisher.assignments.save(session_id, payload)
+                elif parts == ["background-estimate"]:
+                    result = estimate_jobs.enqueue(session_id, payload)
+                    BILLING_ESTIMATE_WAKE_EVENT.set()
                 elif not suffix:
                     result = publisher.publish(session_id, payload)
                 elif parts == ["approve"] and isinstance(payload, dict) and set(payload) == {"proposal", "technicianEmail"}:
@@ -7234,6 +7290,57 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
 
     def google_mail_service(self):
         return google_mail.GoogleMail(self.google_connection_service())
+
+    def handle_billing_pdf_archive(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        try:
+            is_artifact = parsed.path == "/api/google/drive/billing-pdf-intents/artifact"
+            if method == "GET":
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, max_num_fields=14)
+                if any(len(values) != 1 for values in query.values()):
+                    raise billing_pdf_archive_routes.RouteFailure("invalid_request", 400,
+                        "Review the PDF archive request.")
+                payload = {key: values[0] for key, values in query.items()}
+            else:
+                if parsed.query:
+                    raise billing_pdf_archive_routes.RouteFailure("invalid_request", 400,
+                        "Review the PDF archive request.")
+                maximum = ((billing_pdf_artifacts.MAX_PDF_BYTES * 4) // 3) + 8192 if is_artifact else 8192
+                payload = google_connections.strict_json(self.read_limited_body(maximum).decode("utf-8"))
+            service = billing_pdf_archive_routes.BillingPDFArchiveRoutes(
+                db, self.google_connection_service(), primary_admin_email=PRIMARY_ADMIN_EMAIL,
+                container_id=CLOUDKIT_CONTAINER_ID,
+                ledger=billing_pdf_archive_ledger.BillingPDFArchiveLedger(DB_PATH),
+                artifacts=billing_pdf_artifacts.BillingPDFArtifactStore(STORAGE_ROOT))
+            if is_artifact:
+                if method == "POST":
+                    encoded = payload.pop("dataBase64", None) if isinstance(payload, dict) else None
+                    if not isinstance(encoded, str):
+                        raise billing_pdf_archive_routes.RouteFailure("invalid_request", 400,
+                            "PDF bytes are required.")
+                    try:
+                        content = base64.b64decode(encoded, validate=True)
+                    except (ValueError, binascii.Error):
+                        raise billing_pdf_archive_routes.RouteFailure("invalid_request", 400,
+                            "PDF bytes are invalid.") from None
+                    result = service.artifact(method, payload, self._application_session_id, content)
+                    self.write_json(result)
+                else:
+                    result = service.artifact(method, payload, self._application_session_id)
+                    self.write_media_bytes(result, "application/pdf", "GunnAire-Billing-Document.pdf")
+                return
+            result = service.dispatch(method, parsed.path, payload, self._application_session_id)
+            self.write_json(result)
+        except billing_pdf_archive_routes.RouteFailure as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except google_connections.ConnectionError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError, KeyError, AttributeError, RecursionError):
+            self.write_json({"error": "Review the PDF archive request.", "code": "invalid_request"}, status=400)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "PDF archive storage is unavailable. Keep the original request for recovery.",
+                             "code": "storage_unavailable"}, status=503)
 
     def handle_google_mail(self, parsed, *, method):
         if not self.require_application_session():
@@ -7981,6 +8088,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         message = redact_capability_tokens(format % args)
         # Search terms and provider resource IDs can identify customer mail.
         message = re.sub(r"/api/google/mail/[^\s\"]*", "/api/google/mail/[redacted]", message)
+        message = re.sub(r"/api/google/drive/billing-pdf-intents(?:[^\s\"]*)?",
+                         "/api/google/drive/billing-pdf-intents/[redacted]", message)
         message = re.sub(r"/api/qbo/change-capture(?:\?[^\s\"]*)?", "/api/qbo/change-capture", message)
         message = re.sub(r"/api/qbo-document-uploads(?:[/?][^\s\"]*)?", "/api/qbo-document-uploads/[redacted]", message)
         message = re.sub(r"/api/field-payment-review(?:/context)?(?:\?[^\s\"]*)?", "/api/field-payment-review", message)
@@ -8020,6 +8129,7 @@ def main() -> None:
     initialize_database()
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
     start_push_delivery_worker()
+    start_billing_estimate_worker()
     start_backup_worker()
     server = ThreadingHTTPServer((HOST, PORT), GunnAireBackendHandler)
     print(f"GunnAire backend listening on http://{HOST}:{PORT}")

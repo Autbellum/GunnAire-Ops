@@ -37,6 +37,7 @@ class NativeBillingTests(BillingFixture, unittest.TestCase):
         query = self.connection_query()
         result = self.native.connection(self.admin, query)
         self.assertEqual(result, {**query, "realmID": "realm", "environment": "sandbox", "protocolVersion": 1,
+                                 "estimateQueueVersion": 1,
                                  "connectionRevision": self.payload()["connectionRevision"], "projectMilestoneID": None})
         self.assertFalse(self.writes)
         self.preflight.assert_not_called()
