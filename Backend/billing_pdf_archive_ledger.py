@@ -125,6 +125,17 @@ class BillingPDFArchiveLedger:
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
+                other = connection.execute("""
+                    SELECT 1 FROM billing_pdf_archive_intents
+                    WHERE company_id = ? AND drive_account = ?
+                      AND document_kind = ? AND document_id = ?
+                      AND (source_digest != ? OR renderer_version != ?)
+                    LIMIT 1
+                """, self._parts(key)).fetchone()
+                if other is not None:
+                    raise ReservationChanged(
+                        "Another PDF revision is already reserved for this document; review supersession"
+                    )
                 row = self._row(connection, key)
                 if row is None:
                     connection.execute("""

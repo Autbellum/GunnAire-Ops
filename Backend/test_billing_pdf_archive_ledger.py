@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import tempfile
 import unittest
@@ -67,20 +68,66 @@ class BillingPDFArchiveLedgerTests(unittest.TestCase):
         self.assertEqual(after.drive_file_id, "reserved-google-id")
         self.assertIsNone(after.lease_token)
 
-    def test_other_revision_or_google_account_cannot_adopt_file_id(self):
+    def test_conflicting_revision_cannot_create_second_drive_reservation(self):
         first = self.first.reserve(self.key, now=self.now)
         changed = BillingPDFKey(**{**self.key.__dict__, "source_digest": "c" * 64})
+        changed_renderer = BillingPDFKey(**{**self.key.__dict__,
+            "renderer_version": "customer-pdf-v2"})
         other_account = BillingPDFKey(**{**self.key.__dict__,
             "drive_account": "google-subject:" + hashlib.sha256(b"google-subject-2").hexdigest()})
-        changed_reservation = self.second.reserve(changed, now=self.now)
+        with self.assertRaises(ReservationChanged):
+            self.second.reserve(changed, now=self.now)
+        with self.assertRaises(ReservationChanged):
+            self.second.reserve(changed_renderer, now=self.now)
         other_reservation = self.second.reserve(other_account, now=self.now)
-        self.assertNotEqual(first.attachment_id, changed_reservation.attachment_id)
         self.assertNotEqual(first.attachment_id, other_reservation.attachment_id)
-        self.assertIsNone(changed_reservation.drive_file_id)
         self.assertIsNone(other_reservation.drive_file_id)
+        self.assertIsNone(self.second.read(changed))
+        self.assertIsNone(self.second.read(changed_renderer))
+        with self.first._connection() as connection:
+            count = connection.execute("SELECT COUNT(*) FROM billing_pdf_archive_intents").fetchone()[0]
+        self.assertEqual(count, 2)
         with self.assertRaises(ReservationChanged):
             self.second.bind_drive_file_id(other_account, first.lease_token,
                                            "first-account-id", now=self.now)
+
+    def test_expired_or_confirmed_revision_still_blocks_divergent_device(self):
+        original = self.first.reserve(self.key, now=self.now, lease_seconds=10)
+        divergent = BillingPDFKey(**{**self.key.__dict__, "source_digest": "d" * 64})
+        with self.assertRaises(ReservationChanged):
+            self.second.reserve(divergent, now=self.now + timedelta(seconds=11))
+        resumed = self.second.reserve(self.key, now=self.now + timedelta(seconds=11))
+        self.assertEqual(resumed.attachment_id, original.attachment_id)
+        self.second.bind_content_digest(self.key, resumed.lease_token, "b" * 64,
+                                        now=self.now + timedelta(seconds=11))
+        self.second.mark_artifact(self.key, resumed.lease_token, 12,
+                                  now=self.now + timedelta(seconds=11))
+        self.second.bind_drive_file_id(self.key, resumed.lease_token, "original-id",
+                                       now=self.now + timedelta(seconds=11))
+        self.second.confirm(self.key, resumed.lease_token, file_id="original-id",
+            link="https://drive.google.com/file/d/original-id/view",
+            content_digest="b" * 64, now=self.now + timedelta(seconds=11))
+        with self.assertRaises(ReservationChanged):
+            self.first.reserve(divergent, now=self.now + timedelta(seconds=12))
+        self.assertIsNone(self.first.read(divergent))
+        self.assertEqual(self.first.read(self.key).drive_file_id, "original-id")
+
+    def test_two_devices_racing_divergent_sources_create_only_one_intent(self):
+        divergent = BillingPDFKey(**{**self.key.__dict__, "source_digest": "e" * 64})
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            futures = [workers.submit(ledger.reserve, key, now=self.now)
+                       for ledger, key in ((self.first, self.key), (self.second, divergent))]
+            outcomes = []
+            for future in futures:
+                try:
+                    outcomes.append(future.result())
+                except ReservationChanged:
+                    outcomes.append(None)
+        self.assertEqual(sum(value is not None for value in outcomes), 1)
+        with self.first._connection() as connection:
+            rows = connection.execute("SELECT source_digest FROM billing_pdf_archive_intents").fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertIn(rows[0]["source_digest"], {self.key.source_digest, divergent.source_digest})
 
     def test_confirmation_requires_saved_id_and_current_lease(self):
         reservation = self.first.reserve(self.key, now=self.now, lease_seconds=10)

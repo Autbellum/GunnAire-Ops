@@ -129,6 +129,21 @@ class BillingPDFArchiveRoutesTests(unittest.TestCase):
         self.assertNotIn("lease_token", self.routes.dispatch("GET", "/api/google/drive/billing-pdf-intents",
             self.payload, "approved-session")["reservation"])
 
+    def test_conflicting_device_revision_is_refused_before_second_intent(self):
+        original = self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/reserve",
+            self.payload, "approved-session")["reservation"]
+        divergent = {**self.payload, "sourceDigest": "f" * 64}
+        with self.assertRaises(RouteFailure) as failure:
+            self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/reserve",
+                divergent, "approved-session")
+        self.assertEqual((failure.exception.status, failure.exception.code),
+            (409, "reservation_changed"))
+        with self.database() as connection:
+            rows = connection.execute("SELECT source_digest, attachment_id "
+                "FROM billing_pdf_archive_intents").fetchall()
+        self.assertEqual([(row["source_digest"], row["attachment_id"]) for row in rows],
+            [(self.payload["sourceDigest"], original["attachment_id"])])
+
     def test_read_only_identity_preflight_binds_original_google_subject(self):
         identity = self.routes.dispatch("GET", "/api/google/drive/billing-pdf-intents/identity",
             {key: value for key, value in self.payload.items() if key not in
