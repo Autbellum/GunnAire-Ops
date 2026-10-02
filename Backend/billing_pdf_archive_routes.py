@@ -13,6 +13,7 @@ try:
         ReservationBusy, ReservationChanged,
     )
     from .billing_pdf_drive_readback import BillingPDFDriveReadback, ProviderReadbackError
+    from .billing_pdf_drive_upload import BillingPDFDriveUpload, ProviderUploadError
     from .billing_pdf_artifacts import BillingPDFArtifactStore, ArtifactError
 except ImportError:
     import google_connections
@@ -21,6 +22,7 @@ except ImportError:
         ReservationBusy, ReservationChanged,
     )
     from billing_pdf_drive_readback import BillingPDFDriveReadback, ProviderReadbackError
+    from billing_pdf_drive_upload import BillingPDFDriveUpload, ProviderUploadError
     from billing_pdf_artifacts import BillingPDFArtifactStore, ArtifactError
 
 
@@ -42,7 +44,8 @@ class BillingPDFArchiveRoutes:
     def __init__(self, database, google_service, *, primary_admin_email: str,
                  container_id: str, ledger: BillingPDFArchiveLedger,
                  readback: BillingPDFDriveReadback | None = None,
-                 artifacts: BillingPDFArtifactStore | None = None):
+                 artifacts: BillingPDFArtifactStore | None = None,
+                 uploader: BillingPDFDriveUpload | None = None):
         self.database = database
         self.google_service = google_service
         self.primary_admin_email = primary_admin_email
@@ -50,6 +53,7 @@ class BillingPDFArchiveRoutes:
         self.ledger = ledger
         self.readback = readback or BillingPDFDriveReadback()
         self.artifacts = artifacts
+        self.uploader = uploader or BillingPDFDriveUpload()
 
     def artifact(self, method: str, payload: dict, session_id: str,
                  data: bytes | None = None) -> bytes | dict:
@@ -100,13 +104,14 @@ class BillingPDFArchiveRoutes:
             return {"companyID": company, "grantID": payload["grantID"], "driveAccount": account}
         if method == "GET" and path == _BASE:
             operation, extra = "read", set()
-        elif method == "POST" and path in {_BASE + "/reserve", _BASE + "/content", _BASE + "/file", _BASE + "/confirm"}:
+        elif method == "POST" and path in {_BASE + "/reserve", _BASE + "/content", _BASE + "/file", _BASE + "/confirm", _BASE + "/deliver"}:
             operation = path.rsplit("/", 1)[1]
             extra = {
                 "reserve": set(),
                 "content": {"leaseToken", "contentDigest"},
                 "file": {"leaseToken", "fileID"},
                 "confirm": {"leaseToken", "fileID", "contentDigest"},
+                "deliver": {"leaseToken", "contentDigest"},
             }[operation]
         else:
             raise RouteFailure("invalid_request", 400, "Review the PDF archive endpoint.")
@@ -115,6 +120,8 @@ class BillingPDFArchiveRoutes:
         key = self._authorized_key(payload, session_id)
         now = datetime.now(timezone.utc)
         try:
+            if operation == "deliver":
+                return self._deliver(key, payload, session_id)
             if operation == "confirm":
                 saved = self.ledger.read(key)
                 if (saved is None or saved.content_digest != payload["contentDigest"] or
@@ -151,6 +158,46 @@ class BillingPDFArchiveRoutes:
             raise RouteFailure("reservation_changed", 409, str(error)) from error
         except ProviderReadbackError as error:
             raise RouteFailure("provider_unconfirmed", 502, str(error)) from error
+        except ProviderUploadError as error:
+            raise RouteFailure("provider_unconfirmed", 502, str(error)) from error
+
+    def _deliver(self, key: BillingPDFKey, payload: dict, session_id: str) -> dict:
+        """Session-bound delivery; the reserved ID survives an uncertain POST."""
+        if self.artifacts is None:
+            raise RouteFailure("storage_unavailable", 503, "PDF artifact storage is unavailable.")
+        saved = self.ledger.read(key)
+        if saved is None or saved.content_digest != payload["contentDigest"]:
+            raise ReservationChanged("PDF content differs from the original reservation")
+        if saved.confirmed_link is not None:
+            return {"reservation": self._public(saved)}
+        reservation = self.ledger.bind_content_digest(key, payload["leaseToken"],
+            payload["contentDigest"], now=datetime.now(timezone.utc))
+        if not reservation.artifact_ready:
+            raise ReservationChanged("Retained PDF must be durable before Drive upload")
+        try:
+            data = self.artifacts.read(reservation)
+        except ArtifactError as error:
+            raise RouteFailure("artifact_unavailable", 503, str(error)) from error
+        if self._authorized_key(payload, session_id) != key:
+            raise ReservationChanged("Google account or workspace changed before delivery")
+        token = self.google_service.access(session_id, key.company_id,
+            payload["grantID"], _DRIVE_SCOPE)
+        if reservation.drive_file_id is None:
+            file_id = self.uploader.generate_id(token)
+            if self._authorized_key(payload, session_id) != key:
+                raise ReservationChanged("Google account or workspace changed before file reservation")
+            reservation = self.ledger.bind_drive_file_id(key, payload["leaseToken"],
+                file_id, now=datetime.now(timezone.utc))
+        self.uploader.create(key, reservation, data, token)
+        if self._authorized_key(payload, session_id) != key:
+            raise ReservationChanged("Google account or workspace changed during upload")
+        link = self.readback.verify(key, reservation, token)
+        if self._authorized_key(payload, session_id) != key:
+            raise ReservationChanged("Google account or workspace changed during readback")
+        result = self.ledger.confirm(key, payload["leaseToken"],
+            file_id=reservation.drive_file_id, link=link,
+            content_digest=payload["contentDigest"], now=datetime.now(timezone.utc))
+        return {"reservation": self._public(result)}
 
     def _authorized_key(self, payload: dict, session_id: str) -> BillingPDFKey:
         company, account = self._authorized_account(payload, session_id)

@@ -108,7 +108,7 @@ struct CustomerAccountStatementSnapshot: Equatable {
 /// the renderer needs is copied in by value, so no SwiftData model ever
 /// crosses an isolation boundary and the rendered bytes describe the records
 /// exactly as they stood when the plan was captured.
-struct BusinessDocumentRenderPlan: Sendable, Equatable {
+nonisolated struct BusinessDocumentRenderPlan: Sendable, Equatable {
     struct Row: Sendable, Equatable {
         let label: String
         let value: String
@@ -129,6 +129,9 @@ struct BusinessDocumentRenderPlan: Sendable, Equatable {
         let caption: String
         let fileSize: Int
         let modifiedAt: Date?
+        /// Automatic billing snapshots retain exact source bytes off the main
+        /// actor. Manual exports still read their guarded local path.
+        let frozenData: Data?
 
         nonisolated static func fingerprint(_ path: String) -> (size: Int, modifiedAt: Date?) {
             let values = try? URL(fileURLWithPath: path)
@@ -154,7 +157,7 @@ struct BusinessDocumentRenderPlan: Sendable, Equatable {
 /// values are captured before rendering begins and are never recaptured: they
 /// exist so that the records can be proven unchanged before the finished bytes
 /// are published, rather than silently relabelled as current.
-struct PreparedCustomerDocument: Sendable, Equatable {
+nonisolated struct PreparedCustomerDocument: Sendable, Equatable {
     let plan: BusinessDocumentRenderPlan
     let fileName: String
     let sourceValues: [String]
@@ -607,12 +610,12 @@ enum CustomerDocumentExporter {
 
     /// The exact fields `startPage` draws, compared field by field rather than
     /// as the joined block, so one field cannot be emptied into another.
-    @MainActor
-    static func customerHeaderValues(_ customer: Customer?) -> [String] {
+    nonisolated static func customerHeaderValues(_ customer: Customer?) -> [String] {
         guard let customer else { return [] }
         return [customer.name, customer.address ?? "", customer.phone ?? "", customer.email ?? ""]
     }
 
+    @MainActor
     static func exportFieldFormResponse(
         _ response: FieldFormResponse,
         serviceCall: ServiceCall,
@@ -664,12 +667,16 @@ enum CustomerDocumentExporter {
         serviceCall: ServiceCall?,
         attachments: [ServiceDocumentAttachment] = [],
         equipmentProfiles: [CustomerEquipment] = [],
-        serviceCalls: [ServiceCall] = []
+        serviceCalls: [ServiceCall] = [],
+        renderedAt: Date? = nil,
+        deterministicFileName: String? = nil
     ) throws -> PreparedCustomerDocument {
         if let blockedMessage = estimate.customerApprovalBlockedMessage {
             throw CustomerDocumentExportError.authoritativeTaxRequired(blockedMessage)
         }
-        let fileName = makeFileName(prefix: "GunnAire-Estimate", customerName: estimate.customer.name)
+        let fileName = deterministicFileName
+            ?? uniqueExportFileName(makeFileName(prefix: "GunnAire-Estimate",
+                customerName: estimate.customer.name))
         let sections = estimateSections(
             estimate: estimate,
             serviceCall: serviceCall,
@@ -689,15 +696,45 @@ enum CustomerDocumentExporter {
                     invoiceID: nil,
                     estimateID: estimate.id
                 ),
-                approvalSignatureImageBase64: estimate.customerApprovalSignatureImageBase64
+                approvalSignatureImageBase64: estimate.customerApprovalSignatureImageBase64,
+                generatedAt: renderedAt ?? Date()
             ),
-            fileName: uniqueExportFileName(fileName),
+            fileName: fileName,
             sourceValues: estimateSourceValues(estimate, serviceCall: serviceCall, attachments: attachments,
                 equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls),
             customerHeader: customerHeaderValues(estimate.customer),
             customerID: estimate.customer.id,
             documentID: estimate.id
         )
+    }
+
+    /// The automatic archive snapshots only fields that appear in its PDF.
+    /// Manual email preparation retains its broader closeout/source checks.
+    nonisolated static func preparedEstimateForArchive(
+        _ estimate: Estimate,
+        serviceCall: ServiceCall?,
+        attachments: [ServiceDocumentAttachment],
+        equipmentProfiles: [CustomerEquipment],
+        serviceCalls: [ServiceCall],
+        renderedAt: Date,
+        fileName: String
+    ) throws -> PreparedCustomerDocument {
+        if let blockedMessage = estimate.customerApprovalBlockedMessage {
+            throw CustomerDocumentExportError.authoritativeTaxRequired(blockedMessage)
+        }
+        let sections = estimateSections(estimate: estimate, serviceCall: serviceCall,
+            attachments: attachments, equipmentProfiles: equipmentProfiles,
+            serviceCalls: serviceCalls)
+        let title = estimate.isProposalOption ? "\(estimate.proposalOptionDisplayName) Estimate" : "Estimate"
+        return PreparedCustomerDocument(
+            plan: renderPlan(title: title, customer: estimate.customer, sections: sections,
+                imageAttachments: billingPhotoAttachments(for: attachments,
+                    serviceCall: serviceCall, invoiceID: nil, estimateID: estimate.id),
+                approvalSignatureImageBase64: estimate.customerApprovalSignatureImageBase64,
+                generatedAt: renderedAt),
+            fileName: fileName, sourceValues: [],
+            customerHeader: customerHeaderValues(estimate.customer),
+            customerID: estimate.customer.id, documentID: estimate.id)
     }
 
     @MainActor
@@ -759,6 +796,7 @@ enum CustomerDocumentExporter {
             }, currentIdentity: { (estimate.customer, estimate.id) })
     }
 
+    @MainActor
     static func exportMaintenanceAgreement(
         _ contract: RecurringMaintenanceContract,
         equipmentProfiles: [CustomerEquipment] = []
@@ -854,7 +892,9 @@ enum CustomerDocumentExporter {
         payments: [Payment],
         attachments: [ServiceDocumentAttachment] = [],
         equipmentProfiles: [CustomerEquipment] = [],
-        serviceCalls: [ServiceCall] = []
+        serviceCalls: [ServiceCall] = [],
+        renderedAt: Date? = nil,
+        deterministicFileName: String? = nil
     ) throws -> PreparedCustomerDocument {
         // Authoritative tax must be settled before customer-facing invoice
         // bytes exist at all. This runs ahead of rendering on both the
@@ -864,7 +904,10 @@ enum CustomerDocumentExporter {
         }
         let paid = isInvoicePaid(invoice, payments: payments)
         let workPrefix = invoice.workType.displayName.replacingOccurrences(of: " ", with: "-")
-        let fileName = makeFileName(prefix: paid ? "GunnAire-Paid-\(workPrefix)-Invoice" : "GunnAire-\(workPrefix)-Invoice", customerName: invoice.customer.name)
+        let fileName = deterministicFileName
+            ?? uniqueExportFileName(makeFileName(
+                prefix: paid ? "GunnAire-Paid-\(workPrefix)-Invoice" : "GunnAire-\(workPrefix)-Invoice",
+                customerName: invoice.customer.name))
         let sections = invoiceSections(
             invoice: invoice,
             serviceCall: serviceCall,
@@ -884,15 +927,45 @@ enum CustomerDocumentExporter {
                     invoiceID: invoice.id,
                     estimateID: nil
                 ),
-                approvalSignatureImageBase64: invoice.customerSignatureImageBase64
+                approvalSignatureImageBase64: invoice.customerSignatureImageBase64,
+                generatedAt: renderedAt ?? Date()
             ),
-            fileName: uniqueExportFileName(fileName),
+            fileName: fileName,
             sourceValues: invoiceSourceValues(invoice, serviceCall: serviceCall, payments: payments,
                 attachments: attachments, equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls),
             customerHeader: customerHeaderValues(invoice.customer),
             customerID: invoice.customer.id,
             documentID: invoice.id
         )
+    }
+
+    nonisolated static func preparedInvoiceForArchive(
+        _ invoice: Invoice,
+        serviceCall: ServiceCall?,
+        payments: [Payment],
+        attachments: [ServiceDocumentAttachment],
+        equipmentProfiles: [CustomerEquipment],
+        serviceCalls: [ServiceCall],
+        renderedAt: Date,
+        fileName: String
+    ) throws -> PreparedCustomerDocument {
+        if let blockedMessage = invoice.paymentCollectionBlockedMessage {
+            throw CustomerDocumentExportError.authoritativeTaxRequired(blockedMessage)
+        }
+        let paid = isInvoicePaid(invoice, payments: payments)
+        let sections = invoiceSections(invoice: invoice, serviceCall: serviceCall,
+            payments: payments, attachments: attachments,
+            equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls)
+        return PreparedCustomerDocument(
+            plan: renderPlan(title: paid ? "Paid \(invoice.workType.documentTitle)" : invoice.workType.documentTitle,
+                customer: invoice.customer, sections: sections,
+                imageAttachments: billingPhotoAttachments(for: attachments,
+                    serviceCall: serviceCall, invoiceID: invoice.id, estimateID: nil),
+                approvalSignatureImageBase64: invoice.customerSignatureImageBase64,
+                generatedAt: renderedAt),
+            fileName: fileName, sourceValues: [],
+            customerHeader: customerHeaderValues(invoice.customer),
+            customerID: invoice.customer.id, documentID: invoice.id)
     }
 
     @MainActor
@@ -963,6 +1036,7 @@ enum CustomerDocumentExporter {
             }, currentIdentity: { (invoice.customer, invoice.id) })
     }
 
+    @MainActor
     static func exportPaidInvoice(
         _ invoice: Invoice,
         serviceCall: ServiceCall?,
@@ -1233,7 +1307,7 @@ enum CustomerDocumentExporter {
             }
     }
 
-    static func equipmentHistoryRows(
+    nonisolated static func equipmentHistoryRows(
         serviceCall: ServiceCall,
         equipmentProfiles: [CustomerEquipment],
         serviceCalls: [ServiceCall],
@@ -1291,7 +1365,7 @@ enum CustomerDocumentExporter {
         )
     }
 
-    private static func matchingEquipmentProfile(
+    nonisolated private static func matchingEquipmentProfile(
         for serviceCall: ServiceCall,
         equipmentProfiles: [CustomerEquipment]
     ) -> CustomerEquipment? {
@@ -1388,7 +1462,7 @@ enum CustomerDocumentExporter {
         )
     }
 
-    static func serviceReportReadinessRows(for serviceCall: ServiceCall) -> [(label: String, value: String)] {
+    nonisolated static func serviceReportReadinessRows(for serviceCall: ServiceCall) -> [(label: String, value: String)] {
         let completionIssues = serviceCall.serviceReportMissingRequirementLabels
         let missing = serviceCall.serviceReportMissingRequiredItemLabels
         let validationIssues = serviceCall.serviceReportReadingValidationIssueLabels
@@ -1612,24 +1686,26 @@ enum CustomerDocumentExporter {
             }
     }
 
-    static func photoEvidenceAttachments(for attachments: [ServiceDocumentAttachment]) -> [ServiceDocumentAttachment] {
+    nonisolated static func photoEvidenceAttachments(for attachments: [ServiceDocumentAttachment]) -> [ServiceDocumentAttachment] {
         attachments
             .filter { $0.kind != .serviceReport }
             .filter { $0.kind != .customerProfilePhoto }
             .filter { $0.kind.isPhoto || $0.isImage }
             .sorted { lhs, rhs in
                 if lhs.createdAt == rhs.createdAt {
-                    return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+                    return lhs.displayName == rhs.displayName
+                        ? lhs.id.uuidString < rhs.id.uuidString
+                        : lhs.displayName < rhs.displayName
                 }
                 return lhs.createdAt < rhs.createdAt
             }
     }
 
-    static func embeddedPhotoEvidenceAttachments(for attachments: [ServiceDocumentAttachment]) -> [ServiceDocumentAttachment] {
+    nonisolated static func embeddedPhotoEvidenceAttachments(for attachments: [ServiceDocumentAttachment]) -> [ServiceDocumentAttachment] {
         photoEvidenceAttachments(for: attachments)
     }
 
-    static func billingPhotoAttachments(
+    nonisolated static func billingPhotoAttachments(
         for attachments: [ServiceDocumentAttachment],
         serviceCall: ServiceCall?,
         invoiceID: UUID?,
@@ -1664,7 +1740,7 @@ enum CustomerDocumentExporter {
         }
     }
 
-    static func reportEvidenceAttachments(
+    nonisolated static func reportEvidenceAttachments(
         for attachments: [ServiceDocumentAttachment],
         serviceCall: ServiceCall
     ) -> [ServiceDocumentAttachment] {
@@ -1675,7 +1751,8 @@ enum CustomerDocumentExporter {
             if attachment.serviceCallID == serviceCall.id {
                 return true
             }
-            guard attachment.customerEquipmentID == serviceCall.customerEquipmentID,
+            guard let equipmentID = serviceCall.customerEquipmentID,
+                  attachment.customerEquipmentID == equipmentID,
                   attachment.serviceCallID == nil else {
                 return false
             }
@@ -1683,7 +1760,7 @@ enum CustomerDocumentExporter {
         }
     }
 
-    private static func canIncludeInOnsiteReportEvidence(_ attachment: ServiceDocumentAttachment) -> Bool {
+    nonisolated private static func canIncludeInOnsiteReportEvidence(_ attachment: ServiceDocumentAttachment) -> Bool {
         switch attachment.kind {
         case .beforePhoto, .afterPhoto, .diagnosticPhoto, .equipmentDataPlatePhoto, .customerDocument, .other:
             return true
@@ -1692,7 +1769,7 @@ enum CustomerDocumentExporter {
         }
     }
 
-    private static func billingTargetMatches(
+    nonisolated private static func billingTargetMatches(
         attachment: ServiceDocumentAttachment,
         invoiceID: UUID?,
         estimateID: UUID?
@@ -1715,7 +1792,7 @@ enum CustomerDocumentExporter {
         return attachment.invoiceID == nil && attachment.estimateID == nil
     }
 
-    static func photoAttachmentCaption(
+    nonisolated static func photoAttachmentCaption(
         for attachment: ServiceDocumentAttachment,
         serviceCall: ServiceCall? = nil,
         equipmentProfiles: [CustomerEquipment] = []
@@ -1791,7 +1868,7 @@ enum CustomerDocumentExporter {
         return details.isEmpty ? nil : details.joined(separator: " | ")
     }
 
-    private static func attachmentEquipmentTrace(
+    nonisolated private static func attachmentEquipmentTrace(
         _ attachment: ServiceDocumentAttachment,
         serviceCall: ServiceCall?,
         equipmentProfiles: [CustomerEquipment]
@@ -1820,7 +1897,7 @@ enum CustomerDocumentExporter {
         return nil
     }
 
-    private static func estimateSections(
+    nonisolated private static func estimateSections(
         estimate: Estimate,
         serviceCall: ServiceCall?,
         attachments: [ServiceDocumentAttachment] = [],
@@ -1848,7 +1925,7 @@ enum CustomerDocumentExporter {
         return sections
     }
 
-    static func estimateDetailRows(
+    nonisolated static func estimateDetailRows(
         for estimate: Estimate,
         documentationStatus: EstimateDocumentationStatus? = nil
     ) -> [(label: String, value: String)] {
@@ -1919,7 +1996,7 @@ enum CustomerDocumentExporter {
         return rows
     }
 
-    private static func invoiceSections(
+    nonisolated private static func invoiceSections(
         invoice: Invoice,
         serviceCall: ServiceCall?,
         payments: [Payment],
@@ -1969,7 +2046,7 @@ enum CustomerDocumentExporter {
         return sections
     }
 
-    static func invoiceDetailRows(
+    nonisolated static func invoiceDetailRows(
         for invoice: Invoice,
         payments: [Payment],
         documentationStatus: InvoiceDocumentationStatus? = nil
@@ -2061,7 +2138,7 @@ enum CustomerDocumentExporter {
         .map { ($0.label, $0.value) }
     }
 
-    static func invoicePaymentHistoryRows(for payments: [Payment]) -> [(label: String, value: String)] {
+    nonisolated static func invoicePaymentHistoryRows(for payments: [Payment]) -> [(label: String, value: String)] {
         payments
             .sorted { $0.date < $1.date }
             .map { payment in
@@ -2082,11 +2159,11 @@ enum CustomerDocumentExporter {
         "Generated \(invoiceDocumentLabel(for: invoice, payments: payments).lowercased()) PDF"
     }
 
-    private static func isInvoicePaid(_ invoice: Invoice, payments: [Payment]) -> Bool {
+    nonisolated private static func isInvoicePaid(_ invoice: Invoice, payments: [Payment]) -> Bool {
         Invoice.isPaid(invoice, payments: payments)
     }
 
-    private static func billingJobContextRows(
+    nonisolated private static func billingJobContextRows(
         for serviceCall: ServiceCall,
         equipmentProfiles: [CustomerEquipment] = [],
         serviceCalls: [ServiceCall] = []
@@ -2114,7 +2191,7 @@ enum CustomerDocumentExporter {
         return rows
     }
 
-    static func billingDocumentationSummaries(for serviceCall: ServiceCall) -> [(title: String, rows: [(label: String, value: String)])] {
+    nonisolated static func billingDocumentationSummaries(for serviceCall: ServiceCall) -> [(title: String, rows: [(label: String, value: String)])] {
         var summaries: [(title: String, rows: [(label: String, value: String)])] = []
         let readinessRows = serviceReportReadinessRows(for: serviceCall)
         if !readinessRows.isEmpty {
@@ -2153,7 +2230,7 @@ enum CustomerDocumentExporter {
         return summaries
     }
 
-    private static func billingDocumentationSections(for serviceCall: ServiceCall) -> [DocumentSection] {
+    nonisolated private static func billingDocumentationSections(for serviceCall: ServiceCall) -> [DocumentSection] {
         billingDocumentationSummaries(for: serviceCall).map { summary in
             DocumentSection(
                 title: summary.title,
@@ -2195,12 +2272,9 @@ enum CustomerDocumentExporter {
         return (beforeCount, afterCount)
     }
 
-    /// Every SwiftData read and every business fence belongs on this side of
-    /// the boundary. What comes back is an immutable value, so rendering can
-    /// run anywhere and cannot observe a later edit to the records it came
-    /// from — a document is a point-in-time copy, not a live view.
-    @MainActor
-    private static func renderPlan(
+    /// Every SwiftData read belongs in the caller's model context before the
+    /// rendering boundary. The returned value cannot observe later model edits.
+    nonisolated private static func renderPlan(
         title: String,
         customer: Customer,
         sections: [DocumentSection],
@@ -2237,7 +2311,8 @@ enum CustomerDocumentExporter {
                         equipmentProfiles: imageEquipmentProfiles
                     ),
                     fileSize: fingerprint.size,
-                    modifiedAt: fingerprint.modifiedAt
+                    modifiedAt: fingerprint.modifiedAt,
+                    frozenData: nil
                 )
             },
             generatedAt: generatedAt
@@ -2443,9 +2518,9 @@ enum CustomerDocumentExporter {
         return y + 12
     }
 
-    /// Photo selection and captions are projected on the main actor, so this
-    /// only decodes files. Image decoding is the heaviest step in a
-    /// photo-bearing report and is exactly what should not block layout.
+    /// Photo selection and captions were already projected. Automatic billing
+    /// uses frozen bytes; manual exports retain their guarded local-file read.
+    /// Image decoding stays off the main actor.
     nonisolated private static func drawPhotos(
         _ photos: [BusinessDocumentRenderPlan.Photo],
         at initialY: CGFloat,
@@ -2456,7 +2531,15 @@ enum CustomerDocumentExporter {
         // A customer document that quietly loses its evidence photos is worse
         // than one that fails: the missing page is invisible to whoever sends it.
         let images = try photos.map { photo -> (photo: BusinessDocumentRenderPlan.Photo, image: UIImage) in
-            guard photo.matchesFileOnDisk, let image = UIImage(contentsOfFile: photo.filePath) else {
+            let image: UIImage?
+            if let frozenData = photo.frozenData {
+                image = UIImage(data: frozenData)
+            } else if photo.matchesFileOnDisk {
+                image = UIImage(contentsOfFile: photo.filePath)
+            } else {
+                image = nil
+            }
+            guard let image else {
                 throw CustomerDocumentExportError.sourceChangedDuringRender
             }
             return (photo, image)
@@ -2570,7 +2653,9 @@ enum CustomerDocumentExporter {
             let sanitized = sanitizeFileComponent(value)
             return sanitized.isEmpty ? nil : sanitized
         }
-        let date = fileDateFormatter.string(from: Date())
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd-HHmm"
+        let date = formatter.string(from: Date())
         return [prefix, customer, cleanDescriptor, date]
             .compactMap { $0 }
             .joined(separator: "-") + ".pdf"
@@ -2588,16 +2673,16 @@ enum CustomerDocumentExporter {
         return sanitized.isEmpty ? "Customer" : sanitized
     }
 
-    private static func row(_ label: String, _ value: String?) -> DocumentRow {
+    nonisolated private static func row(_ label: String, _ value: String?) -> DocumentRow {
         DocumentRow(label: label, value: value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
     }
 
-    private static func normalizedValue(_ value: String?) -> String? {
+    nonisolated private static func normalizedValue(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == false ? trimmed : nil
     }
 
-    private static func shortID(_ id: UUID?) -> String {
+    nonisolated private static func shortID(_ id: UUID?) -> String {
         guard let id else { return "" }
         return String(id.uuidString.prefix(8)).uppercased()
     }
@@ -2606,7 +2691,7 @@ enum CustomerDocumentExporter {
         value ? "Yes" : "No"
     }
 
-    private static func currency(_ value: Double) -> String {
+    nonisolated private static func currency(_ value: Double) -> String {
         value.formatted(.currency(code: "USD"))
     }
 
@@ -2614,7 +2699,7 @@ enum CustomerDocumentExporter {
         ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
     }
 
-    private static func formattedDate(_ date: Date) -> String {
+    nonisolated private static func formattedDate(_ date: Date) -> String {
         date.formatted(date: .abbreviated, time: .omitted)
     }
 
@@ -2623,29 +2708,19 @@ enum CustomerDocumentExporter {
     }
 
     private static func formattedStatementFileDate(_ date: Date) -> String {
-        statementFileDateFormatter.string(from: date)
-    }
-
-    private static let fileDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd-HHmm"
-        return formatter
-    }()
-
-    private static let statementFileDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
-        return formatter
-    }()
+        return formatter.string(from: date)
+    }
 }
 
-private struct DocumentSection {
+nonisolated private struct DocumentSection {
     let title: String
     let rows: [DocumentRow]
     var keepsTogether: Bool = false
 }
 
-private struct DocumentRow {
+nonisolated private struct DocumentRow {
     let label: String
     let value: String
 }

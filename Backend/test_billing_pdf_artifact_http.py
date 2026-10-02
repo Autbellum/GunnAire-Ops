@@ -15,7 +15,8 @@ import urllib.request
 import uuid
 
 from Backend import gunnaire_backend as backend
-from Backend.test_billing_pdf_archive_routes import FakeApprovedGoogleConnection
+from Backend.test_billing_pdf_archive_routes import FakeApprovedGoogleConnection, FakeReadback
+from Backend.test_billing_pdf_delivery_routes import FakeUploader
 
 
 class ArtifactFixtureHandler(backend.GunnAireBackendHandler):
@@ -87,6 +88,22 @@ class BillingPDFArtifactHTTPTests(unittest.TestCase):
                         self.assertEqual(response.read(), pdf)
                     files = list(storage.rglob("*.pdf"))
                     self.assertEqual([file.name for file in files], [reserved["attachment_id"] + ".pdf"])
+                    uploader = FakeUploader()
+                    with mock.patch.object(backend.billing_pdf_archive_routes,
+                            "BillingPDFDriveUpload", return_value=uploader), \
+                         mock.patch.object(backend.billing_pdf_archive_routes,
+                            "BillingPDFDriveReadback", return_value=FakeReadback(succeeds=True)):
+                        delivery = urllib.request.Request(endpoint + "/deliver",
+                            data=json.dumps({**identity,
+                                "leaseToken": reserved["lease_token"],
+                                "contentDigest": hashlib.sha256(pdf).hexdigest()}).encode(),
+                            method="POST")
+                        with urllib.request.urlopen(delivery, timeout=5) as response:
+                            delivered = json.load(response)["reservation"]
+                    self.assertEqual(delivered["drive_file_id"], "generated-file-id")
+                    self.assertEqual(delivered["confirmed_link"],
+                        "https://drive.google.com/file/d/generated-file-id/view")
+                    self.assertEqual(len(uploader.created), 1)
                 finally:
                     server.shutdown()
                     server.server_close()
