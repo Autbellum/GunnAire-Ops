@@ -55,7 +55,8 @@ disposable directory under the system temporary root:
 python3 -m Backend.release_data_preflight \
   --backup /absolute/path/to/off-host-backup-copy \
   --scratch /tmp/gunnaire-0124-preflight-unique \
-  --expected-artifact-id 0123456789abcdef
+  --expected-artifact-id 0123456789abcdef \
+  > /tmp/gunnaire-0124-data-report.json
 ```
 
 The command rejects stale (>24 hours), incomplete, tampered or mismatched
@@ -71,6 +72,36 @@ SHA/ID, writer-drain evidence, and approved provider acceptance. A
 `copy_verified` result is not production go-live approval. Preserve the
 disposable directory as failure evidence until reviewed; remove it through
 normal operator cleanup after recording the result.
+
+For a current, credential-free public observation, save the JSON result above
+to a new file under the system temporary directory, then run:
+
+```sh
+python3 -m Backend.public_deployment_packet \
+  --output /tmp/gunnaire-0124-public-packet-unique.json \
+  --data-preflight-report /tmp/gunnaire-0124-data-report.json
+```
+
+The packet calls only the fixed public HTTPS `/health` route, requires a
+`no-store` JSON response and rejects an explicit cached response, compares its
+`serviceVersion` with this source, and
+records `NO_GO_PENDING_OPERATOR_EVIDENCE` even if they match. Omit the data
+report option if the production-data restore has not run. A test-fixture
+report does not establish production recovery. The public `rndr-id` is a
+request identifier and `x-render-origin-server` repeats a version string;
+neither proves Render's deployment ID or Git SHA. An unauthenticated Render
+deployments API request returns 401, so this tool never tries to discover or
+use a deployment credential.
+
+The deployment owner must inspect the authenticated Render **live deployment**
+record for `gunnaire-api`, retain its deployment ID, exact deployed Git SHA
+and UTC observation time in a sanitized export or screenshot, then compare
+that SHA to the reviewed source commit. Keep Render environment values and
+logs containing secrets out of the packet. Separately retain the encrypted
+off-host backup object's location, copy time, original and copied artifact
+IDs, and a successful restore/preflight report from that copied artifact.
+The operator reviews writer drain, approved provider acceptance and rollback
+readiness before authorizing any merge into auto-deploying `main`.
 
 Only after backend promotion and a verified compatible route may a new native
 estimate build use `estimateQueueVersion: 1`. Check authenticated readiness,
