@@ -24,7 +24,8 @@ struct GoogleCalendarWorkflowTests {
         var beforeReply: ((URLRequest) async throws -> Void)?
         var afterWrite: ((URLRequest) throws -> Void)?
         lazy var auth = GoogleAuthManager(testTokens: .init(accessToken: "fixture-only",
-            refreshToken: nil, idToken: nil, expiration: .distantFuture), email: email,
+            refreshToken: nil, idToken: nil, expiration: .distantFuture,
+            scopeSignature: Config.Google.scopeSignature(for: [Config.Google.calendarScope])), email: email,
             businessEmail: { self.email }) { [unowned self] request in
                 self.requests.append(request)
                 try await self.beforeReply?(request)
@@ -385,7 +386,7 @@ struct GoogleCalendarWorkflowTests {
         let disconnectedGuidance = try #require(ScheduleGoogleLinkStatus.unlinkedReviewGuidance(
             f.call, connectedGoogleEmail: nil))
         #expect(disconnectedGuidance.contains("your intended Google account"))
-        #expect(disconnectedGuidance.contains("add the event manually in Google Calendar"))
+        #expect(disconnectedGuidance.contains("Review Google publication"))
         #expect(!disconnectedGuidance.contains("connected Google account"))
         #expect(!GoogleCalendarScheduleSync.needsOutboundSync(f.call))
         let queued = try ServiceCallCalendarOutbox.save(f.call) { try f.context.save() }
@@ -639,6 +640,193 @@ struct GoogleCalendarWorkflowTests {
         #expect(!f.call.googleEventManagedByApp)
         #expect(!GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: f.call))
         #expect(f.writes.isEmpty)
+    }
+
+    private func unlinkedPublishReview(_ f: Fixture) async throws
+        -> GoogleCalendarScheduleSync.UnlinkedPublishReview {
+        f.call.googleEventManagedByApp = false
+        try f.context.save()
+        let workflow = try f.flow(scope: [f.call])
+        let inspection = try await GoogleCalendarScheduleSync.inspectUnlinkedCalendarJob(
+            call: f.call, workflow: workflow).get()
+        return try GoogleCalendarScheduleSync.prepareUnlinkedPublishReview(
+            call: f.call, inspection: inspection, workflow: workflow)
+    }
+
+    @Test func legacyPublishRequiresConfirmationAndFreshNoMatchScan() async throws {
+        let f = try Fixture()
+        let review = try await unlinkedPublishReview(f)
+        #expect(f.writes.isEmpty)
+        #expect(!f.call.googleEventManagedByApp)
+        #expect(f.call.googleEventID == nil)
+
+        let result = await GoogleCalendarScheduleSync.publishUnlinkedCalendarJob(review)
+        #expect(try result.get().contains("Schedule confirmed in Google Calendar"))
+        let posts = f.writes.filter { $0.httpMethod == "POST" }
+        #expect(posts.count == 1)
+        #expect(posts.first?.url?.query?.contains("sendUpdates=all") == true)
+        let postedBody = try #require(posts.first?.httpBody)
+        let postedJSON = try #require(JSONSerialization.jsonObject(with: postedBody) as? [String: Any])
+        let reminders = try #require(postedJSON["reminders"] as? [String: Any])
+        #expect(reminders["useDefault"] as? Bool == false)
+        let overrides = try #require(reminders["overrides"] as? [[String: Any]])
+        #expect(overrides.count == 1)
+        #expect(overrides.first?["method"] as? String == "popup")
+        #expect(overrides.first?["minutes"] as? Int == 30)
+        #expect(f.call.googleEventManagedByApp)
+        #expect(f.call.googleEventID == GoogleCalendarScheduleSync.eventID(for: f.call.id))
+        #expect(f.call.googleEventConfirmedAt != nil)
+        #expect(f.call.googleCalendarPendingAt == nil)
+        #expect(f.remote[f.key(f.email, GoogleCalendarScheduleSync.eventID(for: f.call.id))] != nil)
+    }
+
+    @Test func legacyPublishRefusesAProviderMatchFoundAfterConfirmation() async throws {
+        let f = try Fixture()
+        let review = try await unlinkedPublishReview(f)
+        f.remote[f.key(f.email, "old-google-chosen-id")] =
+            f.event(id: "old-google-chosen-id", managed: false)
+
+        let result = await GoogleCalendarScheduleSync.publishUnlinkedCalendarJob(review)
+        if case .success = result { Issue.record("A newly discovered provider event must stop creation") }
+        #expect(f.writes.isEmpty)
+        #expect(!f.call.googleEventManagedByApp)
+        #expect(f.call.googleEventID == nil)
+    }
+
+    @Test func legacyPublishRefusesAnEditedAppointmentOrIncompleteProviderRead() async throws {
+        let edited = try Fixture()
+        let editedReview = try await unlinkedPublishReview(edited)
+        edited.call.scheduledDate = edited.call.scheduledDate.addingTimeInterval(15 * 60)
+        try edited.context.save()
+        let changed = await GoogleCalendarScheduleSync.publishUnlinkedCalendarJob(editedReview)
+        if case .success = changed { Issue.record("A changed appointment must stop creation") }
+        #expect(edited.writes.isEmpty)
+
+        let denied = try Fixture()
+        let deniedReview = try await unlinkedPublishReview(denied)
+        denied.calendarList.append(["id": "unreadable@example.invalid", "accessRole": "freeBusyReader"])
+        denied.deniedEventCalendarID = "unreadable@example.invalid"
+        let unreadable = await GoogleCalendarScheduleSync.publishUnlinkedCalendarJob(deniedReview)
+        if case .success = unreadable { Issue.record("An inaccessible calendar must stop creation") }
+        #expect(denied.writes.isEmpty)
+        #expect(!denied.call.googleEventManagedByApp)
+    }
+
+    @Test(arguments: [401, 403])
+    func legacyPublishRestoresUnmanagedStatusAfterExplicitGoogleDenial(status: Int) async throws {
+        let f = try Fixture()
+        let review = try await unlinkedPublishReview(f)
+        f.rejectedCreateStatus = status
+
+        let denied = await GoogleCalendarScheduleSync.publishUnlinkedCalendarJob(review)
+        if case .success = denied { Issue.record("An HTTP denial must not be presented as publication") }
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+        #expect(!f.call.googleEventManagedByApp)
+        #expect(f.call.googleEventID == nil)
+        #expect(f.call.googleCalendarPendingAt == nil)
+        #expect(f.remote.isEmpty)
+    }
+
+    @Test func legacyPublishKeepsReservedIdentityAfterLostProviderReply() async throws {
+        let f = try Fixture()
+        let review = try await unlinkedPublishReview(f)
+        f.afterWrite = { request in
+            guard request.httpMethod == "POST" else { return }
+            throw URLError(.timedOut)
+        }
+
+        let uncertain = await GoogleCalendarScheduleSync.publishUnlinkedCalendarJob(review)
+        if case .success = uncertain { Issue.record("A lost provider reply must not claim confirmation") }
+        let id = GoogleCalendarScheduleSync.eventID(for: f.call.id)
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+        #expect(!f.call.googleEventManagedByApp)
+        #expect(f.call.googleEventID == id)
+        #expect(f.call.googleCalendarPendingAt != nil)
+        #expect(f.call.googleEventConfirmedAt == nil)
+        #expect(f.remote[f.key(f.email, id)] != nil)
+        #expect(GoogleCalendarScheduleSync.hasUnconfirmedLegacyCreateReservation(f.call))
+
+        f.afterWrite = nil
+        let recovered = try await GoogleCalendarScheduleSync.checkReservedLegacyPublication(
+            call: f.call, workflow: f.flow(scope: [f.call])).get()
+        #expect(recovered.contains("Schedule confirmed in Google Calendar"))
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+        #expect(f.call.googleEventID == id)
+        #expect(f.call.googleEventManagedByApp)
+        #expect(f.call.googleEventConfirmedAt != nil)
+    }
+
+    @Test func legacyPublishNeverAutomaticallyRetriesAnUnreceivedCreate() async throws {
+        let f = try Fixture()
+        let review = try await unlinkedPublishReview(f)
+        f.beforeReply = { request in
+            guard request.httpMethod == "POST" else { return }
+            throw URLError(.timedOut)
+        }
+
+        let uncertain = await GoogleCalendarScheduleSync.publishUnlinkedCalendarJob(review)
+        if case .success = uncertain { Issue.record("A timed-out create is not confirmation") }
+        let id = GoogleCalendarScheduleSync.eventID(for: f.call.id)
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+        #expect(!f.call.googleEventManagedByApp)
+        #expect(f.call.googleEventID == id)
+        #expect(f.call.googleCalendarPendingAt != nil)
+        #expect(f.remote.isEmpty)
+        #expect(GoogleCalendarScheduleSync.hasUnconfirmedLegacyCreateReservation(f.call))
+
+        f.beforeReply = nil
+        let recovery = try await GoogleCalendarScheduleSync.checkReservedLegacyPublication(
+            call: f.call, workflow: f.flow(scope: [f.call])).get()
+        #expect(recovery.contains("reserved Google event ID was not found"))
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+        let automatic = try await f.publish()
+        if case .success = automatic { Issue.record("Automatic recovery may not recreate a missing reservation") }
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+        let callID = f.call.id
+        let persisted = try #require(ModelContext(f.context.container).fetch(
+            FetchDescriptor<ServiceCall>(predicate: #Predicate { $0.id == callID })).first)
+        #expect(!persisted.googleEventManagedByApp)
+        #expect(persisted.googleEventID == id)
+    }
+
+    @Test func legacyPublishRetainsReservationOnCreateConflict() async throws {
+        let f = try Fixture()
+        let review = try await unlinkedPublishReview(f)
+        f.beforeReply = { request in
+            guard request.httpMethod == "POST" else { return }
+            let id = GoogleCalendarScheduleSync.eventID(for: f.call.id)
+            f.remote[f.key(f.email, id)] = f.event(id: id)
+        }
+
+        let conflict = await GoogleCalendarScheduleSync.publishUnlinkedCalendarJob(review)
+        if case .success = conflict { Issue.record("A 409 needs a fresh exact-ID inspection") }
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+        #expect(!f.call.googleEventManagedByApp)
+        #expect(f.call.googleEventID == GoogleCalendarScheduleSync.eventID(for: f.call.id))
+        #expect(f.call.googleCalendarPendingAt != nil)
+    }
+
+    @Test func legacyReservationCannotAdoptAConflictingUnownedGoogleEvent() async throws {
+        let f = try Fixture()
+        let review = try await unlinkedPublishReview(f)
+        f.beforeReply = { request in
+            guard request.httpMethod == "POST" else { return }
+            let id = GoogleCalendarScheduleSync.eventID(for: f.call.id)
+            f.remote[f.key(f.email, id)] = f.event(id: id, managed: false)
+        }
+
+        let conflict = await GoogleCalendarScheduleSync.publishUnlinkedCalendarJob(review)
+        if case .success = conflict { Issue.record("A conflicting ID is not an app-owned event") }
+        f.beforeReply = nil
+        let recovery = await GoogleCalendarScheduleSync.checkReservedLegacyPublication(
+            call: f.call, workflow: try f.flow(scope: [f.call]))
+        if case .success = recovery { Issue.record("An unowned event cannot be linked after a 409") }
+        let automatic = try await f.publish()
+        if case .success = automatic { Issue.record("An unowned event cannot be adopted after a 409") }
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+        #expect(f.writes.filter { $0.httpMethod == "PATCH" }.isEmpty)
+        #expect(!f.call.googleEventManagedByApp)
+        #expect(f.call.googleEventID == GoogleCalendarScheduleSync.eventID(for: f.call.id))
     }
 
     @Test func immediateExportReportsMissingSavedCallBeforeProviderAccess() throws {
