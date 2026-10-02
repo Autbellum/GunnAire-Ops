@@ -650,6 +650,23 @@ private struct GmailDraftIndex: Codable, Equatable {
     let write: (GmailDraftRecord, Int?) throws -> Void
     let list: (GmailDraftScope) throws -> [GmailDraftSummary]
 
+    /// A second tap on a saved estimate must return to its original unsent or
+    /// uncertain attempt. A new draft would have a new Message-ID and could
+    /// deliver a duplicate after a response was lost.
+    func activeEstimateDraft(scope: GmailDraftScope, customerID: UUID, estimateID: UUID) throws -> GmailDraftRecord? {
+        let matches = try list(scope).filter { summary in
+            summary.business?.customerID == customerID &&
+            summary.business?.estimateID == estimateID &&
+            summary.business?.workflow == .customerDocument
+        }
+        guard matches.count <= 1 else { throw GmailDraftError.locked }
+        guard let summary = matches.first else { return nil }
+        guard let record = try read(scope, summary.id), record.scope == scope,
+              record.content.business == summary.business,
+              record.state == summary.state else { throw GmailDraftError.storage }
+        return record
+    }
+
     static func encrypted(directory: URL, activeDraftLimit: Int = 512, key: @escaping (Bool) throws -> Data) -> Self {
         func folder(_ scope: GmailDraftScope) -> URL { directory.appendingPathComponent(scope.storageKey, isDirectory: true) }
         func file(_ scope: GmailDraftScope, _ id: UUID) -> URL { folder(scope).appendingPathComponent(id.uuidString.lowercased() + ".sealed") }
