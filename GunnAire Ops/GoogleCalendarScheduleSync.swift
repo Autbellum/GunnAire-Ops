@@ -20,6 +20,11 @@ enum GoogleCalendarScheduleSync {
         let nextOffset: Int
     }
 
+    struct BackgroundCandidatePage {
+        let calls: [ServiceCall]
+        let nextOffset: Int
+    }
+
     private final class VerifiedLinkEvidence {
         var notFoundIDs: [UUID: String] = [:]
     }
@@ -1283,23 +1288,40 @@ enum GoogleCalendarScheduleSync {
         }
     }
 
-    static func publishPending(workflow: GoogleCalendarWorkflow) async throws -> PendingOutcome {
+    static func publishPending(workflow: GoogleCalendarWorkflow, pageSize: Int = 100,
+                               maximumPages: Int? = nil, maximumPublications: Int? = nil,
+                               startingOffset: Int = 0, backgroundCandidatesOnly: Bool = false,
+                               onBackgroundPage: ((Int) -> Void)? = nil) async throws -> PendingOutcome {
+        guard pageSize > 0, maximumPages.map({ $0 > 0 }) ?? true,
+              maximumPublications.map({ $0 > 0 }) ?? true else {
+            return PendingOutcome(published: 0, reviewErrors: [])
+        }
         try workflow.focus(on: nil)
         try workflow.check()
         guard !workflow.context.hasChanges else { throw GoogleCalendarWorkflowError.changed }
         var published = 0
         var reviewErrors: [String] = []
-        var offset = 0
+        var offset = max(0, startingOffset)
+        var pages = 0
         while true {
             try workflow.focus(on: nil)
             try workflow.check()
-            var descriptor = FetchDescriptor<ServiceCall>(
-                predicate: #Predicate { $0.googleEventManagedByApp || $0.googleCalendarPendingAt != nil },
-                sortBy: [SortDescriptor(\.scheduledDate), SortDescriptor(\.id)])
-            descriptor.fetchLimit = 100
-            descriptor.fetchOffset = offset
-            let page = try workflow.context.fetch(descriptor)
+            let page: [ServiceCall]
+            if backgroundCandidatesOnly {
+                let candidatePage = try backgroundCandidatePage(context: workflow.context,
+                                                                offset: offset, pageSize: pageSize)
+                page = candidatePage.calls
+                onBackgroundPage?(candidatePage.nextOffset)
+            } else {
+                var descriptor = FetchDescriptor<ServiceCall>(
+                    predicate: #Predicate { $0.googleEventManagedByApp || $0.googleCalendarPendingAt != nil },
+                    sortBy: [SortDescriptor(\.scheduledDate), SortDescriptor(\.id)])
+                descriptor.fetchLimit = pageSize
+                descriptor.fetchOffset = offset
+                page = try workflow.context.fetch(descriptor)
+            }
             guard !page.isEmpty else { break }
+            pages += 1
             for call in page where needsOutboundSync(call) {
                 try workflow.focus(on: [call])
                 // Keep the same company/provider operation throughout the batch.
@@ -1316,6 +1338,9 @@ enum GoogleCalendarScheduleSync {
                         }
                     }
                     published += 1
+                    if maximumPublications.map({ published >= $0 }) == true {
+                        return PendingOutcome(published: published, reviewErrors: reviewErrors)
+                    }
                 } catch {
                     // A stale route or legacy guest review must not starve unrelated
                     // pending jobs. Session changes and uncertain transport stop all.
@@ -1326,9 +1351,86 @@ enum GoogleCalendarScheduleSync {
                 }
             }
             offset += page.count
+            if maximumPages.map({ pages >= $0 }) == true { break }
             await Task.yield()
         }
         return PendingOutcome(published: published, reviewErrors: reviewErrors)
+    }
+
+    /// The short refresh scans only durable outbound candidates. A rotating
+    /// cursor also advances past stale/review-only rows and survives relaunches.
+    static func backgroundCandidatePage(context: ModelContext, offset: Int, pageSize: Int = 8,
+                                        now: Date = Date()) throws -> BackgroundCandidatePage {
+        guard pageSize > 0 else { return BackgroundCandidatePage(calls: [], nextOffset: 0) }
+        let today = Calendar.current.startOfDay(for: now)
+        var descriptor = FetchDescriptor<ServiceCall>(
+            predicate: #Predicate {
+                $0.googleCalendarPendingAt != nil ||
+                    ($0.googleEventManagedByApp && $0.googleEventConfirmedAt == nil &&
+                     $0.scheduledDate >= today)
+            }, sortBy: [SortDescriptor(\.scheduledDate), SortDescriptor(\.id)])
+        descriptor.fetchLimit = pageSize
+        var start = max(0, offset)
+        descriptor.fetchOffset = start
+        var calls = try context.fetch(descriptor)
+        if calls.isEmpty, start > 0 {
+            start = 0
+            descriptor.fetchOffset = 0
+            calls = try context.fetch(descriptor)
+        }
+        return BackgroundCandidatePage(calls: calls,
+            nextOffset: calls.count < pageSize ? 0 : start + calls.count)
+    }
+
+    /// A short iOS refresh handles at most one saved outbound appointment.
+    /// The original workspace/provider operation and reservation rules are the
+    /// same as the foreground publisher; cancellation belongs to this task.
+    static func backgroundPublishPending(auth: GoogleAuthManager, context: ModelContext,
+                                         signedInEmail: String?,
+                                         isExpired: @escaping () -> Bool) async -> Result<PendingOutcome, Error> {
+        guard auth.googleCalendarAuthorizationState == .ready,
+              hasPotentialOutboundSync(in: context) else {
+            return .success(PendingOutcome(published: 0, reviewErrors: []))
+        }
+        do {
+            guard let companyID = CompanyWorkspaceAccessController.shared.verifiedCompanyID else {
+                return .failure(GoogleCalendarWorkflowError.accessDenied)
+            }
+            let cursorKey = "GunnAireCalendarBackgroundCursor.v1.\(companyID.uuidString)." +
+                "\(AppAccess.normalizedEmail(signedInEmail)).\(AppAccess.normalizedEmail(auth.signedInEmail))"
+            let startingOffset = UserDefaults.standard.integer(forKey: cursorKey)
+            let workflow = try GoogleCalendarWorkflow(auth: auth, context: context,
+                                                       signedInEmail: signedInEmail)
+            installBackgroundExpirationFence(on: workflow, isExpired: isExpired)
+            var outcome: PendingOutcome?
+            let result = await workflow.run { active in
+                let published = try await publishPending(workflow: active, pageSize: 8,
+                                                         maximumPages: 1, maximumPublications: 1,
+                                                         startingOffset: startingOffset,
+                                                         backgroundCandidatesOnly: true,
+                                                         onBackgroundPage: { nextOffset in
+                                                             UserDefaults.standard.set(nextOffset, forKey: cursorKey)
+                                                         })
+                outcome = published
+                return "Published \(published.published) pending calendar update(s)."
+            }
+            switch result {
+            case .success:
+                guard let outcome else { return .failure(GoogleCalendarWorkflowError.changed) }
+                return .success(outcome)
+            case .failure(let error):
+                return .failure(error)
+            }
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    static func installBackgroundExpirationFence(on workflow: GoogleCalendarWorkflow,
+                                                 isExpired: @escaping () -> Bool) {
+        workflow.setAdditionalValidation {
+            guard !isExpired() else { throw CancellationError() }
+        }
     }
 
     /// Read the saved route first. Only its 404 triggers a bounded same-ID

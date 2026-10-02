@@ -173,6 +173,64 @@ final class AutomaticGoogleDriveArchive {
         }
     }
 
+    /// A refresh window inspects one detached read page and archives at most
+    /// one small file. A later refresh continues at the next page; the normal
+    /// foreground scan remains responsible for larger customer files.
+    func recoverOneBackground(context: ModelContext, maximumBytes: Int = 2 * 1024 * 1024) async -> Bool {
+        guard maximumBytes > 0, !running, canArchiveFast(context: context),
+              let companyID = CompanyWorkspaceAccessController.shared.verifiedCompanyID,
+              let stamp = CompanyWorkspaceAccessController.shared.operationStamp,
+              let providerOperation = try? GoogleAuthManager.shared.captureProviderOperation() else { return false }
+        let cursorKey = "GunnAireDriveBackgroundCursor.v1.\(companyID.uuidString)." +
+            "\(AppAccess.normalizedEmail(AppIdentity.currentEmail))." +
+            "\(AppAccess.normalizedEmail(GoogleAuthManager.shared.signedInEmail))"
+        running = true
+        defer {
+            running = false
+            // A queued foreground scan remains durable in SwiftData. Never
+            // start that unbounded scan after a short BGAppRefreshTask ends.
+            queued = false
+            queuedContext = nil
+        }
+        do {
+            let reader = GoogleDriveArchiveReadStore(container: context.container)
+            guard !Task.isCancelled, await canArchive(context: context, reader: reader) else { return false }
+            let offset = max(0, UserDefaults.standard.integer(forKey: cursorKey))
+            let page = try await reader.attachmentPage(offset: offset)
+            guard !Task.isCancelled,
+                  CompanyWorkspaceAccessController.shared.operationStamp == stamp,
+                  (try? providerOperation.check()) != nil else { return false }
+            if page.fetchedCount == 0 {
+                UserDefaults.standard.set(0, forKey: cursorKey)
+                return true
+            }
+            UserDefaults.standard.set(page.fetchedCount < 100 ? 0 : offset + page.fetchedCount,
+                                      forKey: cursorKey)
+            for id in page.candidateIDs {
+                guard !Task.isCancelled, canArchiveFast(context: context),
+                      CompanyWorkspaceAccessController.shared.operationStamp == stamp,
+                      (try? providerOperation.check()) != nil else { return false }
+                var fetch = FetchDescriptor<ServiceDocumentAttachment>(predicate: #Predicate { $0.id == id })
+                fetch.fetchLimit = 2
+                let matches = try context.fetch(fetch)
+                guard matches.count <= 1 else { return false }
+                guard let attachment = matches.first,
+                      (attachment.customer != nil || attachment.fleetVehicleID != nil),
+                      attachment.needsGoogleDriveArchive,
+                      (1...maximumBytes).contains(attachment.fileSizeBytes),
+                      await Self.backgroundLocalFileIsEligible(attachment.localFileURL,
+                                                               maximumBytes: maximumBytes) else { continue }
+                await archive(attachment, context: context, stamp: stamp,
+                              providerOperation: providerOperation, reader: reader,
+                              maximumBytes: maximumBytes)
+                return !Task.isCancelled && !attachment.needsGoogleDriveArchive
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
+
     private func canArchiveFast(context: ModelContext) -> Bool {
         let access = CompanyWorkspaceAccessController.shared
         let actorEmail = AppAccess.normalizedEmail(AppIdentity.currentEmail)
@@ -204,7 +262,8 @@ final class AutomaticGoogleDriveArchive {
     private func archive(_ attachment: ServiceDocumentAttachment, context: ModelContext,
                          stamp: CompanyWorkspaceOperationStamp,
                          providerOperation: WorkspaceProviderOperation,
-                         reader: GoogleDriveArchiveReadStore) async {
+                         reader: GoogleDriveArchiveReadStore,
+                         maximumBytes: Int? = nil) async {
         let originalID = attachment.id
         guard claim(originalID) else { return }
         defer { release(originalID) }
@@ -217,7 +276,7 @@ final class AutomaticGoogleDriveArchive {
         let originalFleet = attachment.fleetVehicleID
         let actorEmail = AppIdentity.currentEmail
         func check() async throws {
-            guard await canArchive(context: context, reader: reader),
+            guard !Task.isCancelled, await canArchive(context: context, reader: reader),
                   CompanyWorkspaceAccessController.shared.operationStamp == stamp else {
                 throw GoogleDriveAPIError.authorizationChanged
             }
@@ -241,13 +300,46 @@ final class AutomaticGoogleDriveArchive {
             attachment: attachment, context: context, actorEmail: actorEmail,
             check: check,
             reserveFileID: { try await GoogleDriveAPI.shared.generateFileID() },
-            readFile: { try await self.fileData(for: attachment, context: context) },
+            readFile: {
+                if let maximumBytes {
+                    return try await Self.backgroundLocalFileData(attachment.localFileURL,
+                                                                   maximumBytes: maximumBytes)
+                }
+                return try await self.fileData(for: attachment, context: context)
+            },
             upload: { fileID, data in
                 try await GoogleDriveAPI.shared.uploadFile(
                     fileID: fileID, displayName: originalName, mimeType: originalType,
                     attachmentID: originalID, documentKind: originalKind, data: data)
             }
         )
+    }
+
+    /// Short refreshes only inspect local files. Retained media and backend
+    /// downloads have no bounded byte stream here and stay on foreground retry.
+    static func backgroundLocalFileIsEligible(_ url: URL, maximumBytes: Int) async -> Bool {
+        await Task.detached(priority: .utility) {
+            guard maximumBytes > 0,
+                  let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+                  let size = attributes[.size] as? NSNumber else { return false }
+            return (1...maximumBytes).contains(size.intValue)
+        }.value
+    }
+
+    static func backgroundLocalFileData(_ url: URL, maximumBytes: Int) async throws -> Data {
+        try await Task.detached(priority: .utility) {
+            guard maximumBytes > 0,
+                  let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+                  let size = attributes[.size] as? NSNumber,
+                  (1...maximumBytes).contains(size.intValue) else {
+                throw GoogleDriveAPIError.backgroundFileTooLarge
+            }
+            let data = try Data(contentsOf: url, options: .mappedIfSafe)
+            guard (1...maximumBytes).contains(data.count) else {
+                throw GoogleDriveAPIError.backgroundFileTooLarge
+            }
+            return data
+        }.value
     }
 
     private func fileData(for attachment: ServiceDocumentAttachment,
