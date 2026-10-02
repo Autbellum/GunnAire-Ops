@@ -20,7 +20,6 @@ at the start of every turn; append to it rather than rewriting it.
 
 ## Claims
 
-- 2026-10-02 Codex qbo_background_followup: Owns bounded server-side estimate job work in `Backend/billing_publications.py`, `Backend/billing_estimate_jobs.py`, `Backend/billing_provider.py`, `Backend/gunnaire_backend.py`, and focused backend tests on isolated `fix/0122-qbo-background-estimate`. This does not edit the frozen 0122 candidate or deploy the backend. Claim releases after review and validation.
 
 ## Shared rules
 
@@ -44,6 +43,8 @@ at the start of every turn; append to it rather than rewriting it.
    pins the old behavior and the new one.
 
 ## Status log
+
+- 2026-10-02 Codex QBO native queue handoff follow-up: Draft PR #48 extends the atomic estimate-only backend job with native `queueRequested`/`queued` encrypted journal phases, exact original recovery/review retry, server capability versioning, bound realm proof and draft/session checks, off-main two-pass Item/Customer mapping and confirmed-estimate provider-owner censuses, and confirmed-only attachment follow-up. An older backend stops before any prerequisite or journal write; the 0122 release does not contain this bridge. Signed iPad focused native suites passed 138/138 with zero failures/skips/warnings (`/private/tmp/GunnAire-0122-qbo-native-omni-dd/Logs/Test/Test-GunnAire Ops-2026.10.02_00-36-16--0400.xcresult`), backend billing/provider/native/assignment suites passed 144/144, and `generated/omni_runner.py` passed zero-warning simulator compile (`/private/tmp/gunnaire-qbo-native-omni-r2.log`). This remains a release-blocked draft because normalized AppUser/Technician scans and up to 20 selected-item reads still run on MainActor at repeated checks; no live QBO delivery, backend deployment, merge, archive, or upload is claimed. Claim released.
 
 - 2026-10-02 Codex QBO background estimate job: Isolated backend candidate adds an atomic estimate-only reservation/job API and one-at-a-time server worker, with current session/realm/grant rechecks and the existing original-attempt QBO write fence. A lost QBO response, consumed send permit, expired/revoked session, removed office role, changed realm/grant, retry replay, and lease expiry were exercised with synthetic provider tests; 14/14 focused and 144/144 combined billing/provider/native/assignment tests passed. `generated/omni_runner.py` passed zero-warning simulator build in `/private/tmp/GunnAire-0122-qbo-bg-omni-dd`. The endpoint is not called by iOS yet, no live QBO write was made, and frozen 0122 was not modified. Claim remains while native enqueue feasibility is assessed.
 

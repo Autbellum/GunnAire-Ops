@@ -27,7 +27,8 @@ struct QuickBooksBillingWorkflowTests {
         lazy var api = QuickBooksDataAPI(testTokens: .init(accessToken: "billing-fixture", expiration: .distantFuture),
             realmID: "billing-realm", environment: Config.QuickBooks.environment,
             catalogCompanyID: UUID(uuidString: "10000000-0000-4000-8000-000000000001"),
-            customerPublisher: customerPublisher, billingPublisher: billingPublisher) { [unowned self] request in
+            customerPublisher: customerPublisher, billingPublisher: billingPublisher,
+            estimateQueueVersion: 1) { [unowned self] request in
                 self.requests.append(request)
                 try self.beforeResponse?(request)
                 return try self.reply(request)
@@ -648,6 +649,11 @@ struct QuickBooksBillingWorkflowTests {
             isInvoice: true, assignedToJob: true))
         #expect(!QuickBooksBillingAccessPolicy.allows(email: AppAccess.primaryAdminEmail, users: [], verifiedRole: .admin,
             isInvoice: true, assignedToJob: true))
+        let canonical = AppUser(email: "admin@example.invalid", role: .admin)
+        let legacy = AppUser(email: "admin@example.invalid", role: .standard, isActive: false)
+        legacy.email = " Admin@Example.Invalid "
+        #expect(!QuickBooksBillingAccessPolicy.allows(email: canonical.email, users: [canonical, legacy],
+            verifiedRole: .admin, isInvoice: false, assignedToJob: false))
     }
 
     @Test func overlappingDocumentRunDoesNotReplaceTheOriginal() throws {

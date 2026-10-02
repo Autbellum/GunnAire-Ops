@@ -268,6 +268,8 @@ final class AutomaticOutboundSync {
     nonisolated enum EstimateReviewState: Equatable, Sendable {
         case published
         case automaticPending
+        case queueUnconfirmed
+        case serverQueued
         case reviewRequired
         case unavailable
     }
@@ -472,6 +474,24 @@ final class AutomaticOutboundSync {
               realmRecord(for: .estimate(estimate), realmID: nil, environment: nil)?.sameDocument(as: identity) == true else {
             return .unavailable
         }
+        if let bound = stored?.boundScope,
+           stored?.intendedScope == nil || stored?.intendedScope == bound {
+            let actorEmail = AppAccess.normalizedEmail(AppIdentity.currentEmail)
+            if !actorEmail.isEmpty {
+                let scope = BillingNativeJournalScope(document: .init(companyID: identity.companyID,
+                    realmID: bound.realmID, environment: bound.environment, documentType: .estimate,
+                    localDocumentID: identity.documentID), actorEmail: actorEmail)
+                do {
+                    let background = try await Task.detached(priority: .utility) {
+                        try BillingNativeJournalStore.device.read(scope).pending?.backgroundState
+                    }.value
+                    guard isAuthorized(context), CompanyWorkspaceAccessController.shared.operationStamp == stamp,
+                          estimate.quickBooksID == originalQuickBooksID else { return .unavailable }
+                    if background == .queueRequested { return .queueUnconfirmed }
+                    if background == .queued { return .serverQueued }
+                } catch { return .unavailable }
+            }
+        }
         return Self.estimateReviewState(quickBooksID: originalQuickBooksID, stored: stored,
             identity: identity, activeScope: activeScope)
     }
@@ -606,6 +626,15 @@ final class AutomaticOutboundSync {
         return RealmRecord(companyID: companyID, documentType: document.label.lowercased(),
             documentID: document.id, customerID: customer.id, createdAt: createdAt,
             realmID: realmID, environment: workflow.run.workflow.environment)
+    }
+
+    static func requireBoundProof(for workflow: QuickBooksBillingWorkflow) async throws {
+        try workflow.check()
+        let record = try realmRecord(for: workflow)
+        if !GunnAireCloudKit.usesTestDatabase {
+            try await QuickBooksDocumentRealmProofStore.shared.requireProceed([record])
+        }
+        try workflow.check()
     }
 
     /// Operator-started publication (manual retry or the review page) binds or
@@ -1160,6 +1189,7 @@ final class AutomaticOutboundSync {
             let configuration = QuickBooksAccountingConfigurationStore.shared.configuration(
                 for: workflow.run.workflow.realmID, environment: workflow.run.workflow.environment)
             let outcome = try await workflow.execute(configuration: configuration)
+            if outcome.queued { return outcome.message }
             do {
                 try await workflow.uploadLinkedAttachments()
                 return outcome.message

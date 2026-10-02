@@ -12,6 +12,7 @@ import SwiftData
     @State private var shared: BillingNativePublication?
     @State private var original: BillingOriginalProposal?
     @State private var pending: BillingNativePending?
+    @State private var backgroundJob: BillingEstimateJobResponse?
     @State private var busy = false
     @State private var message: String?
     @State private var confirmSend = false
@@ -46,6 +47,11 @@ import SwiftData
     private var status: String {
         if retainedDraft != nil { return retainedOriginal == nil ? "Retained draft needs review" : "Duplicate draft retained" }
         if milestoneOriginal != nil { return "Original milestone invoice found" }
+        if backgroundJob?.background.state == .review { return "QuickBooks estimate needs review" }
+        if pending?.backgroundState == .queueRequested { return "QuickBooks queue request needs confirmation" }
+        if pending?.backgroundState == .queued, original?.publication.state != .confirmed {
+            return "Queued for QuickBooks; not confirmed"
+        }
         return switch original?.publication.state {
         case .reserved: "Not yet sent to QuickBooks"
         case .sending, .unknown: "Checking the original request"
@@ -131,16 +137,22 @@ import SwiftData
                 Section {
                     Button("Check original status") { Task { await recover() } }.disabled(busy)
                         .accessibilityIdentifier("BillingReviewRecover")
-                    if pending != nil, pending?.settled == false, original?.connectionChanged != true,
+                    if pending != nil, pending?.settled == false, pending?.backgroundState == nil,
+                       original?.connectionChanged != true,
                        original == nil || original?.publication.state == .reserved {
                         Button("Publish original proposal") { confirmSend = true }.disabled(busy)
                             .accessibilityIdentifier("BillingReviewPublish")
+                    }
+                    if pending?.backgroundState == .queued,
+                       backgroundJob?.background.state == .review {
+                        Button("Retry original QuickBooks queue") { Task { await retryQueued() } }.disabled(busy)
+                            .accessibilityIdentifier("BillingReviewRetryEstimateQueue")
                     }
                     if original?.reviewableByOffice == true, flow?.canApproveSharedDraft == true {
                         Button("Approve these field prices") { confirmApproval = true }.disabled(busy)
                             .accessibilityIdentifier("BillingReviewApprove")
                     }
-                    if pending != nil, pending?.settled == false,
+                    if pending != nil, pending?.settled == false, pending?.backgroundState == nil,
                        pending?.submitted == false || [.reserved, .cancelled].contains(original?.publication.state) {
                         Button("Cancel unsent request", role: .destructive) { Task { await cancel() } }.disabled(busy)
                             .accessibilityIdentifier("BillingReviewCancel")
@@ -208,7 +220,7 @@ import SwiftData
         if let found = try await flow?.originalMilestone(), found.localDocumentID != document.id {
             guard visit == visitID else { throw CancellationError() }
             milestoneOriginal = found
-            original = nil; pending = nil; didLoad = true
+            original = nil; pending = nil; backgroundJob = nil; didLoad = true
             return
         }
         let found = try await shared.original(customerID: customer.id)
@@ -226,6 +238,10 @@ import SwiftData
             }
         }
         pending = shared.journal.pending
+        backgroundJob = nil
+        if let pending, pending.backgroundState == .queued, let id = pending.publicationID {
+            backgroundJob = try? await shared.client.estimateJob(id, request: pending.request, workflow: shared.workflow)
+        }
         didLoad = true
     }
 
@@ -253,7 +269,27 @@ import SwiftData
         busy = true; defer { if visit == visitID { busy = false } }
         do {
             try await refresh()
-            if pending != nil, let flow,
+            if pending?.backgroundState != nil, let flow, let shared {
+                let revision = try await flow.billingDraftRevisionAsync()
+                let job = try await shared.enqueueOriginal(revision: revision,
+                    checkRevision: flow.billingDraftRevision,
+                    checkProof: {
+                        try await AutomaticOutboundSync.requireBoundProof(for: flow)
+                        try await flow.checkEstimateQueueMappingsOffMain()
+                    })
+                if job.publication.state == .confirmed {
+                    let result = try await flow.recoverOriginalFromReview()
+                    guard visit == visitID else { return }
+                    message = result.message
+                    try await refresh()
+                } else {
+                    guard visit == visitID else { return }
+                    message = job.background.state == .review
+                        ? "The original QuickBooks estimate needs office review. No second estimate was sent."
+                        : "Queued for QuickBooks; not confirmed. Check again for its original status."
+                    try await refresh()
+                }
+            } else if pending != nil, let flow,
                [.sending, .unknown, .confirmed].contains(original?.publication.state) {
                 let result = try await flow.recoverOriginalFromReview()
                 guard visit == visitID else { return }
@@ -280,6 +316,26 @@ import SwiftData
             guard visit == visitID else { return }
             message = error.localizedDescription; try? await refresh()
         }
+    }
+    private func retryQueued() async {
+        guard !busy, let flow, let shared, backgroundJob?.background.state == .review else { return }
+        let visit = visitID
+        busy = true; defer { if visit == visitID { busy = false } }
+        do {
+            let revision = try await flow.billingDraftRevisionAsync()
+            let result = try await shared.enqueueOriginal(revision: revision,
+                checkRevision: flow.billingDraftRevision,
+                checkProof: {
+                    try await AutomaticOutboundSync.requireBoundProof(for: flow)
+                    try await flow.checkEstimateQueueMappingsOffMain()
+                },
+                retryReview: true)
+            guard visit == visitID else { return }
+            message = result.background.state == .review
+                ? "The original estimate still needs office review. No second QuickBooks create was sent."
+                : "The original estimate was queued again; QuickBooks has not confirmed it yet."
+            try await refresh()
+        } catch is CancellationError {} catch { if visit == visitID { message = error.localizedDescription } }
     }
     private func approve() async {
         guard !busy, let shared, let original, flow?.canApproveSharedDraft == true else { return }
@@ -531,6 +587,14 @@ import SwiftData
                     Label("QuickBooks publication pending", systemImage: "arrow.triangle.2.circlepath")
                         .foregroundStyle(.secondary)
                         .accessibilityIdentifier("EstimateQuickBooksPublicationPending-\(estimate.id.uuidString)")
+                case .queueUnconfirmed:
+                    Label("QuickBooks queue request needs confirmation", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                        .accessibilityIdentifier("EstimateQuickBooksQueueUnconfirmed-\(estimate.id.uuidString)")
+                case .serverQueued:
+                    Label("Queued for QuickBooks; not confirmed", systemImage: "arrow.triangle.2.circlepath")
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("EstimateQuickBooksServerQueued-\(estimate.id.uuidString)")
                 case .unavailable:
                     Label("QuickBooks status needs review", systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.orange)

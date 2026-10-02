@@ -27,72 +27,14 @@ authorization or grant loss, ambiguous original evidence, and the safety
 limits stop automatic work for review. The saved proposal and its original
 publication remain intact.
 
-This backend queue is not yet called by the iOS saved-estimate path or the
-`BGAppRefreshTask` worker. It cannot, by itself, publish an estimate saved on
-an offline or closed device. Integrating a native caller still requires a
-bounded snapshot of an eligible saved estimate, mapped prerequisites, an
-already bound device realm proof, an exact workspace/session fence, and local
-readback of the confirmed provider ID. Customer email, attachments, catalog
-creation and customer creation are outside this worker's contract. Deploying
-the backend or merging this branch is a separate release decision.
+## Native handoff and rollout
 
-## Native integration boundary at the 0122 source baseline
+The native saved-estimate path now prepares customer/catalog prerequisites in the foreground, then persists an encrypted immutable `BillingNativePending` request and draft revision. It records `queueRequested` before its first POST. The client accepts only a server connection advertising `estimateQueueVersion: 1`; an older backend stops before a queue journal is created and never falls back to a direct device QBO write. The queue response must match the exact company, realm, environment, document, customer and original publication. `queued` means the backend accepted the job; it is **not** QBO confirmation. A lost response is reconciled through the original publication or exact job, and an existing reserved publication can receive the same job without a second provider create. An ambiguous response remains reviewable.
 
-The existing foreground `QuickBooksBillingWorkflow.publishSharedDocument` is
-not a safe refresh worker. It constructs the immutable
-`BillingPublicationRequest` only after its context, catalog, tax and line
-preparation; `QuickBooksBillingWorkflow.init`, `check`, and
-`draftRevisionValues` fetch all `Item`, `Customer`, or `Payment` models and
-filter them in memory on `MainActor`. Calling this path from a
-`BGAppRefreshTask` would violate the bounded snapshot and UI-thread work
-requirements. The foreground `AutomaticOutboundSync.recoverPending` has a
-rotating 100-record estimate page, but starts a separate drain task and does
-not provide an awaitable, cancellation-fenced, single-estimate handoff to the
-refresh lifetime.
+The estimate handoff caps selected sold items at 20. The repeated document/customer/item/payment membership checks use bounded targeted SwiftData reads; a complete 5,000-row Item and Customer mapping census runs twice in private `ModelContext`s through `Task.detached` before and after the queue POST, with a MainActor revision/session check on return. Confirmed estimate linking also checks provider-ID ownership twice off-main, and related ServiceCall activity uses an exact-ID fetch. A changed draft, unmapped or conflicting provider identity, lost bound device realm proof, expired business session, changed role/realm/connection, or oversized census fails closed.
 
-`BillingNativeJournalStore.device` holds an encrypted, scoped original only
-after preparation. A newly saved offline estimate has no journal entry to
-enqueue. Even for a prepared entry, the refresh needs a bounded, exact
-revision check against the current estimate and relevant payments, a bound
-`QuickBooksDocumentRealmProofStore` record, and current company, business
-session, role and connection proof before it can POST the original request.
-The current `draftRevisionValues` method is private to the foreground workflow
-and obtains payments by fetching the entire table. Until a bounded reader and
-shared revision validator exist, a background journal POST could publish a
-stale draft. The native client also lacks a typed queue response and a
-confirmed-result readback/settlement path. None of those gaps is silently
-bypassed by this server-only change.
+This native bridge is still a **draft latency candidate**. The existing access policy intentionally reads every `AppUser` and `Technician` on MainActor to preserve normalized-email duplicate and crew-assignment semantics. `check()` also makes up to 20 sequential selected-item fetches there at each awaited boundary. Invoice and test-only direct-publication paths retain broader MainActor catalog/customer checks. A safe off-main access mirror and batched selected-item read remain release gates; no zero-latency claim is made for this PR.
 
-The smallest viable bridge is a foreground handoff **after** the existing
-customer, catalog, tax and line preparation, at the point where
-`publishSharedDocument` now calls `shared.prepare`. Before leaving that
-method, it would need to persist the complete `BillingNativePending.request`
-and `draftRevision`, record an explicit `queueRequested` phase *before* its
-first transport suspension, and verify the bound realm proof and current
-business, workspace lease, app session, role and connection. A new isolated
-enqueue actor could then POST that exact immutable request to the queue; no
-SwiftData model may cross into that actor. The actor must carry a captured
-session/workspace generation and check it before and after transport. A
-successful response must be validated as the same original scope and
-publication, saved as `publicationID` with a `queued` phase, and presented as
-**pending** rather than as a QuickBooks confirmation. If the response is lost,
-only an idempotent POST of the same original request or a read of its known ID
-may run. A 404, invalid response, changed identity or expired lease keeps the
-local original for review; it must never fall back to direct QBO publication.
+Foreground startup and the Billing Review screen can poll the exact server job. A job needing review exposes an explicit retry of the **same** original proposal after renewed authority and proof checks; ambiguous provider outcomes do not auto-retry. The saved estimate and Billing Review show queue-requested/queued states across relaunch. Attachments are uploaded only after readback validates a QBO-confirmed estimate and its provider ID has been saved locally. Queueing sends no customer email or payment request.
 
-The foreground/restart workflow must then recognize `queued` separately from
-`sending`/`unknown`/`confirmed`. It should read the exact server job on later
-launches. A pending job leaves the local estimate unsynced and skips attachment
-upload; a review job surfaces Billing Review. Only a confirmed publication may
-use the existing read-only `recover` validation, save the provider ID and tax
-result, settle the journal, and then consider attachments. Both
-`AutomaticOutboundSync.publish` and the manual management caller currently
-upload linked attachments after **any** successful workflow outcome, so their
-callers also need the queued distinction. Before that handoff, replace the
-full-table `Item`, `Customer` and `Payment` fetches in the relevant revision
-and check paths with bounded identity-targeted reads. The refresh worker can
-then inspect one persisted `queued` journal and await its exact status without
-constructing or publishing a new proposal. This refactor spans the SwiftData
-reader, journal phase, transport allowlist/client, result type and two UI
-callers; changing only the transport would leave a stale-draft and premature
-attachment path.
+Deploy and verify this backend capability **before** distributing a native build with the handoff. A native build ahead of a compatible server will refuse estimate queueing rather than silently route to a device QBO create. Frozen 0122 does not include this native bridge. Neither this branch nor its synthetic tests prove live QBO delivery, a deployed backend worker, or TestFlight availability. A saved estimate first created while the app is offline and then closed still needs a future foreground or bounded background wake to perform prerequisites and enqueue it. Apple background scheduling is opportunistic, so there is no deadline guarantee.

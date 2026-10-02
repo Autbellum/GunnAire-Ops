@@ -212,6 +212,7 @@ final class QuickBooksDataAPI: ObservableObject {
     private let catalogFixtureCompanyID: UUID?
     private var sharedBillingOperation: WorkspaceProviderOperation?
     private(set) var sharedBillingConnectionRevision: String?
+    private(set) var sharedBillingEstimateQueueVersion: Int?
     private struct WorkflowScope: Sendable {
         let owner: ObjectIdentifier
         let operation: WorkspaceProviderOperation
@@ -246,11 +247,13 @@ final class QuickBooksDataAPI: ObservableObject {
         self.init(sharedCompanyID: connection.identity.companyID, realmID: connection.realmID,
             environment: connection.environment, connectionRevision: connection.connectionRevision,
             operation: operation, billingPublisher: billingPublisher,
+            estimateQueueVersion: connection.estimateQueueVersion,
             catalogPublisher: catalogPublisher, customerPublisher: customerPublisher)
     }
 
     init(sharedCompanyID: UUID, realmID: String, environment: String, connectionRevision: String,
          operation: WorkspaceProviderOperation, billingPublisher: BillingPublicationClient,
+         estimateQueueVersion: Int? = nil,
          catalogPublisher: @escaping CatalogPublicationBoundary.Transport = { _ in throw CatalogPublicationError.accessRequired },
          customerPublisher: @escaping CustomerPublicationBoundary.Transport = { _ in throw CustomerPublicationError.accessRequired },
          catalogRecovery: @escaping (UUID) async throws -> CatalogPublicationResponse = { _ in throw CatalogPublicationError.needsReview },
@@ -268,6 +271,7 @@ final class QuickBooksDataAPI: ObservableObject {
         storedRealmID = realmID
         storedEnvironment = environment
         sharedBillingConnectionRevision = connectionRevision
+        sharedBillingEstimateQueueVersion = estimateQueueVersion
         sharedBillingOperation = operation
     }
 
@@ -279,6 +283,7 @@ final class QuickBooksDataAPI: ObservableObject {
          catalogPublisher: CatalogPublicationBoundary.Transport? = nil,
          customerPublisher: CustomerPublicationBoundary.Transport? = nil,
          billingPublisher: BillingPublicationClient? = nil,
+         estimateQueueVersion: Int? = nil,
          catalogRecovery: @escaping (UUID) async throws -> CatalogPublicationResponse = { _ in throw CatalogPublicationError.unavailable },
          revokeConnection: @escaping () async -> Bool = { false },
          emailJournal: QuickBooksDocumentEmailJournal? = nil,
@@ -296,6 +301,7 @@ final class QuickBooksDataAPI: ObservableObject {
         catalogPublicationTransport = catalogPublisher
         customerPublicationTransport = customerPublisher
         billingPublicationClient = billingPublisher
+        sharedBillingEstimateQueueVersion = estimateQueueVersion
         catalogRecoveryTransport = catalogRecovery
         catalogFixtureCompanyID = catalogCompanyID
         tokens = testTokens
@@ -2886,7 +2892,7 @@ struct QuickBooksCompanyEmailAddress: Codable {
 }
 
 enum QuickBooksDateOnly {
-    static func string(from date: Date, calendar: Calendar = .current) -> String {
+    nonisolated static func string(from date: Date, calendar: Calendar = .current) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.calendar = calendar
@@ -2895,7 +2901,7 @@ enum QuickBooksDateOnly {
         return formatter.string(from: date)
     }
 
-    static func date(from value: String, calendar: Calendar = .current) -> Date? {
+    nonisolated static func date(from value: String, calendar: Calendar = .current) -> Date? {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.calendar = calendar

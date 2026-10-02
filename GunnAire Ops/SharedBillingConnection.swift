@@ -17,10 +17,11 @@ enum BillingPublicationTransportPolicy {
         }
         if method == "GET", bodyBytes == nil {
             return assignments || suffix.isEmpty || ["/context", "/connection"].contains(suffix) ||
-                (endpoint.query == nil && parts.count == 2 && exactID(1))
+                (endpoint.query == nil && parts.count == 2 && exactID(1)) ||
+                (endpoint.query == nil && parts.count == 3 && parts[1] == "background-estimate" && exactID(2))
         }
         guard method == "POST", bodyBytes != nil, endpoint.query == nil else { return false }
-        return assignments || suffix.isEmpty || suffix == "/approve" ||
+        return assignments || suffix.isEmpty || suffix == "/approve" || suffix == "/background-estimate" ||
             (parts.count == 3 && exactID(1) && ["recover", "cancel", "approve"].contains(String(parts[2]))) ||
             (parts.count == 4 && parts[1] == "draft-grants" && exactID(2) && parts[3] == "revoke")
     }
@@ -63,8 +64,9 @@ nonisolated struct SharedBillingConnection: Decodable, Sendable {
     let environment: String
     let connectionRevision: String
     let protocolVersion: Int
+    let estimateQueueVersion: Int?
 
-    private enum CodingKeys: String, CodingKey { case realmID, environment, connectionRevision, protocolVersion }
+    private enum CodingKeys: String, CodingKey { case realmID, environment, connectionRevision, protocolVersion, estimateQueueVersion }
     init(from decoder: Decoder) throws {
         identity = try SharedBillingIdentity(from: decoder)
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -72,6 +74,7 @@ nonisolated struct SharedBillingConnection: Decodable, Sendable {
         environment = try values.decode(String.self, forKey: .environment)
         connectionRevision = try values.decode(String.self, forKey: .connectionRevision)
         protocolVersion = try values.decode(Int.self, forKey: .protocolVersion)
+        estimateQueueVersion = try values.decodeIfPresent(Int.self, forKey: .estimateQueueVersion)
     }
     static func decodeAsync(_ data: Data) async throws -> Self {
         try await Task.detached(priority: .userInitiated) {
@@ -79,7 +82,8 @@ nonisolated struct SharedBillingConnection: Decodable, Sendable {
         }.value
     }
     func validate(_ expected: SharedBillingIdentity) throws {
-        guard protocolVersion == 1, identity == expected, QuickBooksProviderReference.isValid(realmID),
+        guard protocolVersion == 1, estimateQueueVersion == nil || estimateQueueVersion == 1,
+              identity == expected, QuickBooksProviderReference.isValid(realmID),
               ["sandbox", "production"].contains(environment),
               JobBillingAssignmentSnapshot.validConnectionRevision(connectionRevision) else {
             throw SharedBillingConnectionError.invalid
@@ -130,18 +134,19 @@ final class SharedBillingPreparation {
         let customerID = originalCustomer.quickBooksID
         let selected = Set(CatalogLineItemSnapshot.decoded(from: document.snapshotJSON)
             .flatMap { [$0.catalogItemID] + $0.soldLeaves.map(\.catalogItemID) })
+        if case .estimate = document, selected.count > 20 { throw QuickBooksBillingWorkflowError.changed }
         func items() throws -> [PersistentIdentifier: QuickBooksCatalogItemRevision] {
-            Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<Item>())
-                .filter { selected.contains($0.id) }.map { ($0.persistentModelID, QuickBooksCatalogItemRevision($0)) })
+            Dictionary(uniqueKeysWithValues: try QuickBooksBillingReads.items(selected, context: context)
+                .map { ($0.persistentModelID, QuickBooksCatalogItemRevision($0)) })
         }
         func payments() throws -> [QuickBooksBillingPaymentRevision] {
-            try context.fetch(FetchDescriptor<Payment>()).filter { $0.invoice?.id == document.id }
+            try QuickBooksBillingReads.payments(invoiceID: document.id, context: context)
                 .sorted { $0.id.uuidString < $1.id.uuidString }.map(QuickBooksBillingPaymentRevision.init)
         }
         let savedItems = try items(), savedPayments = try payments()
         validateOriginal = {
             try checkDocument()
-            let customers = try context.fetch(FetchDescriptor<Customer>()).filter { $0.id == draft.localCustomerID }
+            let customers = try QuickBooksBillingReads.customer(draft.localCustomerID, context: context)
             guard customers.count == 1, customers.first === originalCustomer,
                   QuickBooksCustomerCreateOperation.draft(for: originalCustomer) == draft,
                   originalCustomer.quickBooksID == customerID,

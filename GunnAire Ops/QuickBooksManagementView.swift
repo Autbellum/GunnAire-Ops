@@ -5273,8 +5273,10 @@ struct QuickBooksManagementView: View {
                         else { estimates.insert(remote, at: 0) }
                     }
                     actionMessage = outcome.message
-                    do { try await workflow.uploadLinkedAttachments() }
-                    catch { actionMessage = outcome.message + " Supporting files remain pending: " + error.localizedDescription }
+                    if !outcome.queued {
+                        do { try await workflow.uploadLinkedAttachments() }
+                        catch { actionMessage = outcome.message + " Supporting files remain pending: " + error.localizedDescription }
+                    }
                 } catch {
                     guard billingPublicationLifecycles[key] === owner else { return }
                     guard let workflow else { actionMessage = error.localizedDescription; return }

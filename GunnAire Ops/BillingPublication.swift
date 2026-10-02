@@ -97,12 +97,12 @@ struct BillingPublicationRequest: Codable {
     var draftRevision: String?
     var projectMilestoneID: UUID?
 
-    var scope: BillingDocumentScope {
+    nonisolated var scope: BillingDocumentScope {
         .init(companyID: companyID, realmID: realmID, environment: environment,
               documentType: documentType, localDocumentID: localDocumentID)
     }
 
-    func validate() throws {
+    nonisolated func validate() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let date = QuickBooksDateOnly.date(from: document.TxnDate, calendar: calendar)
@@ -208,6 +208,33 @@ struct BillingPublicationResponse: Decodable {
 struct BillingPublicationPage: Decodable {
     let publications: [BillingPublicationRecord]
     let nextCursor: String?
+}
+
+enum BillingEstimateJobState: String, Decodable {
+    case pending, running, confirmed, review
+}
+
+struct BillingEstimateJobResponse: Decodable {
+    struct Background: Decodable {
+        let publicationID: UUID
+        let state: BillingEstimateJobState
+        let attempts: Int
+        let lastErrorCode: String?
+        let updatedAt: String
+    }
+    let publication: BillingPublicationRecord
+    let background: Background
+
+    func validate(_ request: BillingPublicationRequest, expectedID: UUID? = nil) throws {
+        try publication.validate(request.scope, customerID: request.localCustomerID)
+        guard request.documentType == .estimate, request.operation == .create,
+              publication.operation == .create, publication.id == background.publicationID,
+              expectedID.map({ $0 == publication.id }) ?? true,
+              (0...8).contains(background.attempts), !background.updatedAt.isEmpty,
+              background.state != .confirmed || publication.state == .confirmed else {
+            throw BillingPublicationError.invalidResponse
+        }
+    }
 }
 
 struct JobBillingScope: Codable, Equatable {
@@ -341,6 +368,34 @@ struct BillingPublicationClient {
               request.document.Id == nil || request.document.Id == result.publication.providerID else {
             throw BillingPublicationError.invalidResponse
         }
+        return result
+    }
+
+    func enqueueEstimate(_ request: BillingPublicationRequest,
+                         workflow: QuickBooksDataAPI.CapturedWorkspaceWorkflow) async throws -> BillingEstimateJobResponse {
+        try request.scope.validate(workflow); try request.validate()
+        guard request.documentType == .estimate, request.operation == .create,
+              let revision = request.draftRevision, JobBillingAssignmentSnapshot.validConnectionRevision(revision) else {
+            throw BillingPublicationError.invalidProposal
+        }
+        if let pin = workflow.sharedBillingConnectionRevision, request.connectionRevision != pin {
+            throw BillingPublicationError.reviewRequired
+        }
+        let result = try await perform(BillingEstimateJobResponse.self,
+            path: "/api/billing-publications/background-estimate", body: encode(request), workflow: workflow)
+        try result.validate(request)
+        return result
+    }
+
+    func estimateJob(_ id: UUID, request: BillingPublicationRequest,
+                     workflow: QuickBooksDataAPI.CapturedWorkspaceWorkflow) async throws -> BillingEstimateJobResponse {
+        try request.scope.validate(workflow); try request.validate()
+        guard request.documentType == .estimate, request.operation == .create else {
+            throw BillingPublicationError.invalidProposal
+        }
+        let result = try await perform(BillingEstimateJobResponse.self,
+            path: "/api/billing-publications/background-estimate/\(id.uuidString.lowercased())", workflow: workflow)
+        try result.validate(request, expectedID: id)
         return result
     }
 
