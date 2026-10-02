@@ -1450,24 +1450,31 @@ GunnAire
         guard GunnAireCloudKit.usesTestDatabase ||
                 CompanyWorkspaceAccessController.shared.authorizedContainer === modelContext.container,
               let customerID else { throw GmailComposeError.access }
-        let currentUsers = try modelContext.fetch(FetchDescriptor<AppUser>())
+        let census = try QuickBooksBillingAccessPolicy.userCensus(context: modelContext)
+        let currentUsers = census.users
         if requiresMail, !AppAccess.canAccessSidebarItem(.mail, email: currentUserEmail, users: currentUsers) {
             throw GmailComposeError.access
         }
-        let customers = try modelContext.fetch(FetchDescriptor<Customer>()).filter { $0.id == customerID }
+        var customerQuery = FetchDescriptor<Customer>(predicate: #Predicate { $0.id == customerID })
+        customerQuery.fetchLimit = 2
+        let customers = try modelContext.fetch(customerQuery)
         guard customers.count == 1, let customer = customers.first else { throw GmailDraftError.businessChanged }
         if let invoiceID {
-            let rows = try modelContext.fetch(FetchDescriptor<Invoice>()).filter { $0.id == invoiceID }
+            var query = FetchDescriptor<Invoice>(predicate: #Predicate { $0.id == invoiceID })
+            query.fetchLimit = 2
+            let rows = try modelContext.fetch(query)
             guard rows.count == 1, let invoice = rows.first, invoice.customer === customer
             else { throw GmailDraftError.businessChanged }
-            try QuickBooksBillingAccessPolicy.validate(context: modelContext, document: .invoice(invoice))
+            try QuickBooksBillingAccessPolicy.validate(context: modelContext, document: .invoice(invoice), census: census)
         }
         if let estimateID {
-            let rows = try modelContext.fetch(FetchDescriptor<Estimate>()).filter { $0.id == estimateID }
+            var query = FetchDescriptor<Estimate>(predicate: #Predicate { $0.id == estimateID })
+            query.fetchLimit = 2
+            let rows = try modelContext.fetch(query)
             guard rows.count == 1, let estimate = rows.first, estimate.customer === customer
             else { throw GmailDraftError.businessChanged }
             if invoiceID == nil {
-                try QuickBooksBillingAccessPolicy.validate(context: modelContext, document: .estimate(estimate))
+                try QuickBooksBillingAccessPolicy.validate(context: modelContext, document: .estimate(estimate), census: census)
             }
         }
         if let serviceCallID {

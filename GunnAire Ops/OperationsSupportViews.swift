@@ -2585,14 +2585,15 @@ struct OnsiteDocumentationView: View {
     private func validateDocumentAccess(
         call: ServiceCall?, document: QuickBooksBillingDocument?, includesFinancials: Bool
     ) throws {
-        let currentUsers = try modelContext.fetch(FetchDescriptor<AppUser>())
+        let census = try QuickBooksBillingAccessPolicy.userCensus(context: modelContext)
+        let currentUsers = census.users
         guard !includesFinancials ||
             AppAccess.canViewBillingFinancialDetails(email: currentUserEmail, users: currentUsers) ||
             AppAccess.canCollectFieldPayments(email: currentUserEmail, users: currentUsers) else {
             throw GmailComposeError.access
         }
         if let document {
-            try QuickBooksBillingAccessPolicy.validate(context: modelContext, document: document)
+            try QuickBooksBillingAccessPolicy.validate(context: modelContext, document: document, census: census)
         }
         if let call {
             guard isCurrentRecord(call), isCurrentRecord(call.customer) else { throw GmailDraftError.businessChanged }
