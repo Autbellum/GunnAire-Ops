@@ -318,6 +318,41 @@ struct QuickBooksCatalogWorkflowTests {
         #expect(owner.name == "Existing owner")
     }
 
+    @Test func mappingCollisionSavedDuringProviderWriteStopsLocalLink() async throws {
+        let item = Item(name: "Diagnostic", unitPrice: 190)
+        let context = try context(item)
+        let owner = Item(quickBooksID: " i1 ", name: "Other owner", unitPrice: 50)
+        var posts = 0
+        let api = api { request in
+            if request.httpMethod == "POST" {
+                posts += 1
+                context.insert(owner)
+                try context.save()
+                return try reply(request, items: [remote()])
+            }
+            return try reply(request, items: [])
+        }
+        let flow = try workflow(item, context, api)
+        await #expect(throws: QuickBooksCatalogMappingIntegrityError.self) { try await flow.execute() }
+        #expect(posts == 1)
+        #expect(item.quickBooksID == nil)
+        #expect(owner.quickBooksID == " i1 ")
+    }
+
+    @Test func unsavedMappingCollisionDuringProviderReadStopsLocalLink() async throws {
+        let item = Item(name: "Diagnostic", unitPrice: 190)
+        let context = try context(item)
+        let owner = Item(quickBooksID: " i1 ", name: "Unsaved owner", unitPrice: 50)
+        let api = api { request in
+            context.insert(owner)
+            return try reply(request, items: [remote()])
+        }
+        let flow = try workflow(item, context, api)
+        await #expect(throws: QuickBooksCatalogMappingIntegrityError.self) { try await flow.execute() }
+        #expect(item.quickBooksID == nil)
+        #expect(owner.modelContext === context)
+    }
+
     @Test func successfulUpdateUsesTheReviewedRemoteVersionAndLocalProposal() async throws {
         let item = Item(quickBooksID: "I1", name: "Diagnostic", unitPrice: 230)
         let context = try context(item)

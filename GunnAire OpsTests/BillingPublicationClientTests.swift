@@ -91,6 +91,52 @@ struct BillingPublicationClientTests {
         #expect(result.estimate?.Line?.first?.SalesItemLineDetail.UnitPrice == 189)
     }
 
+    @Test func estimateQueueAcceptsOnlyTheOriginalBoundRequestAndNeverClaimsProviderConfirmation() async throws {
+        let api = api()
+        var proposal = request(kind: .estimate)
+        proposal.draftRevision = String(repeating: "b", count: 64)
+        var calls = 0
+        let client = BillingPublicationClient { path, method, body in
+            calls += 1
+            #expect(path == "/api/billing-publications/background-estimate")
+            #expect(method == "POST")
+            let sent = try JSONDecoder().decode(BillingPublicationRequest.self, from: #require(body))
+            #expect(try sent.matches(proposal))
+            return try data(["publication": record(kind: .estimate, state: "reserved"),
+                "background": ["publicationID": attempt.uuidString, "state": "pending", "attempts": 0,
+                    "lastErrorCode": NSNull(), "updatedAt": "2026-09-07T00:00:00Z"]])
+        }
+        let result = try await client.enqueueEstimate(proposal, workflow: api.captureWorkspaceWorkflow())
+        #expect(result.background.state == .pending)
+        #expect(result.publication.providerID == nil)
+        #expect(calls == 1)
+    }
+
+    @Test func estimateQueueRejectsMissingEndpointOrDifferentOriginalWithoutDirectSend() async throws {
+        let api = api()
+        var proposal = request(kind: .estimate)
+        proposal.draftRevision = String(repeating: "b", count: 64)
+        var calls = 0
+        let unavailable = BillingPublicationClient { _, _, _ in
+            calls += 1
+            throw GunnAireBackendError.server(statusCode: 404, message: "no queue")
+        }
+        await #expect(throws: BillingPublicationError.unavailable) {
+            try await unavailable.enqueueEstimate(proposal, workflow: api.captureWorkspaceWorkflow())
+        }
+        #expect(calls == 1)
+        let changed = BillingPublicationClient { _, _, _ in
+            calls += 1
+            return try data(["publication": record(kind: .estimate, state: "reserved", changes: ["realmID": "other"]),
+                "background": ["publicationID": attempt.uuidString, "state": "pending", "attempts": 0,
+                    "lastErrorCode": NSNull(), "updatedAt": "2026-09-07T00:00:00Z"]])
+        }
+        await #expect(throws: BillingPublicationError.invalidResponse) {
+            try await changed.enqueueEstimate(proposal, workflow: api.captureWorkspaceWorkflow())
+        }
+        #expect(calls == 2)
+    }
+
     @Test func changedCompanyInvalidDateAndMissingStructuredTaxAddressesStopBeforeTransport() async throws {
         let api = api()
         var calls = 0
