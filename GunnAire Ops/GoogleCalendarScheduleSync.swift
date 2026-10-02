@@ -1189,11 +1189,26 @@ enum GoogleCalendarScheduleSync {
         }
         try workflow.focus(on: nil)
         let imported = try await importSchedule(workflow: workflow)
+        let hasVisibleUnlinkedJob = verifyConfirmedCalls.contains { call in
+            !call.googleEventManagedByApp && normalizedOptional(call.googleEventID) == nil &&
+                (call.status == .scheduled || call.status == .inProgress)
+        }
         let review = reviewErrors.first.map { " \(reviewErrors.count) update(s) still need review. \($0)" } ?? ""
         let linkCheck = verifyConfirmedCalls.isEmpty ? "" :
             " Checked \(checked) confirmed selected-day/upcoming Google link(s) (up to 25 per sync)." +
             (confirmed.count > 25 ? " \(confirmed.count - 25) more link(s) were not checked; use Check Google Link on those appointments." : "")
-        return "Published \(outcome.published) pending calendar update(s).\(review)\(linkCheck) \(imported)"
+        let unlinkedReview: String
+        if hasVisibleUnlinkedJob {
+            unlinkedReview = " Some displayed scheduled jobs have no Google event link and were not published. Open each affected job in Schedule and choose Review Google publication before creating an event."
+        } else if outcome.published == 0 {
+            unlinkedReview = " Older scheduled jobs without a Google event link are not included in automatic publication; check their Schedule cards for review."
+        } else {
+            unlinkedReview = ""
+        }
+        let publication = outcome.published == 0
+            ? "No pending app-managed calendar updates were published."
+            : "Published \(outcome.published) pending calendar update(s)."
+        return "\(publication)\(review)\(linkCheck)\(unlinkedReview) \(imported)"
     }
 
     struct PendingOutcome {
