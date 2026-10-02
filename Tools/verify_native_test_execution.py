@@ -15,8 +15,11 @@ def verify(summary: dict, tree: dict, selectors: list[str]) -> dict:
         value = summary.get(name)
         if type(value) is not int or value < 0:
             raise ValueError(f"Missing or invalid result count: {name}")
-    if summary["passedTests"] == 0 or summary["failedTests"] or summary["skippedTests"]:
-        raise ValueError("Native tests must actually pass, without failures or skips")
+    expected_failures = summary.get("expectedFailures", 0)
+    if type(expected_failures) is not int or expected_failures < 0:
+        raise ValueError("Missing or invalid result count: expectedFailures")
+    if summary["passedTests"] == 0 or summary["failedTests"] or summary["skippedTests"] or expected_failures:
+        raise ValueError("Native tests must actually pass, without failures, expected failures, or skips")
     expected = []
     for selector in selectors:
         prefix = "-only-testing:"

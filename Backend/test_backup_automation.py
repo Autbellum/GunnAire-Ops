@@ -425,7 +425,7 @@ class BackupAutomationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             with self.configuration(root, AUTH_MODE="google-id-token"):
-                with mock.patch.object(deployment_backend, "ThreadingHTTPServer") as server, \
+                with mock.patch.object(deployment_backend, "BoundedBusinessServer") as server, \
                         mock.patch.object(backend, "initialize_database", side_effect=lambda: order.append("db")), \
                         mock.patch.object(backend, "start_push_delivery_worker", side_effect=lambda: order.append("push")), \
                         mock.patch.object(backend, "start_backup_worker", side_effect=lambda: order.append("backup")), \

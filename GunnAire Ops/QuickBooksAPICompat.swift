@@ -69,8 +69,10 @@ final class QuickBooksAPI: ObservableObject {
         data.createEstimate(estimate, completion: completion)
     }
 
-    func sendEstimate(id: String, to emailAddress: String? = nil, completion: @escaping (Result<QuickBooksEstimate, Error>) -> Void) {
-        data.sendEstimate(id: id, to: emailAddress, completion: completion)
+    func sendEstimate(id: String, to emailAddress: String? = nil, expectedCustomerID: String? = nil,
+        validateSend: @escaping () throws -> Void = {}, completion: @escaping (Result<QuickBooksEstimate, Error>) -> Void) {
+        data.sendEstimate(id: id, to: emailAddress, expectedCustomerID: expectedCustomerID,
+            validateSend: validateSend, completion: completion)
     }
 
     func fetchInvoices(completion: @escaping (Result<[QuickBooksInvoice], Error>) -> Void) {
@@ -85,8 +87,10 @@ final class QuickBooksAPI: ObservableObject {
         data.createInvoice(invoice, requestID: requestID, completion: completion)
     }
 
-    func sendInvoice(id: String, to emailAddress: String? = nil, completion: @escaping (Result<QuickBooksInvoice, Error>) -> Void) {
-        data.sendInvoice(id: id, to: emailAddress, completion: completion)
+    func sendInvoice(id: String, to emailAddress: String? = nil, expectedCustomerID: String? = nil,
+        validateSend: @escaping () throws -> Void = {}, completion: @escaping (Result<QuickBooksInvoice, Error>) -> Void) {
+        data.sendInvoice(id: id, to: emailAddress, expectedCustomerID: expectedCustomerID,
+            validateSend: validateSend, completion: completion)
     }
     
     func fetchBills(completion: @escaping (Result<[QuickBooksBill], Error>) -> Void) {

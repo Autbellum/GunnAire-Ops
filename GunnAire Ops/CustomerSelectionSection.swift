@@ -14,6 +14,14 @@ import SwiftUI
 /// Selection side effects stay with the caller. Add applies the customer's
 /// preferred service location on selection; Edit deliberately does not, so
 /// adopting this view does not silently start moving a committed job's address.
+///
+/// Two defects made customers unfindable from the schedule's Assign Customer
+/// path. A calendar-imported job opens with the calendar placeholder already
+/// bound to `customer`, and results were drawn only while `customer` was nil,
+/// so typing in the search box changed nothing on screen. And results were cut
+/// at the first eight rows, so most of the list never appeared. The placeholder
+/// now counts as no selection, results show whenever the search text is not the
+/// selected customer's name, and every match is listed (the Form is lazy).
 struct CustomerSelectionSection: View {
     @Binding var customer: Customer?
     let customers: [Customer]
@@ -54,15 +62,20 @@ struct CustomerSelectionSection: View {
         customers.filter { !CustomerDataMaintenance.isSystemCalendarCustomer($0) }
     }
 
-    private var matchingCustomers: [Customer] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return selectableCustomers }
-        return selectableCustomers.filter { candidate in
-            candidate.name.lowercased().contains(query) ||
-            (candidate.email?.lowercased().contains(query) ?? false) ||
-            (candidate.phone?.lowercased().contains(query) ?? false) ||
-            (candidate.address?.lowercased().contains(query) ?? false)
-        }
+    /// A real customer is selected. The calendar placeholder does not count:
+    /// it is what an unassigned job carries, and treating it as a selection is
+    /// what hid the results.
+    private var selectedRealCustomer: Customer? {
+        guard let customer, !CustomerDataMaintenance.isSystemCalendarCustomer(customer) else { return nil }
+        return customer
+    }
+
+    /// Results are shown when nothing real is selected, or when the user has
+    /// typed something other than the selected customer's name to replace it.
+    private var showsResults: Bool {
+        guard let selectedRealCustomer else { return true }
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !query.isEmpty && query.caseInsensitiveCompare(selectedRealCustomer.name) != .orderedSame
     }
 
     private var canSaveNewCustomer: Bool {
@@ -70,12 +83,16 @@ struct CustomerSelectionSection: View {
     }
 
     var body: some View {
+        // Filtered once per body pass (perf rule B), not per read.
+        let matches = showsResults
+            ? CustomerSearch.matches(in: selectableCustomers, query: searchText)
+            : []
         Section("Customer") {
             TextField("Search customer name", text: $searchText)
                 .textInputAutocapitalization(.words)
                 .accessibilityIdentifier(identifierPrefix + "CustomerSearch")
 
-            if let customer {
+            if let customer = selectedRealCustomer {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(customer.name)
@@ -101,8 +118,15 @@ struct CustomerSelectionSection: View {
                 }
             }
 
-            if customer == nil {
-                if let placeholder {
+            if let customer, CustomerDataMaintenance.isSystemCalendarCustomer(customer) {
+                Text("Unassigned calendar event. Search or create a customer below.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier(identifierPrefix + "UnassignedCustomerNotice")
+            }
+
+            if showsResults {
+                if customer == nil, let placeholder {
                     Button {
                         select(placeholder)
                     } label: {
@@ -112,12 +136,18 @@ struct CustomerSelectionSection: View {
                     .buttonStyle(.plain)
                     .accessibilityIdentifier(identifierPrefix + "UnassignedCalendarCustomer")
                 }
-                if matchingCustomers.isEmpty {
-                    Text("No matching customers found.")
+                if matches.isEmpty {
+                    Text(selectableCustomers.isEmpty
+                        ? "No customers on this device yet."
+                        : "No matching customers found.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(matchingCustomers.prefix(8)) { match in
+                    Text(matches.count == 1 ? "1 customer" : "\(matches.count) customers")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier(identifierPrefix + "CustomerMatchCount")
+                    ForEach(matches) { match in
                         Button {
                             select(match)
                         } label: {
@@ -132,6 +162,7 @@ struct CustomerSelectionSection: View {
                             }
                         }
                         .buttonStyle(.plain)
+                        .accessibilityIdentifier(identifierPrefix + "CustomerResult-" + match.id.uuidString)
                     }
                 }
             }
@@ -140,7 +171,7 @@ struct CustomerSelectionSection: View {
                 creatingNewCustomer.toggle()
                 if !creatingNewCustomer {
                     resetNewCustomerFields()
-                } else if let customer {
+                } else if let customer = selectedRealCustomer {
                     newCustomerName = customer.name
                     newCustomerPhone = customer.phone ?? ""
                     newCustomerEmail = customer.email ?? ""
@@ -174,7 +205,9 @@ struct CustomerSelectionSection: View {
 
     private func select(_ selection: Customer) {
         customer = selection
-        searchText = selection.name
+        // The placeholder's name is not a search; leave the box empty so the
+        // full list stays visible for picking a real customer.
+        searchText = CustomerDataMaintenance.isSystemCalendarCustomer(selection) ? "" : selection.name
         onSelect(selection)
     }
 
@@ -206,5 +239,56 @@ struct CustomerSelectionSection: View {
         newCustomerPhone = ""
         newCustomerEmail = ""
         newCustomerAddress = ""
+    }
+}
+
+/// Customer search shared by the new-job and edit-job sheets.
+///
+/// Every whitespace-separated term must appear in the name, email, phone, or
+/// address, ignoring case and diacritics, so "smith john", "john smith" and
+/// "smith 78701" all find "John Smith" at a 78701 address. A term with three or
+/// more digits also matches the phone's digits, so "5125550100" finds a phone
+/// stored as "(512) 555-0100". Input order is kept; both sheets query
+/// customers sorted by name, so no per-keystroke sort is needed.
+enum CustomerSearch {
+    static func matches(in customers: [Customer], query: String) -> [Customer] {
+        let terms = searchTerms(query)
+        guard !terms.isEmpty else { return customers }
+        return customers.filter { customer in
+            fieldsMatch(
+                terms: terms,
+                name: customer.name,
+                email: customer.email,
+                phone: customer.phone,
+                address: customer.address
+            )
+        }
+    }
+
+    nonisolated static func searchTerms(_ query: String) -> [String] {
+        query.split(whereSeparator: { $0.isWhitespace || $0 == "," }).map(String.init)
+    }
+
+    nonisolated static func fieldsMatch(
+        terms: [String],
+        name: String,
+        email: String?,
+        phone: String?,
+        address: String?
+    ) -> Bool {
+        let fields = [name, email, phone, address].compactMap { $0 }
+        let phoneDigits = digits(phone ?? "")
+        return terms.allSatisfy { term in
+            if fields.contains(where: { $0.range(of: term, options: [.caseInsensitive, .diacriticInsensitive]) != nil }) {
+                return true
+            }
+            let termDigits = digits(term)
+            return termDigits.count >= 3 && termDigits.count == term.filter { !"()-.+ ".contains($0) }.count
+                && phoneDigits.contains(termDigits)
+        }
+    }
+
+    nonisolated private static func digits(_ value: String) -> String {
+        String(value.filter(\.isASCII).filter(\.isNumber))
     }
 }

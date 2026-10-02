@@ -1,10 +1,19 @@
 import Foundation
 import SwiftData
+import CoreData
 import Testing
 @testable import GunnAire_Ops
 
+@Suite(.serialized)
 @MainActor
 struct GmailSendWorkflowTests {
+    private nonisolated final class StoreNotificationBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: Notification?
+        func retain(_ notification: Notification) { lock.withLock { value = notification } }
+        var latest: Notification? { lock.withLock { value } }
+    }
+
     @MainActor private final class Fixture {
         let email = "mail-fixture@gunnaire.com"
         let context: ModelContext
@@ -32,11 +41,11 @@ struct GmailSendWorkflowTests {
                 return try response(request)
             }
 
-        init() throws {
+        init(storeURL: URL? = nil) throws {
             let schema = GunnAireModelSchema.schema
-            context = ModelContext(try ModelContainer(for: schema, configurations: [
-                ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
-            ]))
+            let configuration = storeURL.map { ModelConfiguration(schema: schema, url: $0, cloudKitDatabase: .none) }
+                ?? ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+            context = ModelContext(try ModelContainer(for: schema, configurations: [configuration]))
             customer = Customer(name: "Mail fixture", email: "customer@example.invalid")
             call = ServiceCall(type: .repair, scheduledDate: Date(), duration: 3600, customer: customer)
             context.insert(customer); context.insert(call); try context.save()
@@ -81,9 +90,12 @@ struct GmailSendWorkflowTests {
         func flow(to: String = "vendor@example.invalid", business: GmailBusinessContext? = nil, journal: GmailDraftSession? = nil,
                   save: @escaping (ModelContext) throws -> Void = { try $0.save() }) throws -> GmailSendWorkflow {
             try GmailSendWorkflow(auth: auth, context: context,
-                message: GmailOutgoingMessage(to: to, subject: "Repair appointment", body: "Fixture only."),
+                message: GmailOutgoingMessage(to: to, subject: "Repair appointment", body: "Fixture only.",
+                    attachments: journal?.record.content.files.map(\.attachment) ?? []),
                 business: business, validateAccess: { if !self.allowed { throw GmailComposeError.access } }, journal: journal, save: save)
         }
+
+        var recipient: String { get throws { try #require(customer.email) } }
 
         var business: GmailBusinessContext {
             .init(customerID: customer.id, serviceCallID: call.id, workflow: .appointmentConfirmation)
@@ -174,6 +186,613 @@ struct GmailSendWorkflowTests {
             #expect(throws: GmailDraftError.businessChanged) { try f.flow(to: f.customer.email!, business: f.business, journal: journal) }
             #expect(f.requests.isEmpty)
         }
+    }
+
+    @Test func savedInvoiceDraftRejectsChangedPrintedDetailsAndPayments() throws {
+        for change in 0..<8 {
+            let f = try Fixture()
+            let invoice = Invoice(customer: f.customer, lineItemSummary: "Saved work", amount: 100,
+                dueDate: Date(timeIntervalSince1970: 2_000_000_000), completionNotes: "Original work")
+            f.context.insert(invoice)
+            let payment = Payment(invoice: invoice, amount: 10)
+            f.context.insert(payment); try f.context.save()
+            let business = GmailBusinessContext(customerID: f.customer.id, invoiceID: invoice.id, workflow: .customerDocument)
+            let journal = try businessJournal(f, business: business)
+            let encoded = try JSONEncoder().encode(journal.record)
+            switch change {
+            case 0: invoice.dueDate = invoice.dueDate?.addingTimeInterval(86_400)
+            case 1: invoice.createdAt = invoice.createdAt.addingTimeInterval(-86_400 * 30)
+            case 2: invoice.completionNotes = "Changed completed work"
+            case 3: invoice.lineItemSummary = "Different work for the same total"
+            case 4: invoice.siteAddress = "Different service property"
+            case 5: payment.amount = 15
+            case 6: payment.method = "check"
+            default: f.context.insert(Payment(invoice: invoice, amount: 3))
+            }
+            let reopened = try GmailDraftSession(record: JSONDecoder().decode(GmailDraftRecord.self, from: encoded),
+                store: f.draftStore, access: {})
+            #expect(throws: GmailDraftError.businessChanged) {
+                try f.flow(to: try f.recipient, business: business, journal: reopened)
+            }
+            #expect(f.requests.isEmpty)
+            #expect(reopened.record.content.files.first?.data == Data("Original PDF".utf8))
+        }
+    }
+
+    @Test func savedEstimateDraftRejectsNotesApprovalAndSiteChanges() throws {
+        for change in 0..<5 {
+            let f = try Fixture()
+            let estimate = Estimate(customer: f.customer, lineItemSummary: "Original work", amount: 100, notes: "Original notes")
+            f.context.insert(estimate); try f.context.save()
+            let business = GmailBusinessContext(customerID: f.customer.id, estimateID: estimate.id, workflow: .customerDocument)
+            let journal = try businessJournal(f, business: business)
+            switch change {
+            case 0: estimate.notes = "Different scope of work"
+            case 1: estimate.siteAddress = "Different property"
+            case 2: estimate.lineItemSummary = "Changed work, unchanged total"
+            case 3: estimate.customerApprovalReference = "Changed approval"
+            default: estimate.customerApprovalSignatureImageBase64 = "changed-signature"
+            }
+            #expect(throws: GmailDraftError.businessChanged) {
+                try f.flow(to: try f.recipient, business: business, journal: journal)
+            }
+            #expect(f.requests.isEmpty)
+        }
+    }
+
+    @Test func inFlightPrintedDocumentChangeKeepsOriginalAttemptUnconfirmed() async throws {
+        for change in 0..<4 {
+            let f = try Fixture()
+            let invoice = Invoice(customer: f.customer, amount: 100, dueDate: .distantFuture)
+            let estimate = Estimate(customer: f.customer, amount: 100, notes: "Original estimate")
+            f.context.insert(invoice); f.context.insert(estimate)
+            let payment = Payment(invoice: invoice, amount: 10)
+            f.context.insert(payment); try f.context.save()
+            let business = GmailBusinessContext(customerID: f.customer.id,
+                invoiceID: change == 3 ? nil : invoice.id, estimateID: change == 3 ? estimate.id : nil,
+                workflow: .customerDocument)
+            f.beforeReply = { request in
+                guard request.httpMethod == "POST" else { return }
+                switch change {
+                case 0: invoice.dueDate = Date()
+                case 1: invoice.createdAt = invoice.createdAt.addingTimeInterval(-86_400)
+                case 2: payment.amount = 20
+                default: estimate.notes = "New estimate notes"
+                }
+            }
+            let flow = try f.flow(to: try f.recipient, business: business)
+            #expect(await flow.send().state == .reviewRequired)
+            #expect(await flow.send().state == .reviewRequired)
+            #expect(f.writes.count == 1)
+            #expect(f.requests.count == 1, "Do not verify or audit changed work as the original message.")
+            #expect(try f.history().first?.deliveryStatus != "sent")
+        }
+    }
+
+    @Test func generatedPDFOriginCannotAdoptNewSourceBeforeFirstDraftOrSend() throws {
+        let f = try Fixture()
+        let invoice = Invoice(customer: f.customer, amount: 100, dueDate: .distantFuture)
+        f.context.insert(invoice); try f.context.save()
+        let business = GmailBusinessContext(customerID: f.customer.id, invoiceID: invoice.id, workflow: .customerDocument)
+        let original = try GmailDraftBusinessSnapshot.capture(business, context: f.context)
+        invoice.dueDate = Date()
+        #expect(throws: GmailDraftError.businessChanged) {
+            try GmailDraftBusinessSnapshot.validate(original, business: business, context: f.context)
+        }
+        #expect(throws: GmailDraftError.businessChanged) {
+            try GmailSendWorkflow(auth: f.auth, context: f.context,
+                message: GmailOutgoingMessage(to: try f.recipient, subject: "Original invoice", body: "Review attached.",
+                    attachments: [.init(fileName: "invoice.pdf", mimeType: "application/pdf", data: Data("Original PDF".utf8))]),
+                business: business, validateAccess: {}, sourceSnapshot: original)
+        }
+        #expect(f.requests.isEmpty)
+    }
+
+    @Test func unchangedDocumentAndReorderedPaymentResultsKeepOriginalSnapshot() throws {
+        let f = try Fixture()
+        let invoice = Invoice(customer: f.customer, amount: 100, dueDate: .distantFuture)
+        f.context.insert(invoice)
+        f.context.insert(Payment(invoice: invoice, amount: 10, date: Date(timeIntervalSince1970: 100)))
+        f.context.insert(Payment(invoice: invoice, amount: 5, date: Date(timeIntervalSince1970: 100)))
+        try f.context.save()
+        let business = GmailBusinessContext(customerID: f.customer.id, invoiceID: invoice.id, workflow: .customerDocument)
+        let original = try GmailDraftBusinessSnapshot.capture(business, context: f.context)
+        try GmailDraftBusinessSnapshot.validate(original, business: business, context: f.context)
+        let payments = try f.context.fetch(FetchDescriptor<Payment>())
+        let forward = CustomerDocumentExporter.mailSourceValues(estimate: nil, invoice: invoice, serviceCall: nil,
+            payments: payments, attachments: [], equipmentProfiles: [], serviceCalls: [])
+        let reverse = CustomerDocumentExporter.mailSourceValues(estimate: nil, invoice: invoice, serviceCall: nil,
+            payments: Array(payments.reversed()), attachments: [], equipmentProfiles: [], serviceCalls: [])
+        #expect(forward == reverse)
+        let unrelated = Invoice(customer: f.customer, amount: 500)
+        f.context.insert(unrelated); f.context.insert(Payment(invoice: unrelated, amount: 500))
+        try GmailDraftBusinessSnapshot.validate(original, business: business, context: f.context)
+    }
+
+    @Test func generatedOutputsDoNotInvalidateTheirOwnSourceButJobReadingsDo() throws {
+        let f = try Fixture()
+        let business = GmailBusinessContext(customerID: f.customer.id, serviceCallID: f.call.id, workflow: .customerDocument)
+        let original = try GmailDraftBusinessSnapshot.capture(business, context: f.context)
+        let output = ServiceDocumentAttachment(customer: f.customer, serviceCallID: f.call.id,
+            kind: .serviceReport, displayName: "generated.pdf", localFilePath: "/synthetic/generated.pdf",
+            contentType: "application/pdf", fileSizeBytes: 100)
+        f.context.insert(output)
+        try GmailDraftBusinessSnapshot.validate(original, business: business, context: f.context)
+        output.fileSizeBytes = 200
+        output.caption = "Replaced generated report"
+        try GmailDraftBusinessSnapshot.validate(original, business: business, context: f.context)
+        f.call.documentationChecklist.toggle()
+        #expect(throws: GmailDraftError.businessChanged) {
+            try GmailDraftBusinessSnapshot.validate(original, business: business, context: f.context)
+        }
+    }
+
+    @Test func scopedMaterialInputsDetectLegacyCaseInsensitiveRequirements() throws {
+        let f = try Fixture()
+        let invoice = Invoice(serviceCallID: f.call.id, customer: f.customer, lineItemSummary: "FILTER REPLACEMENT", amount: 100)
+        let item = Item(name: "Filter", unitPrice: 100, tracksInventory: false)
+        f.context.insert(invoice); f.context.insert(item); try f.context.save()
+        let business = GmailBusinessContext(customerID: f.customer.id, serviceCallID: f.call.id,
+            invoiceID: invoice.id, workflow: .customerDocument)
+        let original = try GmailDraftBusinessSnapshot.capture(business, context: f.context)
+        try GmailDraftBusinessSnapshot.validate(original, business: business, context: f.context)
+        item.tracksInventory = true
+        #expect(throws: GmailDraftError.businessChanged) {
+            try GmailDraftBusinessSnapshot.validate(original, business: business, context: f.context)
+        }
+    }
+
+    @Test func legacyBusinessDraftDecodesButRequiresRegenerationBeforeSend() throws {
+        let f = try Fixture()
+        let journal = try businessJournal(f, business: f.business)
+        var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(journal.record)) as? [String: Any])
+        var content = try #require(object["content"] as? [String: Any])
+        content.removeValue(forKey: "businessSnapshot"); object["content"] = content
+        let legacy = try JSONDecoder().decode(GmailDraftRecord.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(legacy.content.businessSnapshot == nil)
+        let legacyDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("LegacyBusinessMail-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: legacyDirectory) }
+        let store = GmailDraftStore.encrypted(directory: legacyDirectory) { _ in Data(repeating: 17, count: 32) }
+        let reopened = try GmailDraftSession(record: legacy, store: store, access: {})
+        #expect(throws: GmailDraftError.businessChanged) {
+            try f.flow(to: try f.recipient, business: f.business, journal: reopened)
+        }
+        #expect(f.requests.isEmpty)
+    }
+
+    @Test func savedStatementRejectsAggregateInvoicePaymentAndRefundChanges() throws {
+        for change in 0..<12 {
+            let f = try Fixture()
+            let invoice = Invoice(customer: f.customer, amount: 100, dueDate: .distantFuture,
+                createdAt: Date(timeIntervalSince1970: 100))
+            let otherInvoice = Invoice(customer: f.customer, amount: 40, createdAt: Date(timeIntervalSince1970: 100))
+            let payment = Payment(invoice: invoice, amount: 10, date: Date(timeIntervalSince1970: 200))
+            f.context.insert(invoice); f.context.insert(otherInvoice); f.context.insert(payment); try f.context.save()
+            let business = GmailBusinessContext(customerID: f.customer.id, workflow: .accountStatement)
+            let origin = try GmailDraftBusinessSnapshot.prepareAccountStatement(customer: f.customer, context: f.context)
+            let journal = try businessJournal(f, business: business)
+            #expect(journal.record.content.businessSnapshot == origin.sourceSnapshot)
+            let saved = try JSONEncoder().encode(journal.record)
+            switch change {
+            case 0: invoice.amount = 101
+            case 1: invoice.dueDate = Date(timeIntervalSince1970: 500)
+            case 2: invoice.siteAddress = "Changed property"
+            case 3: invoice.quickBooksBalanceDue = 15
+            case 4: invoice.quickBooksLastSyncedAt = Date(timeIntervalSince1970: 600)
+            case 5: f.context.insert(Invoice(customer: f.customer, amount: 20))
+            case 6: f.context.delete(otherInvoice)
+            case 7: f.context.insert(Payment(invoice: invoice, amount: 2))
+            case 8: f.context.delete(payment)
+            case 9: payment.isRefund = true
+            case 10: payment.quickBooksRefundReceiptID = "synthetic-refund"
+            default: payment.method = "ach"; payment.providerPaymentStatus = "PENDING"
+            }
+            let reopened = try GmailDraftSession(record: JSONDecoder().decode(GmailDraftRecord.self, from: saved),
+                store: f.draftStore, access: {})
+            #expect(throws: GmailDraftError.businessChanged) {
+                try f.flow(to: try f.recipient, business: business, journal: reopened)
+            }
+            #expect(reopened.record.content.files.first?.data == Data("Original PDF".utf8))
+            #expect(f.requests.isEmpty)
+        }
+    }
+
+    @Test func statementKeepsOriginalCutoffAndIgnoresGeneratedFilesAndOtherCustomers() throws {
+        let f = try Fixture()
+        let invoice = Invoice(customer: f.customer, amount: 100, createdAt: Date(timeIntervalSince1970: 100))
+        f.context.insert(invoice); try f.context.save()
+        let business = GmailBusinessContext(customerID: f.customer.id, workflow: .accountStatement)
+        let origin = try GmailDraftBusinessSnapshot.prepareAccountStatement(customer: f.customer, context: f.context)
+        let originalCutoff = origin.statement.asOf
+        let generated = ServiceDocumentAttachment(customer: f.customer, serviceCallID: nil, kind: .customerDocument,
+            displayName: "statement.pdf", localFilePath: "/synthetic/statement.pdf", contentType: "application/pdf", fileSizeBytes: 100)
+        f.context.insert(generated)
+        let other = Customer(name: "Other statement customer")
+        let unrelated = Invoice(customer: other, amount: 9)
+        f.context.insert(other); f.context.insert(unrelated); f.context.insert(Payment(invoice: unrelated, amount: 3))
+        try GmailDraftBusinessSnapshot.validate(origin.sourceSnapshot, business: business, context: f.context)
+        generated.fileSizeBytes = 200
+        try GmailDraftBusinessSnapshot.validate(origin.sourceSnapshot, business: business, context: f.context)
+        #expect(origin.statement.asOf == originalCutoff)
+        #expect(origin.statement.preparedAt == originalCutoff)
+        #expect(origin.statement.totalBalance == 100)
+    }
+
+    @Test func statementPaymentMutationAfterPostKeepsSingleAttemptUnconfirmed() async throws {
+        let f = try Fixture()
+        let invoice = Invoice(customer: f.customer, amount: 100, createdAt: Date(timeIntervalSince1970: 100))
+        let payment = Payment(invoice: invoice, amount: 10, date: Date(timeIntervalSince1970: 200))
+        f.context.insert(invoice); f.context.insert(payment); try f.context.save()
+        let business = GmailBusinessContext(customerID: f.customer.id, workflow: .accountStatement)
+        let journal = try businessJournal(f, business: business)
+        let flow = try f.flow(to: try f.recipient, business: business, journal: journal)
+        f.beforeReply = { request in
+            if request.httpMethod == "POST" { payment.amount = 20 }
+        }
+        let first = await flow.send()
+        let repeated = await flow.send()
+        #expect(first.state == .reviewRequired)
+        #expect(repeated.state == .reviewRequired)
+        #expect(f.writes.count == 1)
+        #expect(try f.history().first?.deliveryStatus != "sent")
+    }
+
+    @Test func receiptOriginRejectsPaymentChangeBeforeMailSessionConstruction() throws {
+        let f = try Fixture()
+        let invoice = Invoice(customer: f.customer, amount: 100)
+        let payment = Payment(invoice: invoice, amount: 10)
+        f.context.insert(invoice); f.context.insert(payment); try f.context.save()
+        let business = GmailBusinessContext(customerID: f.customer.id, invoiceID: invoice.id, workflow: .receipt)
+        let origin = try GmailDraftBusinessSnapshot.capture(business, context: f.context)
+        payment.amount = 20
+        #expect(throws: GmailDraftError.businessChanged) {
+            try GmailSendWorkflow(auth: f.auth, context: f.context,
+                message: GmailOutgoingMessage(to: try f.recipient, subject: "Receipt", body: "Received $10"),
+                business: business, validateAccess: {}, sourceSnapshot: origin)
+        }
+        #expect(f.requests.isEmpty)
+    }
+
+    @Test func historyInsertionAndSaveRearmsAnExactFreshSourceLease() async throws {
+        let f = try Fixture()
+        let original = try GmailDraftSourceLease(business: f.business, context: f.context)
+        let replacement = try await original.replacingAfterHistoryWrite(business: f.business, context: f.context,
+            validatePreparation: {}, write: {
+                let history = CustomerCommunication(customer: f.customer, serviceCallID: f.call.id,
+                    recipient: try f.recipient, subject: "Fixture history", deliveryStatus: "pending")
+                f.context.insert(history)
+                try f.context.save()
+                return [history.persistentModelID, f.customer.persistentModelID]
+            })
+        #expect(replacement.snapshot == original.snapshot)
+        #expect(try f.history().count == 1)
+        try replacement.check(context: f.context)
+        #expect(throws: GmailDraftError.businessChanged) { try original.check(context: f.context) }
+        f.call.notes = "Edit after history rearm"
+        #expect(throws: GmailDraftError.businessChanged) { try replacement.check(context: f.context) }
+    }
+
+    @Test func diskHistoryInsertionAndSaveRearmsAnExactFreshSourceLease() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("DiskMailLease-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        do {
+            let f = try Fixture(storeURL: directory.appendingPathComponent("fixture.store"))
+            let recipient = try #require(f.customer.email)
+            let started = ContinuousClock.now
+            let original = try await GmailDraftSourceLease.prepare(business: f.business, context: f.context)
+            let replacement = try await original.replacingAfterHistoryWrite(business: f.business, context: f.context,
+                validatePreparation: {}, write: {
+                    let history = CustomerCommunication(customer: f.customer, serviceCallID: f.call.id,
+                        recipient: recipient, subject: "Fixture history", deliveryStatus: "pending")
+                    f.context.insert(history)
+                    try f.context.save()
+                    return [history.persistentModelID, f.customer.persistentModelID]
+                })
+            #expect(replacement.snapshot == original.snapshot)
+            try replacement.check(context: f.context)
+            #expect(throws: GmailDraftError.businessChanged) { try original.check(context: f.context) }
+            print("MAIL_DISK_LEASE_TIMING total=\(started.duration(to: .now))")
+        }
+    }
+
+    @Test func diskDelayedOwnRemoteNotificationRequiresReclassificationAndStillPasses() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("DiskMailDelayed-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let f = try Fixture(storeURL: directory.appendingPathComponent("fixture.store"))
+        let box = StoreNotificationBox()
+        let observer = NotificationCenter.default.addObserver(forName: .NSPersistentStoreRemoteChange,
+            object: nil, queue: nil) { notification in
+                if let url = notification.userInfo?[NSPersistentStoreURLKey] as? URL,
+                   url.standardizedFileURL == directory.appendingPathComponent("fixture.store").standardizedFileURL {
+                    box.retain(notification)
+                }
+            }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        let center = NotificationCenter()
+        let original = try await GmailDraftSourceLease.prepare(business: f.business, context: f.context,
+            notificationCenter: center)
+        let replacement = try await original.replacingAfterHistoryWrite(business: f.business, context: f.context,
+            validatePreparation: {}, write: {
+                let row = CustomerCommunication(customer: f.customer, recipient: try f.recipient,
+                    subject: "Fixture", deliveryStatus: "pending")
+                f.context.insert(row); try f.context.save()
+                return [row.persistentModelID, f.customer.persistentModelID]
+            })
+        for _ in 0..<100 where box.latest == nil { try await Task.sleep(for: .milliseconds(10)) }
+        let notification = try #require(box.latest)
+        let url = try #require(notification.userInfo?[NSPersistentStoreURLKey] as? URL)
+        #expect(url.standardizedFileURL == directory.appendingPathComponent("fixture.store").standardizedFileURL)
+        center.post(notification)
+        #expect(throws: GmailDraftError.businessChanged) { try replacement.checkTransportPermit(context: f.context) }
+        try await replacement.validateHistory(context: f.context)
+        try replacement.checkTransportPermit(context: f.context)
+        #expect(throws: GmailDraftError.businessChanged) { try original.check(context: f.context) }
+    }
+
+    @Test func diskBusinessSendPersistsHistoryAndDoesNotRetryAcceptedMessage() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("DiskMailSend-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let f = try Fixture(storeURL: directory.appendingPathComponent("fixture.store"))
+        let flow = try await GmailSendWorkflow.prepare(auth: f.auth, context: f.context,
+            message: GmailOutgoingMessage(to: try f.recipient, subject: "Fixture", body: "Fixture only"),
+            business: f.business, validateAccess: { if !f.allowed { throw GmailComposeError.access } })
+        #expect(await flow.send().state == .sent)
+        #expect(await flow.send().state == .sent)
+        #expect(f.writes.count == 1 && f.requests.count == 2)
+        #expect(try f.history().map(\.deliveryStatus) == ["sent"])
+    }
+
+    @Test func diskHistoryRejectsExternalThenOwnTransactionInOneInterval() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("DiskMailCoalesced-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let f = try Fixture(storeURL: directory.appendingPathComponent("fixture.store"))
+        let anchor = try #require(await GmailSourceHistoryReader.capture(f.context.container))
+        let other = ModelContext(f.context.container)
+        other.author = "external-fixture"
+        other.insert(Customer(name: "Unrelated fixture"))
+        try other.save()
+        f.context.author = "own-fixture"
+        let history = CustomerCommunication(customer: f.customer, recipient: try f.recipient,
+            subject: "Fixture", deliveryStatus: "pending")
+        f.context.insert(history); try f.context.save()
+        do {
+            _ = try await GmailSourceHistoryReader.verify(anchor, container: f.context.container,
+                ownAuthor: "own-fixture", allowedIDs: [history.persistentModelID, f.customer.persistentModelID])
+            Issue.record("A newer own-author transaction cannot hide a preceding external write.")
+        } catch { #expect(error as? GmailDraftError == .businessChanged) }
+    }
+
+    @Test func unrelatedDiskStoreSaveDoesNotRevokeSourceLease() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("DiskMailOtherStore-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let f = try Fixture(storeURL: directory.appendingPathComponent("source.store"))
+        let other = try Fixture(storeURL: directory.appendingPathComponent("other.store"))
+        let lease = try await GmailDraftSourceLease.prepare(business: f.business, context: f.context)
+        other.customer.name = "Changed in a separate store"
+        try other.context.save()
+        try await lease.validateHistory(context: f.context)
+        try lease.checkTransportPermit(context: f.context)
+    }
+
+    @Test func diskHistoryRejectsPrunedAnchor() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("DiskMailPruned-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let f = try Fixture(storeURL: directory.appendingPathComponent("fixture.store"))
+        let anchor = try #require(await GmailSourceHistoryReader.capture(f.context.container))
+        try f.context.deleteHistory(HistoryDescriptor<DefaultHistoryTransaction>())
+        do {
+            _ = try await GmailSourceHistoryReader.verify(anchor, container: f.context.container)
+            Issue.record("A pruned anchor cannot authorize a transport.")
+        } catch { #expect(error as? GmailDraftError == .businessChanged) }
+    }
+
+    @Test func confirmedHistorySaveCannotRebaseChangedConsent() async throws {
+        let f = try Fixture()
+        var saves = 0
+        let flow = try f.flow(to: try f.recipient, business: f.business, save: { context in
+            saves += 1
+            if saves == 2 { f.customer.allowsTransactionalEmail = false }
+            try context.save()
+        })
+        #expect(await flow.send().state == .reviewRequired)
+        #expect(f.writes.count == 1 && !f.customer.allowsTransactionalEmail)
+        #expect(await flow.send().state == .reviewRequired)
+        #expect(f.writes.count == 1)
+    }
+
+    @Test func historyWriteChecksCurrentAccessBeforeMutation() async throws {
+        let f = try Fixture()
+        let lease = try GmailDraftSourceLease(business: f.business, context: f.context)
+        var mutations = 0
+        do {
+            _ = try await lease.replacingAfterHistoryWrite(business: f.business, context: f.context,
+                beforeWrite: { throw GmailComposeError.access }, validatePreparation: {}, write: {
+                    mutations += 1
+                    return []
+                })
+            Issue.record("Changed access must reject before retained models are mutated.")
+        } catch { #expect(error as? GmailComposeError == .access) }
+        #expect(mutations == 0 && !f.context.hasChanges)
+    }
+
+    @Test func childPreflightCannotOutliveParentTransportPermit() async throws {
+        let root = WorkspaceProviderOperation { true }
+        var parentPermit = true
+        let parent = WorkspaceProviderOperation(parent: root, beforeTransport: {}, transportFence: {
+            if !parentPermit { throw GmailDraftError.businessChanged }
+        }, isCurrent: { true })
+        let child = WorkspaceProviderOperation(parent: parent, beforeTransport: {
+            await Task.yield()
+            parentPermit = false
+        }, transportFence: {}, isCurrent: { true })
+        let url = try #require(URL(string: "https://fixture.example.invalid/send"))
+        var request = URLRequest(url: url); request.httpMethod = "POST"
+        var sends = 0
+        do {
+            _ = try await child.data(for: request) { _ in
+                sends += 1
+                return (Data(), URLResponse(url: url, mimeType: nil, expectedContentLength: 0, textEncodingName: nil))
+            }
+            Issue.record("A parent permit invalidated during a child await must block transport.")
+        } catch { #expect(error as? GmailDraftError == .businessChanged) }
+        #expect(sends == 0 && !child.mayHaveReachedProvider)
+    }
+
+    @Test func latePermitReclassificationNeverRetriesProviderMutation() async throws {
+        let parent = WorkspaceProviderOperation { true }
+        var classifications = 0
+        let operation = WorkspaceProviderOperation(parent: parent, beforeTransport: { classifications += 1 }, transportFence: {
+            if classifications == 1 { throw GmailDraftError.businessChanged }
+        }, isCurrent: { true })
+        let url = try #require(URL(string: "https://fixture.example.invalid/send"))
+        var request = URLRequest(url: url); request.httpMethod = "POST"
+        var sends = 0
+        _ = try await operation.data(for: request) { _ in
+            sends += 1
+            return (Data(), URLResponse(url: url, mimeType: nil, expectedContentLength: 0, textEncodingName: nil))
+        }
+        #expect(classifications == 3 && sends == 1)
+    }
+
+    @Test func failedHistoryWritePermanentlyRetiresItsOneShotLease() async throws {
+        let f = try Fixture()
+        let original = try GmailDraftSourceLease(business: f.business, context: f.context)
+        do {
+            _ = try await original.replacingAfterHistoryWrite(business: f.business, context: f.context,
+                validatePreparation: {}, write: { throw GmailComposeError.save })
+            Issue.record("A failed history write must throw.")
+        } catch { #expect(error as? GmailComposeError == .save) }
+        #expect(!f.context.hasChanges)
+        #expect(throws: GmailDraftError.businessChanged) { try original.check(context: f.context) }
+    }
+
+    @Test func sourceLeaseRejectsAlreadyDirtyExcludedRowsBeforeArming() throws {
+        let f = try Fixture()
+        let unrelated = Customer(name: "Other fixture", email: "other@example.invalid")
+        let invoice = Invoice(customer: unrelated, amount: 100)
+        f.context.insert(unrelated); f.context.insert(invoice); try f.context.save()
+        invoice.notes = "Already dirty outside the captured source"
+        #expect(throws: GmailDraftError.businessChanged) {
+            try GmailDraftSourceLease(business: f.business, context: f.context)
+        }
+        #expect(f.requests.isEmpty)
+    }
+
+    @Test func sourceLeaseCannotBecomeValidAgainAfterUnsavedEditAndRollback() throws {
+        let f = try Fixture()
+        let lease = try GmailDraftSourceLease(business: f.business, context: f.context)
+        try lease.check(context: f.context)
+        f.call.notes = "Changed before transport"
+        #expect(throws: GmailDraftError.businessChanged) { try lease.check(context: f.context) }
+        f.context.rollback()
+        #expect(!f.context.hasChanges)
+        #expect(throws: GmailDraftError.businessChanged) { try lease.check(context: f.context) }
+    }
+
+    @Test func businessMutationInsidePendingHistorySavePreventsPOST() async throws {
+        let f = try Fixture()
+        let flow = try f.flow(to: try f.recipient, business: f.business, save: { context in
+            f.call.notes = "Changed inside the saving boundary"
+            try context.save()
+        })
+        #expect(await flow.send().state == .notSent)
+        #expect(f.requests.isEmpty)
+        #expect(f.call.notes == "Changed inside the saving boundary")
+    }
+
+    @Test func newStatementInvoiceInsideOwnHistorySaveCannotRebaseDraft() async throws {
+        let f = try Fixture()
+        f.context.insert(Invoice(customer: f.customer, amount: 100)); try f.context.save()
+        let business = GmailBusinessContext(customerID: f.customer.id, workflow: .accountStatement)
+        let journal = try businessJournal(f, business: business)
+        let flow = try f.flow(to: try f.recipient, business: business, journal: journal, save: { context in
+            context.insert(Invoice(customer: f.customer, amount: 250))
+            try context.save()
+        })
+        #expect(await flow.send().state == .notSent)
+        #expect(f.requests.isEmpty)
+        #expect(journal.record.state == .editing)
+    }
+
+    @Test func anotherContextsSavedChangeAfterPOSTRequiresReviewWithoutRetry() async throws {
+        let f = try Fixture()
+        let flow = try f.flow(to: try f.recipient, business: f.business)
+        f.beforeReply = { request in
+            guard request.httpMethod == "POST" else { return }
+            let other = ModelContext(f.context.container)
+            let id = f.call.id
+            let call = try #require(try other.fetch(FetchDescriptor<ServiceCall>(predicate: #Predicate { $0.id == id })).first)
+            call.notes = "Other context update"
+            try other.save()
+        }
+        #expect(await flow.send().state == .reviewRequired)
+        #expect(await flow.send().state == .reviewRequired)
+        #expect(f.writes.count == 1 && f.requests.count == 1)
+    }
+
+    @Test func newlyInsertedStatementPaymentAfterPOSTRequiresReviewWithoutRetry() async throws {
+        let f = try Fixture()
+        let invoice = Invoice(customer: f.customer, amount: 100)
+        f.context.insert(invoice); try f.context.save()
+        let business = GmailBusinessContext(customerID: f.customer.id, workflow: .accountStatement)
+        let flow = try f.flow(to: try f.recipient, business: business)
+        f.beforeReply = { request in
+            if request.httpMethod == "POST" {
+                f.context.insert(Payment(invoice: invoice, amount: 25, method: "Cash"))
+            }
+        }
+        #expect(await flow.send().state == .reviewRequired)
+        #expect(await flow.send().state == .reviewRequired)
+        #expect(f.writes.count == 1 && f.requests.count == 1)
+    }
+
+    @Test func anotherContextsSaveInsideOwnHistoryWriteCannotBeExempted() async throws {
+        let f = try Fixture()
+        let flow = try f.flow(to: try f.recipient, business: f.business, save: { context in
+            let other = ModelContext(context.container)
+            let id = f.call.id
+            let call = try #require(try other.fetch(FetchDescriptor<ServiceCall>(predicate: #Predicate { $0.id == id })).first)
+            call.notes = "Saved by a different context during the history write"
+            try other.save()
+            try context.save()
+        })
+        #expect(await flow.send().state == .notSent)
+        #expect(f.requests.isEmpty)
+    }
+
+    @Test func saveDuringPreparationRevokesLeaseBeforeItsCaptureCanRebase() throws {
+        let f = try Fixture()
+        #expect(throws: GmailDraftError.businessChanged) {
+            try GmailDraftSourceLease(business: f.business, context: f.context, validatePreparation: {
+                let other = ModelContext(f.context.container)
+                other.insert(Customer(name: "Duplicate recipient", email: f.customer.email))
+                try other.save()
+            })
+        }
+        #expect(f.requests.isEmpty)
+    }
+
+    @Test func remoteStoreEventRevokesLeaseSynchronouslyBeforeAnotherActorTurn() throws {
+        let f = try Fixture()
+        let center = NotificationCenter()
+        let lease = try GmailDraftSourceLease(business: f.business, context: f.context, notificationCenter: center)
+        center.post(name: .NSPersistentStoreRemoteChange, object: nil)
+        #expect(throws: GmailDraftError.businessChanged) { try lease.check(context: f.context) }
+    }
+
+    private func businessJournal(_ f: Fixture, business: GmailBusinessContext) throws -> GmailDraftSession {
+        let scope = GmailDraftScope(companyID: UUID(), backendOrigin: "https://fixture.example.invalid", actorEmail: f.email, googleEmail: f.email)
+        let content = GmailDraftContent(to: try f.recipient, subject: "Repair appointment", body: "Fixture only.",
+            files: [.init(.init(fileName: "original.pdf", mimeType: "application/pdf", data: Data("Original PDF".utf8)))],
+            business: business, requiresBusinessContext: true,
+            businessSnapshot: try GmailDraftBusinessSnapshot.capture(business, context: f.context))
+        return try GmailDraftSession(record: .init(id: UUID(), scope: scope, content: content), store: f.draftStore, access: {})
     }
 
     @Test func knownCustomerGeneralMailIsAuditedWithoutRequiringAJobTemplate() async throws {

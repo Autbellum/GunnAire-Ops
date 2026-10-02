@@ -16,6 +16,52 @@ except ModuleNotFoundError:  # Direct execution from the Tools directory.
     import release_preflight
 
 
+class ReleaseBinaryMarkerTests(unittest.TestCase):
+    def test_exact_production_property_line_is_allowed(self) -> None:
+        self.assertEqual(
+            release_preflight.forbidden_release_markers("other\nbootstrapStore\nbootstrapStore\n"),
+            [],
+        )
+
+    def test_production_billing_labels_keep_their_case_sensitive_meaning(self) -> None:
+        # These are real production type names, persisted field names and
+        # storage identifiers, not the DEBUG-only schema bootstrap.
+        labels = (
+            "JobBillingBootstrapStore", "JobBillingBootstrap", "importedBootstrapEditID",
+            "JobBillingBootstrap-v1", "JobBillingBootstrapEncryption-v1",
+        )
+        self.assertEqual(release_preflight.forbidden_release_markers("\n".join(labels)), [])
+
+    def test_bootstrap_property_exception_does_not_accept_other_strings(self) -> None:
+        for value in (
+            "prefixbootstrapStore", "bootstrapStoreSuffix", " bootstrapStore", "bootstrapStore ",
+            "bootstrapStore\t", "bootstrap", "schema-bootstrap@gunnaire.invalid",
+            "bootstrapStore\nunsafe-bootstrap",
+        ):
+            with self.subTest(value=value):
+                self.assertIn("bootstrap", release_preflight.forbidden_release_markers(value))
+
+    def test_real_schema_entrypoints_and_capitalized_markers_are_blocked(self) -> None:
+        for marker in (
+            "-initializeCloudKitSchema", "-cleanupCloudKitSchemaBootstrap",
+            "GunnAireCloudKitSchemaBootstrap", "__GUNNAIRE_CLOUDKIT_SCHEMA_BOOTSTRAP__",
+            "SCHEMA-BOOTSTRAP", "-disableCloudKitForTesting",
+            "GunnAireCloudKitRoundTripProbe", "CloudKitRoundTripCanary", "CloudKitConflict",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, release_preflight.forbidden_release_markers(f"bootstrapStore\n{marker}\n"))
+                self.assertIn(marker, release_preflight.forbidden_release_markers(f"prefix{marker}suffix"))
+
+    def test_existing_ui_test_and_local_host_guards_remain_blocked(self) -> None:
+        for value, marker in (
+            ("-uiTestAuthenticatedAdmin", "-uiTest"),
+            ("https://localhost:8080/path", "localhost"),
+            ("http://127.0.0.1:11434", "127.0.0.1"),
+        ):
+            with self.subTest(value=value):
+                self.assertIn(marker, release_preflight.forbidden_release_markers(f"bootstrapStore\n{value}"))
+
+
 class CloudKitV23PreflightTests(unittest.TestCase):
     def setUp(self) -> None:
         self.production = {

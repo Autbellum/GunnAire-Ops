@@ -6,8 +6,8 @@ import XCTest
 /// Pins the schema seeder against what the app actually writes to CloudKit.
 ///
 /// The seeder exists because the Development schema is missing both the six
-/// record types a staff invitation writes and nine SwiftData stored properties
-/// added between 2026-09-07 and 2026-09-14. An earlier version seeded only the
+/// record types a staff invitation writes and eleven SwiftData stored properties
+/// added between 2026-09-07 and 2026-10-01. An earlier version seeded only the
 /// staff root and the share, which would have left an invitation failing on the
 /// very next write. These tests fail if the seeded set drifts from the writers
 /// or if a field's value kind stops matching how this container stores it.
@@ -76,9 +76,10 @@ final class CloudKitSchemaSeedTests: XCTestCase {
 
     // MARK: - Missing SwiftData model fields
 
-    /// The exact nine stored properties found absent from the Development
-    /// schema, with the record type each is mirrored under.
+    /// The exact stored properties requiring a Development schema seed,
+    /// with the record type each is mirrored under.
     private let expectedMissing: [String: Set<String>] = [
+        "CD_ServiceCall": ["CD_googleEventConfirmedAt", "CD_googleCalendarPendingAt"],
         "CD_Payment": ["CD_collectionAttemptID", "CD_providerPaymentStatus"],
         "CD_Invoice": ["CD_quickBooksPaymentReviewJSON", "CD_milestoneDraftReceiptJSON"],
         "CD_Item": [
@@ -93,7 +94,7 @@ final class CloudKitSchemaSeedTests: XCTestCase {
         let actual = CloudKitSchemaSeed.missingModelFields.mapValues { Set($0.keys) }
         XCTAssertEqual(actual, expectedMissing)
         let total = CloudKitSchemaSeed.missingModelFields.values.reduce(0) { $0 + $1.count }
-        XCTAssertEqual(total, 9, "Nine stored properties were absent from the Development schema.")
+        XCTAssertEqual(total, 11, "Eleven stored properties require schema registration.")
     }
 
     func testEveryMirroredNameCarriesCoreDataPrefix() {
@@ -118,6 +119,9 @@ final class CloudKitSchemaSeedTests: XCTestCase {
 
         let int64 = try XCTUnwrap(CloudKitSchemaSeed.value(for: .int64) as? NSNumber)
         XCTAssertEqual(String(cString: int64.objCType), "q", "Bool fields must serialize as INT(64), not DOUBLE")
+
+        XCTAssertTrue(CloudKitSchemaSeed.value(for: .date) is NSDate,
+                      "Optional Date fields must register as CloudKit DATE/TIME.")
     }
 
     func testClockDriftFieldsUseTheKindsMatchingTheirSwiftTypes() {
@@ -131,6 +135,12 @@ final class CloudKitSchemaSeedTests: XCTestCase {
         // collectionAttemptID is UUID?, stored as STRING exactly like the
         // already-registered refundedPaymentID: UUID? column.
         XCTAssertEqual(CloudKitSchemaSeed.missingModelFields["CD_Payment"]?["CD_collectionAttemptID"], .string)
+    }
+
+    func testCalendarPublicationDatesUseDateTimeFields() {
+        let call = CloudKitSchemaSeed.missingModelFields["CD_ServiceCall"]
+        XCTAssertEqual(call?["CD_googleEventConfirmedAt"], .date)
+        XCTAssertEqual(call?["CD_googleCalendarPendingAt"], .date)
     }
 
     /// The seeded record types must not collide with the staff sharing types:

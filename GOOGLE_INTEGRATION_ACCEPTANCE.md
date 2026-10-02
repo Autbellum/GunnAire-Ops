@@ -1,6 +1,6 @@
 # Google Workspace Integration Acceptance
 
-Last reviewed: 2026-09-05
+Last reviewed: 2026-10-01
 
 ## Supported business surface
 
@@ -32,7 +32,7 @@ granting broad Drive browsing.
 | Identity | The normalized Google email must exactly match the primary GunnAire business-login email before any Google integration is usable. The backend-issued app session is also bound to the verified provider subject and email. |
 | Scopes | `openid`, `profile`, `email`, Calendar, `gmail.modify`, and least-privilege `drive.file`; broad Drive and Workspace administrator scopes are excluded. Legacy tokens without confirmed Drive scope fail closed. |
 | Gmail | Conventional mail presentation hides provider payload/MIME details. Customer sends revalidate role, record relationship, recipient, consent, and workflow context. Provider-confirmed delivery is required before operational success is recorded. Delete moves mail to Gmail Trash. |
-| Calendar | Imports preserve external event detail and remain read-only. Only current-version GunnAire-owned events can be patched or deleted, and updates are limited to start/end time. Calendar and event lists now follow every `nextPageToken`, preserve the original filters, accept empty collections, and reject repeated or unexpectedly unbounded page chains rather than returning a partial dispatch schedule. |
+| Calendar | Imports preserve external title, location, notes, and guests. A local time or staff change to an imported job can adopt only its exact original event after a read and version check, then patch its schedule and staff delivery; a customer-only change does not adopt it. App-owned events retain their saved route and event ID, durable pending marker, and guarded retry. Calendar and event lists follow every `nextPageToken`, preserve the original filters, accept empty collections, and reject repeated or unexpectedly unbounded page chains rather than returning a partial dispatch schedule. |
 | Drive | Administrators archive only supported internal/customer files. The app reserves a stable Drive ID, uses resumable upload, reconciles ambiguous outcomes against app-owned metadata, validates returned links, retains retry state, and cannot list unrelated Drive content. |
 | Local storage | OAuth tokens and the verified application session are stored in Keychain. Provider tokens are not copied into customer records, audit text, screenshots, or this acceptance file. |
 
@@ -48,6 +48,12 @@ granting broad Drive browsing.
 - The behavior follows Google's documented `nextPageToken` contract for
   Calendar list resources:
   <https://developers.google.com/workspace/calendar/api/guides/pagination>.
+- On 2026-10-01, build 2026100112 passed 120 focused signed iPad simulator
+  Calendar/customer tests, 115 Calendar retry tests after a bounded-query
+  correction, and the full 2,875-test iPad unit suite, with zero
+  failures or skips. The clean simulator app build had zero compiler warnings.
+  These tests cover scoped appointment revisions, imported-event write-back,
+  and pending retries; they do not prove that a user's event reached Google.
 
 ## Production acceptance still required
 
@@ -64,7 +70,8 @@ These are provider/account actions and are not inferred from source tests:
    is recorded.
 5. On a signed test device and noncustomer test records, accept: login/logout
    and revoked-grant recovery; Gmail read/send/reply/trash with an attachment;
-   multi-calendar import and app-managed create/reschedule/delete; and Drive
+   multi-calendar import, app-managed create/reschedule/delete, imported-event
+   time/staff write-back, and the intended staff notification; and Drive
    initial upload, interrupted retry, duplicate reconciliation, link open, and
    trashed-file recovery.
 6. Retain redacted evidence, verify that unrelated Drive files and unrelated

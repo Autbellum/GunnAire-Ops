@@ -203,6 +203,17 @@ struct QuickBooksBillingWorkflowTests {
         #expect(f.customer.quickBooksID == nil)
     }
 
+    @Test func backgroundDraftRevisionMatchesSavedDraftAndRejectsUnsavedEdit() async throws {
+        let f = try Fixture()
+        let flow = try f.flow()
+        #expect(try await flow.billingDraftRevisionAsync() == flow.billingDraftRevision())
+        f.invoice.notes = "Changed while the billing draft remains open"
+        await #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try await flow.billingDraftRevisionAsync()
+        }
+        f.owner.finish(flow.run)
+    }
+
     @Test func invoiceUsesServerConfirmedCustomerAndRetainsSoldLines() async throws {
         let f = try Fixture(mapped: false)
         f.item.quickBooksID = "I1"
@@ -658,7 +669,7 @@ struct QuickBooksBillingWorkflowTests {
         #expect(attachment.quickBooksAttachableID == "A1")
         #expect(attachment.quickBooksAttachedEntityKeysRaw?.contains("D1") == true)
         #expect(files.requests.last?.path.hasSuffix("/send") == true)
-        #expect(try files.store.list(files.owner).first?.file.filename == "Fixture report.txt")
+        #expect(try await files.store.list(files.owner).first?.file.filename == "Fixture report.txt")
         #expect(f.requests.allSatisfy { !$0.url!.path.hasSuffix("/upload") })
         try await flow.uploadLinkedAttachments()
         #expect(files.sends == 1); #expect(files.reservations == 1)
@@ -681,6 +692,155 @@ struct QuickBooksBillingWorkflowTests {
         #expect(f.invoice.quickBooksID == "D1")
         #expect(f.invoice.quickBooksSyncStatus == "synced")
         #expect(files.sends == 1)
-        #expect(try files.store.list(files.owner).first?.dispatchStarted == true)
+        #expect(try await files.store.list(files.owner).first?.dispatchStarted == true)
+    }
+
+    // MARK: - Original company proof for saved-document files
+
+    /// The production decision function over an in-memory stand-in for the
+    /// device Keychain proof store. Bind is explicit review; require never binds.
+    @MainActor final class RealmProofMemory {
+        var stored: [String: AutomaticOutboundSync.RealmRecord] = [:]
+        func bind(_ record: AutomaticOutboundSync.RealmRecord) throws {
+            switch AutomaticOutboundSync.realmDecision(stored: stored[record.account], expected: record, explicitReview: true) {
+            case .proceed: return
+            case .bind: stored[record.account] = record
+            case .reviewRequired: throw AutomaticOutboundSync.RealmError.reviewRequired
+            case .wrongRealm: throw AutomaticOutboundSync.RealmError.wrongRealm
+            }
+        }
+        func requireProceed(_ records: [AutomaticOutboundSync.RealmRecord]) throws {
+            guard !records.isEmpty else { throw AutomaticOutboundSync.RealmError.reviewRequired }
+            for record in records {
+                switch AutomaticOutboundSync.realmDecision(stored: stored[record.account], expected: record, explicitReview: false) {
+                case .proceed: continue
+                case .wrongRealm: throw AutomaticOutboundSync.RealmError.wrongRealm
+                case .bind, .reviewRequired: throw AutomaticOutboundSync.RealmError.reviewRequired
+                }
+            }
+        }
+    }
+
+    private func proof(_ f: Fixture, _ files: QuickBooksDocumentWorkflowFixture,
+                       realmID: String = "billing-realm") -> AutomaticOutboundSync.RealmRecord {
+        .init(companyID: files.owner.companyID, documentType: "invoice", documentID: f.invoice.id,
+              customerID: f.customer.id, createdAt: f.invoice.createdAt,
+              realmID: realmID, environment: Config.QuickBooks.environment)
+    }
+
+    @Test func savedDocumentFileUploadsOnlyWithMatchingOriginalCompanyProof() async throws {
+        let f = try Fixture()
+        let files = try QuickBooksDocumentWorkflowFixture(); defer { files.cleanup() }
+        f.documentFixture = files
+        let memory = RealmProofMemory()
+        files.realmProofDecision = { try memory.requireProceed($0) }
+        let attachment = try f.addAttachment()
+        defer { try? FileManager.default.removeItem(at: attachment.localFileURL) }
+        let flow = try f.flow()
+        _ = try await flow.execute()
+        memory.stored[proof(f, files).account] = proof(f, files)
+        try await flow.uploadLinkedAttachments()
+        #expect(attachment.quickBooksAttachableID == "A1")
+        #expect(files.reservations == 1 && files.sends == 1)
+        #expect(files.realmProofRequests == [[proof(f, files)]],
+                "The gate must ask for this exact company, realm, environment and original document.")
+    }
+
+    @Test func savedDocumentFileWithoutOriginalCompanyProofSendsNothing() async throws {
+        let f = try Fixture()
+        let files = try QuickBooksDocumentWorkflowFixture(); defer { files.cleanup() }
+        f.documentFixture = files
+        let memory = RealmProofMemory()
+        files.realmProofDecision = { try memory.requireProceed($0) }
+        let attachment = try f.addAttachment()
+        defer { try? FileManager.default.removeItem(at: attachment.localFileURL) }
+        let flow = try f.flow()
+        _ = try await flow.execute()
+        // A proof saved before the company was known never authorizes a file.
+        memory.stored[proof(f, files).account] = .init(companyID: files.owner.companyID, documentType: "invoice",
+            documentID: f.invoice.id, customerID: f.customer.id, createdAt: f.invoice.createdAt,
+            realmID: nil, environment: nil)
+        await fails { try await flow.uploadLinkedAttachments() }
+        #expect(files.requests.isEmpty, "No upload service read, reservation or send without proof.")
+        #expect(try await files.store.list(files.owner).isEmpty, "No original-file journal row is created.")
+        #expect(attachment.quickBooksAttachableID == nil)
+        #expect(attachment.quickBooksSyncError == AutomaticOutboundSync.RealmError.reviewRequired.localizedDescription)
+        #expect(f.invoice.quickBooksSyncStatus == "synced")
+    }
+
+    @Test func savedDocumentFileProvenForAnotherCompanySendsNothing() async throws {
+        let f = try Fixture()
+        let files = try QuickBooksDocumentWorkflowFixture(); defer { files.cleanup() }
+        f.documentFixture = files
+        let memory = RealmProofMemory()
+        files.realmProofDecision = { try memory.requireProceed($0) }
+        let attachment = try f.addAttachment()
+        defer { try? FileManager.default.removeItem(at: attachment.localFileURL) }
+        let flow = try f.flow()
+        _ = try await flow.execute()
+        let other = proof(f, files, realmID: "other-realm")
+        memory.stored[other.account] = other
+        await fails { try await flow.uploadLinkedAttachments() }
+        #expect(files.requests.isEmpty)
+        #expect(attachment.quickBooksAttachableID == nil)
+        #expect(attachment.quickBooksSyncError == AutomaticOutboundSync.RealmError.wrongRealm.localizedDescription)
+    }
+
+    @Test func alreadyDispatchedOriginalStillRecoversWithoutAnotherProofOrSend() async throws {
+        let f = try Fixture()
+        let files = try QuickBooksDocumentWorkflowFixture(); defer { files.cleanup() }
+        f.documentFixture = files
+        let memory = RealmProofMemory()
+        files.realmProofDecision = { try memory.requireProceed($0) }
+        memory.stored[proof(f, files).account] = proof(f, files)
+        let attachment = try f.addAttachment()
+        defer { try? FileManager.default.removeItem(at: attachment.localFileURL) }
+        let flow = try f.flow()
+        _ = try await flow.execute()
+        // The provider accepted the send but its reply was lost.
+        files.beforeResponse = { path in if path.hasSuffix("/send") { throw URLError(.networkConnectionLost) } }
+        await fails { try await flow.uploadLinkedAttachments() }
+        #expect(files.sends == 1)
+        #expect(try await files.store.list(files.owner).first?.dispatchStarted == true)
+        // Proof is no longer available, yet reconciling the dispatched original
+        // is not a new write and must still apply the provider's receipt.
+        memory.stored.removeAll()
+        files.beforeResponse = nil
+        try await flow.uploadLinkedAttachments()
+        #expect(attachment.quickBooksAttachableID == "A1")
+        #expect(files.sends == 1 && files.reservations == 1)
+        #expect(files.realmProofRequests.count == 1)
+    }
+
+    @Test func manualPublishBindsOriginalCompanyBeforeWritingAndUploadsItsFile() async throws {
+        let f = try Fixture()
+        let files = try QuickBooksDocumentWorkflowFixture(); defer { files.cleanup() }
+        f.documentFixture = files
+        let memory = RealmProofMemory()
+        files.realmProofDecision = { try memory.requireProceed($0) }
+        let attachment = try f.addAttachment()
+        defer { try? FileManager.default.removeItem(at: attachment.localFileURL) }
+        let flow = try f.flow()
+        try await AutomaticOutboundSync.bindExplicitlyReviewed(flow, bind: { try memory.bind($0) })
+        #expect(f.requests.isEmpty, "Binding happens before any QuickBooks request.")
+        #expect(memory.stored[proof(f, files).account] == proof(f, files))
+        _ = try await flow.execute()
+        try await flow.uploadLinkedAttachments()
+        #expect(f.invoice.quickBooksID == "D1")
+        #expect(attachment.quickBooksAttachableID == "A1")
+        #expect(files.sends == 1)
+    }
+
+    @Test func manualPublishForDocumentProvenInAnotherCompanyStopsBeforeAnyWrite() async throws {
+        let f = try Fixture()
+        let memory = RealmProofMemory()
+        let files = try QuickBooksDocumentWorkflowFixture(); defer { files.cleanup() }
+        let other = proof(f, files, realmID: "other-realm")
+        memory.stored[other.account] = other
+        let flow = try f.flow()
+        await fails { try await AutomaticOutboundSync.bindExplicitlyReviewed(flow, bind: { try memory.bind($0) }) }
+        #expect(f.requests.isEmpty)
+        #expect(!flow.attemptedWrite)
+        #expect(memory.stored[other.account] == other, "A wrong-company proof is never overwritten.")
     }
 }

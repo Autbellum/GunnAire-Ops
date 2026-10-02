@@ -885,6 +885,7 @@ private struct FleetServiceSheet: View {
                 actorTechnicianID: actorTechnicianID
             )
             modelContext.insert(event)
+            var savedAttachment: ServiceDocumentAttachment?
             if let importedFileURL {
                 let attachment = try FleetAttachmentStore.makeAttachment(
                     sourceURL: importedFileURL,
@@ -892,8 +893,12 @@ private struct FleetServiceSheet: View {
                     event: event
                 )
                 modelContext.insert(attachment)
+                savedAttachment = attachment
             }
             try modelContext.save()
+            if let savedAttachment {
+                AutomaticGoogleDriveArchive.shared.wakeAfterSave(savedAttachment, context: modelContext)
+            }
             onSaved("Recorded \(category.displayName.lowercased()) for \(vehicle.unitNumber).")
             dismiss()
         } catch {

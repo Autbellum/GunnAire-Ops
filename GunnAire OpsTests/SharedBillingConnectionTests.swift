@@ -87,6 +87,19 @@ import Testing
         #expect(customer.connectionRevision == f.epoch)
     }
 
+    @Test func backgroundConnectionDecodePreservesIdentityAndRejectsMalformedPayload() async throws {
+        let f = try BillingNativeWorkflowTests.Fixture()
+        let identity = SharedBillingIdentity(companyID: f.company, documentType: .invoice,
+            localDocumentID: f.app.invoice.id, localCustomerID: f.app.customer.id,
+            serviceCallID: nil, projectMilestoneID: nil)
+        let connection = try await SharedBillingConnection.decodeAsync(connectionData(f, path: identity.path))
+        try connection.validate(identity)
+        #expect(connection.connectionRevision == f.epoch)
+        await #expect(throws: DecodingError.self) {
+            try await SharedBillingConnection.decodeAsync(Data("{\"realmID\":1}".utf8))
+        }
+    }
+
     @Test func staleOrMalformedDiscoveryCannotStartAWorkflow() async throws {
         for changes: [String: Any] in [["companyID": UUID().uuidString], ["localDocumentID": UUID().uuidString],
             ["localCustomerID": UUID().uuidString], ["documentType": "Estimate"], ["realmID": ""],
@@ -133,6 +146,89 @@ import Testing
             #expect(f.app.invoice.catalogSnapshotJSON == original && f.app.invoice.quickBooksID == nil)
             #expect(f.writes == 0 && f.app.requests.isEmpty && f.journals.isEmpty)
         }
+    }
+
+    @Test func transientConnectionReadRecoversSavedDocumentWithOnePublication() async throws {
+        for estimate in [false, true] {
+            let f = try BillingNativeWorkflowTests.Fixture()
+            var connectionReads = 0
+            let first = try prepare(f, estimate: estimate, beforeDiscovery: {
+                connectionReads += 1
+                throw URLError(.notConnectedToInternet)
+            })
+            await #expect(throws: SharedBillingConnectionError.unavailable) {
+                try await first.makeWorkflow(lifecycle: f.app.owner, billingJournal: f.app.billingJournal)
+            }
+            #expect(connectionReads == 1 && f.writes == 0 && f.journals.isEmpty)
+            #expect(f.calls.isEmpty && f.app.requests.isEmpty)
+
+            let reopened = ModelContext(f.app.context.container)
+            let document: QuickBooksBillingDocument
+            if estimate {
+                let id = f.app.estimate.id
+                let saved = try #require(reopened.fetch(FetchDescriptor<Estimate>(
+                    predicate: #Predicate { $0.id == id })).first)
+                #expect(saved.quickBooksID == nil)
+                document = .estimate(saved)
+            } else {
+                let id = f.app.invoice.id
+                let saved = try #require(reopened.fetch(FetchDescriptor<Invoice>(
+                    predicate: #Predicate { $0.id == id })).first)
+                #expect(saved.quickBooksID == nil)
+                document = .invoice(saved)
+            }
+            let client = BillingPublicationClient { path, method, body in
+                if path.hasPrefix("/api/billing-publications/connection?") {
+                    connectionReads += 1
+                    #expect(method == "GET" && body == nil)
+                    return try connectionData(f, path: path)
+                }
+                return try f.reply(path, method, body)
+            }
+            let recovered = try SharedBillingPreparation(document: document, context: reopened,
+                isCurrent: { true }, validateAccess: {
+                    if !f.app.authorized { throw QuickBooksBillingWorkflowError.accessDenied }
+                }, client: client,
+                catalog: { _ in throw CatalogPublicationError.accessRequired },
+                customer: { _ in throw CustomerPublicationError.accessRequired },
+                fixtureCompanyID: f.company)
+            let flow = try await recovered.makeWorkflow(lifecycle: f.app.owner,
+                billingJournal: f.app.billingJournal)
+            let result = try await flow.execute()
+            #expect(connectionReads == 2)
+            #expect(f.writes == 1)
+            #expect(f.calls.filter { $0.0 == "/api/billing-publications" && $0.1 == "POST" }.count == 1)
+            #expect((estimate ? result.estimate?.Id : result.invoice?.Id) == "D1")
+            #expect(f.app.requests.isEmpty)
+            switch document {
+            case .estimate(let saved):
+                #expect(AutomaticOutboundSync.pendingDocumentKeys(invoices: [], estimates: [saved]).isEmpty)
+            case .invoice(let saved):
+                #expect(AutomaticOutboundSync.pendingDocumentKeys(invoices: [saved], estimates: []).isEmpty)
+            }
+            f.finish(flow)
+        }
+    }
+
+    @Test func savedInvoicePaymentRevisionSurvivesFreshContextFetchAndStillDetectsAmountChange() throws {
+        let f = try BillingNativeWorkflowTests.Fixture()
+        let payment = Payment(invoice: f.app.invoice, amount: 20)
+        f.app.context.insert(payment)
+        try f.app.context.save()
+
+        let reopened = ModelContext(f.app.context.container)
+        let invoiceID = f.app.invoice.id
+        func revisions() throws -> [QuickBooksBillingPaymentRevision] {
+            try reopened.fetch(FetchDescriptor<Payment>()).filter { $0.invoice?.id == invoiceID }
+                .sorted { $0.id.uuidString < $1.id.uuidString }.map(QuickBooksBillingPaymentRevision.init)
+        }
+        let first = try revisions()
+        #expect(first.count == 1)
+        #expect(first.first?.recordID == payment.persistentModelID)
+        #expect(try revisions() == first)
+        let saved = try #require(reopened.fetch(FetchDescriptor<Payment>()).first)
+        saved.amount = 30
+        #expect(try revisions() != first)
     }
 
     @Test func replacementGrantAfterDiscoveryCannotPublishOriginalUnderNewAuthorization() async throws {
