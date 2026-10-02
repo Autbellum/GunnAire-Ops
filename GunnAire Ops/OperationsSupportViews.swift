@@ -2743,6 +2743,7 @@ struct OnsiteDocumentationView: View {
             }
 
             try modelContext.save()
+            AutomaticGoogleDriveArchive.shared.wakeAfterSave(attachment, context: modelContext)
             syncGeneratedOnsiteReportToCompanyStorage(attachment, data: data) {
                 try validateDocumentAccess(call: call, document: nil, includesFinancials: includesFinancials)
             }
@@ -2919,6 +2920,7 @@ struct OnsiteDocumentationView: View {
                 attachment = generated
             }
             try modelContext.save()
+            AutomaticGoogleDriveArchive.shared.wakeAfterSave(attachment, context: modelContext)
             syncGeneratedBillingDocumentToCompanyStorage(attachment, data: data, validateAccess: validateUploadAccess)
             try QuickBooksInvoiceAttachmentSync.syncPendingServiceReports(
                 estimates: estimates,
@@ -5343,6 +5345,7 @@ private struct CustomerEditorView: View {
             modelContext.insert(attachment)
             agreement.linkGeneratedDocument(attachment.id)
             try modelContext.save()
+            AutomaticGoogleDriveArchive.shared.wakeAfterSave(attachment, context: modelContext)
             syncMaintenanceAgreementDocumentIfPossible(attachment, data: data)
         } catch {
             customerActionMessage = "Agreement saved, but its PDF could not be generated: \(error.localizedDescription)"

@@ -66,7 +66,7 @@ struct GoogleDriveFile: Codable, Equatable, Identifiable {
     }
 }
 
-struct GoogleDriveUploadMetadata: Codable, Equatable {
+nonisolated struct GoogleDriveUploadMetadata: Codable, Equatable {
     let id: String
     let name: String
     let mimeType: String
@@ -92,7 +92,7 @@ struct GoogleDriveUploadMetadata: Codable, Equatable {
     }
 }
 
-enum GoogleDriveRequestFactory {
+nonisolated enum GoogleDriveRequestFactory {
     static let returnedFileFields = "id,name,mimeType,webViewLink,trashed,appProperties"
 
     static func generateFileID(accessToken: String) throws -> URLRequest {
@@ -371,23 +371,27 @@ final class GoogleDriveAPI {
 
         for _ in 0..<4 {
             do {
-                let request: URLRequest
-                if shouldQueryStatus {
-                    request = try GoogleDriveRequestFactory.queryUploadStatus(
+                let currentOffset = offset
+                let queryStatus = shouldQueryStatus
+                // A resumed upload can copy the entire document into its
+                // request body. Construct that body off the UI actor.
+                let request = try await Task.detached(priority: .utility) {
+                    if queryStatus {
+                        return try GoogleDriveRequestFactory.queryUploadStatus(
+                            sessionURL: sessionURL,
+                            totalLength: data.count,
+                            accessToken: accessToken
+                        )
+                    }
+                    return try GoogleDriveRequestFactory.uploadContent(
                         sessionURL: sessionURL,
+                        data: Data(data.dropFirst(currentOffset)),
                         totalLength: data.count,
-                        accessToken: accessToken
-                    )
-                } else {
-                    request = try GoogleDriveRequestFactory.uploadContent(
-                        sessionURL: sessionURL,
-                        data: Data(data.dropFirst(offset)),
-                        totalLength: data.count,
-                        offset: offset,
+                        offset: currentOffset,
                         mimeType: mimeType,
                         accessToken: accessToken
                     )
-                }
+                }.value
 
                 let (responseData, response) = try await send(request, operation: operation)
                 switch response.statusCode {
