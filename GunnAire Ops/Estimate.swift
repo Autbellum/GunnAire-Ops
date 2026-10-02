@@ -39,7 +39,7 @@ enum EstimateApprovalMethod: String, CaseIterable, Identifiable, Codable {
 
     var id: String { rawValue }
 
-    var displayName: String {
+    nonisolated var displayName: String {
         switch self {
         case .inPersonSignature: "In-person signature"
         case .email: "Email approval"
