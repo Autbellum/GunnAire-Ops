@@ -1,4 +1,5 @@
 from pathlib import Path
+import hashlib
 import sqlite3
 import tempfile
 import unittest
@@ -7,6 +8,7 @@ import uuid
 from Backend import google_connections
 from Backend.billing_pdf_archive_ledger import BillingPDFArchiveLedger
 from Backend.billing_pdf_archive_routes import BillingPDFArchiveRoutes, RouteFailure
+from Backend.billing_pdf_drive_readback import ProviderReadbackError
 
 
 class FakeApprovedGoogleConnection:
@@ -31,6 +33,25 @@ class FakeApprovedGoogleConnection:
     def check_grant(self, row, grant_id, scopes):
         if row is None or row["id"] != grant_id or row["state"] != "active" or scopes != google_connections.FEATURE_SCOPES["drive"]:
             raise google_connections.ConnectionError("connection_changed", "Reconnect Google.", 403)
+
+    def access(self, session_id, company, grant_id, scopes):
+        if session_id != "approved-session":
+            raise google_connections.ConnectionError("access_required", "Sign in again.", 403)
+        return "fixture-access-token"
+
+
+class FakeReadback:
+    def __init__(self, *, succeeds=False):
+        self.succeeds = succeeds
+        self.calls = 0
+
+    def verify(self, key, reservation, access_token):
+        self.calls += 1
+        if not self.succeeds:
+            raise ProviderReadbackError("Drive PDF revision was not verified")
+        if access_token != "fixture-access-token":
+            raise ProviderReadbackError("Wrong Google grant")
+        return "https://drive.google.com/file/d/" + reservation.drive_file_id + "/view"
 
 
 class BillingPDFArchiveRoutesTests(unittest.TestCase):
@@ -64,11 +85,12 @@ class BillingPDFArchiveRoutesTests(unittest.TestCase):
                                (self.company, "owner@gunnaire.com", self.subject))
         self.routes = BillingPDFArchiveRoutes(self.database, self.google,
             primary_admin_email="owner@gunnaire.com", container_id="iCloud.com.gunnaire.businesssuite",
-            ledger=self.ledger)
+            ledger=self.ledger, readback=FakeReadback())
         self.payload = {
             "companyID": self.company, "grantID": self.grant,
             "containerID": "iCloud.com.gunnaire.businesssuite", "environment": "production",
             "replicaID": self.replica, "cloudAccountHash": "account-hash",
+            "expectedDriveAccount": "google-subject:" + hashlib.sha256(self.subject.encode()).hexdigest(),
             "documentKind": "invoice", "documentID": self.document,
             "sourceDigest": "a" * 64, "rendererVersion": "customer-pdf-v1",
         }
@@ -100,6 +122,21 @@ class BillingPDFArchiveRoutesTests(unittest.TestCase):
         self.assertNotIn("lease_token", self.routes.dispatch("GET", "/api/google/drive/billing-pdf-intents",
             self.payload, "approved-session")["reservation"])
 
+    def test_read_only_identity_preflight_binds_original_google_subject(self):
+        identity = self.routes.dispatch("GET", "/api/google/drive/billing-pdf-intents/identity",
+            {key: value for key, value in self.payload.items() if key not in
+             {"expectedDriveAccount", "documentKind", "documentID", "sourceDigest", "rendererVersion"}}, "approved-session")
+        self.assertEqual(identity, {
+            "companyID": self.company,
+            "grantID": self.grant,
+            "driveAccount": "google-subject:" + hashlib.sha256(self.subject.encode()).hexdigest(),
+        })
+        with self.database() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM billing_pdf_archive_intents").fetchone()[0], 0)
+        with self.assertRaises(RouteFailure):
+            self.routes.dispatch("GET", "/api/google/drive/billing-pdf-intents/identity",
+                {**self.payload}, "approved-session")
+
     def test_wrong_company_workspace_account_and_role_are_rejected(self):
         variants = [
             {**self.payload, "companyID": str(uuid.uuid4())},
@@ -121,16 +158,108 @@ class BillingPDFArchiveRoutesTests(unittest.TestCase):
         with self.database() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM billing_pdf_archive_intents").fetchone()[0], 0)
 
-    def test_provider_confirmation_fails_closed_until_readback_exists(self):
+    def test_provider_confirmation_fails_closed_when_readback_rejects(self):
         reservation = self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/reserve",
                                            self.payload, "approved-session")["reservation"]
+        self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/content",
+            {**self.payload, "leaseToken": reservation["lease_token"], "contentDigest": "b" * 64},
+            "approved-session")
+        self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/file",
+            {**self.payload, "leaseToken": reservation["lease_token"], "fileID": "claimed"},
+            "approved-session")
         with self.assertRaises(RouteFailure) as failure:
             self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/confirm",
                 {**self.payload, "leaseToken": reservation["lease_token"],
                  "fileID": "claimed", "contentDigest": "b" * 64}, "approved-session")
-        self.assertEqual(failure.exception.code, "provider_verification_required")
+        self.assertEqual(failure.exception.code, "provider_unconfirmed")
         self.assertIsNone(self.routes.dispatch("GET", "/api/google/drive/billing-pdf-intents",
             self.payload, "approved-session")["reservation"]["confirmed_link"])
+
+    def test_confirm_requires_readback_and_closes_original_lease(self):
+        reservation = self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/reserve",
+                                           self.payload, "approved-session")["reservation"]
+        self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/content",
+            {**self.payload, "leaseToken": reservation["lease_token"], "contentDigest": "b" * 64},
+            "approved-session")
+        self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/file",
+            {**self.payload, "leaseToken": reservation["lease_token"], "fileID": "claimed"},
+            "approved-session")
+        self.routes.readback = FakeReadback(succeeds=True)
+        confirmed = self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/confirm",
+            {**self.payload, "leaseToken": reservation["lease_token"],
+             "fileID": "claimed", "contentDigest": "b" * 64}, "approved-session")["reservation"]
+        self.assertEqual(confirmed["confirmed_link"], "https://drive.google.com/file/d/claimed/view")
+        self.assertNotIn("lease_token", confirmed)
+        self.assertEqual(self.routes.readback.calls, 1)
+        with self.assertRaises(RouteFailure) as failure:
+            self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/confirm",
+                {**self.payload, "leaseToken": reservation["lease_token"],
+                 "fileID": "claimed", "contentDigest": "b" * 64}, "approved-session")
+        self.assertEqual(failure.exception.code, "reservation_changed")
+        self.assertEqual(self.routes.readback.calls, 1)
+
+    def test_wrong_confirm_digest_does_not_bind_a_file_id(self):
+        reservation = self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/reserve",
+                                           self.payload, "approved-session")["reservation"]
+        self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/content",
+            {**self.payload, "leaseToken": reservation["lease_token"], "contentDigest": "b" * 64},
+            "approved-session")
+        with self.assertRaises(RouteFailure) as failure:
+            self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/confirm",
+                {**self.payload, "leaseToken": reservation["lease_token"],
+                 "fileID": "wrong-file-id", "contentDigest": "c" * 64}, "approved-session")
+        self.assertEqual(failure.exception.code, "reservation_changed")
+        status = self.routes.dispatch("GET", "/api/google/drive/billing-pdf-intents",
+                                      self.payload, "approved-session")["reservation"]
+        self.assertIsNone(status["drive_file_id"])
+        self.assertEqual(self.routes.readback.calls, 0)
+
+    def test_confirm_cannot_introduce_a_file_id_without_prior_binding(self):
+        reservation = self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/reserve",
+                                           self.payload, "approved-session")["reservation"]
+        self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/content",
+            {**self.payload, "leaseToken": reservation["lease_token"], "contentDigest": "b" * 64},
+            "approved-session")
+        with self.assertRaises(RouteFailure) as failure:
+            self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/confirm",
+                {**self.payload, "leaseToken": reservation["lease_token"],
+                 "fileID": "unbound-file", "contentDigest": "b" * 64}, "approved-session")
+        self.assertEqual(failure.exception.code, "reservation_changed")
+        with self.database() as connection:
+            self.assertIsNone(connection.execute(
+                "SELECT drive_file_id FROM billing_pdf_archive_intents WHERE attachment_id=?",
+                (reservation["attachment_id"],)).fetchone()[0])
+        self.assertEqual(self.routes.readback.calls, 0)
+
+    def test_google_grant_change_during_readback_cannot_confirm(self):
+        reservation = self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/reserve",
+                                           self.payload, "approved-session")["reservation"]
+        self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/content",
+            {**self.payload, "leaseToken": reservation["lease_token"], "contentDigest": "b" * 64},
+            "approved-session")
+        self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/file",
+            {**self.payload, "leaseToken": reservation["lease_token"], "fileID": "claimed"},
+            "approved-session")
+
+        class ReconnectDuringReadback:
+            def verify(inner, key, saved, token):
+                with self.database() as connection:
+                    connection.execute("UPDATE google_connections SET subject=? WHERE company_id=?",
+                                       ("replacement-google-subject", self.company))
+                    connection.execute("UPDATE google_account_bindings SET subject=? WHERE company_id=?",
+                                       ("replacement-google-subject", self.company))
+                return "https://drive.google.com/file/d/claimed/view"
+
+        self.routes.readback = ReconnectDuringReadback()
+        with self.assertRaises(RouteFailure) as failure:
+            self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/confirm",
+                {**self.payload, "leaseToken": reservation["lease_token"],
+                 "fileID": "claimed", "contentDigest": "b" * 64}, "approved-session")
+        self.assertEqual(failure.exception.code, "account_changed")
+        with self.database() as connection:
+            self.assertIsNone(connection.execute(
+                "SELECT confirmed_link FROM billing_pdf_archive_intents WHERE drive_file_id=?",
+                ("claimed",)).fetchone()[0])
 
     def test_replacement_google_subject_cannot_adopt_prior_file_reservation(self):
         first = self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/reserve",
@@ -141,8 +270,16 @@ class BillingPDFArchiveRoutesTests(unittest.TestCase):
                                (replacement_grant, "google-subject-2", self.company))
             connection.execute("UPDATE google_account_bindings SET subject=? WHERE company_id=?",
                                ("google-subject-2", self.company))
+        with self.assertRaises(RouteFailure) as mismatch:
+            self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/reserve",
+                {**self.payload, "grantID": replacement_grant}, "approved-session")
+        self.assertEqual(mismatch.exception.code, "account_changed")
+        with self.database() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM billing_pdf_archive_intents").fetchone()[0], 1)
         replacement = self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/reserve",
-            {**self.payload, "grantID": replacement_grant}, "approved-session")["reservation"]
+            {**self.payload, "grantID": replacement_grant,
+             "expectedDriveAccount": "google-subject:" + hashlib.sha256(b"google-subject-2").hexdigest()},
+            "approved-session")["reservation"]
         self.assertNotEqual(replacement["key"]["drive_account"], first["key"]["drive_account"])
         self.assertNotEqual(replacement["attachment_id"], first["attachment_id"])
         self.assertIsNone(replacement["drive_file_id"])

@@ -3993,7 +3993,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/api/google/mail/"):
             self.handle_google_mail(parsed, method="GET")
             return
-        if parsed.path == "/api/google/drive/billing-pdf-intents":
+        if parsed.path in ("/api/google/drive/billing-pdf-intents",
+                           "/api/google/drive/billing-pdf-intents/identity"):
             self.handle_billing_pdf_archive(parsed, method="GET")
             return
         if parsed.path == "/api/payment-attempts" or parsed.path.startswith("/api/payment-attempts/"):
