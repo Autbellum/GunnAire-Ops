@@ -1,6 +1,6 @@
 import Foundation
 
-enum BillingPublicationError: LocalizedError, Equatable {
+nonisolated enum BillingPublicationError: LocalizedError, Equatable {
     case unavailable, accessRequired, reviewRequired, invalidProposal, invalidResponse, savedDocumentRequired
 
     var errorDescription: String? {
@@ -16,8 +16,8 @@ enum BillingPublicationError: LocalizedError, Equatable {
 }
 
 nonisolated enum BillingPublicationDocumentKind: String, Codable, Sendable { case invoice = "Invoice", estimate = "Estimate" }
-enum BillingPublicationOperation: String, Codable { case create, update }
-enum BillingPublicationState: String, Codable { case reserved, sending, unknown, confirmed, cancelled }
+nonisolated enum BillingPublicationOperation: String, Codable, Sendable { case create, update }
+nonisolated enum BillingPublicationState: String, Codable, Sendable { case reserved, sending, unknown, confirmed, cancelled }
 
 nonisolated struct BillingDocumentScope: Codable, Equatable, Sendable {
     let companyID: UUID
@@ -97,12 +97,12 @@ struct BillingPublicationRequest: Codable {
     var draftRevision: String?
     var projectMilestoneID: UUID?
 
-    var scope: BillingDocumentScope {
+    nonisolated var scope: BillingDocumentScope {
         .init(companyID: companyID, realmID: realmID, environment: environment,
               documentType: documentType, localDocumentID: localDocumentID)
     }
 
-    func validate() throws {
+    nonisolated func validate() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let date = QuickBooksDateOnly.date(from: document.TxnDate, calendar: calendar)
@@ -133,7 +133,7 @@ struct BillingPublicationRequest: Codable {
     }
 }
 
-struct BillingPublicationRecord: Codable, Identifiable {
+nonisolated struct BillingPublicationRecord: Codable, Identifiable, Sendable {
     let id: UUID
     let companyID: UUID
     let realmID: String
@@ -208,6 +208,48 @@ struct BillingPublicationResponse: Decodable {
 struct BillingPublicationPage: Decodable {
     let publications: [BillingPublicationRecord]
     let nextCursor: String?
+}
+
+nonisolated enum BillingEstimateJobState: String, Decodable, Sendable {
+    case pending, running, confirmed, review
+}
+
+nonisolated struct BillingEstimateJobResponse: Decodable, Sendable {
+    nonisolated struct Background: Decodable, Sendable {
+        let publicationID: UUID
+        let state: BillingEstimateJobState
+        let attempts: Int
+        let lastErrorCode: String?
+        let updatedAt: String
+    }
+    let publication: BillingPublicationRecord
+    let background: Background
+
+    nonisolated static func decodeAsync(_ data: Data) async throws -> Self {
+        let decoder = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            return try JSONDecoder().decode(Self.self, from: data)
+        }
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            let value = try await decoder.value
+            try Task.checkCancellation()
+            return value
+        } onCancel: {
+            decoder.cancel()
+        }
+    }
+
+    func validate(_ request: BillingPublicationRequest, expectedID: UUID? = nil) throws {
+        try publication.validate(request.scope, customerID: request.localCustomerID)
+        guard request.documentType == .estimate, request.operation == .create,
+              publication.operation == .create, publication.id == background.publicationID,
+              expectedID.map({ $0 == publication.id }) ?? true,
+              (0...8).contains(background.attempts), !background.updatedAt.isEmpty,
+              background.state != .confirmed || publication.state == .confirmed else {
+            throw BillingPublicationError.invalidResponse
+        }
+    }
 }
 
 struct JobBillingScope: Codable, Equatable {
@@ -301,6 +343,12 @@ struct BillingPublicationClient {
                     data = try await operation.performExternalMutation { try await transport(path, "POST", body) }
                 } else { data = try await transport(path, "GET", nil) }
                 try workflow.check()
+                if type == BillingEstimateJobResponse.self {
+                    guard let decoded = try await BillingEstimateJobResponse.decodeAsync(data) as? T else {
+                        throw BillingPublicationError.invalidResponse
+                    }
+                    return decoded
+                }
                 return try JSONDecoder().decode(type, from: data)
             }
         } catch {
@@ -341,6 +389,34 @@ struct BillingPublicationClient {
               request.document.Id == nil || request.document.Id == result.publication.providerID else {
             throw BillingPublicationError.invalidResponse
         }
+        return result
+    }
+
+    func enqueueEstimate(_ request: BillingPublicationRequest,
+                         workflow: QuickBooksDataAPI.CapturedWorkspaceWorkflow) async throws -> BillingEstimateJobResponse {
+        try request.scope.validate(workflow); try request.validate()
+        guard request.documentType == .estimate, request.operation == .create,
+              let revision = request.draftRevision, JobBillingAssignmentSnapshot.validConnectionRevision(revision) else {
+            throw BillingPublicationError.invalidProposal
+        }
+        if let pin = workflow.sharedBillingConnectionRevision, request.connectionRevision != pin {
+            throw BillingPublicationError.reviewRequired
+        }
+        let result = try await perform(BillingEstimateJobResponse.self,
+            path: "/api/billing-publications/background-estimate", body: encode(request), workflow: workflow)
+        try result.validate(request)
+        return result
+    }
+
+    func estimateJob(_ id: UUID, request: BillingPublicationRequest,
+                     workflow: QuickBooksDataAPI.CapturedWorkspaceWorkflow) async throws -> BillingEstimateJobResponse {
+        try request.scope.validate(workflow); try request.validate()
+        guard request.documentType == .estimate, request.operation == .create else {
+            throw BillingPublicationError.invalidProposal
+        }
+        let result = try await perform(BillingEstimateJobResponse.self,
+            path: "/api/billing-publications/background-estimate/\(id.uuidString.lowercased())", workflow: workflow)
+        try result.validate(request, expectedID: id)
         return result
     }
 

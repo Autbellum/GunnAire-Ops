@@ -21,6 +21,7 @@ at the start of every turn; append to it rather than rewriting it.
 ## Claims
 
 - 2026-10-02 Codex root full 0124 candidate: Claims only this isolated `integrate/0124-full-candidate` worktree for composition of already pushed 0123, PR #60 native QBO and PR #59 backend source. No other worktree or production service is changed by this claim. Release after integrated validation or abort.
+- 2026-10-02 Codex root 0124 integration: In isolated `integrate/0124-qbo-native`, merged PR #48 QBO native/test paths atop exact 0123 source, retaining the estimate email action in `BillingDocumentsView.swift`. Signed iPad Pro 13-inch M5 focused tests passed 212 logical / 218 executions, zero failures/skips/expected failures/compiler warnings (`/private/tmp/GunnAire-0124-qbo-native-focused.xcresult`); exact-source `generated/omni_runner.py` compiled the simulator app with zero warnings (`/private/tmp/GunnAire-0124-qbo-native-omni.log`). Swift parsing and `git diff --check` passed. This remains source-only until the compatible `estimateQueueVersion:1` backend is deployed and a live provider round trip is observed. The frozen 0123 release worktree remains untouched; claim released.
 
 ## Shared rules
 

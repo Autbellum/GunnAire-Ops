@@ -7,12 +7,13 @@ import Testing
     @Test func transportRetainsEveryBillingRouteButCannotBecomeAGeneralProxy() {
         let root = "/api/billing-publications", id = UUID().uuidString.lowercased()
         for path in [root + "?companyID=fixture", root + "/context?companyID=fixture", root + "/connection?companyID=fixture",
-                     root + "/" + id, "/api/job-billing-assignments?companyID=fixture",
+                     root + "/" + id, root + "/background-estimate/" + id,
+                     "/api/job-billing-assignments?companyID=fixture",
                      "/api/job-billing-assignments/connection?companyID=fixture"] {
             #expect(BillingPublicationTransportPolicy.allows(path: path, method: "GET", bodyBytes: nil))
             #expect(!BillingPublicationTransportPolicy.allows(path: path, method: "GET", bodyBytes: 2))
         }
-        for path in [root, root + "/approve", root + "/\(id)/recover", root + "/\(id)/cancel", root + "/\(id)/approve",
+        for path in [root, root + "/background-estimate", root + "/approve", root + "/\(id)/recover", root + "/\(id)/cancel", root + "/\(id)/approve",
                      root + "/draft-grants/\(id)/revoke", "/api/job-billing-assignments"] {
             #expect(BillingPublicationTransportPolicy.allows(path: path, method: "POST", bodyBytes: 2))
             #expect(!BillingPublicationTransportPolicy.allows(path: path + "?unexpected=1", method: "POST", bodyBytes: 2))
@@ -30,7 +31,8 @@ import Testing
         let pairs = URLComponents(string: path)!.queryItems!
         var object: [String: Any] = Dictionary(uniqueKeysWithValues: pairs.map { ($0.name, $0.value!) })
         object.merge(["realmID": "billing-realm", "environment": Config.QuickBooks.environment,
-                      "protocolVersion": 1, "connectionRevision": f.epoch]) { _, new in new }
+                      "protocolVersion": 1, "estimateQueueVersion": 1,
+                      "connectionRevision": f.epoch]) { _, new in new }
         object.merge(changes) { _, new in new }
         return try f.encoded(object)
     }
@@ -38,7 +40,8 @@ import Testing
     func prepare(_ f: BillingNativeWorkflowTests.Fixture, estimate: Bool = false,
                  current: @escaping () -> Bool = { true }, changes: [String: Any] = [:],
                  beforeDiscovery: @escaping () throws -> Void = {},
-                 discoverError: Error? = nil) throws -> SharedBillingPreparation {
+                 discoverError: Error? = nil,
+                 selectedItemCapture: QuickBooksSelectedItemCapture? = nil) throws -> SharedBillingPreparation {
         let client = BillingPublicationClient { path, method, body in
             if path.hasPrefix("/api/billing-publications/connection?") {
                 #expect(method == "GET" && body == nil)
@@ -51,7 +54,8 @@ import Testing
         return try .init(document: estimate ? .estimate(f.app.estimate) : .invoice(f.app.invoice), context: f.app.context,
             isCurrent: current, validateAccess: { if !f.app.authorized { throw QuickBooksBillingWorkflowError.accessDenied } },
             client: client, catalog: { _ in throw CatalogPublicationError.accessRequired },
-            customer: { _ in throw CustomerPublicationError.accessRequired }, fixtureCompanyID: f.company)
+            customer: { _ in throw CustomerPublicationError.accessRequired }, fixtureCompanyID: f.company,
+            selectedItemCapture: selectedItemCapture)
     }
 
     @Test func businessSessionInvoiceAndEstimatePublishWithoutAnyDeviceOAuth() async throws {
@@ -61,11 +65,130 @@ import Testing
             let flow = try await prepare(f, estimate: estimate).makeWorkflow(lifecycle: f.app.owner, billingJournal: f.app.billingJournal)
             #expect(flow.run.workflow.sharedBillingConnectionRevision == f.epoch)
             let result = try await flow.execute()
-            #expect(result.invoice?.Id == "D1" || result.estimate?.Id == "D1")
+            #expect(estimate ? result.queued : result.invoice?.Id == "D1")
             #expect(f.request?.document.Line.first?.SalesItemLineDetail.UnitPrice == 190)
-            #expect(f.writes == 1 && f.app.requests.isEmpty)
+            #expect(f.writes == (estimate ? 0 : 1) && f.app.requests.isEmpty)
             #expect((estimate ? f.app.estimate.catalogSnapshotJSON : f.app.invoice.catalogSnapshotJSON) == original)
             f.finish(flow)
+        }
+    }
+
+    @Test func loadedEstimateItemsAreCapturedAtTapAndCannotAdoptALaterRevision() async throws {
+        let f = try BillingNativeWorkflowTests.Fixture()
+        let document = QuickBooksBillingDocument.estimate(f.app.estimate)
+        let capture = try QuickBooksSelectedItemCapture(document: document,
+            items: [f.app.item], context: f.app.context)
+        try capture.validate(document: document, context: f.app.context)
+        let preparation = try SharedBillingPreparation(document: document, context: f.app.context,
+            isCurrent: { true }, validateAccess: {}, client: f.app.billingPublisher,
+            catalog: { _ in throw CatalogPublicationError.accessRequired },
+            customer: { _ in throw CustomerPublicationError.accessRequired },
+            fixtureCompanyID: f.company, selectedItemCapture: capture)
+        f.app.item.unitPrice += 7
+        await #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try await preparation.makeWorkflow(lifecycle: f.app.owner)
+        }
+        #expect(f.writes == 0 && f.journals.isEmpty)
+    }
+
+    @Test func itemEditedWhileSavingAfterTapCannotBecomeTheQueuedDraft() throws {
+        let f = try BillingNativeWorkflowTests.Fixture()
+        let capture = try QuickBooksSelectedItemCapture(document: .estimate(f.app.estimate),
+            items: [f.app.item], context: f.app.context)
+        f.app.item.unitPrice += 5
+        try f.app.context.save()
+        #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try prepare(f, estimate: true, selectedItemCapture: capture)
+        }
+        #expect(f.calls.isEmpty && f.writes == 0 && f.journals.isEmpty)
+    }
+
+    @Test func stagedFirstSaveCannotQueueAfterBindingSuspendsAndAuthorityOrItemChanges() async throws {
+        for revokeAccess in [false, true] {
+            let f = try BillingNativeWorkflowTests.Fixture()
+            let document = QuickBooksBillingDocument.estimate(f.app.estimate)
+            let capture = try QuickBooksSelectedItemCapture(document: document,
+                items: [f.app.item], context: f.app.context)
+            let staged = try prepare(f, estimate: true, beforeDiscovery: {
+                if revokeAccess { f.app.authorized = false }
+                else { f.app.item.unitPrice += 1 }
+            }, selectedItemCapture: capture)
+            await #expect(throws: (any Error).self) {
+                try await staged.makeWorkflow(lifecycle: f.app.owner)
+            }
+            #expect(f.writes == 0 && f.journals.isEmpty && f.app.owner.activeID == nil)
+        }
+    }
+
+    @Test func loadedEstimateCaptureQueuesOriginalWithoutADirectProviderWrite() async throws {
+        let f = try BillingNativeWorkflowTests.Fixture()
+        let document = QuickBooksBillingDocument.estimate(f.app.estimate)
+        let capture = try QuickBooksSelectedItemCapture(document: document,
+            items: [f.app.item], context: f.app.context)
+        let flow = try await prepare(f, estimate: true, selectedItemCapture: capture)
+            .makeWorkflow(lifecycle: f.app.owner, billingJournal: f.app.billingJournal)
+        #expect(try await flow.execute().queued)
+        #expect(f.writes == 0)
+        #expect(f.calls.filter { $0.0 == "/api/billing-publications/background-estimate" && $0.1 == "POST" }.count == 1)
+        f.finish(flow)
+    }
+
+    @Test func loadedEstimateCaptureRejectsMissingOrReplacedItemsBeforePublication() throws {
+        let f = try BillingNativeWorkflowTests.Fixture()
+        let document = QuickBooksBillingDocument.estimate(f.app.estimate)
+        #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try QuickBooksSelectedItemCapture(document: document, items: [], context: f.app.context)
+        }
+        let capture = try QuickBooksSelectedItemCapture(document: document,
+            items: [f.app.item], context: f.app.context)
+        f.app.context.delete(f.app.item)
+        #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try capture.validate(document: document, context: f.app.context)
+        }
+    }
+
+    @Test func savedEstimateNeedsAnExplicitSecondActionAndChangedItemsCannotBeAdopted() throws {
+        let f = try BillingNativeWorkflowTests.Fixture()
+        let document = QuickBooksBillingDocument.estimate(f.app.estimate)
+        let gate = QuickBooksSelectedItemCaptureGate()
+        var preparations = 0
+        func prepare() throws -> QuickBooksSelectedItemCapture {
+            preparations += 1
+            return try QuickBooksSelectedItemCapture(document: document,
+                items: [f.app.item], context: f.app.context)
+        }
+        #expect(try gate.takeOrPrepare(document: document, context: f.app.context, prepare: prepare) == nil)
+        #expect(preparations == 1 && f.writes == 0)
+        f.app.item.unitPrice += 1
+        try f.app.context.save()
+        #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try gate.takeOrPrepare(document: document, context: f.app.context, prepare: prepare)
+        }
+        #expect(preparations == 1 && f.writes == 0)
+        #expect(try gate.takeOrPrepare(document: document, context: f.app.context, prepare: prepare) == nil)
+        #expect(try gate.takeOrPrepare(document: document, context: f.app.context, prepare: prepare) != nil)
+        #expect(preparations == 2 && f.writes == 0)
+    }
+
+    @Test func secondEstimateActionCannotAdoptEditedDocumentOrCustomer() throws {
+        for change in 0..<2 {
+            let f = try BillingNativeWorkflowTests.Fixture()
+            let document = QuickBooksBillingDocument.estimate(f.app.estimate)
+            let gate = QuickBooksSelectedItemCaptureGate()
+            #expect(try gate.takeOrPrepare(document: document, context: f.app.context, prepare: {
+                try QuickBooksSelectedItemCapture(document: document,
+                    items: [f.app.item], context: f.app.context)
+            }) == nil)
+            if change == 0 { f.app.estimate.notes = "Changed after first action" }
+            else { f.app.customer.name = "Changed after first action" }
+            try f.app.context.save()
+            #expect(throws: QuickBooksBillingWorkflowError.changed) {
+                try gate.takeOrPrepare(document: document, context: f.app.context, prepare: {
+                    try QuickBooksSelectedItemCapture(document: document,
+                        items: [f.app.item], context: f.app.context)
+                })
+            }
+            #expect(f.writes == 0 && f.journals.isEmpty)
         }
     }
 
@@ -98,6 +221,62 @@ import Testing
         await #expect(throws: DecodingError.self) {
             try await SharedBillingConnection.decodeAsync(Data("{\"realmID\":1}".utf8))
         }
+    }
+
+    @Test func olderBackendCannotTrapANewEstimateInAQueueJournal() async throws {
+        let f = try BillingNativeWorkflowTests.Fixture()
+        f.app.customer.quickBooksID = nil
+        f.app.item.quickBooksID = nil
+        try f.app.context.save()
+        let preparation = try prepare(f, estimate: true, changes: ["estimateQueueVersion": NSNull()])
+        let flow = try await preparation.makeWorkflow(lifecycle: f.app.owner,
+            billingJournal: f.app.billingJournal)
+        await #expect(throws: SharedBillingConnectionError.updateRequired) { try await flow.execute() }
+        #expect(f.journals.isEmpty)
+        #expect(!f.calls.contains { $0.1 == "POST" })
+        f.finish(flow)
+    }
+
+    @Test func duplicateMappingOutsideEstimateIsCaughtOffMainBeforeQueuePost() async throws {
+        let f = try BillingNativeWorkflowTests.Fixture()
+        f.app.context.insert(Item(quickBooksID: " I1 ", name: "Conflicting item", unitPrice: 20))
+        try f.app.context.save()
+        let flow = try await prepare(f, estimate: true).makeWorkflow(lifecycle: f.app.owner,
+            billingJournal: f.app.billingJournal)
+        await #expect(throws: QuickBooksBillingWorkflowError.changed) { try await flow.execute() }
+        #expect(!f.calls.contains { $0.0 == "/api/billing-publications/background-estimate" && $0.1 == "POST" })
+        #expect(f.writes == 0)
+        f.finish(flow)
+    }
+
+    @Test func changedSelectedItemAfterServerReadStopsBeforeCatalogPrerequisiteWrite() async throws {
+        let f = try BillingNativeWorkflowTests.Fixture()
+        f.app.item.quickBooksID = nil
+        try f.app.context.save()
+        var catalogWrites = 0
+        let client = BillingPublicationClient { path, method, body in
+            if path.hasPrefix("/api/billing-publications/connection?") {
+                return try connectionData(f, path: path)
+            }
+            if path.hasPrefix("/api/billing-publications?") && method == "GET" {
+                f.app.item.unitPrice = 205
+                try f.app.context.save()
+            }
+            return try f.reply(path, method, body)
+        }
+        let preparation = try SharedBillingPreparation(document: .estimate(f.app.estimate),
+            context: f.app.context, isCurrent: { true },
+            validateAccess: { if !f.app.authorized { throw QuickBooksBillingWorkflowError.accessDenied } },
+            client: client, catalog: { _ in
+                catalogWrites += 1
+                throw CatalogPublicationError.unavailable
+            }, customer: { _ in throw CustomerPublicationError.accessRequired }, fixtureCompanyID: f.company)
+        let flow = try await preparation.makeWorkflow(lifecycle: f.app.owner,
+            billingJournal: f.app.billingJournal)
+        await #expect(throws: (any Error).self) { try await flow.execute(configuration: f.app.configuration) }
+        #expect(catalogWrites == 0)
+        #expect(!f.calls.contains { $0.1 == "POST" })
+        f.finish(flow)
     }
 
     @Test func staleOrMalformedDiscoveryCannotStartAWorkflow() async throws {
@@ -196,13 +375,13 @@ import Testing
                 billingJournal: f.app.billingJournal)
             let result = try await flow.execute()
             #expect(connectionReads == 2)
-            #expect(f.writes == 1)
-            #expect(f.calls.filter { $0.0 == "/api/billing-publications" && $0.1 == "POST" }.count == 1)
-            #expect((estimate ? result.estimate?.Id : result.invoice?.Id) == "D1")
+            #expect(f.writes == (estimate ? 0 : 1))
+            #expect(f.calls.filter { $0.0 == (estimate ? "/api/billing-publications/background-estimate" : "/api/billing-publications") && $0.1 == "POST" }.count == 1)
+            #expect(estimate ? result.queued : result.invoice?.Id == "D1")
             #expect(f.app.requests.isEmpty)
             switch document {
             case .estimate(let saved):
-                #expect(AutomaticOutboundSync.pendingDocumentKeys(invoices: [], estimates: [saved]).isEmpty)
+                #expect(!AutomaticOutboundSync.pendingDocumentKeys(invoices: [], estimates: [saved]).isEmpty)
             case .invoice(let saved):
                 #expect(AutomaticOutboundSync.pendingDocumentKeys(invoices: [saved], estimates: []).isEmpty)
             }
