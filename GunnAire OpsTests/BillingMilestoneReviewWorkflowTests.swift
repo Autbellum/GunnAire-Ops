@@ -3,7 +3,23 @@ import SwiftData
 import Testing
 @testable import GunnAire_Ops
 
+@Suite(.serialized)
 @MainActor struct BillingMilestoneReviewWorkflowTests {
+    private func withReviewerIdentity(_ body: () async throws -> Void) async throws {
+        let defaults = UserDefaults.standard
+        let originalBusiness = defaults.object(forKey: "SignedInBusinessEmail")
+        let originalGoogle = defaults.object(forKey: "SignedInGoogleEmail")
+        defaults.set("accounting@example.invalid", forKey: "SignedInBusinessEmail")
+        defaults.set("accounting@example.invalid", forKey: "SignedInGoogleEmail")
+        defer {
+            if let originalBusiness { defaults.set(originalBusiness, forKey: "SignedInBusinessEmail") }
+            else { defaults.removeObject(forKey: "SignedInBusinessEmail") }
+            if let originalGoogle { defaults.set(originalGoogle, forKey: "SignedInGoogleEmail") }
+            else { defaults.removeObject(forKey: "SignedInGoogleEmail") }
+        }
+        #expect(AppAccess.normalizedEmail(AppIdentity.currentEmail) == "accounting@example.invalid")
+        try await body()
+    }
     @MainActor final class Fixture {
         let local: BillingMilestoneReconciliationTests.Fixture
         var calls: [(String, String)] = []
@@ -70,6 +86,7 @@ import Testing
     }
 
     @Test func officeRetentionUsesFourScopedReadsWithoutAnyPublicationOrJournalMutation() async throws {
+        try await withReviewerIdentity {
         let f = try Fixture(), flow = try f.flow()
         let draftID = f.local.draft.id, notes = f.local.draft.notes
         try await flow.retainDuplicateMilestoneDraft()
@@ -79,9 +96,11 @@ import Testing
         #expect(BillingMilestoneReconciliation.receipt(f.local.draft)?.reviewedBy == f.local.reviewer.id)
         #expect(f.local.original.quickBooksID == "D1" && f.local.original.amount == 190)
         f.local.app.owner.finish(flow.run)
+        }
     }
 
     @Test func revocationAtEveryAwaitedReadPreventsReceiptPersistence() async throws {
+        try await withReviewerIdentity {
         for step in 1...4 {
             let f = try Fixture(), flow = try f.flow()
             f.beforeReply = { if $0 == step { f.local.app.authorized = false } }
@@ -90,9 +109,11 @@ import Testing
             #expect(f.calls.allSatisfy { $0.1 == "GET" } && f.journalWrites == 0)
             f.local.app.owner.finish(flow.run)
         }
+        }
     }
 
     @Test func originalDriftLatePaymentOrOfficeRoleLossCannotBeHiddenByAReceipt() async throws {
+        try await withReviewerIdentity {
         for mode in 0..<3 {
             let f = try Fixture(), flow = try f.flow()
             f.beforeReply = { step in
@@ -105,9 +126,11 @@ import Testing
             #expect(f.local.draft.milestoneDraftReceiptJSON == nil && f.journalWrites == 0)
             f.local.app.owner.finish(flow.run)
         }
+        }
     }
 
     @Test func foreignScopeNonOfficeAuthorityAndExistingAliasPublicationRequireReview() async throws {
+        try await withReviewerIdentity {
         for mode in 0..<3 {
             let f = try Fixture(), flow = try f.flow()
             if mode == 0 { f.companyOverride = UUID() }
@@ -118,9 +141,11 @@ import Testing
             #expect(f.calls.allSatisfy { $0.1 == "GET" })
             f.local.app.owner.finish(flow.run)
         }
+        }
     }
 
     @Test func workflowSaveFailureLeavesBothDocumentsAndUnrelatedEditsIntact() async throws {
+        try await withReviewerIdentity {
         let f = try Fixture()
         struct SaveFailure: Error {}
         let flow = try f.flow(save: { _ in throw SaveFailure() })
@@ -133,5 +158,6 @@ import Testing
         #expect(try f.local.context.fetch(FetchDescriptor<Item>()).contains { $0 === unrelated })
         #expect(f.journalWrites == 0 && f.calls.allSatisfy { $0.1 == "GET" })
         f.local.app.owner.finish(flow.run)
+        }
     }
 }

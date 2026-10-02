@@ -1,6 +1,43 @@
 import SwiftUI
 import SwiftData
 
+/// A reviewed document keeps only its original main-context object. The user
+/// census is read in an isolated context before this permit becomes visible.
+@MainActor
+final class BillingReviewAccessPermit {
+    let document: QuickBooksBillingDocument
+    private let context: ModelContext
+    private let email: String?
+    private let stamp: CompanyWorkspaceOperationStamp?
+    private let unchanged: () throws -> Void
+
+    private init(document: QuickBooksBillingDocument, context: ModelContext,
+                 email: String?, stamp: CompanyWorkspaceOperationStamp?) {
+        self.document = document; self.context = context; self.email = email; self.stamp = stamp
+        unchanged = document.validation(context: context)
+    }
+
+    static func acquire(document: QuickBooksBillingDocument, context: ModelContext) async throws -> BillingReviewAccessPermit {
+        let permit = BillingReviewAccessPermit(document: document, context: context,
+            email: AppIdentity.currentEmail, stamp: CompanyWorkspaceAccessController.shared.operationStamp)
+        try await QuickBooksBillingAccessPolicy.checkOffMain(context: context, document: document,
+            email: permit.email, stamp: permit.stamp)
+        try permit.check()
+        return permit
+    }
+
+    func check() throws {
+        try QuickBooksBillingAccessPolicy.checkLocalFence(context: context, document: document,
+            email: email, stamp: stamp)
+        try unchanged()
+    }
+
+    func covers(_ invoice: Invoice) -> Bool {
+        guard case .invoice(let retained) = document, retained === invoice else { return false }
+        return (try? check()) != nil
+    }
+}
+
 /// A single review page reached from the original invoice/estimate or job.
 /// No raw payload, account-email footer, or additional top-level workspace.
 @MainActor struct BillingPublicationReviewView: View {
@@ -21,6 +58,8 @@ import SwiftData
     @State private var visibleLines = 20
     @State private var didLoad = false
     @State private var milestoneOriginal: BillingMilestoneOriginal?
+    @State private var retainedDraftPermit: BillingReviewAccessPermit?
+    @State private var milestoneInvoicePermit: BillingReviewAccessPermit?
     @Query private var syncedInvoices: [Invoice]
     @State private var visitID = UUID()
     @State private var confirmRetain = false
@@ -28,15 +67,23 @@ import SwiftData
     @Query private var reviewAttachments: [ServiceDocumentAttachment]
     @Query private var reviewPayments: [Payment]
 
+    private var userAccessRevision: [String] {
+        let email = AppAccess.normalizedEmail(AppIdentity.currentEmail)
+        return reviewUsers.filter { AppAccess.normalizedEmail($0.email) == email }
+            .map { "\($0.id.uuidString):\($0.roleRawValue):\($0.isActive)" }.sorted()
+    }
+
     private var retainedDraft: Invoice? {
         guard case .invoice(let invoice) = document, invoice.milestoneDraftReceiptJSON != nil,
-              (try? QuickBooksBillingAccessPolicy.validate(context: context, document: document)) != nil else { return nil }
+              retainedDraftPermit?.covers(invoice) == true else { return nil }
         return invoice
     }
 
     private var retainedOriginal: Invoice? {
         guard let retainedDraft else { return nil }
-        return BillingMilestoneReconciliation.original(for: retainedDraft, in: syncedInvoices, payments: reviewPayments)
+        guard let original = BillingMilestoneReconciliation.original(for: retainedDraft,
+            in: syncedInvoices, payments: reviewPayments), milestoneInvoicePermit?.covers(original) == true else { return nil }
+        return original
     }
 
     init(document: QuickBooksBillingDocument, context: ModelContext, availableItems: [Item] = []) {
@@ -45,6 +92,16 @@ import SwiftData
     }
 
     private var proposal: BillingPublicationRequest? { original?.proposal ?? pending?.request }
+    private var canApproveOfficeReview: Bool {
+        guard flow != nil else { return false }
+        let email = AppIdentity.currentEmail
+        let role = AppAccess.activeRole(email: email, users: reviewUsers)
+        let isInvoice: Bool
+        switch document { case .invoice: isInvoice = true; case .estimate: isInvoice = false }
+        guard role == .admin || (isInvoice ? role == .accounting : role == .dispatcher) else { return false }
+        return QuickBooksBillingAccessPolicy.allows(email: email, users: reviewUsers,
+            verifiedRole: role, isInvoice: isInvoice, assignedToJob: false)
+    }
     private var status: String {
         if retainedDraft != nil { return retainedOriginal == nil ? "Retained draft needs review" : "Duplicate draft retained" }
         if milestoneOriginal != nil { return "Original milestone invoice found" }
@@ -104,7 +161,7 @@ import SwiftData
                         }
                         .accessibilityIdentifier("BillingReviewOpenMilestoneOriginal")
                         if milestoneOriginal.state == .confirmed, invoice.quickBooksID != nil,
-                           flow?.canApproveSharedDraft == true, shared?.journal.pending == nil {
+                           canApproveOfficeReview, shared?.journal.pending == nil {
                             Button("Retain this unused draft") { confirmRetain = true }.disabled(busy)
                                 .accessibilityIdentifier("BillingReviewRetainMilestoneDraft")
                         }
@@ -149,7 +206,7 @@ import SwiftData
                         Button("Retry original QuickBooks queue") { Task { await retryQueued() } }.disabled(busy)
                             .accessibilityIdentifier("BillingReviewRetryEstimateQueue")
                     }
-                    if original?.reviewableByOffice == true, flow?.canApproveSharedDraft == true {
+                    if original?.reviewableByOffice == true, canApproveOfficeReview {
                         Button("Approve these field prices") { confirmApproval = true }.disabled(busy)
                             .accessibilityIdentifier("BillingReviewApprove")
                     }
@@ -166,12 +223,20 @@ import SwiftData
         .navigationTitle("Billing Review")
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
+        .onChange(of: userAccessRevision) { _, _ in
+            retainedDraftPermit = nil; milestoneInvoicePermit = nil
+            Task { await load() }
+        }
+        .onChange(of: syncedInvoices.map(\.persistentModelID)) { _, _ in
+            Task { await load() }
+        }
         .onDisappear {
             visitID = UUID()
             lifecycle.cancel()
             // Retain the displayed navigation link while its child is pushed;
             // recreate only the cancelled workflow owner on the next appearance.
             flow = nil; shared = nil; message = nil; busy = false
+            retainedDraftPermit = nil; milestoneInvoicePermit = nil
         }
         .confirmationDialog("Publish this original proposal?", isPresented: $confirmSend, titleVisibility: .visible) {
             Button("Publish original proposal") { Task { await publish() } }
@@ -189,8 +254,26 @@ import SwiftData
     private func load() async {
         guard !busy else { return }
         let visit = visitID
-        busy = true; defer { if visit == visitID { busy = false } }
+        let accessRevision = userAccessRevision
+        busy = true
+        defer {
+            if visit == visitID {
+                busy = false
+                if accessRevision != userAccessRevision { Task { await load() } }
+            }
+        }
         do {
+            if case .invoice(let invoice) = document, invoice.milestoneDraftReceiptJSON != nil {
+                let permit = try await BillingReviewAccessPermit.acquire(document: document, context: context)
+                guard visit == visitID, accessRevision == userAccessRevision else { throw CancellationError() }
+                retainedDraftPermit = permit
+                if let original = BillingMilestoneReconciliation.original(for: invoice,
+                    in: syncedInvoices, payments: reviewPayments) {
+                    milestoneInvoicePermit = try? await BillingReviewAccessPermit.acquire(
+                        document: .invoice(original), context: context)
+                    guard visit == visitID, accessRevision == userAccessRevision else { throw CancellationError() }
+                } else { milestoneInvoicePermit = nil }
+            }
             if retainedDraft != nil {
                 milestoneOriginal = nil; original = nil; pending = nil; didLoad = true; message = nil
                 return
@@ -226,8 +309,16 @@ import SwiftData
     private func refresh() async throws {
         guard let shared, let customer = document.customer else { throw BillingNativeError.pending }
         let visit = visitID
+        let accessRevision = userAccessRevision
         if let found = try await flow?.originalMilestone(), found.localDocumentID != document.id {
-            guard visit == visitID else { throw CancellationError() }
+            guard visit == visitID, accessRevision == userAccessRevision else { throw CancellationError() }
+            let candidate = try? found.localInvoice(in: context, for: document)
+            milestoneInvoicePermit = nil
+            if let candidate {
+                milestoneInvoicePermit = try? await BillingReviewAccessPermit.acquire(
+                    document: .invoice(candidate), context: context)
+                guard visit == visitID, accessRevision == userAccessRevision else { throw CancellationError() }
+            }
             milestoneOriginal = found
             original = nil; pending = nil; backgroundJob = nil; didLoad = true
             return
@@ -259,18 +350,21 @@ import SwiftData
         // model UUIDs or a record from another customer, job or business access.
         guard syncedInvoices.filter({ $0.id == original.localDocumentID }).count == 1,
               let invoice = try? original.localInvoice(in: context, for: document) else { return nil }
-        do { try QuickBooksBillingAccessPolicy.validate(context: context, document: .invoice(invoice)); return invoice }
-        catch { return nil }
+        return milestoneInvoicePermit?.covers(invoice) == true ? invoice : nil
     }
     private func retainDraft() async {
-        guard !busy, let flow else { return }
+        guard !busy, canApproveOfficeReview, let flow else { return }
         let visit = visitID
         busy = true; defer { if visit == visitID { busy = false } }
         do {
             try await flow.retainDuplicateMilestoneDraft()
             guard visit == visitID else { return }
+            let renewedPermit = try? await BillingReviewAccessPermit.acquire(document: document, context: context)
+            guard visit == visitID else { return }
+            retainedDraftPermit = renewedPermit
             lifecycle.cancel(); self.flow = nil; shared = nil
-            milestoneOriginal = nil; original = nil; pending = nil; message = nil; didLoad = true
+            milestoneOriginal = nil; original = nil; pending = nil; didLoad = true
+            message = renewedPermit == nil ? "Draft saved. Reopen it from your current business workspace to review access." : nil
         } catch is CancellationError {} catch { if visit == visitID { message = error.localizedDescription } }
     }
     private func recover() async {
@@ -347,10 +441,12 @@ import SwiftData
         } catch is CancellationError {} catch { if visit == visitID { message = error.localizedDescription } }
     }
     private func approve() async {
-        guard !busy, let shared, let original, flow?.canApproveSharedDraft == true else { return }
+        guard !busy, canApproveOfficeReview, let shared, let original, let flow else { return }
         let visit = visitID
         busy = true; defer { if visit == visitID { busy = false } }
         do {
+            try await flow.checkOfficeReviewAccessOffMain()
+            guard visit == visitID else { throw CancellationError() }
             try await shared.client.approveOriginal(original, workflow: shared.workflow)
             guard visit == visitID else { return }
             message = "Field prices approved. The original technician can now publish this unchanged proposal."
@@ -485,11 +581,16 @@ import SwiftData
     let context: ModelContext
     @Query private var invoices: [Invoice]
     @Query private var users: [AppUser]
+    @State private var accessPermit: BillingReviewAccessPermit?
+
+    private var userAccessRevision: [String] {
+        let email = AppAccess.normalizedEmail(AppIdentity.currentEmail)
+        return users.filter { AppAccess.normalizedEmail($0.email) == email }
+            .map { "\($0.id.uuidString):\($0.roleRawValue):\($0.isActive)" }.sorted()
+    }
 
     private var allowed: Bool {
-        guard !users.isEmpty, invoices.contains(where: { $0 === invoice }) else { return false }
-        do { try QuickBooksBillingAccessPolicy.validate(context: context, document: .invoice(invoice)); return true }
-        catch { return false }
+        invoices.contains(where: { $0 === invoice }) && accessPermit?.covers(invoice) == true
     }
 
     var body: some View {
@@ -507,6 +608,21 @@ import SwiftData
         }
         .navigationTitle("Original Invoice")
         .navigationBarTitleDisplayMode(.inline)
+        .task {
+            await authorize()
+        }
+        .onChange(of: userAccessRevision) { _, _ in
+            accessPermit = nil
+            Task { await authorize() }
+        }
+        .onDisappear { accessPermit = nil }
+    }
+
+    private func authorize() async {
+        let revision = userAccessRevision
+        let permit = try? await BillingReviewAccessPermit.acquire(document: .invoice(invoice), context: context)
+        guard revision == userAccessRevision else { return }
+        accessPermit = permit
     }
 }
 
