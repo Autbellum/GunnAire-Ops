@@ -20,8 +20,6 @@ at the start of every turn; append to it rather than rewriting it.
 
 ## Claims
 
-- 2026-10-02 Codex 0122 integration: isolated `release/2026100122` checkout; owns specified Calendar/Drive/BG cherry-picks, `AGENTS.md` conflict resolution, `GunnAire Ops.xcodeproj/project.pbxproj` build bump, and focused version assertion until validation and draft PR.
-
 ## Shared rules
 
 1. The project sets `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`. A helper reached
@@ -44,6 +42,8 @@ at the start of every turn; append to it rather than rewriting it.
    pins the old behavior and the new one.
 
 ## Status log
+
+- 2026-10-02 Codex 0122 integration: Isolated `release/2026100122` from exact `release/2026100121` combines PR #42 commits `4d84055` and `22cde2e`, PR #44 `021821f`, and PR #46 `6e4b9ff`; disabled QBO email PR #45 is excluded. Only `AGENTS.md` conflicted in two cherry-picks, and both Calendar/Drive/BG status entries were retained; overlapping Swift files merged without conflict. All six project build-number settings are `2026100122`, marketing version remains `1.0`, and `Tools.release_preflight.source_versions` asserted that configuration. Combined-source `generated/omni_runner.py` passed with zero compiler warnings (`/private/tmp/GunnAire-0122-omni.log`). Signed iPad Calendar, Drive, BG recovery, QBO document, and Google transport suites passed 197/197 logical tests (200 executions), zero failures/skips/expected failures/compiler warnings (`/private/tmp/GunnAire-0122-focused-r1.xcresult`). The full signed suite, exact-commit release package, live provider delivery, physical-device background execution, and upload remain separate work.
 
 - 2026-10-02 Codex calendar_0121_audit follow-up: PR #42 now provides a read-only Check Google Event & Alerts action for saved imported links and reports explicit Google reminder opt-out and all-day event shape when an exact linked event is read. A schedule mismatch still withholds a verified provider link; the new detail directs review without changing the original event. Imported events are never adopted or published by this check, and deliberate remote reminder settings are preserved. Four new fixture regressions assert managed/imported diagnostics, a structured arrival window, and zero Google writes. Signed iPad Pro M5 `GoogleCalendarWorkflowTests` passed 144/144 logical tests, zero failures/skips/warnings (`calendar-alert-suite-r2.xcresult`); `generated/omni_runner.py` passed a clean simulator build with zero compiler warnings (`calendar-alert-omni-final.log`). Evidence under `/Users/gunnaire/Documents/GunnAireCompletion/2026-10-02-calendar-unlinked-sync/`. Live device alert and user-specific provider event were not modified or verified. Claims released.
 
