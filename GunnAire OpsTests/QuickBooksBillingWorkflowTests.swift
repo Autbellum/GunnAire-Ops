@@ -720,6 +720,56 @@ struct QuickBooksBillingWorkflowTests {
         }
     }
 
+    @Test func selectedItemBatchKeepsExactTwentyIdentitiesAndRejectsMissingOrDuplicate() async throws {
+        let f = try Fixture()
+        var ids: Set<UUID> = [f.item.id]
+        for index in 1..<20 {
+            let item = Item(quickBooksID: "I\(index + 1)", name: "Selected \(index)", unitPrice: Double(index))
+            f.context.insert(item)
+            ids.insert(item.id)
+        }
+        let unrelated = Item(quickBooksID: "UNRELATED", name: "Unrelated", unitPrice: 1)
+        f.context.insert(unrelated)
+        try f.context.save()
+        let selected = try QuickBooksBillingReads.items(ids, context: f.context)
+        #expect(selected.count == 20)
+        #expect(Set(selected.map(\.id)) == ids)
+        #expect(!selected.contains { $0.id == unrelated.id })
+        let container = f.context.container
+        let original = try await Task.detached {
+            try QuickBooksBillingReads.selectedRevisions(container: container, ids: ids)
+        }.value
+        #expect(original.count == 20)
+        selected[0].unitPrice += 1
+        try f.context.save()
+        let changed = try await Task.detached {
+            try QuickBooksBillingReads.selectedRevisions(container: container, ids: ids)
+        }.value
+        #expect(changed != original)
+        let removedID = selected[1].id
+        f.context.delete(selected[1])
+        try f.context.save()
+        #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try QuickBooksBillingReads.items(ids, context: f.context)
+        }
+        await #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try await Task.detached {
+                try QuickBooksBillingReads.selectedRevisions(container: container, ids: ids)
+            }.value
+        }
+        f.context.insert(Item(id: removedID, quickBooksID: "DUPLICATE", name: "Replacement", unitPrice: 1))
+        f.context.insert(Item(id: removedID, quickBooksID: "DUPLICATE2", name: "Duplicate", unitPrice: 1))
+        try f.context.save()
+        #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try QuickBooksBillingReads.items(ids, context: f.context)
+        }
+        await #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try await Task.detached {
+                try QuickBooksBillingReads.selectedRevisions(container: container, ids: ids)
+            }.value
+        }
+    }
+
     @Test func overlappingDocumentRunDoesNotReplaceTheOriginal() throws {
         let f = try Fixture()
         let flow = try f.flow()

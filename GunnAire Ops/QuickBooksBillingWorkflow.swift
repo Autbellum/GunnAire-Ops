@@ -388,12 +388,15 @@ struct QuickBooksBillingPaymentRevision: Equatable {
         guard !ids.isEmpty, ids.count <= 20 else { throw QuickBooksBillingWorkflowError.changed }
         let context = ModelContext(container)
         context.autosaveEnabled = false
+        let selectedIDs = Array(ids)
+        var query = FetchDescriptor<Item>(predicate: #Predicate { selectedIDs.contains($0.id) })
+        query.fetchLimit = 21
+        let values = try context.fetch(query)
+        guard values.count == ids.count, Set(values.map(\.id)) == ids else {
+            throw QuickBooksBillingWorkflowError.changed
+        }
         var result: [PersistentIdentifier: QuickBooksCatalogItemRevision] = [:]
-        for id in ids.sorted(by: { $0.uuidString < $1.uuidString }) {
-            var query = FetchDescriptor<Item>(predicate: #Predicate { $0.id == id })
-            query.fetchLimit = 2
-            let values = try context.fetch(query)
-            guard values.count == 1, let item = values.first else { throw QuickBooksBillingWorkflowError.changed }
+        for item in values {
             result[item.persistentModelID] = QuickBooksCatalogItemRevision(item)
         }
         guard result.count == ids.count else { throw QuickBooksBillingWorkflowError.changed }
@@ -415,13 +418,13 @@ struct QuickBooksBillingPaymentRevision: Equatable {
             guard values.count == ids.count else { throw QuickBooksBillingWorkflowError.changed }
             return values
         }
-        var values: [Item] = []
-        for id in ids.sorted(by: { $0.uuidString < $1.uuidString }) {
-            var query = FetchDescriptor<Item>(predicate: #Predicate { $0.id == id })
-            query.fetchLimit = 2
-            values.append(contentsOf: try context.fetch(query))
+        let selectedIDs = Array(ids)
+        var query = FetchDescriptor<Item>(predicate: #Predicate { selectedIDs.contains($0.id) })
+        query.fetchLimit = 21
+        let values = try context.fetch(query)
+        guard values.count == ids.count, Set(values.map(\.id)) == ids else {
+            throw QuickBooksBillingWorkflowError.changed
         }
-        guard values.count == ids.count else { throw QuickBooksBillingWorkflowError.changed }
         return values
     }
 
