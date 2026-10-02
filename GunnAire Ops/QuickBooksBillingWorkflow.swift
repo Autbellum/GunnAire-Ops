@@ -242,9 +242,10 @@ enum QuickBooksBillingAccessPolicy {
     }
 
     nonisolated static func allows(mirror: Mirror, verifiedRole: AppUserRole?,
-                                   isInvoice: Bool) -> Bool {
+                                   isInvoice: Bool, requiresMailAccess: Bool = false) -> Bool {
         guard let role = verifiedRole, !mirror.roles.isEmpty, mirror.allActive,
               mirror.roles.allSatisfy({ $0 == role }) else { return false }
+        if requiresMailAccess, role != .admin, role != .dispatcher { return false }
         switch role {
         case .admin: return true
         case .accounting: return isInvoice
@@ -303,7 +304,8 @@ enum QuickBooksBillingAccessPolicy {
 
     static func checkOffMain(context: ModelContext, document: QuickBooksBillingDocument,
                              email: String?, stamp: CompanyWorkspaceOperationStamp?,
-                             requiredRole: AppUserRole? = nil) async throws {
+                             requiredRole: AppUserRole? = nil,
+                             requiresMailAccess: Bool = false) async throws {
         try checkLocalFence(context: context, document: document, email: email, stamp: stamp)
         let normalized = AppAccess.normalizedEmail(email)
         let jobID = document.serviceCallID
@@ -323,7 +325,8 @@ enum QuickBooksBillingAccessPolicy {
             : CompanyWorkspaceAccessController.shared.verifiedRole
         let isInvoice: Bool
         switch document { case .invoice: isInvoice = true; case .estimate: isInvoice = false }
-        guard allows(mirror: mirror, verifiedRole: role, isInvoice: isInvoice),
+        guard allows(mirror: mirror, verifiedRole: role, isInvoice: isInvoice,
+                     requiresMailAccess: requiresMailAccess),
               requiredRole == nil || requiredRole == role else {
             throw QuickBooksBillingWorkflowError.accessDenied
         }
