@@ -171,6 +171,7 @@ struct GoogleCalendarWorkflowTests {
         try f.context.save()
         let result = await (try f.flow()).run { try await GoogleCalendarScheduleSync.synchronize(workflow: $0) }
         #expect(try result.get().contains("Published 1"))
+        #expect(try !result.get().contains("Review Google publication"))
         #expect(f.writes.count == 1)
         #expect(!GoogleCalendarScheduleSync.needsOutboundSync(f.call))
         _ = try await (try f.flow()).run { try await GoogleCalendarScheduleSync.synchronize(workflow: $0) }.get()
@@ -393,11 +394,20 @@ struct GoogleCalendarWorkflowTests {
         #expect(!queued)
         #expect(f.call.googleCalendarPendingAt == nil)
 
-        _ = try await (try f.flow()).run {
-            try await GoogleCalendarScheduleSync.synchronize(workflow: $0)
+        let result = try await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.synchronize(workflow: $0, verifyConfirmedCalls: [f.call])
         }.get()
         #expect(f.writes.isEmpty)
         #expect(f.call.googleEventID == nil)
+        #expect(result.contains("Review Google publication"))
+        #expect(result.contains("not published"))
+
+        let background = try await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.synchronize(workflow: $0)
+        }.get()
+        #expect(background.contains("No pending app-managed calendar updates were published"))
+        #expect(background.contains("Older scheduled jobs without a Google event link are not included"))
+        #expect(f.writes.isEmpty)
 
         f.call.googleEventID = "existing-external-event"
         #expect(!ScheduleGoogleLinkStatus.needsUnlinkedReview(f.call))
@@ -406,6 +416,19 @@ struct GoogleCalendarWorkflowTests {
         f.call.googleEventID = nil
         f.call.status = .completed
         #expect(!ScheduleGoogleLinkStatus.needsUnlinkedReview(f.call))
+    }
+
+    @Test func completedUnlinkedJobDoesNotWarnAboutCurrentGooglePublication() async throws {
+        let f = try Fixture()
+        f.call.googleEventManagedByApp = false
+        f.call.status = .completed
+        try f.context.save()
+
+        let message = try await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.synchronize(workflow: $0, verifyConfirmedCalls: [f.call])
+        }.get()
+        #expect(!message.contains("Review Google publication"))
+        #expect(f.writes.isEmpty)
     }
 
     @Test func legacyInspectionFindsGoogleChosenIDAtSavedTimeWithoutWriting() async throws {
