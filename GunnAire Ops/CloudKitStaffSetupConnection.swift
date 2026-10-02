@@ -12,15 +12,23 @@ struct CloudKitStaffSetupStamp: Equatable {
     }
 }
 
-@MainActor final class CloudKitStaffAccountFence {
+@MainActor final class CloudKitStaffAccountFence: ObservableObject {
     static let shared = CloudKitStaffAccountFence()
     private(set) var generation = UUID()
-    private(set) var mustRestart = false
+    @Published private(set) var mustRestart = false
     private var observer: NSObjectProtocol?
-    private init() {
-        observer = NotificationCenter.default.addObserver(forName: .CKAccountChanged, object: nil, queue: .main) { [weak self] _ in
+    init(center: NotificationCenter = .default) {
+        observer = center.addObserver(forName: .CKAccountChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.generation = UUID(); self?.mustRestart = true }
         }
+    }
+}
+
+@MainActor enum CloudKitStaffRelaunchPolicy {
+    static let message = "iCloud account access changed while GunnAire Ops was open. Close and reopen the app to verify Staff iCloud access. Your saved work is retained."
+
+    static func requiresRestart(staffAccountChanged: Bool, workspacePhase: CompanyWorkspacePhase) -> Bool {
+        staffAccountChanged || workspacePhase == .blocked(.restartRequired)
     }
 }
 
