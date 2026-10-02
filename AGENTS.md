@@ -20,6 +20,7 @@ at the start of every turn; append to it rather than rewriting it.
 
 ## Claims
 
+
 ## Shared rules
 
 1. The project sets `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`. A helper reached
@@ -42,6 +43,8 @@ at the start of every turn; append to it rather than rewriting it.
    pins the old behavior and the new one.
 
 ## Status log
+
+- 2026-10-01 Codex calendar_delivery_audit: On isolated `fix/0120-calendar-legacy-link`, a dispatcher can link an unlinked legacy job only after a complete bounded read-only scan finds one owned GunnAire marker or deterministic ID on a writable calendar. An explicit tap rechecks the same account, workspace, unchanged job, exact remote schedule/ownership, tombstones and local duplicate ID before saving only the existing route and event ID; a post-save exact GET controls ephemeral verified status. Same-time-only matches have no link action. Import preserves an existing unmanaged call's ownership state, preventing the route-only link from silently acquiring automatic publication authority. Signed iPad Air `GoogleCalendarWorkflowTests` passed 131/131, zero failures/skips (`/private/tmp/GunnAire-0120-calendar-link-focused-r2.xcresult`). Final-source `generated/omni_runner.py` passed with zero compiler warnings (`/private/tmp/GunnAire-0120-calendar-link-omni.log`). No live Google write, TestFlight upload, or provider notification is claimed. Source/test claims released.
 
 - 2026-10-01 Codex root: Combined 2026100119 source at `0b3ee50` passed `generated/omni_runner.py` with zero compiler warnings. The first full signed iPad run exposed one stale test expectation after the snapshot equality fast path; corrected test-only commit `0b3ee50` passed the focused suite 10/10 and the final full iPad suite 2,920/2,920 logical tests (3,000 executions), zero failures or skips. Six signed iPad billing, progress-invoice, and Google Calendar UI paths passed 6/6. Current-build iPad and iPhone screenshot captures passed 1/1 each; all twelve exported images were visually reviewed, dimension/alpha checked, and hashed in `AppStoreAssets/ScreenshotManifest.json`. The connected Google account has one app-shaped event, but the user's specific missing appointment and notification, physical-device iCloud sign-in, live QuickBooks/Drive delivery, and 0119 TestFlight availability remain unverified. Apple rejected the 0118 upload with error 90382 at 2026-10-01 16:13:50 EDT and said to wait one day; 0119 packaging must not claim upload before that limit clears.
 

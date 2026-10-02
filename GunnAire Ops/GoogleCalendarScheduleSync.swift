@@ -94,7 +94,7 @@ enum GoogleCalendarScheduleSync {
         let verifiedLink: VerifiedGoogleEventLink?
     }
 
-    private struct LinkRevision: Equatable {
+    fileprivate struct LinkRevision: Equatable {
         let id: UUID
         let calendarID: String?
         let eventID: String?
@@ -412,7 +412,7 @@ enum GoogleCalendarScheduleSync {
         (await checkGoogleLink(call: call, workflow: workflow)).map(\.missingEventReview)
     }
 
-    enum UnlinkedMatchReason: String {
+    enum UnlinkedMatchReason: String, Equatable {
         case appMarker, deterministicID, sameSchedule
 
         var displayName: String {
@@ -424,11 +424,12 @@ enum GoogleCalendarScheduleSync {
         }
     }
 
-    struct UnlinkedCalendarCandidate {
+    struct UnlinkedCalendarCandidate: Equatable {
         let calendarID: String
         let eventID: String
         let summary: String?
         let reason: UnlinkedMatchReason
+        let linkEligible: Bool
     }
 
     struct UnlinkedCalendarInspection {
@@ -437,11 +438,136 @@ enum GoogleCalendarScheduleSync {
         let windowStart: Date
         let windowEnd: Date
         let searchedCalendarIDs: [String]
+        let writableCalendarIDs: [String]
         let candidates: [UnlinkedCalendarCandidate]
 
         /// A complete scoped search found no matching ID, marker, or schedule.
         /// It is not proof that no event exists in another account or time slot.
         var noMatchWithinScope: Bool { candidates.isEmpty }
+
+        var singleProvableCandidate: UnlinkedCalendarCandidate? {
+            let proven = candidates.filter { $0.reason != .sameSchedule }
+            guard proven.count == 1, let candidate = proven.first, candidate.linkEligible,
+                  writableCalendarIDs.contains(candidate.calendarID) else { return nil }
+            return candidate
+        }
+    }
+
+    struct UnlinkedEventLinkReview {
+        let call: ServiceCall
+        let workflow: GoogleCalendarWorkflow
+        let accountEmail: String
+        let originalCalendarID: String
+        let candidate: UnlinkedCalendarCandidate
+        fileprivate let revision: LinkRevision
+    }
+
+    struct ExistingEventLinkOutcome {
+        let message: String
+        let verifiedEvent: GoogleCalendarEvent?
+    }
+
+    static func linkReview(call: ServiceCall, workflow: GoogleCalendarWorkflow,
+                           inspection: UnlinkedCalendarInspection) -> UnlinkedEventLinkReview? {
+        guard let candidate = inspection.singleProvableCandidate,
+              AppAccess.normalizedEmail(workflow.auth.signedInEmail) == inspection.accountEmail,
+              !workflow.context.hasChanges, normalizedOptional(call.googleEventID) == nil,
+              !call.googleEventManagedByApp else { return nil }
+        return UnlinkedEventLinkReview(call: call, workflow: workflow,
+            accountEmail: inspection.accountEmail, originalCalendarID: inspection.originalCalendarID,
+            candidate: candidate, revision: LinkRevision(call))
+    }
+
+    /// A user-confirmed link only records the route and opaque ID of an event
+    /// already owned by this job. It performs no provider mutation.
+    static func linkExistingEvent(_ review: UnlinkedEventLinkReview) async -> Result<ExistingEventLinkOutcome, Error> {
+        var outcome: ExistingEventLinkOutcome?
+        let result = await review.workflow.run { workflow in
+            let call = review.call
+            guard LinkRevision(call) == review.revision,
+                  AppAccess.normalizedEmail(workflow.auth.signedInEmail) == review.accountEmail else {
+                throw GoogleCalendarWorkflowError.changed
+            }
+            let fresh = try await inspectUnlinkedCalendarJobReadOnly(call: call, workflow: workflow)
+            guard fresh.accountEmail == review.accountEmail,
+                  fresh.originalCalendarID == review.originalCalendarID,
+                  fresh.singleProvableCandidate == review.candidate,
+                  LinkRevision(call) == review.revision,
+                  fresh.writableCalendarIDs.contains(review.candidate.calendarID) else {
+                throw GoogleCalendarWorkflowError.changed
+            }
+            let candidate = review.candidate
+            guard GoogleAuthManager.calendarPathComponent(candidate.eventID) != nil,
+                  !isCalendarEventDeleted(calendarID: candidate.calendarID, eventID: candidate.eventID) else {
+                throw GoogleCalendarWorkflowError.needsReview
+            }
+            let remote: GoogleCalendarEvent = try await workflow.receive {
+                workflow.auth.fetchCalendarEvent(calendarID: candidate.calendarID, eventID: candidate.eventID,
+                    operation: workflow.operation, completion: $0)
+            }
+            try validateLegacyLinkRemote(remote, candidate: candidate, call: call)
+            guard try containsOriginalCall(call, in: workflow.context), !workflow.context.hasChanges,
+                  LinkRevision(call) == review.revision else { throw GoogleCalendarWorkflowError.changed }
+            try requireNoOtherLocalLink(eventID: candidate.eventID, callID: call.id, context: workflow.context)
+            let oldCalendar = call.googleCalendarID
+            let oldEvent = call.googleEventID
+            call.googleCalendarID = candidate.calendarID
+            call.googleEventID = candidate.eventID
+            let linkedRevision = LinkRevision(call)
+            workflow.setAdditionalValidation {
+                guard LinkRevision(call) == linkedRevision,
+                      !isCalendarEventDeleted(calendarID: candidate.calendarID, eventID: candidate.eventID) else {
+                    throw GoogleCalendarWorkflowError.changed
+                }
+                try requireNoOtherLocalLink(eventID: candidate.eventID, callID: call.id, context: workflow.context)
+            }
+            defer { workflow.setAdditionalValidation(nil) }
+            do { try workflow.saveChanges() }
+            catch {
+                call.googleCalendarID = oldCalendar
+                call.googleEventID = oldEvent
+                throw error
+            }
+            do {
+                let checked: GoogleCalendarEvent = try await workflow.receive {
+                    workflow.auth.fetchCalendarEvent(calendarID: candidate.calendarID, eventID: candidate.eventID,
+                        operation: workflow.operation, completion: $0)
+                }
+                try validateLegacyLinkRemote(checked, candidate: candidate, call: call)
+                outcome = ExistingEventLinkOutcome(message:
+                    "Linked the existing Google event for \(review.accountEmail) on \(candidate.calendarID). The saved link was verified again. No event or invitation was sent.",
+                    verifiedEvent: checked)
+            } catch {
+                outcome = ExistingEventLinkOutcome(message:
+                    "The existing Google event link was saved, but its follow-up verification could not finish. Check this link again before relying on it. No event or invitation was sent.",
+                    verifiedEvent: nil)
+            }
+            return outcome?.message ?? "The existing Google event link was saved without a provider write."
+        }
+        return result.flatMap { _ in
+            guard let outcome else { return .failure(GoogleCalendarWorkflowError.needsReview) }
+            return .success(outcome)
+        }
+    }
+
+    private static func validateLegacyLinkRemote(_ event: GoogleCalendarEvent,
+                                                  candidate: UnlinkedCalendarCandidate,
+                                                  call: ServiceCall) throws {
+        let marker = event.extendedProperties?.privateProperties?["gunnaireServiceCallID"]
+        guard event.id == candidate.eventID, event.status != "cancelled", event.isManagedByGunnAire,
+              marker == nil || marker == call.id.uuidString,
+              marker == call.id.uuidString || event.id == eventID(for: call.id),
+              remoteEventMatchesExactSchedule(call: call, remoteEvent: event) else {
+            throw GoogleCalendarWorkflowError.identity
+        }
+    }
+
+    private static func requireNoOtherLocalLink(eventID: String, callID: UUID, context: ModelContext) throws {
+        var descriptor = FetchDescriptor<ServiceCall>(predicate: #Predicate { $0.googleEventID == eventID })
+        descriptor.fetchLimit = 2
+        guard try context.fetch(descriptor).allSatisfy({ $0.id == callID }) else {
+            throw GoogleCalendarWorkflowError.identity
+        }
     }
 
     /// Inspect a legacy nil-ID job without saving a link or issuing a write.
@@ -508,8 +634,11 @@ enum GoogleCalendarScheduleSync {
                         operation: workflow.operation, completion: $0)
                 }
                 guard event.id == deterministicID else { throw GoogleCalendarWorkflowError.identity }
+                let candidate = UnlinkedCalendarCandidate(calendarID: calendar.id, eventID: event.id,
+                    summary: event.summary, reason: .deterministicID, linkEligible: false)
                 candidates[key] = UnlinkedCalendarCandidate(calendarID: calendar.id, eventID: event.id,
-                    summary: event.summary, reason: .deterministicID)
+                    summary: event.summary, reason: .deterministicID,
+                    linkEligible: (try? validateLegacyLinkRemote(event, candidate: candidate, call: call)) != nil)
                 guard candidates.count <= 20 else { throw GoogleCalendarWorkflowError.needsReview }
             } catch GoogleAuthError.http(statusCode: 404) {
                 // Only an exact 404 on this ID may be treated as absent here.
@@ -534,14 +663,19 @@ enum GoogleCalendarScheduleSync {
                 else if matchesSchedule { reason = .sameSchedule }
                 else { continue }
                 let key = "\(calendar.id)|\(event.id)"
+                let candidate = UnlinkedCalendarCandidate(calendarID: calendar.id, eventID: event.id,
+                    summary: event.summary, reason: reason, linkEligible: false)
                 candidates[key] = UnlinkedCalendarCandidate(calendarID: calendar.id, eventID: event.id,
-                    summary: event.summary, reason: reason)
+                    summary: event.summary, reason: reason,
+                    linkEligible: reason != .sameSchedule &&
+                        (try? validateLegacyLinkRemote(event, candidate: candidate, call: call)) != nil)
                 guard candidates.count <= 20 else { throw GoogleCalendarWorkflowError.needsReview }
             }
         }
         try requireCall(call, workflow: workflow)
         return UnlinkedCalendarInspection(accountEmail: account, originalCalendarID: original.id,
             windowStart: windowStart, windowEnd: windowEnd, searchedCalendarIDs: list.map(\.id),
+            writableCalendarIDs: list.filter(\.isWritable).map(\.id),
             candidates: candidates.values.sorted {
                 $0.calendarID == $1.calendarID ? $0.eventID < $1.eventID : $0.calendarID < $1.calendarID
             })
@@ -1589,7 +1723,10 @@ enum GoogleCalendarScheduleSync {
                 }
                 call.googleCalendarID = plan.calendarID
                 call.googleEventID = plan.event.id
-                call.googleEventManagedByApp = plan.event.isManagedByGunnAire
+                // A route-only manual link must not silently acquire
+                // automatic publication authority during later import.
+                call.googleEventManagedByApp = plan.existing == nil
+                    ? plan.event.isManagedByGunnAire : call.googleEventManagedByApp
                 call.eventTitle = mergedImportedCalendarTitle(remoteValue: plan.event.summary,
                     existingValue: call.eventTitle, isManagedByApp: call.googleEventManagedByApp)
                 call.type = inferCallType(from: plan.event.summary, description: plan.event.description)
