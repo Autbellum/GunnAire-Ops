@@ -73,6 +73,40 @@ struct AutomaticGoogleDriveArchiveReadStoreTests {
         #expect(end.fetchedCount == 0)
     }
 
+    @Test func staleSavedFileSizeCannotStartBackgroundDriveUpload() async throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let customer = Customer(name: "Drive size fixture")
+        let localURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("drive-bg-size-\(UUID().uuidString).pdf")
+        try Data(repeating: 0x41, count: 33).write(to: localURL)
+        defer { try? FileManager.default.removeItem(at: localURL) }
+        let attachment = ServiceDocumentAttachment(customer: customer, serviceCallID: nil,
+            kind: .serviceReport, displayName: "report.pdf", localFilePath: localURL.path,
+            contentType: "application/pdf", fileSizeBytes: 1)
+        context.insert(customer)
+        context.insert(attachment)
+        try context.save()
+
+        #expect(attachment.fileSizeBytes == 1)
+        #expect(await AutomaticGoogleDriveArchive.backgroundLocalFileIsEligible(
+            localURL, maximumBytes: 32) == false)
+        var uploads = 0
+        await GoogleDriveArchivePublication.run(
+            attachment: attachment, context: context, actorEmail: "drive-fixture@gunnaire.com",
+            check: {}, reserveFileID: { "reserved-bg-size" },
+            readFile: {
+                try await AutomaticGoogleDriveArchive.backgroundLocalFileData(localURL, maximumBytes: 32)
+            },
+            upload: { _, _ in
+                uploads += 1
+                throw GoogleDriveAPIError.invalidResponse
+            })
+        #expect(uploads == 0)
+        #expect(attachment.googleDriveFileID == "reserved-bg-size")
+        #expect(attachment.needsGoogleDriveArchive)
+    }
+
     @Test func savedOwnedAttachmentsWakeArchiveWithoutRewakingArchivedOrUnownedFiles() throws {
         let container = try makeContainer()
         let context = ModelContext(container)
