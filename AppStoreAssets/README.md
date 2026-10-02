@@ -73,28 +73,32 @@ silently passing release preparation after the app interface changes.
 
 ## Current-source verification
 
-The retained screenshot set was regenerated from build `1.0 (2026100120)` on
-2026-10-01. Both the iPad Pro 13-inch (M5) and iPhone 17 Pro Max capture tests
-passed **1/1** on iOS 26.5. The selected images show the current
+The retained screenshot set was regenerated from build `1.0 (2026100121)` on
+2026-10-01. The signed iPad Pro 13-inch (M5) capture test passed **1/1** on
+iPadOS 26.4.1, and the signed iPhone 17 Pro Max capture test passed **1/1** on
+iOS 26.2. The selected images show the current
 Command Center, Schedule, customer equipment, job billing, payment entry, and
-QuickBooks publication review. The QuickBooks light-mode background and title
+QuickBooks publication review. The QuickBooks title and publication status
 remain readable in both device captures.
 
 The retained result bundles and exported attachment manifests are in
-`/Users/gunnaire/Documents/GunnAireCompletion/2026-10-01-release-0120/`.
+`/Users/gunnaire/Documents/GunnAireCompletion/2026-10-01-release-0121/`.
 All twelve selected images were visually reviewed and mechanically checked at
 2064 x 2752 or 1320 x 2868 with no alpha channel. The fixtures show disconnected
 Google Calendar and QuickBooks Payments states honestly; they do not represent
 live provider delivery. No selected image exposes a signed-in account email,
-keyboard, alert, spinner, or notification banner.
+keyboard, alert, app loading spinner, or notification banner. The small white
+curve at the lower-right of the iPad captures is iPadOS's native window resize
+handle, not an app loading indicator.
 
 The capture contract disables animation only for the Debug screenshot fixture,
-waits through a four-second app-and-system quiescence window, and refreshes an
-interactive native iPad sidebar before capture. It also verifies that the
-deterministic fixtures never expose a
-GunnAire account address. When the sidebar is visible, it also requires the
-role-only `Administrator` footer; the compact iPhone layout correctly keeps its
-collapsed sidebar out of the screenshot. Customer Systems must show the compact
+waits through a four-second app-and-system quiescence window, and closes the
+native iPad sidebar before capture so a relaunch cannot retain clipped labels
+from its split-view transition. It also verifies that the deterministic
+fixtures never expose a GunnAire account address. When the sidebar account row
+is accessible, it requires the role-only `Administrator` label; the compact
+iPhone layout keeps its collapsed sidebar out of the screenshot. Customer
+Systems must show the compact
 Edit, QR, and More actions while lifecycle and delete actions remain hidden in
 the closed menu. Immediately before each attachment, the test also waits for any
 SpringBoard notification banner to disappear and fails instead of retaining an
@@ -113,13 +117,13 @@ xcodebuild test -project 'GunnAire Ops.xcodeproj' -scheme 'GunnAire Ops' \
   -destination 'platform=iOS Simulator,name=iPad Pro 13-inch (M5)' \
   -only-testing:'GunnAire OpsUITests/GunnAire_OpsUITests/testCaptureAppStoreScreenshots' \
   -resultBundlePath /tmp/GunnAire-AppStore-iPad.xcresult \
-  CODE_SIGNING_ALLOWED=NO
+  -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-
 
 xcodebuild test -project 'GunnAire Ops.xcodeproj' -scheme 'GunnAire Ops' \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro Max' \
   -only-testing:'GunnAire OpsUITests/GunnAire_OpsUITests/testCaptureAppStoreScreenshots' \
   -resultBundlePath /tmp/GunnAire-AppStore-iPhone.xcresult \
-  CODE_SIGNING_ALLOWED=NO
+  -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-
 
 xcrun xcresulttool export attachments \
   --path /tmp/GunnAire-AppStore-iPad.xcresult \
