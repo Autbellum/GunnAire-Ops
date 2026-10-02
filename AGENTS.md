@@ -20,6 +20,8 @@ at the start of every turn; append to it rather than rewriting it.
 
 ## Claims
 
+- 2026-10-02 Codex 0122 integration: isolated `release/2026100122` checkout; owns specified Calendar/Drive/BG cherry-picks, `AGENTS.md` conflict resolution, `GunnAire Ops.xcodeproj/project.pbxproj` build bump, and focused version assertion until validation and draft PR.
+
 
 ## Shared rules
 
