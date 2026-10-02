@@ -113,6 +113,7 @@ struct BillingDocumentsView: View {
     @State private var newItemPurchaseDescription = ""
     @State private var newItemTaxable = false
     @State private var actionMessage = ""
+    @State private var billingPDFQueueMessage = ""
     @State private var estimateSendIssue: String?
     @State private var isCreatingDocument = false
     @State private var isImportingQuickBooksItems = false
@@ -1818,6 +1819,9 @@ GunnAire
                     if !actionMessage.isEmpty {
                         Section { Text(actionMessage).accessibilityIdentifier("FocusedInvoiceStatus") }
                     }
+                    if !billingPDFQueueMessage.isEmpty {
+                        Section { Text(billingPDFQueueMessage).accessibilityIdentifier("BillingPDFQueueStatus") }
+                    }
                     AnyView(invoicesWorkspaceSection)
                 }
                 .navigationTitle(navigationTitle)
@@ -1878,6 +1882,9 @@ GunnAire
                         }
                         if !actionMessage.isEmpty {
                             Section { Text(actionMessage).accessibilityIdentifier("ManagementBillingSavedStatus") }
+                        }
+                        if !billingPDFQueueMessage.isEmpty {
+                            Section { Text(billingPDFQueueMessage).accessibilityIdentifier("BillingPDFQueueStatus") }
                         }
                     } else {
                         if startsNewDocument, !actionMessage.isEmpty {
@@ -2188,6 +2195,7 @@ GunnAire
             documentExportGeneration = UUID()
             isPreparingCustomerDocument = false
             isCreatingDocument = false
+            billingPDFQueueMessage = ""
             for owner in billingSyncLifecycles.values { owner.cancel() }
             billingSyncLifecycles.removeAll()
         }
@@ -2196,11 +2204,13 @@ GunnAire
             billingSyncLifecycles.removeValue(forKey: "document-preparation")
             isPreparingCustomerDocument = false
             isCreatingDocument = false
+            billingPDFQueueMessage = ""
         }
         .onReceive(NotificationCenter.default.publisher(for: .gunnaireConnectivityRestored)) { _ in
             guard canAttemptSharedBilling else { return }
             AutomaticOutboundSync.shared.recoverPending(context: modelContext, force: true)
         }
+        .task { await recoverQueuedBillingPDFs() }
     }
 
     private var hasNewDocumentEdits: Bool {
@@ -3830,6 +3840,12 @@ GunnAire
                         Text(actionMessage)
                             .font(.caption)
                             .foregroundColor(.secondary)
+                    }
+                    if !billingPDFQueueMessage.isEmpty {
+                        Text(billingPDFQueueMessage)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .accessibilityIdentifier("BillingPDFQueueStatus")
                     }
                 }
 
@@ -8513,6 +8529,7 @@ GunnAire
                     realmMarkerIssue = error.localizedDescription
                     automaticRetryPending = false
                 }
+                queueSavedBillingPDF(.invoice(invoice))
                 do {
                     let validateReport = try await preparation.perform {
                         try GmailDraftBusinessSnapshot.validate(initiatingSource, business: initiatingBusiness, context: modelContext)
@@ -10304,6 +10321,9 @@ GunnAire
                 isCreatingDocument = false
                 return
             }
+            if isUpdatingExistingInvoice {
+                queueSavedBillingPDF(.invoice(invoice))
+            }
             let shouldReturnToInvoiceOverview = isUpdatingExistingInvoice && selectedInvoiceForEditingID == invoice.id
             if startsNewDocument { newDocumentSaveConfirmed = true }
             let invoiceItems = selectedLineItems
@@ -10460,6 +10480,7 @@ GunnAire
                                                  publishWhenAvailable: Bool,
                                                  hadWriteAheadMarker: Bool = false,
                                                  selectedItemCapture: QuickBooksSelectedItemCapture? = nil) {
+        queueSavedBillingPDF(document)
         if case .estimate = document, publishWhenAvailable, canAttemptSharedBilling,
            let selectedItemCapture {
             do {
@@ -10489,6 +10510,95 @@ GunnAire
             } catch {
                 actionMessage = "\(document.label) is saved locally. Automatic QuickBooks delivery is not confirmed; review the saved document and business connection: \(error.localizedDescription)"
             }
+        }
+    }
+
+    private func queueSavedBillingPDF(_ document: QuickBooksBillingDocument) {
+        let access = CompanyWorkspaceAccessController.shared
+        guard access.verifiedRole == .admin,
+              let binding = access.verifiedBinding,
+              let stamp = access.operationStamp,
+              access.authorizedContainer === modelContext.container else {
+            billingPDFQueueMessage = "Customer PDF preparation needs an administrator in the verified business workspace."
+            return
+        }
+        let container = modelContext.container
+        let companyID = binding.companyID
+        let generation = stamp.generation
+        let session = stamp.session
+        let viewGeneration = documentExportGeneration
+        let kind: BillingPDFPrivateProjection.Kind
+        switch document {
+        case .estimate: kind = .estimate
+        case .invoice: kind = .invoice
+        }
+        let documentID = document.id
+        billingPDFQueueMessage = "Preparing the saved customer PDF…"
+        let check: BillingPDFLocalQueue.Check = {
+            try await MainActor.run {
+                let current = CompanyWorkspaceAccessController.shared
+                guard current.verifiedRole == .admin,
+                      current.verifiedBinding == binding,
+                      current.operationStamp?.generation == generation,
+                      current.operationStamp?.session == session,
+                      current.authorizedContainer === container else {
+                    throw BillingPDFGenerationError.changed
+                }
+            }
+        }
+        Task { @MainActor in
+            let result = await BillingPDFLocalQueue.shared.enqueue(companyID: companyID,
+                container: container, kind: kind, documentID: documentID, check: check)
+            guard documentExportGeneration == viewGeneration,
+                  access.operationStamp == stamp,
+                  access.authorizedContainer === container else { return }
+            billingPDFQueueMessage = Self.billingPDFQueueStatusText(result)
+        }
+    }
+
+    private func recoverQueuedBillingPDFs() async {
+        let access = CompanyWorkspaceAccessController.shared
+        guard access.verifiedRole == .admin,
+              let binding = access.verifiedBinding,
+              let stamp = access.operationStamp,
+              access.authorizedContainer === modelContext.container else { return }
+        let container = modelContext.container
+        let generation = stamp.generation
+        let session = stamp.session
+        let viewGeneration = documentExportGeneration
+        let check: BillingPDFLocalQueue.Check = {
+            try await MainActor.run {
+                let current = CompanyWorkspaceAccessController.shared
+                guard current.verifiedRole == .admin,
+                      current.verifiedBinding == binding,
+                      current.operationStamp?.generation == generation,
+                      current.operationStamp?.session == session,
+                      current.authorizedContainer === container else {
+                    throw BillingPDFGenerationError.changed
+                }
+            }
+        }
+        let results = await BillingPDFLocalQueue.shared.recoverPending(
+            companyID: binding.companyID, container: container, check: check)
+        guard documentExportGeneration == viewGeneration,
+              access.operationStamp == stamp,
+              access.authorizedContainer === container,
+              let last = results.last else { return }
+        billingPDFQueueMessage = results.contains(.needsReview)
+            ? Self.billingPDFQueueStatusText(.needsReview)
+            : Self.billingPDFQueueStatusText(last)
+    }
+
+    private static func billingPDFQueueStatusText(_ status: BillingPDFLocalQueueStatus) -> String {
+        switch status {
+        case .queued, .alreadyQueued:
+            "Customer PDF saved on this device. Google Drive archive is pending."
+        case .inProgress:
+            "Preparing the saved customer PDF…"
+        case .needsReview:
+            "Customer PDF preparation needs review. Google Drive archive is not confirmed."
+        case .archived:
+            "Customer PDF archived to Google Drive and verified."
         }
     }
 

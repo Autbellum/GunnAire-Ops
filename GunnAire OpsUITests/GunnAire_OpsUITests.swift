@@ -5112,6 +5112,11 @@ final class GunnAire_OpsUITests: XCTestCase {
             evidence.name = "Management - original \(kind.lowercased()) saved offline"
             evidence.lifetime = .keepAlways; self.add(evidence)
             XCTAssertEqual(savedCustomer.label, "Blue Ridge Dental")
+            let pdfStatus = app.staticTexts["BillingPDFQueueStatus"].firstMatch
+            XCTAssertTrue(pdfStatus.waitForExistence(timeout: 5),
+                          "Saving the original \(kind.lowercased()) must report the external PDF archive state.")
+            XCTAssertFalse(pdfStatus.label.contains("archived to Google Drive"),
+                           "An offline save cannot claim that Google Drive confirmed an archive.")
             if kind == "Invoice" {
                 let workType = app.descendants(matching: .any)["ManagementBillingSavedWorkType"]
                 XCTAssertTrue(workType.exists)

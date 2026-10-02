@@ -540,6 +540,7 @@ struct ContentView: View {
                 AutomaticPaymentSync.shared.recoverPending(context: modelContext, force: true)
                 AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
                 AutomaticGoogleDriveArchive.shared.recover(context: modelContext)
+                recoverPendingBillingPDFs()
             }
         }
         .task {
@@ -555,6 +556,7 @@ struct ContentView: View {
             AutomaticPaymentSync.shared.recoverPending(context: modelContext, force: true)
             AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
             AutomaticGoogleDriveArchive.shared.recover(context: modelContext)
+            recoverPendingBillingPDFs()
             await runStartupDataMaintenance()
             retryPendingSharedCompanyDocumentUploadsIfNeeded()
             retryPendingCustomerCommunicationUploadsIfNeeded()
@@ -637,6 +639,7 @@ struct ContentView: View {
             }
             AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
             AutomaticGoogleDriveArchive.shared.recover(context: modelContext)
+            recoverPendingBillingPDFs()
             retryPendingSharedCompanyDocumentUploadsIfNeeded()
             retryPendingCustomerCommunicationUploadsIfNeeded()
             applyPendingAppRouteIfNeeded()
@@ -659,12 +662,14 @@ struct ContentView: View {
             guard authenticated else { return }
             AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
             AutomaticGoogleDriveArchive.shared.recover(context: modelContext)
+            recoverPendingBillingPDFs()
         }
         .onReceive(NotificationCenter.default.publisher(for: .gunnaireConnectivityRestored)) { _ in
             AutomaticOutboundSync.shared.recoverPending(context: modelContext, force: true)
             AutomaticPaymentSync.shared.recoverPending(context: modelContext, force: true)
             AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
             AutomaticGoogleDriveArchive.shared.recover(context: modelContext)
+            recoverPendingBillingPDFs()
         }
         .onReceive(NotificationCenter.default.publisher(for: .CKAccountChanged)) { _ in
             Task {
@@ -721,6 +726,31 @@ struct ContentView: View {
     @MainActor
     private func refreshOperationalContinuityState() async {
         await refreshCloudKitContinuityReadiness()
+    }
+
+    @MainActor
+    private func recoverPendingBillingPDFs() {
+        let access = CompanyWorkspaceAccessController.shared
+        guard access.verifiedRole == .admin,
+              let binding = access.verifiedBinding,
+              let stamp = access.operationStamp,
+              access.authorizedContainer === modelContext.container else { return }
+        let container = modelContext.container
+        let check: BillingPDFLocalQueue.Check = {
+            try await MainActor.run {
+                let current = CompanyWorkspaceAccessController.shared
+                guard current.verifiedRole == .admin,
+                      current.verifiedBinding == binding,
+                      current.operationStamp == stamp,
+                      current.authorizedContainer === container else {
+                    throw BillingPDFGenerationError.changed
+                }
+            }
+        }
+        Task {
+            _ = await BillingPDFLocalQueue.shared.recoverPending(
+                companyID: binding.companyID, container: container, check: check)
+        }
     }
 
     @ViewBuilder
