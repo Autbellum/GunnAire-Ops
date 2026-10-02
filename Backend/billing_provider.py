@@ -55,12 +55,13 @@ def transport(request):
 
 
 class BillingQBOProvider:
-    def __init__(self, context, authorize, bearer_loader, send=None):
+    def __init__(self, context, authorize, bearer_loader, send=None, *, maximum_documents=None):
         reference(context["realm_id"])
         if context["environment"] not in ("sandbox", "production"):
             raise failure("provider_changed", "Select the original QuickBooks environment.")
         self.context, self.authorize, self.bearer_loader = dict(context), authorize, bearer_loader
         self.send, self.bearer = send or transport, None
+        self.maximum_documents = maximum_documents
 
     def request(self, resource, query=None, document=None, before_send=None):
         read_allowed = re.fullmatch(r"(?:query|preferences|(?:invoice|estimate|customer|item|companyinfo)/[A-Za-z0-9._:-]+)", resource)
@@ -104,6 +105,8 @@ class BillingQBOProvider:
                 raise failure("documents_incomplete", "The complete accounting document list could not be verified.")
             return total
         total, values, seen = count(), [], set()
+        if self.maximum_documents is not None and total > self.maximum_documents:
+            raise failure("background_census_limit", "Review this estimate in the app; the QuickBooks document census exceeds the background safety limit.")
         # Smaller pages keep ordinary 750-line documents below the response cap;
         # exceptionally large pages stop safely rather than truncating a census.
         for start in range(1, total + 1, 25):
