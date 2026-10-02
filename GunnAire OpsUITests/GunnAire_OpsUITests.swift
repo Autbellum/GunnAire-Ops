@@ -1428,6 +1428,30 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testStaffICloudAccountChangeRequiresRelaunchInsteadOfRetrying() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-uiTestAuthenticatedAdmin",
+                               "-uiTestWorkspaceProofMismatch", "-uiTestStaffCloudKitSetup", "-uiTestStaffAsParticipant",
+                               "-uiTestStaffAccountChanged"]
+        app.launchEnvironment["GUNNAIRE_STAFF_SETUP_FIXTURE"] = UUID().uuidString
+        app.launch()
+
+        let open = app.buttons["OpenStaffCloudKitSetup"]
+        XCTAssertTrue(open.waitForExistence(timeout: 8))
+        open.tap()
+        XCTAssertTrue(app.navigationBars["Staff iCloud"].waitForExistence(timeout: 5))
+        let restart = app.staticTexts["StaffCloudKitRestartRequired"]
+        XCTAssertTrue(restart.waitForExistence(timeout: 8))
+        XCTAssertTrue(restart.label.contains("Close and reopen"))
+        XCTAssertTrue(restart.label.contains("saved work is retained"))
+        XCTAssertFalse(app.buttons["Check Again"].exists)
+        XCTAssertFalse(app.buttons["StaffCloudKitRequestAccess"].exists)
+        XCTAssertFalse(app.buttons["StaffCloudKitRecoverOriginal"].exists)
+        XCTAssertFalse(app.buttons["StaffCloudKitAcceptInvitation"].exists)
+        XCTAssertTrue(app.navigationBars["Staff iCloud"].buttons["Close"].exists)
+    }
+
+    @MainActor
     func testStaffCloudKitRequestRecoversAfterRelaunchWithoutOpeningAnotherWorkspace() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-uiTestAuthenticatedAdmin",
