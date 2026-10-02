@@ -2571,21 +2571,27 @@ struct OnsiteDocumentationView: View {
         selectedServiceCallID = pendingID
     }
 
-    private func validateDocumentWorkspace(request: UUID) throws {
+    @discardableResult
+    private func validateDocumentWorkspace(request: UUID) throws -> QuickBooksBillingAccessPolicy.UserCensus {
         try documentExportLifetime.check(request)
         guard GunnAireCloudKit.usesTestDatabase ||
                 CompanyWorkspaceAccessController.shared.authorizedContainer === modelContext.container else {
             throw WorkspaceProviderAccessError.unavailable
         }
-        let currentUsers = try modelContext.fetch(FetchDescriptor<AppUser>())
+        let census = try QuickBooksBillingAccessPolicy.userCensus(context: modelContext)
+        let currentUsers = census.users
         guard AppAccess.canAccessSidebarItem(.onsiteDocumentation,
             email: currentUserEmail, users: currentUsers) else { throw GmailComposeError.access }
+        return census
     }
 
     private func validateDocumentAccess(
-        call: ServiceCall?, document: QuickBooksBillingDocument?, includesFinancials: Bool
+        call: ServiceCall?, document: QuickBooksBillingDocument?, includesFinancials: Bool,
+        priorCensus: QuickBooksBillingAccessPolicy.UserCensus? = nil
     ) throws {
-        let census = try QuickBooksBillingAccessPolicy.userCensus(context: modelContext)
+        let census: QuickBooksBillingAccessPolicy.UserCensus
+        if let priorCensus { census = priorCensus }
+        else { census = try QuickBooksBillingAccessPolicy.userCensus(context: modelContext) }
         let currentUsers = census.users
         guard !includesFinancials ||
             AppAccess.canViewBillingFinancialDetails(email: currentUserEmail, users: currentUsers) ||
@@ -2597,11 +2603,8 @@ struct OnsiteDocumentationView: View {
         }
         if let call {
             guard isCurrentRecord(call), isCurrentRecord(call.customer) else { throw GmailDraftError.businessChanged }
-            let currentTechnicians = try modelContext.fetch(FetchDescriptor<Technician>())
-            guard AppAccess.visibleServiceCallIDs(email: currentUserEmail, users: currentUsers,
-                serviceCalls: [call], technicians: currentTechnicians).contains(call.id) else {
-                throw GmailComposeError.access
-            }
+            try CustomerDocumentServiceCallAccess.require(call: call, context: modelContext,
+                email: currentUserEmail, users: currentUsers)
         }
     }
 
@@ -2614,26 +2617,26 @@ struct OnsiteDocumentationView: View {
         invoiceID: UUID?,
         estimateID: UUID?,
         membershipIsIntact: @escaping @MainActor () -> Bool,
-        validateAccess: @escaping @MainActor () throws -> Void,
+        validateAccess: @escaping @MainActor (QuickBooksBillingAccessPolicy.UserCensus) throws -> Void,
         export: (@escaping @MainActor () throws -> Void) async throws -> URL
     ) async throws -> OnsiteDocumentExportLifetime.Result {
-        try validateDocumentWorkspace(request: request)
+        let initialCensus = try validateDocumentWorkspace(request: request)
         let context = modelContext
         let email = AppAccess.normalizedEmail(currentUserEmail)
         let selection = selectedServiceCallID
         let operation = try WorkspaceProviderOperation.capture { true }
         guard membershipIsIntact() else { throw GmailDraftError.businessChanged }
-        try validateAccess()
+        try validateAccess(initialCensus)
         let business = GmailBusinessContext(customerID: customerID, serviceCallID: serviceCallID,
             invoiceID: invoiceID, estimateID: estimateID, workflow: .customerDocument)
         let origin = try GmailDraftBusinessSnapshot.capture(business, context: context)
         return try await documentExportLifetime.export(request: request, validateCurrent: {
             try operation.check()
-            try validateDocumentWorkspace(request: request)
+            let census = try validateDocumentWorkspace(request: request)
             guard modelContext === context, selectedServiceCallID == selection,
                   AppAccess.normalizedEmail(currentUserEmail) == email,
                   membershipIsIntact() else { throw GmailDraftError.businessChanged }
-            try validateAccess()
+            try validateAccess(census)
             try GmailDraftBusinessSnapshot.validate(origin, business: business, context: context)
         }, render: export)
     }
@@ -2668,8 +2671,9 @@ struct OnsiteDocumentationView: View {
                     (linkedInvoice.map { isCurrentRecord($0) } ?? true) &&
                     (linkedEstimate.map { isCurrentRecord($0) } ?? true)
                 },
-                validateAccess: {
-                    try validateDocumentAccess(call: call, document: nil, includesFinancials: includesFinancials)
+                validateAccess: { census in
+                    try validateDocumentAccess(call: call, document: nil, includesFinancials: includesFinancials,
+                        priorCensus: census)
                 }
             ) { authorize in
                 try await CustomerDocumentExporter.exportOnsiteReportOffMainActor(
@@ -2802,8 +2806,9 @@ struct OnsiteDocumentationView: View {
                     isCurrentRecord(call) && isCurrentRecord(estimate) && isCurrentRecord(customer) &&
                     call.linkedEstimateID == originalEstimateLink
                 },
-                validateAccess: {
-                    try validateDocumentAccess(call: call, document: .estimate(estimate), includesFinancials: false)
+                validateAccess: { census in
+                    try validateDocumentAccess(call: call, document: .estimate(estimate), includesFinancials: false,
+                        priorCensus: census)
                 }
             ) { authorize in
                 try await CustomerDocumentExporter.exportEstimateOffMainActor(
@@ -2846,8 +2851,9 @@ struct OnsiteDocumentationView: View {
                     isCurrentRecord(invoice) && isCurrentRecord(customer) &&
                     (linkedCall.map { isCurrentRecord($0) } ?? true)
                 },
-                validateAccess: {
-                    try validateDocumentAccess(call: linkedCall, document: .invoice(invoice), includesFinancials: true)
+                validateAccess: { census in
+                    try validateDocumentAccess(call: linkedCall, document: .invoice(invoice), includesFinancials: true,
+                        priorCensus: census)
                 }
             ) { authorize in
                 try await CustomerDocumentExporter.exportInvoiceOffMainActor(

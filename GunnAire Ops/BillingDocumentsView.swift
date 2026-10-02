@@ -1446,11 +1446,14 @@ GunnAire
 
     @discardableResult
     private func validateDocumentExportAccess(customerID: UUID?, serviceCallID: UUID?,
-        invoiceID: UUID?, estimateID: UUID?, requiresMail: Bool) throws -> Customer {
+        invoiceID: UUID?, estimateID: UUID?, requiresMail: Bool,
+        priorCensus: QuickBooksBillingAccessPolicy.UserCensus? = nil) throws -> Customer {
         guard GunnAireCloudKit.usesTestDatabase ||
                 CompanyWorkspaceAccessController.shared.authorizedContainer === modelContext.container,
               let customerID else { throw GmailComposeError.access }
-        let census = try QuickBooksBillingAccessPolicy.userCensus(context: modelContext)
+        let census: QuickBooksBillingAccessPolicy.UserCensus
+        if let priorCensus { census = priorCensus }
+        else { census = try QuickBooksBillingAccessPolicy.userCensus(context: modelContext) }
         let currentUsers = census.users
         if requiresMail, !AppAccess.canAccessSidebarItem(.mail, email: currentUserEmail, users: currentUsers) {
             throw GmailComposeError.access
@@ -1478,12 +1481,8 @@ GunnAire
             }
         }
         if let serviceCallID {
-            let calls = try modelContext.fetch(FetchDescriptor<ServiceCall>())
-            let matches = calls.filter { $0.id == serviceCallID }
-            guard matches.count == 1, let call = matches.first, call.customer === customer,
-                  AppAccess.canAccessServiceCall(call, email: currentUserEmail, users: currentUsers,
-                    serviceCalls: calls, technicians: try modelContext.fetch(FetchDescriptor<Technician>()))
-            else { throw GmailComposeError.access }
+            try CustomerDocumentServiceCallAccess.require(callID: serviceCallID, customer: customer,
+                context: modelContext, email: currentUserEmail, users: currentUsers)
         } else if invoiceID == nil && estimateID == nil {
             guard AppAccess.canAccessSidebarItem(.customers, email: currentUserEmail, users: currentUsers)
             else { throw GmailComposeError.access }
@@ -1497,7 +1496,12 @@ GunnAire
         guard !isPreparingCustomerDocument, !isCreatingDocument else { return }
         let generation = documentExportGeneration
         do {
-            if let document { try QuickBooksBillingAccessPolicy.validate(context: modelContext, document: document) }
+            let census: QuickBooksBillingAccessPolicy.UserCensus?
+            if let document {
+                let current = try QuickBooksBillingAccessPolicy.userCensus(context: modelContext)
+                try QuickBooksBillingAccessPolicy.validate(context: modelContext, document: document, census: current)
+                census = current
+            } else { census = nil }
             if let serviceCall, !isCurrentRecord(serviceCall) { throw GmailDraftError.businessChanged }
             guard let customerID = document?.customer?.id ?? serviceCall?.customer?.id else {
                 throw GmailDraftError.businessChanged
@@ -1512,7 +1516,8 @@ GunnAire
                 serviceCallID: serviceCall?.id ?? document?.serviceCallID,
                 invoiceID: invoiceID, estimateID: estimateID, workflow: .customerDocument)
             let originalCustomer = try validateDocumentExportAccess(customerID: customerID, serviceCallID: sourceBusiness.serviceCallID,
-                invoiceID: invoiceID, estimateID: estimateID, requiresMail: requiresGoogleSession)
+                invoiceID: invoiceID, estimateID: estimateID, requiresMail: requiresGoogleSession,
+                priorCensus: census)
             let customerMembership = BillingDocumentPreparation.membership([originalCustomer], in: modelContext)
             let source = try GmailDraftBusinessSnapshot.capture(sourceBusiness, context: modelContext)
             let hadGoogle = googleAuth.isAuthenticated
