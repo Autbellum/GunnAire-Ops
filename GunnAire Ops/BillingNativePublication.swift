@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import SwiftData
 
 struct BillingNativeContext: Decodable {
     let companyID: UUID
@@ -168,6 +169,91 @@ nonisolated struct BillingNativePending: Codable {
     var publicationID: UUID?
     var settled = false
     var backgroundState: BillingNativeBackgroundState?
+    var queueProof: BillingNativeQueueProof? = nil
+}
+
+/// Captured only after customer and catalog preparation. The encrypted journal
+/// keeps these digests so a later process cannot silently adopt edited local
+/// records while replaying an immutable server request.
+nonisolated struct BillingNativeQueueProof: Codable, Equatable, Sendable {
+    let customerID: UUID
+    let customerRevision: String
+    let itemRevisions: [UUID: String]
+    let actorRole: AppUserRole?
+
+    static func capture(customer: QuickBooksCustomerCreateDraft,
+                        items: [UUID: QuickBooksCatalogItemRevision],
+                        actorRole: AppUserRole? = nil) throws -> Self {
+        guard !items.isEmpty, items.count <= 20 else { throw QuickBooksBillingWorkflowError.changed }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        func digest<T: Encodable>(_ value: T) throws -> String {
+            SHA256.hash(data: try encoder.encode(value)).map { String(format: "%02x", $0) }.joined()
+        }
+        var revisions: [UUID: String] = [:]
+        for (id, value) in items {
+            guard id == value.id else { throw QuickBooksBillingWorkflowError.changed }
+            revisions[id] = try digest(value)
+        }
+        return .init(customerID: customer.localCustomerID,
+            customerRevision: try digest(customer), itemRevisions: revisions, actorRole: actorRole)
+    }
+
+    /// A private-context, double-read fence for a persisted queue attempt.
+    /// A changed selected record, removed mapping, conflicting provider owner
+    /// or changed customer blocks replay before the backend can reserve work.
+    func checkPersisted(container: ModelContainer, request: BillingPublicationRequest) async throws {
+        guard customerID == request.localCustomerID, itemRevisions.count <= 20,
+              !itemRevisions.isEmpty, let draftRevision = request.draftRevision else {
+            throw QuickBooksBillingWorkflowError.changed
+        }
+        let expected = self
+        let providerCustomerID = request.document.CustomerRef.value
+        let documentID = request.localDocumentID
+        try await Task.detached(priority: .utility) {
+            func read() throws -> BillingNativeQueueProof {
+                let context = ModelContext(container)
+                context.autosaveEnabled = false
+                var customerQuery = FetchDescriptor<Customer>(predicate: #Predicate { $0.id == expected.customerID })
+                customerQuery.fetchLimit = 2
+                let customers = try context.fetch(customerQuery)
+                guard customers.count == 1, let customer = customers.first,
+                      customer.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines) == providerCustomerID else {
+                    throw QuickBooksBillingWorkflowError.changed
+                }
+                var estimateQuery = FetchDescriptor<Estimate>(predicate: #Predicate { $0.id == documentID })
+                estimateQuery.fetchLimit = 2
+                let estimates = try context.fetch(estimateQuery)
+                guard estimates.count == 1, let estimate = estimates.first,
+                      estimate.customer?.persistentModelID == customer.persistentModelID,
+                      estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
+                      try QuickBooksBillingWorkflow.digestDraftRevision(
+                        QuickBooksBillingWorkflow.estimateDraftRevisionValues(
+                            estimate: estimate, customer: customer, context: context)) == draftRevision else {
+                    throw QuickBooksBillingWorkflowError.changed
+                }
+                var selected: [UUID: QuickBooksCatalogItemRevision] = [:]
+                for id in expected.itemRevisions.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+                    var itemQuery = FetchDescriptor<Item>(predicate: #Predicate { $0.id == id })
+                    itemQuery.fetchLimit = 2
+                    let items = try context.fetch(itemQuery)
+                    guard items.count == 1, let item = items.first,
+                          selected.updateValue(QuickBooksCatalogItemRevision(item), forKey: id) == nil else {
+                        throw QuickBooksBillingWorkflowError.changed
+                    }
+                }
+                let mapping = try QuickBooksBillingWorkflow.readEstimateQueueMappings(
+                    container: container, selectedIDs: Set(selected.keys), customerID: expected.customerID)
+                guard mapping.first == providerCustomerID else {
+                    throw QuickBooksBillingWorkflowError.changed
+                }
+                return try Self.capture(customer: QuickBooksCustomerCreateOperation.draft(for: customer), items: selected)
+            }
+            let first = try read()
+            let second = try read()
+            guard first == second, second == expected else { throw QuickBooksBillingWorkflowError.changed }
+        }.value
+    }
 }
 
 enum BillingNativeBackgroundState: String, Codable, Sendable {
@@ -189,7 +275,14 @@ nonisolated struct BillingNativeJournal: Codable {
                   pending.backgroundState == nil ||
                     (pending.request.documentType == .estimate && pending.request.operation == .create &&
                      pending.submitted && !pending.settled &&
-                     (pending.backgroundState != .queued || pending.publicationID != nil)) else {
+                     (pending.backgroundState != .queued || pending.publicationID != nil)),
+                  pending.queueProof == nil ||
+                    (pending.request.documentType == .estimate && pending.request.operation == .create &&
+                     pending.queueProof?.customerID == pending.request.localCustomerID &&
+                     pending.queueProof?.customerRevision.count == 64 &&
+                     pending.queueProof?.itemRevisions.isEmpty == false &&
+                     (pending.queueProof?.itemRevisions.count ?? 0) <= 20 &&
+                     pending.queueProof?.itemRevisions.values.allSatisfy({ $0.count == 64 }) == true) else {
                 throw BillingNativeError.storage
             }
         }
@@ -306,10 +399,11 @@ final class BillingNativePublication {
         return nil
     }
 
-    func prepare(_ request: BillingPublicationRequest, revision: String) throws {
+    func prepare(_ request: BillingPublicationRequest, revision: String,
+                 queueProof: BillingNativeQueueProof? = nil) throws {
         guard journal.pending == nil || journal.pending?.settled == true else { throw BillingNativeError.pending }
         var value = journal
-        value.pending = .init(request: request, draftRevision: revision)
+        value.pending = .init(request: request, draftRevision: revision, queueProof: queueProof)
         try save(value)
     }
 
@@ -351,6 +445,10 @@ final class BillingNativePublication {
               pending.request.documentType == .estimate, pending.request.operation == .create,
               pending.draftRevision == revision, try checkRevision() == revision else {
             throw BillingNativeError.originalDraft
+        }
+        if let capturedRole = pending.queueProof?.actorRole,
+           CompanyWorkspaceAccessController.shared.verifiedRole != capturedRole {
+            throw BillingPublicationError.accessRequired
         }
         if pending.backgroundState == .queued, let id = pending.publicationID {
             let status = try await client.estimateJob(id, request: pending.request, workflow: workflow)

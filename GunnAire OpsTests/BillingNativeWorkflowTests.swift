@@ -145,6 +145,22 @@ import Testing
             #expect(settled.settled == !estimate)
             #expect(settled.backgroundState == (estimate ? .queued : nil))
             #expect(settled.draftRevision == (try flow.billingDraftRevision()))
+            if estimate {
+                let proof = try #require(settled.queueProof)
+                #expect(proof.customerID == f.app.customer.id)
+                #expect(proof.itemRevisions.keys.contains(f.app.item.id))
+                let original = try BillingNativeQueueProof.capture(
+                    customer: QuickBooksCustomerCreateOperation.draft(for: f.app.customer),
+                    items: [f.app.item.id: QuickBooksCatalogItemRevision(f.app.item)])
+                #expect(proof == original)
+                f.app.item.unitPrice = 191
+                let changed = try BillingNativeQueueProof.capture(
+                    customer: QuickBooksCustomerCreateOperation.draft(for: f.app.customer),
+                    items: [f.app.item.id: QuickBooksCatalogItemRevision(f.app.item)])
+                #expect(changed != proof)
+            } else {
+                #expect(settled.queueProof == nil)
+            }
             if !estimate {
                 #expect(f.app.invoice.status == "unpaid")
                 #expect(settled.draftRevision != f.request?.draftRevision)
@@ -468,5 +484,71 @@ import Testing
         try bytes.dropLast().write(to: file)
         #expect(throws: BillingNativeError.storage) { try store.read(journal.scope) }
         f.finish(flow)
+    }
+
+    @Test func encryptedEstimateQueueProofSurvivesRestartAndRejectsEditedCustomer() async throws {
+        let f = try Fixture(), flow = try f.flow(estimate: true)
+        #expect(try await flow.execute().queued)
+        let journal = try #require(f.journals.values.first)
+        let proof = try #require(journal.pending?.queueProof)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("billing-estimate-proof-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = BillingNativeJournalStore.encrypted(directory: directory, key: { _ in Data(repeating: 9, count: 32) })
+        try store.write(journal)
+        #expect(try store.read(journal.scope).pending?.queueProof == proof)
+        var malformed = journal
+        malformed.pending?.queueProof = .init(customerID: proof.customerID,
+            customerRevision: "not-a-digest", itemRevisions: proof.itemRevisions,
+            actorRole: proof.actorRole)
+        #expect(throws: BillingNativeError.storage) { try store.write(malformed) }
+        let request = try #require(journal.pending?.request)
+        try await proof.checkPersisted(container: f.app.context.container, request: request)
+        f.app.customer.name = "Edited after queue"
+        try f.app.context.save()
+        await #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try await proof.checkPersisted(container: f.app.context.container, request: request)
+        }
+        f.finish(flow)
+    }
+
+    @Test func preparedBackgroundProofRejectsEditedSelectedItemAndEstimate() async throws {
+        let f = try Fixture(), flow = try f.flow(estimate: true)
+        #expect(try await flow.execute().queued)
+        let pending = try #require(f.journals.values.first?.pending)
+        let proof = try #require(pending.queueProof)
+        try await proof.checkPersisted(container: f.app.context.container, request: pending.request)
+        f.app.item.unitPrice += 1
+        try f.app.context.save()
+        await #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try await proof.checkPersisted(container: f.app.context.container, request: pending.request)
+        }
+        f.app.item.unitPrice -= 1
+        try f.app.context.save()
+        f.app.estimate.notes = "Changed after original queue request"
+        try f.app.context.save()
+        await #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try await proof.checkPersisted(container: f.app.context.container, request: pending.request)
+        }
+        f.finish(flow)
+    }
+
+    @Test func queuedEstimateRejectsChangedCapturedRoleBeforeAnotherBackendRequest() async throws {
+        let f = try Fixture(), first = try f.flow(estimate: true)
+        #expect(try await first.execute().queued)
+        f.finish(first)
+        let current = CompanyWorkspaceAccessController.shared.verifiedRole
+        let differentRole: AppUserRole = current == .admin ? .dispatcher : .admin
+        let proof = try BillingNativeQueueProof.capture(
+            customer: QuickBooksCustomerCreateOperation.draft(for: f.app.customer),
+            items: [f.app.item.id: QuickBooksCatalogItemRevision(f.app.item)], actorRole: differentRole)
+        let key = try #require(f.journals.keys.first)
+        var journal = try #require(f.journals[key])
+        journal.pending?.queueProof = proof
+        f.journals[key] = journal
+        let attempts = f.calls.filter { $0.0 == "/api/billing-publications/background-estimate" && $0.1 == "POST" }.count
+        let second = try f.flow(estimate: true)
+        await #expect(throws: BillingPublicationError.accessRequired) { try await second.execute() }
+        #expect(f.calls.filter { $0.0 == "/api/billing-publications/background-estimate" && $0.1 == "POST" }.count == attempts)
+        f.finish(second)
     }
 }

@@ -19,7 +19,7 @@ enum QuickBooksCatalogWorkflowError: LocalizedError, Equatable {
 
 /// Exact reviewed values, not the pricebook's approximate display comparison.
 /// Also restores only the fields this workflow can mutate on a failed save.
-nonisolated struct QuickBooksCatalogItemRevision: Equatable, Sendable {
+nonisolated struct QuickBooksCatalogItemRevision: Codable, Equatable, Sendable {
     let id: UUID
     let quickBooksID: String?
     let values: QuickBooksItemCreate

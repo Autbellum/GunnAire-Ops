@@ -416,7 +416,7 @@ struct QuickBooksBillingPaymentRevision: Equatable {
         return values
     }
 
-    static func payments(invoiceID: UUID, context: ModelContext) throws -> [Payment] {
+    nonisolated static func payments(invoiceID: UUID, context: ModelContext) throws -> [Payment] {
         var query = FetchDescriptor<Payment>(predicate: #Predicate { $0.invoice?.id == invoiceID })
         query.fetchLimit = 751
         let values = try context.fetch(query)
@@ -811,6 +811,9 @@ final class QuickBooksBillingWorkflow {
     }
 
     private func draftRevisionValues() throws -> [String?] {
+        if case .estimate(let estimate) = document {
+            return try Self.estimateDraftRevisionValues(estimate: estimate, customer: customer, context: context)
+        }
         var values: [String?] = [document.label, document.id.uuidString, customer.id.uuidString,
             document.serviceCallID?.uuidString, document.snapshotJSON]
         func date(_ value: Date?) -> String? { value.map { String($0.timeIntervalSince1970) } }
@@ -822,12 +825,7 @@ final class QuickBooksBillingWorkflow {
                 date(value.finalizedAt), value.completionNotes, value.projectMilestoneID?.uuidString,
                 value.projectMilestoneTitle, value.projectContractAmount.map(String.init(describing:)),
                 value.projectBillingPercent.map(String.init(describing:))]
-        case .estimate(let value):
-            values += [value.serviceLocationID?.uuidString, value.siteAddress, value.notes, date(value.createdAt), value.status,
-                value.scheduledServiceCallID?.uuidString, value.parentEstimateID?.uuidString,
-                value.proposalGroupID?.uuidString, value.changeOrderReason, value.proposalOption,
-                value.customerApprovedByName, value.customerApprovalMethodRaw, value.customerApprovalReference,
-                value.customerApprovalRecordedByEmail, value.customerApprovalSignatureImageBase64, date(value.customerApprovedAt)]
+        case .estimate: throw QuickBooksBillingWorkflowError.changed
         }
         let payments = try QuickBooksBillingReads.payments(invoiceID: document.id, context: context).sorted { $0.id.uuidString < $1.id.uuidString }
         for payment in payments {
@@ -837,9 +835,32 @@ final class QuickBooksBillingWorkflow {
         return values
     }
 
+    /// The persisted replay reads this identical estimate digest in a private
+    /// context; no SwiftData object or broad query crosses back to MainActor.
+    nonisolated static func estimateDraftRevisionValues(estimate: Estimate, customer: Customer,
+                                                         context: ModelContext) throws -> [String?] {
+        func date(_ value: Date?) -> String? { value.map { String($0.timeIntervalSince1970) } }
+        var values: [String?] = ["Estimate", estimate.id.uuidString, customer.id.uuidString,
+            estimate.serviceCallID?.uuidString, estimate.catalogSnapshotJSON,
+            estimate.serviceLocationID?.uuidString, estimate.siteAddress, estimate.notes,
+            date(estimate.createdAt), estimate.status, estimate.scheduledServiceCallID?.uuidString,
+            estimate.parentEstimateID?.uuidString, estimate.proposalGroupID?.uuidString,
+            estimate.changeOrderReason, estimate.proposalOption, estimate.customerApprovedByName,
+            estimate.customerApprovalMethodRaw, estimate.customerApprovalReference,
+            estimate.customerApprovalRecordedByEmail, estimate.customerApprovalSignatureImageBase64,
+            date(estimate.customerApprovedAt)]
+        let payments = try QuickBooksBillingReads.payments(invoiceID: estimate.id, context: context)
+            .sorted { $0.id.uuidString < $1.id.uuidString }
+        for payment in payments {
+            values += [payment.id.uuidString, String(payment.amount), String(payment.isRefund),
+                payment.providerPaymentStatus, payment.quickBooksID, payment.quickBooksChargeID]
+        }
+        return values
+    }
+
     /// The complete mapping census can be large. Read it through private
     /// contexts off the UI actor, twice, and pass back only immutable IDs.
-    nonisolated private static func readEstimateQueueMappings(container: ModelContainer,
+    nonisolated static func readEstimateQueueMappings(container: ModelContainer,
         selectedIDs: Set<UUID>, customerID: UUID) throws -> [String] {
         let context = ModelContext(container)
         context.autosaveEnabled = false
@@ -954,7 +975,7 @@ final class QuickBooksBillingWorkflow {
         }
     }
 
-    nonisolated private static func digestDraftRevision(_ values: [String?]) throws -> String {
+    nonisolated static func digestDraftRevision(_ values: [String?]) throws -> String {
         SHA256.hash(data: try JSONEncoder().encode(values)).map { String(format: "%02x", $0) }.joined()
     }
 
@@ -1027,7 +1048,17 @@ final class QuickBooksBillingWorkflow {
         if case .estimate = document, api.sharedBillingEstimateQueueVersion != 1 {
             throw SharedBillingConnectionError.updateRequired
         }
-        try shared.prepare(request, revision: revision)
+        let queueProof: BillingNativeQueueProof?
+        if case .estimate = document {
+            guard Set(itemRevisions.keys) == lineEvidence.selectedItemIDs else {
+                throw QuickBooksBillingWorkflowError.changed
+            }
+            queueProof = try BillingNativeQueueProof.capture(customer: customerDraft, items: itemRevisions,
+                actorRole: CompanyWorkspaceAccessController.shared.verifiedRole)
+        } else {
+            queueProof = nil
+        }
+        try shared.prepare(request, revision: revision, queueProof: queueProof)
         attemptedWrite = true
         if case .estimate = document {
             let status = try await shared.enqueueOriginal(revision: revision,

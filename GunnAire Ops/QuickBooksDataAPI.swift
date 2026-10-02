@@ -3199,7 +3199,7 @@ struct QuickBooksCustomerCreate: Codable {
     let BillAddr: QuickBooksAddress?
 }
 
-struct QuickBooksCustomerCreateDraft: Equatable {
+nonisolated struct QuickBooksCustomerCreateDraft: Codable, Equatable, Sendable {
     let localCustomerID: UUID
     let displayName: String
     let phone: String?
@@ -3230,7 +3230,7 @@ enum QuickBooksCustomerCreateOperationError: LocalizedError, Equatable {
 /// response or an existing compatible customer can be recovered without a
 /// duplicate. Contact conflicts and ambiguity always require human review.
 enum QuickBooksCustomerCreateOperation {
-    static func draft(for customer: Customer) -> QuickBooksCustomerCreateDraft {
+    nonisolated static func draft(for customer: Customer) -> QuickBooksCustomerCreateDraft {
         QuickBooksCustomerCreateDraft(
             localCustomerID: customer.id,
             displayName: customer.name,
@@ -3334,7 +3334,7 @@ enum QuickBooksCustomerCreateOperation {
             .lowercased()
     }
 
-    private static func trimmed(_ value: String?) -> String? {
+    nonisolated private static func trimmed(_ value: String?) -> String? {
         let result = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         return result?.isEmpty == false ? result : nil
     }
