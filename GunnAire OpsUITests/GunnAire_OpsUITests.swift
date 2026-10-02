@@ -3341,6 +3341,54 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testOfflineAppointmentSaveAcknowledgesPendingGooglePublication() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin"
+        ]
+        app.launch()
+
+        let schedule = app.staticTexts["Schedule & Jobs"]
+        if !schedule.waitForExistence(timeout: 2) {
+            let sidebarButton = app.buttons["GunnAire Ops"]
+            XCTAssertTrue(sidebarButton.waitForExistence(timeout: 3))
+            sidebarButton.tap()
+        }
+        XCTAssertTrue(schedule.waitForExistence(timeout: 3))
+        schedule.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 10))
+        let addJob = app.buttons["AddServiceCall"]
+        XCTAssertTrue(addJob.waitForExistence(timeout: 3))
+        addJob.tap()
+        XCTAssertTrue(app.navigationBars["New Service Call"].waitForExistence(timeout: 10))
+
+        let typePicker = app.descendants(matching: .any)["NewServiceCallType"]
+        XCTAssertTrue(typePicker.waitForExistence(timeout: 3))
+        typePicker.tap()
+        let meeting = app.buttons["Meeting"]
+        XCTAssertTrue(meeting.waitForExistence(timeout: 3))
+        meeting.tap()
+        let title = app.textFields["Event Title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 3))
+        title.tap()
+        title.typeText("Calendar acknowledgment fixture")
+        app.buttons["Add"].tap()
+
+        let saved = app.alerts["Appointment saved"]
+        XCTAssertTrue(saved.waitForExistence(timeout: 10), app.debugDescription)
+        let local = saved.staticTexts.matching(NSPredicate(
+            format: "label CONTAINS %@ OR label CONTAINS %@",
+            "Saved on this device", "Google Calendar has not confirmed"
+        )).firstMatch
+        XCTAssertTrue(local.exists, "A local save must not be presented as a confirmed Google event.")
+        saved.buttons["View Schedule"].tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 10))
+    }
+
+    @MainActor
     func testDispatchWeekBoardOpensAsDedicatedWorkspace() throws {
         let app = XCUIApplication()
         app.launchArguments = [
