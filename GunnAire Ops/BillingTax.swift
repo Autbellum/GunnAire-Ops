@@ -10,7 +10,7 @@ enum BillingTaxCalculationStatus: String, Codable, Equatable, CaseIterable {
         self == .pendingQuickBooks || self == .needsAttention
     }
 
-    var displayName: String {
+    nonisolated var displayName: String {
         switch self {
         case .notApplicable:
             "Not applicable"

@@ -150,15 +150,19 @@ actor BillingPDFGenerationJournal {
 
     func pending(companyID: UUID) throws -> [BillingPDFGenerationIntent] {
         guard let directory else { throw BillingPDFGenerationError.unavailable }
+        if !FileManager.default.fileExists(atPath: directory.path) {
+            if (try? FileManager.default.destinationOfSymbolicLink(atPath: directory.path)) != nil {
+                throw BillingPDFGenerationError.invalidIntent
+            }
+            return []
+        }
         let files: [URL]
         do {
             try Self.validateDirectory(directory, create: false)
             files = try FileManager.default.contentsOfDirectory(at: directory,
                 includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
-        } catch let error as BillingPDFGenerationError {
-            if error == .unavailable && !FileManager.default.fileExists(atPath: directory.path) { return [] }
-            throw error
-        } catch { throw BillingPDFGenerationError.unavailable }
+        } catch let error as BillingPDFGenerationError { throw error }
+        catch { throw BillingPDFGenerationError.unavailable }
         guard files.count <= 1_000 else { throw BillingPDFGenerationError.tooManyPending }
         return try files.filter { $0.pathExtension == "json" }.compactMap { file in
             guard let value = try read(key: file.deletingPathExtension().lastPathComponent),
