@@ -3061,7 +3061,18 @@ GunnAire
                                 }
                                 .buttonStyle(.bordered)
 
+                                BillingPublicationReviewLink(document: .estimate(estimate), context: modelContext)
+                                if !QuickBooksEstimatePublicationRecovery.queuedEstimates(from: [estimate]).isEmpty {
+                                    Button("Sync Saved Estimate") {
+                                        publishBillingDocument(.estimate(estimate), explicitReview: true)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .disabled(!canAttemptSharedBilling)
+                                    .accessibilityIdentifier("SyncSavedEstimate-\(estimate.id.uuidString)")
+                                }
                                 estimateDeliveryAction(estimate)
+
+                                estimateQuickBooksDeliveryAction(estimate)
 
                                 if estimate.status == "accepted", currentJobInvoice == nil {
                                     Button("Create Change Order") {
@@ -3077,13 +3088,6 @@ GunnAire
                                     } label: {
                                         Label("Generate Estimate PDF", systemImage: "doc.richtext")
                                     }
-
-                                    Button {
-                                        sendEstimateThroughQuickBooks(estimate)
-                                    } label: {
-                                        Label("Send Through QuickBooks", systemImage: "paperplane")
-                                    }
-                                    .disabled(!QuickBooksDataAPI.shared.isAuthenticated || estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false)
 
                                     if let estimateFollowUpEmailURL {
                                         Button {
@@ -4565,15 +4569,6 @@ GunnAire
                         if selectedJobStage == .billing {
                             if let invoice = currentJobInvoice {
                                 BillingPublicationReviewLink(document: .invoice(invoice), context: modelContext)
-                            } else if let estimate = currentJobEstimate {
-                                BillingPublicationReviewLink(document: .estimate(estimate), context: modelContext)
-                                if !QuickBooksEstimatePublicationRecovery.queuedEstimates(from: [estimate]).isEmpty {
-                                    Button("Sync Saved Estimate") {
-                                        publishBillingDocument(.estimate(estimate), explicitReview: true)
-                                    }
-                                    .disabled(!canAttemptSharedBilling)
-                                    .accessibilityIdentifier("SyncSavedEstimate-\(estimate.id.uuidString)")
-                                }
                             }
                         }
                         jobMaterialsSection(for: call)

@@ -5225,6 +5225,35 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testCurrentJobEstimateShowsQuickBooksSendAndPublicationBlocker() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin", "-uiTestSeedCollectibleJob",
+            "-uiTestSeedPendingEstimate", "-uiTestForceQuickBooksConnected"]
+        app.launch()
+
+        revealSidebarDestination("Schedule & Jobs", in: app).tap()
+        let documentation = app.buttons["OpenDocumentation-A1000000-0000-4000-8000-000000000002"]
+        for _ in 0..<6 where !documentation.exists || !documentation.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(documentation))
+        documentation.tap()
+        let stagePicker = app.segmentedControls["JobDocumentationStagePicker"]
+        XCTAssertTrue(stagePicker.waitForExistence(timeout: 3))
+        stagePicker.buttons["Billing"].tap()
+
+        let send = app.buttons["SendEstimateQuickBooks-A1000000-0000-4000-8000-000000000016"]
+        for _ in 0..<10 where !send.exists || !send.isHittable { app.swipeUp() }
+        XCTAssertTrue(send.exists, "The job estimate must expose its QuickBooks send action directly.")
+        XCTAssertFalse(send.isEnabled, "A connection cannot send an estimate before its QuickBooks identity is confirmed.")
+        let issue = app.staticTexts["SendEstimateQuickBooksIssue-A1000000-0000-4000-8000-000000000016"]
+        XCTAssertTrue(issue.exists)
+        XCTAssertTrue(issue.label.contains("Sync Saved Estimate"))
+        XCTAssertTrue(app.buttons["SyncSavedEstimate-A1000000-0000-4000-8000-000000000016"].exists,
+                      "The same job card must offer company-verified publication for an unsynced estimate.")
+        XCTAssertFalse(app.staticTexts["Message sent."].exists)
+    }
+
+    @MainActor
     private func assertEstimateMailDraft(_ app: XCUIApplication) {
         let composeAppeared = app.navigationBars["Compose"].waitForExistence(timeout: 8)
         if !composeAppeared { retainNavigationFailure(app, name: "Estimate email draft did not open") }
