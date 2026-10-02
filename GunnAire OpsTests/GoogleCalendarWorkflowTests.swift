@@ -18,6 +18,7 @@ struct GoogleCalendarWorkflowTests {
         var failPatch = false
         var rejectedCreateStatus: Int?
         var deniedEventCalendarID: String?
+        var createdEventReadbackStatus: Int?
         var inspectionNextPageToken: String?
         var inspectionCalendarListNextPageToken: String?
         var excludedWindowCalendarIDs: Set<String> = []
@@ -123,7 +124,10 @@ struct GoogleCalendarWorkflowTests {
                     payload["nextPageToken"] = inspectionNextPageToken
                 }
             } else if request.httpMethod == "GET" {
-                if calendar == deniedEventCalendarID { status = 403 }
+                if remote[key(calendar, id)] != nil,
+                   requests.contains(where: { $0.httpMethod == "POST" }),
+                   let createdEventReadbackStatus { status = createdEventReadbackStatus }
+                else if calendar == deniedEventCalendarID { status = 403 }
                 else if let existing = remote[key(calendar, id)] { payload = existing }
                 else { status = 404 }
             } else if request.httpMethod == "POST" {
@@ -401,6 +405,9 @@ struct GoogleCalendarWorkflowTests {
         #expect(f.call.googleEventID == nil)
         #expect(result.contains("Review Google publication"))
         #expect(result.contains("not published"))
+        #expect(result.contains("1 displayed scheduled job has no Google event link and was not published"))
+        #expect(result.contains(f.email))
+        #expect(result.contains("another account or time slot"))
 
         let background = try await (try f.flow()).run {
             try await GoogleCalendarScheduleSync.synchronize(workflow: $0)
@@ -416,6 +423,37 @@ struct GoogleCalendarWorkflowTests {
         f.call.googleEventID = nil
         f.call.status = .completed
         #expect(!ScheduleGoogleLinkStatus.needsUnlinkedReview(f.call))
+    }
+
+    @Test func legacyReviewCountDeduplicatesVisibleJobsAndExcludesCompletedWork() async throws {
+        let f = try Fixture()
+        f.call.googleEventManagedByApp = false
+        f.call.scheduledDate = Date().addingTimeInterval(3600)
+        let second = ServiceCall(googleCalendarID: "primary", googleEventManagedByApp: false,
+            eventTitle: "Second visit", type: .repair,
+            scheduledDate: Date().addingTimeInterval(7200), duration: 3600,
+            customer: f.customer, notes: "Synthetic appointment")
+        let completed = ServiceCall(googleCalendarID: "primary", googleEventManagedByApp: false,
+            eventTitle: "Completed visit", type: .repair,
+            scheduledDate: Date().addingTimeInterval(10_800), duration: 3600,
+            customer: f.customer, notes: "Synthetic completed appointment")
+        completed.status = .completed
+        f.context.insert(second)
+        f.context.insert(completed)
+        try f.context.save()
+
+        #expect(ScheduleGoogleLinkStatus.unlinkedReviewCount(
+            selectedDay: [f.call, second, completed], upcoming: [second, f.call]) == 2)
+        let result = try await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.synchronize(workflow: $0,
+                verifyConfirmedCalls: [f.call, second, f.call, completed])
+        }.get()
+        #expect(result.contains("2 displayed scheduled jobs have no Google event link and were not published"))
+        #expect(result.contains("another account or time slot"))
+        #expect(f.requests.filter { $0.httpMethod == "GET" }.count > 0)
+        #expect(f.writes.isEmpty)
+        #expect(f.call.googleEventID == nil)
+        #expect(second.googleEventID == nil)
     }
 
     @Test func completedUnlinkedJobDoesNotWarnAboutCurrentGooglePublication() async throws {
@@ -1407,6 +1445,68 @@ struct GoogleCalendarWorkflowTests {
         #expect(f.call.notes == "Saved field observations")
         #expect(f.customer.address == "Local service address")
         #expect(f.requests.allSatisfy { !$0.url!.path.contains("/primary/") })
+        #expect(f.requests.contains { $0.httpMethod == "GET" &&
+            $0.url?.path.hasSuffix("/calendars/\(f.email)/events/\(id)") == true })
+        let reminders = try #require(f.remote[f.key(f.email, id)]?["reminders"] as? [String: Any])
+        #expect(reminders["useDefault"] as? Bool == false)
+        let overrides = try #require(reminders["overrides"] as? [[String: Any]])
+        #expect(overrides.contains { $0["method"] as? String == "popup" && $0["minutes"] as? Int == 30 })
+    }
+
+    @Test func acceptedCreateWithoutExactReadbackRetainsReservationAndNeverPostsAgain() async throws {
+        let f = try Fixture()
+        f.createdEventReadbackStatus = 404
+        let result = try await f.publish()
+        failed(result)
+        if case .failure(let error) = result {
+            #expect(error as? GoogleCalendarWorkflowError == .unconfirmedReadback)
+        }
+        let reserved = try #require(f.call.googleEventID)
+        #expect(f.call.googleEventConfirmedAt == nil)
+        #expect(f.call.googleCalendarPendingAt != nil)
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+        f.createdEventReadbackStatus = nil
+        _ = try await f.publish().get()
+        #expect(f.call.googleEventID == reserved)
+        #expect(f.call.googleEventConfirmedAt != nil)
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+    }
+
+    @Test func deniedReadbackAfterAcceptedCreateCannotReleaseReservedIdentity() async throws {
+        let f = try Fixture()
+        f.createdEventReadbackStatus = 403
+        failed(try await f.publish())
+        let reserved = try #require(f.call.googleEventID)
+        #expect(f.call.googleCalendarID == f.email)
+        #expect(f.call.googleEventConfirmedAt == nil)
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+        f.createdEventReadbackStatus = nil
+        _ = try await f.publish().get()
+        #expect(f.call.googleEventID == reserved)
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+    }
+
+    @Test func strippedPopupCannotBeReportedAsConfirmedDelivery() async throws {
+        let f = try Fixture()
+        let id = GoogleCalendarScheduleSync.eventID(for: f.call.id)
+        f.afterWrite = { request in
+            if request.httpMethod == "POST" {
+                f.remote[f.key(f.email, id)]?["reminders"] =
+                    ["useDefault": false, "overrides": []] as [String: Any]
+            }
+        }
+        let result = try await f.publish()
+        failed(result)
+        if case .failure(let error) = result {
+            #expect(error.localizedDescription.contains("30-minute popup"))
+        }
+        #expect(f.call.googleEventID == id)
+        #expect(f.call.googleEventConfirmedAt == nil)
+        #expect(f.call.googleCalendarPendingAt != nil)
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+        f.afterWrite = nil
+        failed(try await f.publish())
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
     }
 
     @Test func lostCreateResponseRecoversOriginalEventWithoutAnotherPost() async throws {
@@ -1687,6 +1787,111 @@ struct GoogleCalendarWorkflowTests {
         #expect(f.writes.count == 1, "A later sync must reconcile, not create twice.")
     }
 
+    @Test func repairedEventNeedsExactReadbackBeforeOldConfirmationCanReturn() async throws {
+        let f = try Fixture(linked: true)
+        f.remote.removeValue(forKey: f.key(f.email, "fixture-event"))
+        let review = try #require(try await GoogleCalendarScheduleSync.checkMissingEvent(
+            call: f.call, workflow: f.flow()).get())
+        f.createdEventReadbackStatus = 404
+        failed(await GoogleCalendarScheduleSync.repairMissingEvent(review))
+        #expect(f.call.googleEventID == "fixture-event")
+        #expect(f.call.googleEventConfirmedAt == nil)
+        #expect(f.call.googleCalendarPendingAt != nil)
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+        f.createdEventReadbackStatus = nil
+        _ = try await f.publish().get()
+        #expect(f.call.googleEventConfirmedAt != nil)
+        #expect(f.call.googleCalendarPendingAt == nil)
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+    }
+
+    @Test func repairedLegacyIDWithoutPopupCannotBeConfirmedByLaterSync() async throws {
+        let f = try Fixture(linked: true)
+        f.remote.removeValue(forKey: f.key(f.email, "fixture-event"))
+        let review = try #require(try await GoogleCalendarScheduleSync.checkMissingEvent(
+            call: f.call, workflow: f.flow()).get())
+        f.afterWrite = { request in
+            if request.httpMethod == "POST" {
+                f.remote[f.key(f.email, "fixture-event")]?["reminders"] =
+                    ["useDefault": false, "overrides": []] as [String: Any]
+            }
+        }
+        failed(await GoogleCalendarScheduleSync.repairMissingEvent(review))
+        #expect(f.call.googleEventConfirmedAt == nil)
+        #expect(f.call.googleCalendarPendingAt != nil)
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+        f.afterWrite = nil
+        failed(try await f.publish())
+        #expect(f.call.googleEventConfirmedAt == nil)
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+
+        let proof = try #require(f.call.googleCalendarPendingAt)
+        #expect(proof == Date(timeIntervalSince1970: 946_684_800))
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(f.call)
+        #expect(f.call.googleCalendarPendingAt == proof)
+        f.call.notes = "An edited saved appointment"
+        try ServiceCallCalendarOutbox.save(f.call) { try f.context.save() }
+        #expect(f.call.googleCalendarPendingAt == proof)
+        let resumedContext = ModelContext(f.context.container)
+        let callID = f.call.id
+        let resumed = try #require(resumedContext.fetch(FetchDescriptor<ServiceCall>(
+            predicate: #Predicate { $0.id == callID })).first)
+        #expect(resumed.googleCalendarPendingAt == proof)
+        let workflow = try GoogleCalendarWorkflow(auth: f.auth, context: resumedContext,
+            signedInEmail: f.email, validateAccess: {})
+        let automatic = await workflow.run {
+            let outcome = try await GoogleCalendarScheduleSync.publishPending(workflow: $0)
+            return String(outcome.published)
+        }
+        switch automatic {
+        case .success:
+            Issue.record("Automatic retry confirmed a replacement without its popup reminder.")
+        case .failure(let error):
+            if let workflowError = error as? GoogleCalendarWorkflowError,
+               case .alertReview(let message) = workflowError {
+                #expect(message.contains("30-minute popup"))
+            } else {
+                Issue.record("Automatic retry failed for a reason other than the missing popup: \(error)")
+            }
+        }
+        #expect(resumed.googleEventConfirmedAt == nil)
+        #expect(resumed.googleCalendarPendingAt == proof)
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+        f.remote[f.key(f.email, "fixture-event")]?["reminders"] = ["useDefault": false,
+            "overrides": [["method": "popup", "minutes": 30]]] as [String: Any]
+        let recovered = try GoogleCalendarWorkflow(auth: f.auth, context: resumedContext,
+            signedInEmail: f.email, validateAccess: {})
+        let published = try await recovered.run {
+            let outcome = try await GoogleCalendarScheduleSync.publishPending(workflow: $0)
+            return String(outcome.published)
+        }.get()
+        #expect(published == "1")
+        #expect(resumed.googleEventConfirmedAt != nil)
+        #expect(resumed.googleCalendarPendingAt == nil)
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+    }
+
+    @Test func laterDeliberateReminderOptOutDoesNotReopenCompletedRepairProof() async throws {
+        let f = try Fixture(linked: true)
+        f.remote.removeValue(forKey: f.key(f.email, "fixture-event"))
+        let review = try #require(try await GoogleCalendarScheduleSync.checkMissingEvent(
+            call: f.call, workflow: f.flow()).get())
+        _ = try await GoogleCalendarScheduleSync.repairMissingEvent(review).get()
+        #expect(f.call.googleEventConfirmedAt != nil)
+        f.remote[f.key(f.email, "fixture-event")]?["reminders"] =
+            ["useDefault": false, "overrides": []] as [String: Any]
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(f.call)
+        f.call.googleCalendarPendingAt = Date().addingTimeInterval(1)
+        try f.context.save()
+        _ = try await f.publish().get()
+        #expect(f.call.googleEventConfirmedAt != nil)
+        #expect(f.call.googleCalendarPendingAt == nil)
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+        let event = try #require(f.remote[f.key(f.email, "fixture-event")])
+        let reminders = try #require(event["reminders"] as? [String: Any])
+        #expect((reminders["overrides"] as? [[String: Any]])?.isEmpty == true)
+    }
+
     @Test func verifiedProviderLinkOpensOnlyTheUnchangedOriginalGoogleEvent() async throws {
         let f = try Fixture(linked: true)
         let url = "https://www.google.com/calendar/event?eid=verified-fixture"
@@ -1887,12 +2092,47 @@ struct GoogleCalendarWorkflowTests {
             call: raced.call, workflow: raced.flow()).get())
         raced.beforeReply = { request in
             if request.httpMethod == "POST" {
-                raced.remote[raced.key(raced.email, "fixture-event")] = raced.event(id: "fixture-event")
+                var event = raced.event(id: "fixture-event")
+                event["reminders"] = ["useDefault": false,
+                    "overrides": [["method": "popup", "minutes": 30]]] as [String: Any]
+                raced.remote[raced.key(raced.email, "fixture-event")] = event
             }
         }
         _ = try await GoogleCalendarScheduleSync.repairMissingEvent(review).get()
-        #expect(raced.writes.count == 1)
+        #expect(raced.writes.map(\.httpMethod) == ["POST"])
         #expect(raced.call.googleEventID == "fixture-event")
+
+        let noPopup = try Fixture(linked: true)
+        noPopup.remote.removeValue(forKey: noPopup.key(noPopup.email, "fixture-event"))
+        let noPopupReview = try #require(try await GoogleCalendarScheduleSync.checkMissingEvent(
+            call: noPopup.call, workflow: noPopup.flow()).get())
+        noPopup.beforeReply = { request in
+            if request.httpMethod == "POST" {
+                noPopup.remote[noPopup.key(noPopup.email, "fixture-event")] =
+                    noPopup.event(id: "fixture-event")
+            }
+        }
+        failed(await GoogleCalendarScheduleSync.repairMissingEvent(noPopupReview))
+        #expect(noPopup.call.googleEventConfirmedAt == nil)
+        #expect(noPopup.call.googleCalendarPendingAt != nil)
+        #expect(noPopup.writes.filter { $0.httpMethod == "POST" }.count == 1)
+
+        let collision = try Fixture(linked: true)
+        collision.remote.removeValue(forKey: collision.key(collision.email, "fixture-event"))
+        let collisionReview = try #require(try await GoogleCalendarScheduleSync.checkMissingEvent(
+            call: collision.call, workflow: collision.flow()).get())
+        collision.beforeReply = { request in
+            if request.httpMethod == "POST" {
+                var event = collision.event(id: "fixture-event", managed: false)
+                event["reminders"] = ["useDefault": false,
+                    "overrides": [["method": "popup", "minutes": 30]]] as [String: Any]
+                collision.remote[collision.key(collision.email, "fixture-event")] = event
+            }
+        }
+        failed(await GoogleCalendarScheduleSync.repairMissingEvent(collisionReview))
+        #expect(collision.call.googleEventConfirmedAt == nil)
+        #expect(collision.call.googleCalendarPendingAt != nil)
+        #expect(collision.writes.filter { $0.httpMethod == "POST" }.count == 1)
 
         let lost = try Fixture(linked: true)
         lost.remote.removeValue(forKey: lost.key(lost.email, "fixture-event"))

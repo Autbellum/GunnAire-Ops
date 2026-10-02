@@ -290,4 +290,30 @@ struct FieldCollectionNavigationTests {
         #expect(draft?.workflow == .maintenanceRenewal)
         #expect(GunnAireAppIntentRouter.consumePendingRoute() == nil)
     }
+
+    @Test func estimateMailRouteRejectsChangedOrMalformedOriginBeforeConsumption() throws {
+        GunnAireAppIntentRouter.discardAllPendingPayloads()
+        defer { GunnAireAppIntentRouter.discardAllPendingPayloads() }
+        let original = GunnAireMailDraftRouteOrigin(companyID: UUID(), backendOrigin: "https://fixture.example.invalid",
+            actorEmail: "office@gunnaire.com", workspaceGeneration: UUID(),
+            sessionDigest: "original-session", connectedGoogleEmail: "office@gunnaire.com")
+        GunnAireAppIntentRouter.storeMailDraftRoute(to: "customer@example.invalid", subject: "Estimate",
+            body: "Attached.", attachmentPaths: ["/private/fixture-estimate.pdf"],
+            customerID: UUID(), estimateID: UUID(), workflow: .customerDocument,
+            sourceSnapshot: ["original-estimate"], origin: original)
+        #expect(GunnAireAppIntentRouter.pendingMailDraftRequiresOrigin())
+        #expect(GunnAireAppIntentRouter.pendingMailDraftOriginMatches(original))
+        let switched = GunnAireMailDraftRouteOrigin(companyID: original.companyID,
+            backendOrigin: original.backendOrigin, actorEmail: original.actorEmail,
+            workspaceGeneration: UUID(), sessionDigest: "replacement-session",
+            connectedGoogleEmail: "other@gunnaire.com")
+        #expect(!GunnAireAppIntentRouter.pendingMailDraftOriginMatches(switched))
+        #expect(GunnAireAppIntentRouter.hasPendingMailDraft(), "The route must still be unconsumed at the identity check.")
+        UserDefaults.standard.set(Data("malformed-origin".utf8), forKey: "GunnAirePendingMailOrigin")
+        #expect(!GunnAireAppIntentRouter.pendingMailDraftOriginMatches(original))
+        GunnAireAppIntentRouter.discardPendingPayload(for: .mail)
+        #expect(!GunnAireAppIntentRouter.hasPendingMailDraft())
+        #expect(UserDefaults.standard.string(forKey: "GunnAirePendingMailTo") == nil)
+        #expect(UserDefaults.standard.stringArray(forKey: "GunnAirePendingMailAttachmentPaths") == nil)
+    }
 }

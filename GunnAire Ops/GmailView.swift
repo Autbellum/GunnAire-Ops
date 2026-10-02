@@ -153,6 +153,7 @@ struct GmailView: View {
     @State private var searchQuery = ""
     @State private var activeMailSend: GmailSendWorkflow?
     @State private var composeDraft: GmailDraft?
+    @State private var draftRouteIssue: String?
     @State private var didConsumePendingDraft = false
     @State private var showingDrafts = false
     @State private var savedDrafts: [GmailDraftSummary] = []
@@ -409,6 +410,9 @@ struct GmailView: View {
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
                 applyPendingDraftIfNeeded(force: true)
             }
+            .onChange(of: workspace.verifiedCompanyID) { _, _ in
+                if composeDraft == nil { applyPendingDraftIfNeeded(force: true) }
+            }
             .sheet(item: $composeDraft) { draft in
                 GmailComposeView(
                     initialTo: draft.to,
@@ -457,6 +461,14 @@ struct GmailView: View {
             .onChange(of: workspace.operationStamp) { _, _ in
                 if !usesMailUITestFixture { clearMailbox() }
                 automaticRefreshIfDue()
+            }
+            .alert("Estimate Email Needs Attention", isPresented: Binding(
+                get: { draftRouteIssue != nil },
+                set: { if !$0 { draftRouteIssue = nil } }
+            )) {
+                Button("OK", role: .cancel) { draftRouteIssue = nil }
+            } message: {
+                Text(draftRouteIssue ?? "Review the original estimate email before sending another copy.")
             }
         }
     }
@@ -601,7 +613,10 @@ struct GmailView: View {
     private func draftScope() throws -> GmailDraftScope {
         #if DEBUG
         if usesMailUITestFixture {
-            return .init(companyID: UUID(uuidString: "3BF63F8D-C536-4BC2-826B-EF5CA1B1C9DA")!, backendOrigin: "https://fixture.example.invalid",
+            guard let companyID = UUID(uuidString: "3BF63F8D-C536-4BC2-826B-EF5CA1B1C9DA") else {
+                throw GmailDraftError.access
+            }
+            return .init(companyID: companyID, backendOrigin: "https://fixture.example.invalid",
                 actorEmail: "mail-fixture@gunnaire.com", googleEmail: "mail-fixture@gunnaire.com")
         }
         #endif
@@ -674,8 +689,47 @@ struct GmailView: View {
 
     private func applyPendingDraftIfNeeded(force: Bool = false) {
         guard composeDraft == nil, force || !didConsumePendingDraft else { return }
-        didConsumePendingDraft = true
+        guard GunnAireAppIntentRouter.hasPendingMailDraft() else {
+            didConsumePendingDraft = true
+            return
+        }
+        let scope: GmailDraftScope
+        do { scope = try draftScope() }
+        catch {
+            draftRouteIssue = "Verify the original company workspace before opening this email. The requested draft is retained."
+            return
+        }
+        if GunnAireAppIntentRouter.pendingMailDraftRequiresOrigin() ||
+           GunnAireAppIntentRouter.hasPendingMailDraftOrigin() {
+            guard let currentOrigin = GunnAireMailDraftRouteOrigin.current(),
+                  currentOrigin.matches(scope),
+                  GunnAireAppIntentRouter.pendingMailDraftOriginMatches(currentOrigin) else {
+                GunnAireAppIntentRouter.discardPendingPayload(for: .mail)
+                didConsumePendingDraft = true
+                draftRouteIssue = "The company or signed-in account changed before this estimate email opened. Reopen the original estimate to prepare a new PDF. Nothing was sent."
+                return
+            }
+        }
         guard let draft = GunnAireAppIntentRouter.consumePendingMailDraft() else { return }
+        didConsumePendingDraft = true
+        if let customerID = draft.customerID, let estimateID = draft.estimateID,
+           draft.workflow == .customerDocument {
+            do {
+                if let prior = try draftStore.activeEstimateDraft(scope: scope,
+                    customerID: customerID, estimateID: estimateID) {
+                    try validateDraftAccess(scope, business: prior.content.business)
+                    if prior.state == .editing && prior.content.businessSnapshot != draft.sourceSnapshot {
+                        draftRouteIssue = "This estimate changed after an earlier email draft was saved. Open Drafts on This Device to review or discard that draft, then prepare a new PDF. Nothing was sent."
+                        return
+                    }
+                    composeDraft = GmailDraft(record: prior)
+                    return
+                }
+            } catch {
+                draftRouteIssue = "The earlier estimate email could not be verified. Open Drafts on This Device and review it before preparing another copy. Nothing was sent."
+                return
+            }
+        }
         let attachmentResult = Result { try GmailOutgoingMessage.attachments(paths: draft.attachmentPaths) }
         composeDraft = GmailDraft(
             to: draft.to,
@@ -1274,6 +1328,10 @@ private struct GmailComposeView: View {
     @State private var subject: String
     @State private var messageBody: String
 
+    private var isEstimateDocument: Bool {
+        template.business?.workflow == .customerDocument && template.business?.estimateID != nil
+    }
+
     init(
         initialTo: String = "",
         initialSubject: String = "",
@@ -1342,6 +1400,12 @@ private struct GmailComposeView: View {
     var body: some View {
         NavigationStack {
             Form {
+                if isEstimateDocument {
+                    Text("Review the customer address, message, and attached estimate PDF. Tap Send Estimate only when ready.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("EstimateMailReviewNote")
+                }
                 TextField("To", text: $to)
                     .keyboardType(.emailAddress)
                     .textInputAutocapitalization(.never)
@@ -1406,7 +1470,7 @@ private struct GmailComposeView: View {
                         .accessibilityIdentifier("MailDraftSaveStatus")
                 }
             }
-            .navigationTitle("Compose")
+            .navigationTitle(isEstimateDocument ? "Send Estimate" : "Compose")
             .interactiveDismissDisabled(true)
             .onAppear { persist() }
             .onChange(of: content) { _, _ in saveRevision += 1 }
@@ -1435,7 +1499,7 @@ private struct GmailComposeView: View {
                         .disabled(isSending || isImportingFiles)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(isSending ? "Sending..." : "Send") {
+                    Button(isSending ? "Sending..." : isEstimateDocument ? "Send Estimate" : "Send") {
                         guard !isSending, persist(), let journal, journal.record.editable else { return }
                         isSending = true
                         Task { @MainActor in
