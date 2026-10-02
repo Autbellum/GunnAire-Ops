@@ -1077,7 +1077,7 @@ struct InvoiceDocumentationStatus: Equatable {
             failedQuickBooksAttachmentCount == 0
     }
 
-    var statusLabel: String {
+    nonisolated var statusLabel: String {
         if failedQuickBooksAttachmentCount > 0 {
             return "QuickBooks attachment sync failed"
         }
@@ -1115,7 +1115,7 @@ struct InvoiceDocumentationStatus: Equatable {
         return "Ready to send with documentation"
     }
 
-    var actionSummary: String {
+    nonisolated var actionSummary: String {
         if failedQuickBooksAttachmentCount > 0 {
             return "Retry \(failedQuickBooksAttachmentCount) failed QuickBooks attachment upload\(failedQuickBooksAttachmentCount == 1 ? "" : "s") before emailing."
         }
@@ -1137,7 +1137,7 @@ struct InvoiceDocumentationStatus: Equatable {
         return "Ready to email with onsite report and linked job photos."
     }
 
-    var summary: String {
+    nonisolated var summary: String {
         var parts = [
             "\(linkedReportCount) onsite report\(linkedReportCount == 1 ? "" : "s")"
         ]
@@ -1176,7 +1176,7 @@ struct EstimateDocumentationStatus: Equatable {
             failedQuickBooksAttachmentCount == 0
     }
 
-    var statusLabel: String {
+    nonisolated var statusLabel: String {
         if linkedReportCount == 0 {
             return "Onsite report missing"
         }
@@ -1208,7 +1208,7 @@ struct EstimateDocumentationStatus: Equatable {
         return "Ready to send with documentation"
     }
 
-    var actionSummary: String {
+    nonisolated var actionSummary: String {
         if linkedReportCount == 0 {
             return "Create or attach the onsite service report for this estimate."
         }
@@ -1227,7 +1227,7 @@ struct EstimateDocumentationStatus: Equatable {
         return "Ready to email with onsite report and linked job photos."
     }
 
-    var summary: String {
+    nonisolated var summary: String {
         var parts = [
             "\(linkedReportCount) onsite report\(linkedReportCount == 1 ? "" : "s")"
         ]

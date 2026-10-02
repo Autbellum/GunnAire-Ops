@@ -2185,6 +2185,48 @@ enum GunnAireBackendService {
         }
     }
 
+    static func billingPDFArchiveRequest(path: String, method: String, body: Data?) async throws -> Data {
+        let base = "/api/google/drive/billing-pdf-intents"
+        let posts: Set<String> = Set(["reserve", "content", "file", "confirm"].map { base + "/" + $0 })
+        let artifact = base + "/artifact"
+        guard let endpoint = URLComponents(string: path), endpoint.scheme == nil,
+              endpoint.host == nil, endpoint.fragment == nil,
+              (method == "GET" && [base, base + "/identity", artifact].contains(endpoint.path) &&
+                body == nil && endpoint.query != nil) ||
+                (method == "POST" && (posts.contains(endpoint.path) || endpoint.path == artifact) &&
+                 endpoint.query == nil && body != nil),
+              (body?.count ?? 0) <= (endpoint.path == artifact ? 35_000_000 : 8_192),
+              let identity = CompanyWorkspaceSession.current else {
+            throw GunnAireBackendError.missingBusinessIdentity
+        }
+        var request = try makeRequest(path: path, method: method, body: body)
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        guard bearer.hasPrefix("Bearer "),
+              CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == identity.tokenFingerprint,
+              request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil else {
+            throw GunnAireBackendError.missingBusinessIdentity
+        }
+        request.timeoutInterval = 100
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        let controller = CompanyWorkspaceAccessController.shared
+        let generation = controller.generation
+        do {
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request,
+                maximum: endpoint.path == artifact && method == "GET" ? 25 * 1024 * 1024 : 32_768)
+            guard CompanyWorkspaceSession.current == identity, controller.generation == generation,
+                  controller.authorizedContainer != nil else { throw GunnAireBackendError.missingBusinessIdentity }
+            return data
+        } catch {
+            guard CompanyWorkspaceSession.current == identity, controller.generation == generation,
+                  controller.authorizedContainer != nil else { throw GunnAireBackendError.missingBusinessIdentity }
+            if case GmailServerHTTPError.status(let code) = error {
+                throw GunnAireBackendError.server(statusCode: code,
+                    message: "Billing PDF archive request was not confirmed.")
+            }
+            throw error
+        }
+    }
+
     static func quickBooksChangeHistoryRequest(path: String, method: String, body: Data?) async throws -> Data {
         guard let endpoint = URLComponents(string: path), endpoint.scheme == nil, endpoint.host == nil,
               endpoint.path == "/api/qbo/change-capture", endpoint.fragment == nil,

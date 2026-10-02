@@ -10,8 +10,8 @@ enum InvoiceWorkType: String, Codable, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var displayName: String { rawValue.capitalized }
-    var documentTitle: String { "\(displayName) Invoice" }
+    nonisolated var displayName: String { rawValue.capitalized }
+    nonisolated var documentTitle: String { "\(displayName) Invoice" }
 
     static func inferred(from serviceCall: ServiceCall?) -> InvoiceWorkType {
         switch serviceCall?.type {
