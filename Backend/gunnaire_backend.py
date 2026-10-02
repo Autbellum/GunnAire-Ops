@@ -134,6 +134,12 @@ APNS_AUTH_TOKEN_CACHE: dict[str, object] = {
     "token": "",
 }
 APNS_AUTH_TOKEN_LOCK = threading.Lock()
+APNS_AUTH_TOKEN_REFRESH_AGE_SECONDS = 50 * 60
+APNS_PROVIDER_TOKEN_REFRESH_REASONS = {
+    "ExpiredProviderToken",
+    "InvalidProviderToken",
+    "MissingProviderToken",
+}
 PUSH_DELIVERY_LOCK = threading.Lock()
 PUSH_DELIVERY_WAKE_EVENT = threading.Event()
 BILLING_ESTIMATE_WAKE_EVENT = threading.Event()
@@ -950,20 +956,36 @@ def apns_private_key() -> ec.EllipticCurvePrivateKey:
     return private_key
 
 
-def apns_authentication_token(now: datetime | None = None) -> str:
-    issued_at = int((now or datetime.now(timezone.utc)).timestamp())
-    configuration_fingerprint = hashlib.sha256(
+def apns_configuration_fingerprint() -> str:
+    return hashlib.sha256(
         f"{APNS_TEAM_ID}:{APNS_KEY_ID}:{APNS_TOPIC}:{APNS_PRIVATE_KEY_BASE64}".encode("utf-8")
     ).hexdigest()
+
+
+def clear_apns_authentication_token_cache() -> None:
+    with APNS_AUTH_TOKEN_LOCK:
+        APNS_AUTH_TOKEN_CACHE.update(
+            {
+                "configuration_fingerprint": "",
+                "issued_at": 0,
+                "token": "",
+            }
+        )
+
+
+def apns_authentication_token(now: datetime | None = None, *, force_refresh: bool = False) -> str:
+    issued_at = int((now or datetime.now(timezone.utc)).timestamp())
+    configuration_fingerprint = apns_configuration_fingerprint()
     with APNS_AUTH_TOKEN_LOCK:
         cached_token = APNS_AUTH_TOKEN_CACHE.get("token")
         cached_issued_at = APNS_AUTH_TOKEN_CACHE.get("issued_at")
         cached_fingerprint = APNS_AUTH_TOKEN_CACHE.get("configuration_fingerprint")
         if (
-            isinstance(cached_token, str)
+            not force_refresh
+            and isinstance(cached_token, str)
             and cached_token
             and isinstance(cached_issued_at, int)
-            and 0 <= issued_at - cached_issued_at < 50 * 60
+            and 0 <= issued_at - cached_issued_at < APNS_AUTH_TOKEN_REFRESH_AGE_SECONDS
             and cached_fingerprint == configuration_fingerprint
         ):
             return cached_token
@@ -1019,36 +1041,48 @@ def send_apns_request(
     except ImportError:
         return HTTPStatus.SERVICE_UNAVAILABLE, "ProviderDependencyUnavailable", None
     host = "api.push.apple.com" if environment == "production" else "api.sandbox.push.apple.com"
-    headers = {
-        "authorization": f"bearer {apns_authentication_token()}",
-        "apns-topic": APNS_TOPIC,
-        "apns-push-type": "alert",
-        "apns-priority": "10",
-        "apns-expiration": str(int(time.time()) + 24 * 60 * 60),
-        "apns-collapse-id": collapse_id,
-    }
-    try:
+
+    def post(force_refresh: bool = False):
+        headers = {
+            "authorization": f"bearer {apns_authentication_token(force_refresh=force_refresh)}",
+            "apns-topic": APNS_TOPIC,
+            "apns-push-type": "alert",
+            "apns-priority": "10",
+            "apns-expiration": str(int(time.time()) + 24 * 60 * 60),
+            "apns-collapse-id": collapse_id,
+        }
         with httpx.Client(http2=True, timeout=10.0) as client:
-            response = client.post(
+            return client.post(
                 f"https://{host}/3/device/{device_token}",
                 headers=headers,
                 json=payload,
             )
+
+    def parse_response(response) -> tuple[int, str | None, str | None]:
+        reason: str | None = None
+        if response.content:
+            try:
+                response_payload = response.json()
+                candidate = response_payload.get("reason") if isinstance(response_payload, dict) else None
+                if isinstance(candidate, str) and re.fullmatch(r"[A-Za-z0-9]{1,80}", candidate):
+                    reason = candidate
+            except (ValueError, TypeError):
+                reason = "MalformedProviderResponse"
+        apns_id = response.headers.get("apns-id")
+        if apns_id is not None and not re.fullmatch(r"[0-9a-fA-F-]{36}", apns_id):
+            apns_id = None
+        return response.status_code, reason, apns_id
+
+    try:
+        response = post()
+        status_code, reason, apns_id = parse_response(response)
+        if int(status_code) == HTTPStatus.FORBIDDEN and reason in APNS_PROVIDER_TOKEN_REFRESH_REASONS:
+            clear_apns_authentication_token_cache()
+            response = post(force_refresh=True)
+            status_code, reason, apns_id = parse_response(response)
     except Exception:
         return HTTPStatus.SERVICE_UNAVAILABLE, "ProviderConnectionFailed", None
-    reason: str | None = None
-    if response.content:
-        try:
-            response_payload = response.json()
-            candidate = response_payload.get("reason") if isinstance(response_payload, dict) else None
-            if isinstance(candidate, str) and re.fullmatch(r"[A-Za-z0-9]{1,80}", candidate):
-                reason = candidate
-        except (ValueError, TypeError):
-            reason = "MalformedProviderResponse"
-    apns_id = response.headers.get("apns-id")
-    if apns_id is not None and not re.fullmatch(r"[0-9a-fA-F-]{36}", apns_id):
-        apns_id = None
-    return response.status_code, reason, apns_id
+    return status_code, reason, apns_id
 
 
 def qbo_request(form: dict[str, str], endpoint: str) -> tuple[int, dict[str, object]]:
