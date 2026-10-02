@@ -656,6 +656,29 @@ struct QuickBooksBillingWorkflowTests {
             verifiedRole: .admin, isInvoice: false, assignedToJob: false))
     }
 
+    @Test func detachedMirrorPreservesInvoiceAndEstimateRoleBoundaries() {
+        let accounting = QuickBooksBillingAccessPolicy.Mirror(roles: [.accounting], allActive: true, assigned: false)
+        #expect(QuickBooksBillingAccessPolicy.allows(mirror: accounting, verifiedRole: .accounting, isInvoice: true))
+        #expect(!QuickBooksBillingAccessPolicy.allows(mirror: accounting, verifiedRole: .accounting, isInvoice: false))
+        #expect(!QuickBooksBillingAccessPolicy.allows(mirror: accounting, verifiedRole: .admin, isInvoice: true))
+        let administrator = QuickBooksBillingAccessPolicy.Mirror(roles: [.admin], allActive: true, assigned: false)
+        #expect(QuickBooksBillingAccessPolicy.allows(mirror: administrator, verifiedRole: .admin, isInvoice: true))
+        #expect(QuickBooksBillingAccessPolicy.allows(mirror: administrator, verifiedRole: .admin, isInvoice: false))
+        let dispatcher = QuickBooksBillingAccessPolicy.Mirror(roles: [.dispatcher], allActive: true, assigned: false)
+        #expect(!QuickBooksBillingAccessPolicy.allows(mirror: dispatcher, verifiedRole: .dispatcher, isInvoice: true))
+        #expect(QuickBooksBillingAccessPolicy.allows(mirror: dispatcher, verifiedRole: .dispatcher, isInvoice: false))
+        let crew = QuickBooksBillingAccessPolicy.Mirror(roles: [.fieldTechnician], allActive: true, assigned: true)
+        #expect(QuickBooksBillingAccessPolicy.allows(mirror: crew, verifiedRole: .fieldTechnician, isInvoice: true))
+        #expect(!QuickBooksBillingAccessPolicy.allows(mirror: .init(roles: crew.roles, allActive: true, assigned: false),
+            verifiedRole: .fieldTechnician, isInvoice: true))
+        let conflicting = QuickBooksBillingAccessPolicy.Mirror(roles: [.admin, .standard], allActive: true, assigned: false)
+        #expect(!QuickBooksBillingAccessPolicy.allows(mirror: conflicting, verifiedRole: .admin, isInvoice: true))
+        #expect(!QuickBooksBillingAccessPolicy.allows(mirror: .init(roles: [.admin, .admin], allActive: false, assigned: false),
+            verifiedRole: .admin, isInvoice: true))
+        #expect(!QuickBooksBillingAccessPolicy.allows(mirror: .init(roles: [], allActive: true, assigned: false),
+            verifiedRole: .admin, isInvoice: true))
+    }
+
     @Test func detachedBillingMirrorIncludesNoncanonicalConflictsAndCrewAssignment() async throws {
         let f = try Fixture()
         let canonical = AppUser(email: "tech@fixture.invalid", role: .fieldTechnician)

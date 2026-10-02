@@ -5248,7 +5248,6 @@ struct QuickBooksManagementView: View {
             } else { selectedItemCapture = nil }
             let preparation = try SharedBillingPreparation(document: document, context: modelContext,
                 isCurrent: { billingPublicationLifecycles[key] === owner },
-                validateAccess: { try QuickBooksSyncAccessPolicy.validate(context: modelContext) },
                 requiresAdministrator: true, selectedItemCapture: selectedItemCapture)
             switch document {
             case .invoice: activeLocalInvoicePublicationID = document.id
