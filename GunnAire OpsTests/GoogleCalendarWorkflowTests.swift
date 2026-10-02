@@ -1896,6 +1896,9 @@ struct GoogleCalendarWorkflowTests {
         let f = try Fixture(linked: true)
         let url = "https://www.google.com/calendar/event?eid=verified-fixture"
         f.remote[f.key(f.email, "fixture-event")]?["htmlLink"] = url
+        f.remote[f.key(f.email, "fixture-event")]?["reminders"] = [
+            "useDefault": false, "overrides": [["method": "popup", "minutes": 30]]
+        ]
         let session = CompanyWorkspaceSession(backendOrigin: "https://backend.example.invalid",
             email: f.email, tokenFingerprint: "fixture", expiresAt: .distantFuture)
         let stamp = CompanyWorkspaceOperationStamp(generation: UUID(), session: session)
@@ -1928,9 +1931,53 @@ struct GoogleCalendarWorkflowTests {
 
         #expect(check.missingEventReview == nil)
         #expect(check.alertGuidance?.contains("reminders are turned off") == true)
+        #expect(check.alertGuidance?.contains("alert is not confirmed") == true)
         #expect(check.alertGuidance?.contains("Google Calendar") == true)
+        let published = try await f.publish().get()
+        #expect(published.contains("alert is not confirmed"))
+        #expect(f.call.googleEventConfirmedAt != nil)
         #expect(f.writes.isEmpty)
         #expect(f.remote[f.key(f.email, "fixture-event")]?["reminders"] as? [String: Any] != nil)
+    }
+
+    @Test func linkedCalendarDefaultDoesNotMasqueradeAsAConfirmedPopup() async throws {
+        let f = try Fixture(linked: true)
+        f.remote[f.key(f.email, "fixture-event")]?["reminders"] = ["useDefault": true] as [String: Any]
+
+        let checked = try await GoogleCalendarScheduleSync.checkGoogleLink(
+            call: f.call, workflow: f.flow()).get()
+        #expect(checked.missingEventReview == nil)
+        #expect(checked.alertGuidance?.contains("30-minute popup alert is not confirmed") == true)
+
+        let published = try await f.publish().get()
+        #expect(published.contains("30-minute popup alert is not confirmed"))
+        #expect(f.call.googleEventConfirmedAt != nil)
+        let synchronized = try await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.synchronize(workflow: $0,
+                verifyConfirmedCalls: [f.call])
+        }.get()
+        #expect(synchronized.contains("30-minute popup alert is not confirmed"))
+        #expect(f.writes.isEmpty)
+        let unchanged = try #require(f.remote[f.key(f.email, "fixture-event")]?["reminders"] as? [String: Any])
+        #expect(unchanged["useDefault"] as? Bool == true)
+    }
+
+    @Test func pendingLinkedReminderOptOutSurfacesInSyncWithoutOverwritingGoogle() async throws {
+        let f = try Fixture(linked: true)
+        f.remote[f.key(f.email, "fixture-event")]?["reminders"] = [
+            "useDefault": false, "overrides": []
+        ] as [String: Any]
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(f.call)
+        try f.context.save()
+
+        let synchronized = try await (try f.flow()).run {
+            try await GoogleCalendarScheduleSync.synchronize(workflow: $0)
+        }.get()
+        #expect(synchronized.contains("alert is not confirmed"))
+        #expect(f.call.googleEventConfirmedAt != nil)
+        #expect(f.writes.isEmpty)
+        let unchanged = try #require(f.remote[f.key(f.email, "fixture-event")]?["reminders"] as? [String: Any])
+        #expect((unchanged["overrides"] as? [[String: Any]])?.isEmpty == true)
     }
 
     @Test func allDayGoogleEventWithTimedAppointmentNeedsSpecificReview() async throws {
