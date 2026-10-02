@@ -16,6 +16,7 @@ final class QuickBooksCustomerEmailWorkflow {
     private let consent: CustomerCommunicationConsentSnapshot
     private let validateDocument: () throws -> Void
     private let access: () throws -> Void
+    private let authorizeAccess: () async throws -> Void
     private let save: (ModelContext) throws -> Void
     private let customerQuickBooksID: String?
     private var communication: CustomerCommunication?
@@ -23,10 +24,11 @@ final class QuickBooksCustomerEmailWorkflow {
     private var completed = false
 
     init(context: ModelContext, document: QuickBooksBillingDocument, recipient: String?,
-         validateAccess: (() throws -> Void)? = nil,
+         validateAccess: @escaping () throws -> Void,
+         authorizeAccess: @escaping () async throws -> Void,
          save: @escaping (ModelContext) throws -> Void = { try $0.save() }) throws {
         self.context = context; self.document = document; self.save = save
-        let access = validateAccess ?? { try Self.requireAccess(context: context, document: document) }
+        let access = validateAccess
         try access()
         let validateDocument = document.validation(context: context)
         try validateDocument()
@@ -44,17 +46,38 @@ final class QuickBooksCustomerEmailWorkflow {
         consent = CustomerCommunicationConsentSnapshot(customer: customer)
         customerQuickBooksID = customer.quickBooksID
         actor = AppAccess.normalizedEmail(AppIdentity.currentEmail)
-        self.access = access; self.validateDocument = validateDocument
+        self.access = access; self.authorizeAccess = authorizeAccess; self.validateDocument = validateDocument
         try validate(requireConsent: false)
     }
 
-    static func requireAccess(context: ModelContext, document: QuickBooksBillingDocument) throws {
-        let census = try QuickBooksBillingAccessPolicy.userCensus(context: context)
-        let users = census.users
-        guard AppAccess.canAccessSidebarItem(.mail, email: AppIdentity.currentEmail, users: users) else {
-            throw GmailComposeError.access
+    static func authorized(context: ModelContext, document: QuickBooksBillingDocument,
+                           recipient: String?, save: @escaping (ModelContext) throws -> Void = { try $0.save() })
+        async throws -> QuickBooksCustomerEmailWorkflow {
+        let email = AppIdentity.currentEmail
+        let stamp = CompanyWorkspaceAccessController.shared.operationStamp
+        let localAccess: () throws -> Void = {
+            try QuickBooksBillingAccessPolicy.checkLocalFence(context: context, document: document,
+                email: email, stamp: stamp)
+            if !GunnAireCloudKit.usesTestDatabase {
+                let role = CompanyWorkspaceAccessController.shared.verifiedRole
+                guard role == .admin || role == .dispatcher else { throw GmailComposeError.access }
+            }
         }
-        try QuickBooksBillingAccessPolicy.validate(context: context, document: document, census: census)
+        let fullAccess: () async throws -> Void = {
+            try await QuickBooksBillingAccessPolicy.checkOffMain(context: context, document: document,
+                email: email, stamp: stamp, requiresMailAccess: true)
+        }
+        try localAccess()
+        let workflow = try QuickBooksCustomerEmailWorkflow(context: context, document: document,
+            recipient: recipient, validateAccess: localAccess, authorizeAccess: fullAccess, save: save)
+        try await workflow.validateAuthorization()
+        return workflow
+    }
+
+    func validateAuthorization() async throws {
+        try validate(requireConsent: false)
+        try await authorizeAccess()
+        try validate(requireConsent: false)
     }
 
     /// Stop before document preparation, retaining a suppression audit when
@@ -97,7 +120,25 @@ final class QuickBooksCustomerEmailWorkflow {
               communication.deliveryStatus == "pending" else { throw GmailComposeError.changed }
     }
 
-    func finish(_ result: Result<Void, Error>) -> String {
+    func validateSendAsync() async throws {
+        try validateSend()
+        try await authorizeAccess()
+        try validateSend()
+    }
+
+    func finishAuthorized(_ result: Result<Void, Error>,
+                          validateCurrent: () throws -> Void = {}) async -> String {
+        let authorized: Bool
+        do {
+            try validateCurrent()
+            try await validateSendAsync()
+            try validateCurrent()
+            authorized = true
+        } catch { authorized = false }
+        return finish(result, authorized: authorized)
+    }
+
+    func finish(_ result: Result<Void, Error>, authorized: Bool = true) -> String {
         guard !completed else { return "Review the recorded QuickBooks email status before sending again." }
         defer { completed = true }
         let accepted: Bool
@@ -119,6 +160,7 @@ final class QuickBooksCustomerEmailWorkflow {
             }
         }
         do {
+            guard authorized else { throw GmailComposeError.access }
             try validateSend()
             guard let communication else { throw GmailComposeError.changed }
             let oldStatus = communication.deliveryStatus, oldDetail = communication.providerStatusDetail

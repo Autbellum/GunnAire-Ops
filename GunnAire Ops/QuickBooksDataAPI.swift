@@ -1065,7 +1065,14 @@ final class QuickBooksDataAPI: ObservableObject {
                 Task { @MainActor in
                     if let error = access.failure { completion(.failure(error)); return }
                     if let error {
-                        completion(.failure(error is CancellationError ? error : QBError.network))
+                        // Preserve a local authorization denial raised by the
+                        // async transport fence. It was not a network attempt.
+                        if error is CancellationError || error is GmailComposeError ||
+                            error is QuickBooksBillingWorkflowError {
+                            completion(.failure(error))
+                        } else {
+                            completion(.failure(QBError.network))
+                        }
                         return
                     }
                     if let httpError = self.resolveHTTPError(data: data, response: response) {
@@ -1497,6 +1504,19 @@ final class QuickBooksDataAPI: ObservableObject {
             }
     }
 
+    func sendEstimateAuthorized(id: String, to emailAddress: String?, expectedCustomerID: String?,
+        validateCurrent: @escaping () throws -> Void, validateSendAsync: @escaping () async throws -> Void,
+        completion: @escaping (Result<QuickBooksEstimate, Error>) -> Void) {
+        sendDocumentEmail(kind: "estimate", id: id, to: emailAddress, expectedCustomerID: expectedCustomerID,
+            validateSend: validateCurrent, asyncValidateSend: validateSendAsync,
+            decode: QuickBooksEstimateResponse.self,
+            observe: { .init(id: $0.Estimate.Id, recipient: $0.Estimate.BillEmail?.Address,
+                emailStatus: $0.Estimate.EmailStatus, delivery: $0.Estimate.DeliveryInfo,
+                customerID: $0.Estimate.CustomerRef.value) }) {
+            completion($0.map(\.Estimate))
+        }
+    }
+
     func fetchInvoices(completion: @escaping (Result<[QuickBooksInvoice], Error>) -> Void) {
         performPaginatedQuery(
             baseSQL: "SELECT * FROM Invoice",
@@ -1597,10 +1617,24 @@ final class QuickBooksDataAPI: ObservableObject {
             }
     }
 
+    func sendInvoiceAuthorized(id: String, to emailAddress: String?, expectedCustomerID: String?,
+        validateCurrent: @escaping () throws -> Void, validateSendAsync: @escaping () async throws -> Void,
+        completion: @escaping (Result<QuickBooksInvoice, Error>) -> Void) {
+        sendDocumentEmail(kind: "invoice", id: id, to: emailAddress, expectedCustomerID: expectedCustomerID,
+            validateSend: validateCurrent, asyncValidateSend: validateSendAsync,
+            decode: QuickBooksInvoiceResponse.self,
+            observe: { .init(id: $0.Invoice.Id, recipient: $0.Invoice.BillEmail?.Address,
+                emailStatus: $0.Invoice.EmailStatus, delivery: $0.Invoice.DeliveryInfo,
+                customerID: $0.Invoice.CustomerRef.value) }) {
+            completion($0.map(\.Invoice))
+        }
+    }
+
     /// A retry first reads the original document. It never issues a second POST
     /// while a retained attempt has an uncertain outcome, even after relaunch.
     private func sendDocumentEmail<T: Decodable>(kind: String, id: String, to emailAddress: String?, expectedCustomerID: String?,
-        validateSend: @escaping () throws -> Void, decode: T.Type, observe: @escaping (T) -> QuickBooksDocumentEmailObservation,
+        validateSend: @escaping () throws -> Void, asyncValidateSend: (() async throws -> Void)? = nil,
+        decode: T.Type, observe: @escaping (T) -> QuickBooksDocumentEmailObservation,
         completion: @escaping (Result<T, Error>) -> Void) {
         guard sharedBillingOperation == nil else {
             completion(.failure(BillingPublicationError.savedDocumentRequired)); return
@@ -1614,8 +1648,12 @@ final class QuickBooksDataAPI: ObservableObject {
         let operation: WorkspaceProviderOperation
         do {
             try validateSend()
-            operation = WorkspaceProviderOperation(parent: try captureProviderOperation()) {
-                (try? validateSend()) != nil
+            let parent = try captureProviderOperation()
+            if let asyncValidateSend {
+                operation = WorkspaceProviderOperation(parent: parent, beforeTransport: asyncValidateSend,
+                    transportFence: validateSend, isCurrent: { (try? validateSend()) != nil })
+            } else {
+                operation = WorkspaceProviderOperation(parent: parent) { (try? validateSend()) != nil }
             }
         }
         catch { completion(.failure(error)); return }
@@ -1631,6 +1669,7 @@ final class QuickBooksDataAPI: ObservableObject {
             var accepted = false
             let result: Result<T, Error>
             do {
+                try await asyncValidateSend?()
                 try operation.check()
                 let previous = try await journal.acquire(key)
                 acquired = true

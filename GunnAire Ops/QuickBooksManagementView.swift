@@ -5336,25 +5336,32 @@ struct QuickBooksManagementView: View {
     }
 
     private func sendCreatedEstimateEmail(_ estimate: QuickBooksEstimate, to emailAddress: String?) {
-        do {
-            let matches = localEstimates.filter { $0.quickBooksID == estimate.Id }
-            guard matches.count == 1, let local = matches.first,
-                  local.customer?.quickBooksID == estimate.CustomerRef.value else {
-                throw QuickBooksBillingWorkflowError.customerConflict
-            }
-            let workflow = try QuickBooksCustomerEmailWorkflow(context: modelContext,
-                document: .estimate(local), recipient: emailAddress)
-            try workflow.prepare()
-            liveAPI.sendEstimate(id: estimate.Id, to: workflow.recipient,
-                expectedCustomerID: workflow.quickBooksCustomerID, validateSend: { try workflow.validateSend() }) { result in
-                actionMessage = workflow.finish(result.map { _ in () })
+        Task { @MainActor in
+            do {
+                let matches = localEstimates.filter { $0.quickBooksID == estimate.Id }
+                guard matches.count == 1, let local = matches.first,
+                      local.customer?.quickBooksID == estimate.CustomerRef.value else {
+                    throw QuickBooksBillingWorkflowError.customerConflict
+                }
+                let workflow = try await QuickBooksCustomerEmailWorkflow.authorized(context: modelContext,
+                    document: .estimate(local), recipient: emailAddress)
+                try workflow.prepare()
+                try await workflow.validateAuthorization()
+                liveAPI.sendEstimateAuthorized(id: estimate.Id, to: workflow.recipient,
+                    expectedCustomerID: workflow.quickBooksCustomerID,
+                    validateCurrent: { try workflow.validateSend() },
+                    validateSendAsync: { try await workflow.validateSendAsync() }) { result in
+                    Task { @MainActor in
+                        actionMessage = await workflow.finishAuthorized(result.map { _ in () })
+                        isLoading = false
+                        activeEmailEstimateID = nil
+                    }
+                }
+            } catch {
+                actionMessage = error.localizedDescription
                 isLoading = false
                 activeEmailEstimateID = nil
             }
-        } catch {
-            actionMessage = error.localizedDescription
-            isLoading = false
-            activeEmailEstimateID = nil
         }
     }
 
@@ -5383,25 +5390,32 @@ struct QuickBooksManagementView: View {
     }
 
     private func sendCreatedInvoiceEmail(_ invoice: QuickBooksInvoice, to emailAddress: String?) {
-        do {
-            let matches = localInvoices.filter { $0.quickBooksID == invoice.Id }
-            guard matches.count == 1, let local = matches.first,
-                  local.customer?.quickBooksID == invoice.CustomerRef.value else {
-                throw QuickBooksBillingWorkflowError.customerConflict
-            }
-            let workflow = try QuickBooksCustomerEmailWorkflow(context: modelContext,
-                document: .invoice(local), recipient: emailAddress)
-            try workflow.prepare()
-            liveAPI.sendInvoice(id: invoice.Id, to: workflow.recipient,
-                expectedCustomerID: workflow.quickBooksCustomerID, validateSend: { try workflow.validateSend() }) { result in
-                actionMessage = workflow.finish(result.map { _ in () })
+        Task { @MainActor in
+            do {
+                let matches = localInvoices.filter { $0.quickBooksID == invoice.Id }
+                guard matches.count == 1, let local = matches.first,
+                      local.customer?.quickBooksID == invoice.CustomerRef.value else {
+                    throw QuickBooksBillingWorkflowError.customerConflict
+                }
+                let workflow = try await QuickBooksCustomerEmailWorkflow.authorized(context: modelContext,
+                    document: .invoice(local), recipient: emailAddress)
+                try workflow.prepare()
+                try await workflow.validateAuthorization()
+                liveAPI.sendInvoiceAuthorized(id: invoice.Id, to: workflow.recipient,
+                    expectedCustomerID: workflow.quickBooksCustomerID,
+                    validateCurrent: { try workflow.validateSend() },
+                    validateSendAsync: { try await workflow.validateSendAsync() }) { result in
+                    Task { @MainActor in
+                        actionMessage = await workflow.finishAuthorized(result.map { _ in () })
+                        isLoading = false
+                        activeEmailInvoiceID = nil
+                    }
+                }
+            } catch {
+                actionMessage = error.localizedDescription
                 isLoading = false
                 activeEmailInvoiceID = nil
             }
-        } catch {
-            actionMessage = error.localizedDescription
-            isLoading = false
-            activeEmailInvoiceID = nil
         }
     }
 
