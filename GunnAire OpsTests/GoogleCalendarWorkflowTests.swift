@@ -510,6 +510,137 @@ struct GoogleCalendarWorkflowTests {
         #expect(f.call.googleEventID == nil)
     }
 
+    private func linkReview(for f: Fixture, eventID: String = "legacy-marker-event") async throws
+        -> GoogleCalendarScheduleSync.UnlinkedEventLinkReview {
+        f.call.googleEventManagedByApp = false
+        f.remote[f.key(f.email, eventID)] = f.event(id: eventID)
+        try f.context.save()
+        let workflow = try f.flow(scope: [f.call])
+        let inspection = try await GoogleCalendarScheduleSync.inspectUnlinkedCalendarJob(
+            call: f.call, workflow: workflow).get()
+        return try #require(GoogleCalendarScheduleSync.linkReview(
+            call: f.call, workflow: workflow, inspection: inspection))
+    }
+
+    @Test func explicitlyLinkedLegacyEventSavesOnlyRouteAfterFreshGoogleRefetch() async throws {
+        let f = try Fixture()
+        let review = try await linkReview(for: f)
+        let originalDate = f.call.scheduledDate
+        let originalTitle = f.call.eventTitle
+        let outcome = try await GoogleCalendarScheduleSync.linkExistingEvent(review).get()
+
+        #expect(outcome.verifiedEvent?.id == "legacy-marker-event")
+        #expect(f.call.googleCalendarID == f.email)
+        #expect(f.call.googleEventID == "legacy-marker-event")
+        #expect(f.call.scheduledDate == originalDate)
+        #expect(f.call.eventTitle == originalTitle)
+        #expect(!f.call.googleEventManagedByApp)
+        #expect(f.call.googleEventConfirmedAt == nil)
+        #expect(f.call.googleCalendarPendingAt == nil)
+        #expect(f.writes.isEmpty)
+        #expect(f.requests.filter { $0.url?.path.hasSuffix("/legacy-marker-event") == true }.count >= 2)
+        let reopened = ModelContext(f.context.container)
+        let id = f.call.id
+        let saved = try #require(reopened.fetch(FetchDescriptor<ServiceCall>(
+            predicate: #Predicate { $0.id == id })).first)
+        #expect(saved.googleEventID == "legacy-marker-event")
+        #expect(!saved.googleEventManagedByApp)
+    }
+
+    @Test func legacyLinkNeverOffersSameTimeOrWrongMarkerEvent() async throws {
+        let f = try Fixture()
+        f.call.googleEventManagedByApp = false
+        f.remote[f.key(f.email, "same-time-event")] = f.event(id: "same-time-event", managed: false)
+        let deterministic = GoogleCalendarScheduleSync.eventID(for: f.call.id)
+        var wrong = f.event(id: deterministic)
+        var properties = try #require(wrong["extendedProperties"] as? [String: [String: String]])
+        properties["private"]?["gunnaireServiceCallID"] = UUID().uuidString
+        wrong["extendedProperties"] = properties
+        f.remote[f.key(f.email, deterministic)] = wrong
+        try f.context.save()
+        let workflow = try f.flow(scope: [f.call])
+        let scan = try await GoogleCalendarScheduleSync.inspectUnlinkedCalendarJob(
+            call: f.call, workflow: workflow).get()
+        #expect(scan.candidates.count == 2)
+        #expect(scan.singleProvableCandidate == nil)
+        #expect(GoogleCalendarScheduleSync.linkReview(call: f.call, workflow: workflow,
+            inspection: scan) == nil)
+        #expect(f.writes.isEmpty)
+    }
+
+    @Test func legacyLinkRefusesDuplicateLocalEventID() async throws {
+        let f = try Fixture()
+        let review = try await linkReview(for: f)
+        let other = ServiceCall(googleCalendarID: f.email, googleEventID: review.candidate.eventID,
+            type: .repair, scheduledDate: f.call.scheduledDate, customer: f.customer)
+        f.context.insert(other)
+        try f.context.save()
+
+        let result = await GoogleCalendarScheduleSync.linkExistingEvent(review)
+        if case .success = result { Issue.record("A local duplicate cannot be linked") }
+        #expect(f.call.googleEventID == nil)
+        #expect(f.writes.isEmpty)
+    }
+
+    @Test func legacyLinkRefusesChangedJobAccountAndRemoteSchedule() async throws {
+        let changed = try Fixture()
+        let changedReview = try await linkReview(for: changed)
+        changed.call.scheduledDate = changed.call.scheduledDate.addingTimeInterval(60)
+        try changed.context.save()
+        if case .success = await GoogleCalendarScheduleSync.linkExistingEvent(changedReview) {
+            Issue.record("A changed job cannot be linked")
+        }
+        #expect(changed.call.googleEventID == nil)
+        #expect(changed.writes.isEmpty)
+
+        let account = try Fixture()
+        let accountReview = try await linkReview(for: account)
+        account.auth.signOut()
+        if case .success = await GoogleCalendarScheduleSync.linkExistingEvent(accountReview) {
+            Issue.record("A different Google account cannot be linked")
+        }
+        #expect(account.call.googleEventID == nil)
+        #expect(account.writes.isEmpty)
+
+        let workspace = try Fixture()
+        let workspaceReview = try await linkReview(for: workspace)
+        workspace.authorized = false
+        if case .success = await GoogleCalendarScheduleSync.linkExistingEvent(workspaceReview) {
+            Issue.record("Lost workspace authority cannot link an event")
+        }
+        #expect(workspace.call.googleEventID == nil)
+        #expect(workspace.writes.isEmpty)
+
+        let remote = try Fixture()
+        let remoteReview = try await linkReview(for: remote)
+        remote.remote[remote.key(remote.email, remoteReview.candidate.eventID)] = remote.event(
+            id: remoteReview.candidate.eventID, start: remote.call.scheduledDate.addingTimeInterval(30))
+        if case .success = await GoogleCalendarScheduleSync.linkExistingEvent(remoteReview) {
+            Issue.record("A remotely retimed event cannot be linked")
+        }
+        #expect(remote.call.googleEventID == nil)
+        #expect(remote.writes.isEmpty)
+    }
+
+    @Test func importNeverPromotesExistingUnmanagedLinkToAutomaticPublication() throws {
+        let f = try Fixture()
+        let placeholder = Customer(quickBooksID: CustomerDataMaintenance.unassignedCalendarCustomerMarker,
+            name: CustomerDataMaintenance.unassignedCalendarCustomerName)
+        f.context.insert(placeholder)
+        f.call.customer = placeholder
+        f.call.googleEventID = "legacy-marker-event"
+        f.call.googleEventManagedByApp = false
+        try f.context.save()
+        let event = try f.decoded(f.event(id: "legacy-marker-event"))
+        let summary = try GoogleCalendarScheduleSync.importEvents([(f.email, event)],
+            into: f.context, signedInEmail: f.email, primaryCalendarID: f.email)
+        #expect(summary.importedCount == 1)
+        #expect(f.call.googleEventID == "legacy-marker-event")
+        #expect(!f.call.googleEventManagedByApp)
+        #expect(!GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: f.call))
+        #expect(f.writes.isEmpty)
+    }
+
     @Test func immediateExportReportsMissingSavedCallBeforeProviderAccess() throws {
         let f = try Fixture()
         let detachedCustomer = Customer(name: "Detached fixture customer")
