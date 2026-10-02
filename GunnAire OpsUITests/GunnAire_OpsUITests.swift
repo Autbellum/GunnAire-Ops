@@ -10516,7 +10516,7 @@ final class GunnAire_OpsUITests: XCTestCase {
             "App window did not finish rotating for screenshot \(name)"
         )
         afterLaunch(app)
-        refreshPersistentSidebarIfNeeded(app, screenshotName: name)
+        settlePersistentSidebarForScreenshot(app, screenshotName: name)
         waitForAppStoreScreenshotSurfaceToSettle(app, screenshotName: name)
 
         let accountIdentity = app.staticTexts["SidebarAccountIdentity"]
@@ -10547,15 +10547,14 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
-    private func refreshPersistentSidebarIfNeeded(
+    private func settlePersistentSidebarForScreenshot(
         _ app: XCUIApplication,
         screenshotName: String
     ) {
-        // On iPad, a rapid fixture relaunch can occasionally leave the
-        // system-owned split-view column in an intermediate clipping mask
-        // even though the requested route is ready. Close and reopen the
-        // persistent sidebar through its native control so every retained
-        // image reflects the normal settled layout.
+        // Rapid fixture relaunches can leave iPadOS's split-view sidebar in
+        // an incomplete clipping transition even when its accessibility tree
+        // says it is ready. Capture the unobscured detail surface after the
+        // native sidebar closes; production sidebar behavior is unchanged.
         let accountIdentity = app.staticTexts["SidebarAccountIdentity"]
         guard accountIdentity.exists, accountIdentity.isHittable else { return }
 
@@ -10564,15 +10563,14 @@ final class GunnAire_OpsUITests: XCTestCase {
         ).firstMatch
         guard sidebarButton.waitForExistence(timeout: 2) else { return }
         sidebarButton.tap()
-
-        let reopenedSidebarButton = app.buttons.matching(
-            NSPredicate(format: "label CONTAINS[c] %@", "sidebar")
-        ).firstMatch
-        XCTAssertTrue(reopenedSidebarButton.waitForExistence(timeout: 2))
-        reopenedSidebarButton.tap()
-        XCTAssertTrue(
-            accountIdentity.waitForExistence(timeout: 3) && accountIdentity.isHittable,
-            "Persistent iPad sidebar did not reopen for \(screenshotName)"
+        let sidebarClosed = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in !accountIdentity.isHittable },
+            object: nil
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [sidebarClosed], timeout: 5),
+            .completed,
+            "Persistent iPad sidebar did not close for \(screenshotName)"
         )
     }
 
