@@ -20,6 +20,8 @@ at the start of every turn; append to it rather than rewriting it.
 
 ## Claims
 
+- 2026-10-02 Codex qbo_background_followup: Owns bounded server-side estimate job work in `Backend/billing_publications.py`, `Backend/billing_estimate_jobs.py`, `Backend/billing_provider.py`, `Backend/gunnaire_backend.py`, and focused backend tests on isolated `fix/0122-qbo-background-estimate`. This does not edit the frozen 0122 candidate or deploy the backend. Claim releases after review and validation.
+
 ## Shared rules
 
 1. The project sets `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`. A helper reached
@@ -42,6 +44,8 @@ at the start of every turn; append to it rather than rewriting it.
    pins the old behavior and the new one.
 
 ## Status log
+
+- 2026-10-02 Codex QBO background estimate job: Isolated backend candidate adds an atomic estimate-only reservation/job API and one-at-a-time server worker, with current session/realm/grant rechecks and the existing original-attempt QBO write fence. A lost QBO response, consumed send permit, revoked session, changed grant, retry replay, and lease expiry were exercised with synthetic provider tests; 11/11 focused and 141/141 combined billing/provider/native/assignment tests passed. `generated/omni_runner.py` passed zero-warning simulator build in `/private/tmp/GunnAire-0122-qbo-bg-omni-dd`. The endpoint is not called by iOS yet, no live QBO write was made, and frozen 0122 was not modified. Claim remains while native enqueue feasibility is assessed.
 
 - 2026-10-02 Codex 0122 integration: Isolated `release/2026100122` from exact `release/2026100121` combines PR #42 commits `4d84055` and `22cde2e`, PR #44 `021821f`, and PR #46 `6e4b9ff`; disabled QBO email PR #45 is excluded. Only `AGENTS.md` conflicted in two cherry-picks, and both Calendar/Drive/BG status entries were retained; overlapping Swift files merged without conflict. All six project build-number settings are `2026100122`, marketing version remains `1.0`, and `Tools.release_preflight.source_versions` asserted that configuration. Combined-source `generated/omni_runner.py` passed with zero compiler warnings (`/private/tmp/GunnAire-0122-omni.log`). Signed iPad Calendar, Drive, BG recovery, QBO document, and Google transport suites passed 197/197 logical tests (200 executions), zero failures/skips/expected failures/compiler warnings (`/private/tmp/GunnAire-0122-focused-r1.xcresult`). The full signed suite, exact-commit release package, live provider delivery, physical-device background execution, and upload remain separate work.
 

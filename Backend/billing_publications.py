@@ -533,7 +533,7 @@ class BillingPublisher:
         if intent["operation"] == "update" and (linked is None or linked["provider_id"] != intent["document"]["Id"] or linked["local_customer_id"] != intent["local_customer_id"]):
             raise failure("identity_conflict", "Review the original server-owned invoice mapping before updating.")
 
-    def reserve(self, session_id, payload):
+    def reserve(self, session_id, payload, *, on_reserved=None):
         intent = validated_request(payload)
         hash_value, ciphertext = digest(intent), self.encrypt(canonical(intent))
         with self.database() as connection:
@@ -548,6 +548,8 @@ class BillingPublisher:
                     self.authorize(connection, session_id, row)
                     if row["payload_hash"] != hash_value:
                         raise failure("publication_pending", "Review the original document before publishing a changed proposal.")
+                    if on_reserved is not None:
+                        on_reserved(connection, row)
                     return dict(row)
             self.document_mapping(connection, intent)
             self.payment_boundary(connection, intent)
@@ -561,7 +563,10 @@ class BillingPublisher:
             billing_milestones.index_row(connection, self, self.record(connection, identifier))
             invoice_fences.bind_publication(connection, self.record(connection, identifier), applications, self.encrypt)
             self.audit(actor["email"], "reserve", "billing-publication", identifier, connection=connection)
-            return dict(self.record(connection, identifier))
+            row = self.record(connection, identifier)
+            if on_reserved is not None:
+                on_reserved(connection, row)
+            return dict(row)
 
     def check(self, session_id, identifier):
         with self.database() as connection:

@@ -34,7 +34,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 
 try:
-    from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications, billing_native, qbo_link_adoption, field_payment_review
+    from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications, billing_estimate_jobs, billing_native, qbo_link_adoption, field_payment_review
     from Backend import customer_accounts, transactional_email
     from Backend.customer_account_portal import PORTAL_HTML as CUSTOMER_ACCOUNT_PORTAL_HTML
     from Backend.billing_provider import BillingQBOProvider
@@ -55,6 +55,7 @@ except ModuleNotFoundError:
     import catalog_publications
     import customer_publications
     import billing_publications
+    import billing_estimate_jobs
     import billing_native
     import qbo_link_adoption
     import customer_accounts
@@ -131,6 +132,7 @@ APNS_AUTH_TOKEN_CACHE: dict[str, object] = {
 APNS_AUTH_TOKEN_LOCK = threading.Lock()
 PUSH_DELIVERY_LOCK = threading.Lock()
 PUSH_DELIVERY_WAKE_EVENT = threading.Event()
+BILLING_ESTIMATE_WAKE_EVENT = threading.Event()
 DATA_ROOT_RAW = os.environ.get("GUNNAIRE_BACKEND_DATA_DIR", "").strip()
 DATA_ROOT = Path(DATA_ROOT_RAW).expanduser() if DATA_ROOT_RAW else None
 DB_PATH = Path(
@@ -2691,6 +2693,7 @@ def initialize_database() -> None:
         customer_publications.initialize_schema(connection)
         customer_accounts.initialize_schema(connection, ensure_column)
         billing_publications.initialize_schema(connection)
+        billing_estimate_jobs.initialize_schema(connection)
         qbo_link_adoption.initialize_schema(connection)
         google_connections.initialize_schema(connection)
         google_mail.initialize_schema(connection)
@@ -3412,6 +3415,40 @@ def push_delivery_worker() -> None:
 
 def start_push_delivery_worker() -> threading.Thread:
     worker = threading.Thread(target=push_delivery_worker, name="gunnaire-apns-worker", daemon=True)
+    worker.start()
+    return worker
+
+
+def billing_estimate_queue() -> billing_estimate_jobs.EstimateJobs:
+    # The mobile request only reserves an immutable proposal. This separate
+    # worker is allowed a bounded census before it can reach the existing
+    # billing publication's single-use provider-write fence.
+    publisher = billing_publications.BillingPublisher(
+        db, lambda context, authorize: BillingQBOProvider(
+            context, authorize, qbo_authorized_bearer, maximum_documents=500),
+        encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
+    )
+    return billing_estimate_jobs.EstimateJobs(db, publisher)
+
+
+def billing_estimate_worker() -> None:
+    while True:
+        BILLING_ESTIMATE_WAKE_EVENT.wait(timeout=60)
+        BILLING_ESTIMATE_WAKE_EVENT.clear()
+        try:
+            # Serial work stays bounded per wake. Further due rows wait for the
+            # next tick; unavailable rows keep a durable not-before timestamp.
+            for _ in range(10):
+                if not billing_estimate_queue().run_one():
+                    break
+        except Exception:
+            # The job/attempt fences remain durable. An unexpected failure is
+            # retried only after the worker's next bounded wake.
+            continue
+
+
+def start_billing_estimate_worker() -> threading.Thread:
+    worker = threading.Thread(target=billing_estimate_worker, name="gunnaire-qbo-estimate-worker", daemon=True)
     worker.start()
     return worker
 
@@ -7155,6 +7192,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
         )
         native = billing_native.NativeBilling(publisher)
+        estimate_jobs = billing_estimate_queue()
         session_id = self._application_session_id
         assignments = parsed.path == "/api/job-billing-assignments"
         assignment_connection = parsed.path == "/api/job-billing-assignments/connection"
@@ -7176,6 +7214,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                     result = native.connection(session_id, query)
                 else:
                     result = publisher.list_for_document(session_id, query)
+            elif method == "GET" and len(parts) == 2 and parts[0] == "background-estimate" and not parsed.query:
+                result = estimate_jobs.status(session_id, parts[1])
             elif method == "GET" and len(parts) == 1 and not parsed.query:
                 result = native.proposal(session_id, parts[0])
             elif method == "POST" and not parsed.query:
@@ -7196,6 +7236,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                                      object_pairs_hook=unique_object, parse_constant=invalid_constant)
                 if assignments:
                     result = publisher.assignments.save(session_id, payload)
+                elif parts == ["background-estimate"]:
+                    result = estimate_jobs.enqueue(session_id, payload)
+                    BILLING_ESTIMATE_WAKE_EVENT.set()
                 elif not suffix:
                     result = publisher.publish(session_id, payload)
                 elif parts == ["approve"] and isinstance(payload, dict) and set(payload) == {"proposal", "technicianEmail"}:
@@ -8020,6 +8063,7 @@ def main() -> None:
     initialize_database()
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
     start_push_delivery_worker()
+    start_billing_estimate_worker()
     start_backup_worker()
     server = ThreadingHTTPServer((HOST, PORT), GunnAireBackendHandler)
     print(f"GunnAire backend listening on http://{HOST}:{PORT}")
