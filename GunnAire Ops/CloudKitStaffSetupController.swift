@@ -76,7 +76,16 @@ struct CloudKitStaffSetupDependencies {
     }
     private func authority(_ stamp: CloudKitStaffSetupStamp, prior: Context? = nil) async throws -> Context {
         try check(stamp)
-        let account = try await dependencies.account()
+        let account: CompanyCloudKitAccount
+        do {
+            account = try await dependencies.account()
+        } catch is CompanyCloudKitAccountVerificationSuperseded {
+            // A concurrent foreground verification may retire this read while
+            // the same business session remains valid. Retry that read once;
+            // account changes invalidate the captured stamp instead.
+            try check(stamp)
+            account = try await dependencies.account()
+        }
         try check(stamp)
         if let prior {
             // Do not let a later server outage conceal a newly observed account change.

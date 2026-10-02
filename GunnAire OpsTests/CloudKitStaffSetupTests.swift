@@ -209,6 +209,68 @@ import Testing
         #expect(next.appleInvitations.isEmpty); #expect(next.mutations.isEmpty); #expect(nextModel.needsRecovery)
     }
 
+    @Test func supersededAccountReadRetriesOnceOnlyForTheOriginalSession() async throws {
+        let fixture = try Fixture()
+        let original = fixture.dependencies
+        var reads = 0
+        let dependencies = CloudKitStaffSetupDependencies(
+            stamp: original.stamp,
+            account: {
+                reads += 1
+                if reads == 1 { throw CompanyCloudKitAccountVerificationSuperseded() }
+                return fixture.account
+            },
+            request: original.request, store: original.store, remote: original.remote, now: original.now)
+        let model = CloudKitStaffSetupController(dependencies: dependencies)
+
+        await model.refresh()
+
+        #expect(reads == 2)
+        #expect(model.error == nil)
+        #expect(model.context != nil)
+        #expect(model.canEnroll)
+        #expect(fixture.mutations.isEmpty)
+    }
+
+    @Test func supersededAccountReadCannotRetryAfterSessionChangeOrRepeatedFailure() async throws {
+        let changed = try Fixture()
+        let changedOriginal = changed.dependencies
+        var changedReads = 0
+        let changedDependencies = CloudKitStaffSetupDependencies(
+            stamp: changedOriginal.stamp,
+            account: {
+                changedReads += 1
+                changed.stamp = nil
+                throw CompanyCloudKitAccountVerificationSuperseded()
+            },
+            request: changedOriginal.request, store: changedOriginal.store,
+            remote: changedOriginal.remote, now: changedOriginal.now)
+        let changedModel = CloudKitStaffSetupController(dependencies: changedDependencies)
+        await changedModel.refresh()
+        #expect(changedReads == 1)
+        #expect(changedModel.error == .changed)
+        #expect(changedModel.context == nil)
+        #expect(changed.mutations.isEmpty)
+
+        let repeated = try Fixture()
+        let repeatedOriginal = repeated.dependencies
+        var repeatedReads = 0
+        let repeatedDependencies = CloudKitStaffSetupDependencies(
+            stamp: repeatedOriginal.stamp,
+            account: {
+                repeatedReads += 1
+                throw CompanyCloudKitAccountVerificationSuperseded()
+            },
+            request: repeatedOriginal.request, store: repeatedOriginal.store,
+            remote: repeatedOriginal.remote, now: repeatedOriginal.now)
+        let repeatedModel = CloudKitStaffSetupController(dependencies: repeatedDependencies)
+        await repeatedModel.refresh()
+        #expect(repeatedReads == 2)
+        #expect(repeatedModel.error == .unavailable)
+        #expect(repeatedModel.context == nil)
+        #expect(repeated.mutations.isEmpty)
+    }
+
     @Test func privateInvitationRecordsOriginalURLAndRecoversLostAppleReply() async throws {
         let fixture = try Fixture(owner: true, state: "approved"), model = await fixture.model(); fixture.failAppleReply = true
         await model.invite(fixture.base.shareID, confirmed: true)
