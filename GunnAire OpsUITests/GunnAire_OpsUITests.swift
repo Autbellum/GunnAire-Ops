@@ -5174,7 +5174,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         for _ in 0..<6 where !sendEstimate.exists || !sendEstimate.isHittable { app.swipeUp() }
         XCTAssertTrue(waitForHittable(sendEstimate))
         XCTAssertTrue(sendEstimate.isEnabled)
-        XCTAssertEqual(sendEstimate.label, "Prepare Estimate Email Draft")
+        XCTAssertEqual(sendEstimate.label, "Send Estimate by Email")
         let quickBooksSend = app.buttons["SendEstimateQuickBooks-A1000000-0000-4000-8000-000000000016"]
         XCTAssertTrue(quickBooksSend.exists, "Saved estimates must show the QuickBooks send route even when disconnected.")
         XCTAssertFalse(quickBooksSend.isEnabled, "A disconnected account cannot send through QuickBooks.")
@@ -5183,6 +5183,73 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(quickBooksIssue.label.contains("Connect QuickBooks in Settings"))
         sendEstimate.tap()
         assertEstimateMailDraft(app)
+        app.buttons["MailSendButton"].tap()
+        let status = app.staticTexts["MailComposeStatus"]
+        XCTAssertTrue(status.waitForExistence(timeout: 4), "A rejected fixture send must leave the estimate and PDF available for correction.")
+        XCTAssertTrue(app.navigationBars["Send Estimate"].exists)
+        XCTAssertEqual(app.textFields["MailComposeTo"].value as? String, "office@example.com")
+        XCTAssertTrue(app.buttons["MailSendButton"].isEnabled)
+        XCTAssertFalse(app.staticTexts["Message sent."].exists)
+    }
+
+    @MainActor
+    func testUnconfirmedEstimateSendReopensOriginalLockedDraft() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-appStoreScreenshotFixtures", "-uiTestSeedCollectibleJob", "-uiTestSeedPendingEstimate",
+            "-uiTestForceQuickBooksDisconnected", "-uiTestSeedMailInbox", "-uiTestMailUnconfirmedSend"]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+        revealSidebarDestination("Estimates", in: app).tap()
+        let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Blue Ridge Dental")).firstMatch
+        for _ in 0..<14 where !row.exists || !row.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(row)); row.tap()
+        let send = app.buttons["SendEstimate-A1000000-0000-4000-8000-000000000016"]
+        for _ in 0..<6 where !send.exists || !send.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(send)); send.tap()
+        assertEstimateMailDraft(app)
+        app.buttons["MailSendButton"].tap()
+        let status = app.staticTexts["MailComposeStatus"]
+        XCTAssertTrue(status.waitForExistence(timeout: 4))
+        XCTAssertTrue(status.label.contains("Check Sent in Gmail"))
+        XCTAssertFalse(app.buttons["MailSendButton"].isEnabled)
+        app.navigationBars["Send Estimate"].buttons["Close"].tap()
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 8))
+        revealSidebarDestination("Estimates", in: app).tap()
+        for _ in 0..<14 where !row.exists || !row.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(row)); row.tap()
+        for _ in 0..<6 where !send.exists || !send.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(send)); send.tap()
+        XCTAssertTrue(app.navigationBars["Send Estimate"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["MailComposeStatus"].waitForExistence(timeout: 4))
+        XCTAssertFalse(app.buttons["MailSendButton"].isEnabled, "An uncertain first attempt cannot become a fresh send.")
+        XCTAssertEqual(app.textFields["MailComposeTo"].value as? String, "office@example.com")
+    }
+
+    @MainActor
+    func testEstimateMailOriginSwitchHidesRecipientAndPDF() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-appStoreScreenshotFixtures", "-uiTestSeedCollectibleJob", "-uiTestSeedPendingEstimate",
+            "-uiTestForceQuickBooksDisconnected", "-uiTestSeedMailInbox", "-uiTestMailOriginSwitch"]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+        revealSidebarDestination("Estimates", in: app).tap()
+        let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Blue Ridge Dental")).firstMatch
+        for _ in 0..<14 where !row.exists || !row.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(row)); row.tap()
+        let send = app.buttons["SendEstimate-A1000000-0000-4000-8000-000000000016"]
+        for _ in 0..<6 where !send.exists || !send.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(send)); send.tap()
+        let alert = app.alerts["Estimate Email Needs Attention"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 8))
+        XCTAssertTrue(alert.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "signed-in account changed")).firstMatch.exists)
+        XCTAssertFalse(app.textFields["MailComposeTo"].exists)
+        XCTAssertFalse(app.navigationBars["Send Estimate"].exists)
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label ENDSWITH %@", ".pdf")).firstMatch.exists)
+        alert.buttons["OK"].tap()
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 8))
+        XCTAssertFalse(app.textFields["MailComposeTo"].exists)
     }
 
     @MainActor
@@ -5255,7 +5322,7 @@ final class GunnAire_OpsUITests: XCTestCase {
 
     @MainActor
     private func assertEstimateMailDraft(_ app: XCUIApplication) {
-        let composeAppeared = app.navigationBars["Compose"].waitForExistence(timeout: 8)
+        let composeAppeared = app.navigationBars["Send Estimate"].waitForExistence(timeout: 8)
         if !composeAppeared { retainNavigationFailure(app, name: "Estimate email draft did not open") }
         XCTAssertTrue(composeAppeared)
         let recipient = app.textFields["MailComposeTo"]
@@ -5271,9 +5338,11 @@ final class GunnAire_OpsUITests: XCTestCase {
         ))
         XCTAssertTrue(estimatePDFs.firstMatch.waitForExistence(timeout: 4))
         XCTAssertEqual(estimatePDFs.count, 1, "Attach the saved estimate PDF exactly once.")
+        XCTAssertTrue(app.staticTexts["EstimateMailReviewNote"].exists)
         let draftStatus = app.staticTexts["MailDraftSaveStatus"]
         XCTAssertTrue(draftStatus.waitForExistence(timeout: 4))
         XCTAssertTrue(app.buttons["MailSendButton"].isEnabled)
+        XCTAssertEqual(app.buttons["MailSendButton"].label, "Send Estimate")
         XCTAssertFalse(app.staticTexts["MailComposeStatus"].exists, "Opening a draft must not attempt transmission.")
         XCTAssertFalse(app.staticTexts["Message sent."].exists)
     }
