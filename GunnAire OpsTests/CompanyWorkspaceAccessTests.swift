@@ -7,6 +7,7 @@ import StoreKit
 @testable import GunnAire_Ops
 
 @MainActor
+@Suite(.serialized)
 struct CompanyWorkspaceAccessTests {
     private actor AccountResolutionProbe {
         private var pending: [Int: CheckedContinuation<CompanyCloudKitAccount, Error>] = [:]
@@ -658,11 +659,6 @@ struct CompanyWorkspaceAccessTests {
     @Test func cloudKitTimeoutDoesNotWaitForAnOperationThatIgnoresCancellation() async throws {
         let gate = SuspendedCloudKitCall()
         let (started, signal) = AsyncStream<Void>.makeStream()
-        let failsafe = Task.detached {
-            do { try await Task.sleep(for: .seconds(10)) }
-            catch { return }
-            gate.release()
-        }
         let work = Task { () -> Error? in
             do {
                 _ = try await withCloudKitTimeout(seconds: 0.05) {
@@ -673,14 +669,22 @@ struct CompanyWorkspaceAccessTests {
                 return error
             }
         }
+        // A hung timeout must still end the test. Canceling the caller settles
+        // the timeout race without releasing the cancellation-ignoring operation.
+        // Releasing it here could make a correct timeout look late if the test
+        // resumes after the watchdog under heavy parallel-suite load.
+        let failsafe = Task.detached {
+            do { try await Task.sleep(for: .seconds(60)) }
+            catch { return }
+            work.cancel()
+        }
         for await _ in started { break }
         let error = await work.value
         let operationWasReleased = gate.hasReleased
         gate.release()
         failsafe.cancel()
         #expect(error is CompanyCloudKitTimeout)
-        // Completion must precede releasing the operation; this checks the
-        // cancellation-ignoring failure without a narrow wall-clock budget.
+        // The operation was still held when the timeout completed.
         #expect(!operationWasReleased)
     }
 
