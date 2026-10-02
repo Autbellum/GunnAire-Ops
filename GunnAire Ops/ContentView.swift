@@ -4364,6 +4364,9 @@ struct AddServiceCallView: View {
     
     @State private var callType: ServiceCallType = .service
     @State private var jobSaveMessage: String?
+    @State private var savedCall: ServiceCall?
+    @State private var showingSaveAcknowledgement = false
+    @State private var calendarSaveMessage = ""
     @State private var dispatchUrgency: ServiceRequestUrgency = .normal
     @State private var eventTitle = ""
     @State private var customer: Customer?
@@ -4888,7 +4891,7 @@ struct AddServiceCallView: View {
                 }
                 Toggle("Open Documentation After Save", isOn: $openDocumentationAfterSave)
             }
-            .disabled(!canManageDispatch)
+            .disabled(!canManageDispatch || savedCall != nil)
             .scrollContentBackground(.hidden)
             .background(Color.primaryBlack)
             .navigationTitle("New Service Call")
@@ -4901,7 +4904,7 @@ struct AddServiceCallView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add") {
                         addCall()
-                    }.disabled(!canSaveCall)
+                    }.disabled(!canSaveCall || savedCall != nil)
                     .tint(Color.brandGold)
                 }
             }
@@ -4910,6 +4913,11 @@ struct AddServiceCallView: View {
         .alert("Job not saved", isPresented: Binding(get: { jobSaveMessage != nil }, set: { if !$0 { jobSaveMessage = nil } })) {
             Button("Keep Editing", role: .cancel) { jobSaveMessage = nil }
         } message: { Text(jobSaveMessage ?? "Keep this form open and try Save again.") }
+        .alert("Appointment saved", isPresented: $showingSaveAcknowledgement) {
+            Button("View Schedule") { finishSavedCall() }
+        } message: {
+            Text(calendarSaveMessage)
+        }
         .sheet(isPresented: $showingEquipmentNameplateCapture) {
             EquipmentNameplateCaptureSheet { draft in
                 applyEquipmentNameplateDraft(draft)
@@ -5028,13 +5036,10 @@ struct AddServiceCallView: View {
             jobSaveMessage = (error as? JobBillingDispatchError)?.localizedDescription ?? JobBillingDispatchError.save.localizedDescription
             return
         }
+        savedCall = call
+        calendarSaveMessage = "Saved on this device. Google Calendar publication is pending until the event and its 30-minute reminder are verified. View Schedule for the current status and Sync Google if it needs attention."
+        showingSaveAcknowledgement = true
         publishToGoogleCalendar(call)
-        dismiss()
-        if openDocumentationAfterSave {
-            DispatchQueue.main.async {
-                onCreated?(call)
-            }
-        }
     }
 
     private func applyEquipmentNameplateDraft(_ draft: EquipmentNameplateDraft) {
@@ -5127,7 +5132,26 @@ struct AddServiceCallView: View {
             modelContext: modelContext,
             signedInEmail: signedInEmail,
             isAdminUser: isAdminUser
-        )
+        ) { result in
+            guard savedCall?.id == call.id else { return }
+            switch result {
+            case .success(let message):
+                calendarSaveMessage = message
+            case .failure(let error):
+                calendarSaveMessage = "Saved on this device, but Google Calendar has not confirmed this appointment. \(error.localizedDescription) View Schedule for the current status and use Sync Google to retry."
+            }
+        }
+    }
+
+    private func finishSavedCall() {
+        guard let call = savedCall else { return }
+        savedCall = nil
+        dismiss()
+        if openDocumentationAfterSave {
+            DispatchQueue.main.async {
+                onCreated?(call)
+            }
+        }
     }
 
     private func resetNewCustomerFields() {
