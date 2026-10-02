@@ -46,6 +46,32 @@ intentionally blocks such rows pending manual reconciliation. Drain older PDF
 writers before enabling the new reservation route, because older code does
 not enforce the cross-revision fence.
 
+The operator can run the 0124 data preflight against a **locally accessible
+copy of the independently retained, encrypted off-host artifact**. Record the
+artifact ID from the original backup manifest before transfer, then use a new
+disposable directory under the system temporary root:
+
+```sh
+python3 -m Backend.release_data_preflight \
+  --backup /absolute/path/to/off-host-backup-copy \
+  --scratch /tmp/gunnaire-0124-preflight-unique \
+  --expected-artifact-id 0123456789abcdef
+```
+
+The command rejects stale (>24 hours), incomplete, tampered or mismatched
+database-plus-storage artifacts; verifies a full non-overwriting restore; and
+runs only the new estimate-job and PDF-reservation schema migrations on the
+restored SQLite copy. It reports the measured restore duration and requires
+`quick_check`, `foreign_key_check`, expected
+keys/indexes, no preexisting conflicting PDF revisions, and an exact stored
+file for every database reservation marked artifact-ready. The original backup
+is verified again afterward. It neither accesses Render nor proves where the
+copy was held: retain separate off-host custody evidence, the live deployment
+SHA/ID, writer-drain evidence, and approved provider acceptance. A
+`copy_verified` result is not production go-live approval. Preserve the
+disposable directory as failure evidence until reviewed; remove it through
+normal operator cleanup after recording the result.
+
 Only after backend promotion and a verified compatible route may a new native
 estimate build use `estimateQueueVersion: 1`. Check authenticated readiness,
 one synthetic or approved sandbox exact-proposal enqueue/status/recovery,
