@@ -5225,6 +5225,35 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testCurrentJobEstimateShowsQuickBooksSendAndPublicationBlocker() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin", "-uiTestSeedCollectibleJob",
+            "-uiTestSeedPendingEstimate", "-uiTestForceQuickBooksConnected"]
+        app.launch()
+
+        revealSidebarDestination("Schedule & Jobs", in: app).tap()
+        let documentation = app.buttons["OpenDocumentation-A1000000-0000-4000-8000-000000000002"]
+        for _ in 0..<6 where !documentation.exists || !documentation.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(documentation))
+        documentation.tap()
+        let stagePicker = app.segmentedControls["JobDocumentationStagePicker"]
+        XCTAssertTrue(stagePicker.waitForExistence(timeout: 3))
+        stagePicker.buttons["Billing"].tap()
+
+        let send = app.buttons["SendEstimateQuickBooks-A1000000-0000-4000-8000-000000000016"]
+        for _ in 0..<10 where !send.exists || !send.isHittable { app.swipeUp() }
+        XCTAssertTrue(send.exists, "The job estimate must expose its QuickBooks send action directly.")
+        XCTAssertFalse(send.isEnabled, "A connection cannot send an estimate before its QuickBooks identity is confirmed.")
+        let issue = app.staticTexts["SendEstimateQuickBooksIssue-A1000000-0000-4000-8000-000000000016"]
+        XCTAssertTrue(issue.exists)
+        XCTAssertTrue(issue.label.contains("Sync Saved Estimate"))
+        XCTAssertTrue(app.buttons["SyncSavedEstimate-A1000000-0000-4000-8000-000000000016"].exists,
+                      "The same job card must offer company-verified publication for an unsynced estimate.")
+        XCTAssertFalse(app.staticTexts["Message sent."].exists)
+    }
+
+    @MainActor
     private func assertEstimateMailDraft(_ app: XCUIApplication) {
         let composeAppeared = app.navigationBars["Compose"].waitForExistence(timeout: 8)
         if !composeAppeared { retainNavigationFailure(app, name: "Estimate email draft did not open") }
@@ -10487,7 +10516,7 @@ final class GunnAire_OpsUITests: XCTestCase {
             "App window did not finish rotating for screenshot \(name)"
         )
         afterLaunch(app)
-        refreshPersistentSidebarIfNeeded(app, screenshotName: name)
+        settlePersistentSidebarForScreenshot(app, screenshotName: name)
         waitForAppStoreScreenshotSurfaceToSettle(app, screenshotName: name)
 
         let accountIdentity = app.staticTexts["SidebarAccountIdentity"]
@@ -10518,15 +10547,14 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
-    private func refreshPersistentSidebarIfNeeded(
+    private func settlePersistentSidebarForScreenshot(
         _ app: XCUIApplication,
         screenshotName: String
     ) {
-        // On iPad, a rapid fixture relaunch can occasionally leave the
-        // system-owned split-view column in an intermediate clipping mask
-        // even though the requested route is ready. Close and reopen the
-        // persistent sidebar through its native control so every retained
-        // image reflects the normal settled layout.
+        // Rapid fixture relaunches can leave iPadOS's split-view sidebar in
+        // an incomplete clipping transition even when its accessibility tree
+        // says it is ready. Capture the unobscured detail surface after the
+        // native sidebar closes; production sidebar behavior is unchanged.
         let accountIdentity = app.staticTexts["SidebarAccountIdentity"]
         guard accountIdentity.exists, accountIdentity.isHittable else { return }
 
@@ -10535,15 +10563,14 @@ final class GunnAire_OpsUITests: XCTestCase {
         ).firstMatch
         guard sidebarButton.waitForExistence(timeout: 2) else { return }
         sidebarButton.tap()
-
-        let reopenedSidebarButton = app.buttons.matching(
-            NSPredicate(format: "label CONTAINS[c] %@", "sidebar")
-        ).firstMatch
-        XCTAssertTrue(reopenedSidebarButton.waitForExistence(timeout: 2))
-        reopenedSidebarButton.tap()
-        XCTAssertTrue(
-            accountIdentity.waitForExistence(timeout: 3) && accountIdentity.isHittable,
-            "Persistent iPad sidebar did not reopen for \(screenshotName)"
+        let sidebarClosed = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in !accountIdentity.isHittable },
+            object: nil
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [sidebarClosed], timeout: 5),
+            .completed,
+            "Persistent iPad sidebar did not close for \(screenshotName)"
         )
     }
 

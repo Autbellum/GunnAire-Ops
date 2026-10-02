@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "sourceVersion": "1.0",
-  "sourceBuild": "2026100120",
+  "sourceBuild": "2026100121",
   "reviewedAt": "2026-10-01",
   "captureEvidence": {
-    "iPad-13-inch": "GunnAire Ops 1.0 (2026100120 iPad Screenshots).xcresult",
-    "iPhone-6.9-inch": "GunnAire Ops 1.0 (2026100120 iPhone Screenshots).xcresult"
+    "iPad-13-inch": "GunnAire Ops 1.0 (2026100121 iPad Screenshots settled).xcresult",
+    "iPhone-6.9-inch": "GunnAire Ops 1.0 (2026100121 iPhone Screenshots).xcresult"
   },
   "sets": {
     "iPad-13-inch": {
@@ -14,27 +14,27 @@
       "files": [
         {
           "name": "01-command-center.png",
-          "sha256": "146f93451984ac5c66414422b0e5d7601cfcf828dc8e8d2b1c73a39ae2e25082"
+          "sha256": "93cb543641e1b38183394931b853a5ab2787473fdcf00f79332bd0de2276ed91"
         },
         {
           "name": "02-schedule.png",
-          "sha256": "7b87e38c24ca45eb1990a1b7a331d347482a131183032630ee4bf7aebd90e403"
+          "sha256": "256ff8f12c77c8fdc4d921e700d09c4d25ab16093df68db44cd5601de8ff764a"
         },
         {
           "name": "03-customer-systems.png",
-          "sha256": "a8d81a52766613b68953d52f85cd306ea1a354555c32349755a94a676bf42d7c"
+          "sha256": "bbfb8ef0b350a8c824f231f2408492b56738883ced8ab8d00e91cde835878afa"
         },
         {
           "name": "04-job-billing.png",
-          "sha256": "dc87c682feff170cbb19ace2a0088ea856a25f651dd78dddd4dc59b63ce6b820"
+          "sha256": "d5df0286ac72c9b1a54adf72bd20aa17a672bdbf264af2dc146d9ece11f980b7"
         },
         {
           "name": "05-field-collection.png",
-          "sha256": "4e375573cc0a63e232990745fb41a2f1828ad1380836be62e73bf2bda29b85c1"
+          "sha256": "fd2f683393caae56fdded91ebd48d5e14f9572da4ac08671f587919c43657a77"
         },
         {
           "name": "06-quickbooks-sales.png",
-          "sha256": "15055acdf740d2c3987e448ea5ec097a18f87a68346f524dfc11da3942bec239"
+          "sha256": "779469ce9502e248ec2e4decdc86cc269b2c514b6aab55ff97eeb4ee9fc4c791"
         }
       ]
     },
