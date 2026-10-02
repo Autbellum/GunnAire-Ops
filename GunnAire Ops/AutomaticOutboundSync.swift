@@ -311,6 +311,7 @@ final class AutomaticOutboundSync {
 
     private var pending: [DocumentKey] = []
     private var preparations: [DocumentKey: SharedBillingPreparation] = [:]
+    private var firstSavePreparedKeys: Set<DocumentKey> = []
     private var explicitReviewKeys: Set<DocumentKey> = []
     private var deferredUntil: [DocumentKey: Date] = [:]
     private var proofChecksInFlight: Set<DocumentKey> = []
@@ -363,6 +364,18 @@ final class AutomaticOutboundSync {
         return deferred == Date.distantFuture ? .enqueue : .ignore
     }
 
+    nonisolated static func firstSaveProofWakeDisposition(_ deferred: Date?,
+        isEstimate: Bool, hasPreparedCapture: Bool, sameGeneration: Bool,
+        sameContainer: Bool, proofMatches: Bool, checkingProof: Bool) -> ProofWakeDisposition {
+        guard !isEstimate || hasPreparedCapture else { return .ignore }
+        return proofWakeDisposition(deferred, sameGeneration: sameGeneration,
+            sameContainer: sameContainer, proofMatches: proofMatches, checkingProof: checkingProof)
+    }
+
+    nonisolated static func mayStageFirstSave(existingKey: Bool, retainedCount: Int) -> Bool {
+        existingKey || retainedCount < 16
+    }
+
     static func requeueAfterProofCheck(_ key: DocumentKey, pending: inout [DocumentKey],
                                        handoffs: inout Set<DocumentKey>,
                                        explicitReviews: Set<DocumentKey>) -> Bool {
@@ -376,11 +389,15 @@ final class AutomaticOutboundSync {
                                             context: ModelContext, generation: UUID,
                                             stamp: CompanyWorkspaceOperationStamp?) {
         let key: DocumentKey = document.label == "Invoice" ? .invoice(document.id) : .estimate(document.id)
+        // A first-save estimate must not wake a deferred fallback that would
+        // recapture today's Items instead of the Items pinned at the save tap.
         let sameGeneration = queueGeneration == generation && queueStamp == stamp &&
             queueRealmID == QuickBooksDataAPI.shared.realmID
         let sameContainer = queueContainer == ObjectIdentifier(context.container) && isAuthorized(context)
-        switch Self.proofWakeDisposition(deferredUntil[key], sameGeneration: sameGeneration,
-            sameContainer: sameContainer, proofMatches: true,
+        switch Self.firstSaveProofWakeDisposition(deferredUntil[key],
+            isEstimate: document.label == "Estimate",
+            hasPreparedCapture: firstSavePreparedKeys.contains(key) && preparations[key] != nil,
+            sameGeneration: sameGeneration, sameContainer: sameContainer, proofMatches: true,
             checkingProof: proofChecksInFlight.contains(key)) {
         case .ignore:
             return
@@ -528,6 +545,38 @@ final class AutomaticOutboundSync {
         case .estimate(let value): modelID = value.persistentModelID
         }
         return context.insertedModelsArray.contains { $0.persistentModelID == modelID }
+    }
+
+    /// Pin the first-save preparation before company binding can suspend and
+    /// wake a previously deferred recovery. The saved estimate and its loaded
+    /// selected Items must still be the exact action-time objects; an already
+    /// running recovery cannot silently take over this new save.
+    func stageNewlySavedEstimate(_ document: QuickBooksBillingDocument, context: ModelContext,
+                                 selectedItemCapture: QuickBooksSelectedItemCapture) throws {
+        guard case .estimate = document, isAuthorized(context) else {
+            throw BillingPublicationError.accessRequired
+        }
+        adopt(context)
+        let key = DocumentKey.estimate(document.id)
+        guard currentKey != key, !pending.contains(key) else {
+            throw BillingPublicationError.reviewRequired
+        }
+        // Retain every older staged estimate. If the bounded in-memory queue is
+        // full, the new saved estimate remains available for explicit review.
+        guard Self.mayStageFirstSave(existingKey: preparations[key] != nil,
+                                     retainedCount: preparations.count) else {
+            throw BillingPublicationError.reviewRequired
+        }
+        let generation = queueGeneration
+        let stamp = queueStamp
+        let preparation = try SharedBillingPreparation(document: document, context: context,
+            isCurrent: { [weak self] in
+                self?.queueGeneration == generation && self?.isAuthorized(context) == true &&
+                    CompanyWorkspaceAccessController.shared.operationStamp == stamp &&
+                    self?.queueRealmID == QuickBooksDataAPI.shared.realmID
+            }, selectedItemCapture: selectedItemCapture)
+        preparations[key] = preparation
+        firstSavePreparedKeys.insert(key)
     }
 
     @discardableResult
@@ -957,6 +1006,7 @@ final class AutomaticOutboundSync {
             attachmentDeferredUntil.removeAll()
             pending.removeAll()
             preparations.removeAll()
+            firstSavePreparedKeys.removeAll()
             explicitReviewKeys.removeAll()
             deferredUntil.removeAll()
             proofChecksInFlight.removeAll()
@@ -1031,6 +1081,7 @@ final class AutomaticOutboundSync {
                 }
                 guard let document = try document(for: next, context: context) else {
                     preparations.removeValue(forKey: next)
+                    firstSavePreparedKeys.remove(next)
                     let callbacks = completions.removeValue(forKey: next) ?? []
                     callbacks.forEach { $0(.failure(QuickBooksBillingWorkflowError.changed)) }
                     currentKey = nil
@@ -1076,6 +1127,7 @@ final class AutomaticOutboundSync {
                     explicitReviewKeys.remove(next)
                 }
                 let capturedPreparation = preparations.removeValue(forKey: next)
+                firstSavePreparedKeys.remove(next)
                 let result = try await publish(document, context: context,
                     preparation: capturedPreparation, explicitReview: explicitReview,
                     allowNewMarker: !explicitReview && hasNewMarkerForCurrentDocument)

@@ -103,6 +103,23 @@ import Testing
         #expect(f.calls.isEmpty && f.writes == 0 && f.journals.isEmpty)
     }
 
+    @Test func stagedFirstSaveCannotQueueAfterBindingSuspendsAndAuthorityOrItemChanges() async throws {
+        for revokeAccess in [false, true] {
+            let f = try BillingNativeWorkflowTests.Fixture()
+            let document = QuickBooksBillingDocument.estimate(f.app.estimate)
+            let capture = try QuickBooksSelectedItemCapture(document: document,
+                items: [f.app.item], context: f.app.context)
+            let staged = try prepare(f, estimate: true, beforeDiscovery: {
+                if revokeAccess { f.app.authorized = false }
+                else { f.app.item.unitPrice += 1 }
+            }, selectedItemCapture: capture)
+            await #expect(throws: (any Error).self) {
+                try await staged.makeWorkflow(lifecycle: f.app.owner)
+            }
+            #expect(f.writes == 0 && f.journals.isEmpty && f.app.owner.activeID == nil)
+        }
+    }
+
     @Test func loadedEstimateCaptureQueuesOriginalWithoutADirectProviderWrite() async throws {
         let f = try BillingNativeWorkflowTests.Fixture()
         let document = QuickBooksBillingDocument.estimate(f.app.estimate)

@@ -10450,6 +10450,16 @@ GunnAire
                                                  publishWhenAvailable: Bool,
                                                  hadWriteAheadMarker: Bool = false,
                                                  selectedItemCapture: QuickBooksSelectedItemCapture? = nil) {
+        if case .estimate = document, publishWhenAvailable, canAttemptSharedBilling,
+           let selectedItemCapture {
+            do {
+                try AutomaticOutboundSync.shared.stageNewlySavedEstimate(document, context: modelContext,
+                    selectedItemCapture: selectedItemCapture)
+            } catch {
+                actionMessage = "Estimate is saved locally. Automatic QuickBooks preparation stopped: \(error.localizedDescription) Review the saved estimate before syncing."
+                return
+            }
+        }
         Task { @MainActor in
             do {
                 let bound = try await AutomaticOutboundSync.shared.recordNewlySaved(document, context: modelContext)
