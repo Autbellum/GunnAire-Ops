@@ -477,10 +477,16 @@ enum GoogleCalendarScheduleSync {
                 ? "Google lists this as an all-day event, but GunnAire has a specific appointment time or arrival window. A time in notes does not make the Google event timed; review it in Google Calendar."
                 : "Google lists this as an all-day event. A time in notes does not make it a timed appointment; review the event time in Google Calendar.")
         }
-        if remote.reminders?.useDefault == false && remote.reminders?.overrides?.isEmpty != false {
-            warnings.append("Google event reminders are turned off. Turn one on in Google Calendar if you want an event alert.")
-        }
+        if let warning = appointmentAlertGuidance(for: remote) { warnings.append(warning) }
         return warnings.isEmpty ? nil : warnings.joined(separator: " ")
+    }
+
+    private static func appointmentAlertGuidance(for event: GoogleCalendarEvent) -> String? {
+        guard !hasExplicitAppointmentPopup(event) else { return nil }
+        if event.reminders?.useDefault == false && event.reminders?.overrides?.isEmpty != false {
+            return "Google event reminders are turned off. The 30-minute popup alert is not confirmed. Turn one on in Google Calendar if you want an event alert."
+        }
+        return "The Google event is linked, but its 30-minute popup alert is not confirmed. Check this event's reminders and calendar defaults in Google Calendar."
     }
 
     private static func scheduleMismatchGuidance(for remote: GoogleCalendarEvent, call: ServiceCall) -> String {
@@ -1292,10 +1298,13 @@ enum GoogleCalendarScheduleSync {
         for call in confirmed.prefix(25) {
             do {
                 try workflow.focus(on: [call])
-                let exists = try await verifyConfirmedLink(call: call, calendars: confirmationCalendars,
+                let remote = try await verifyConfirmedLink(call: call, calendars: confirmationCalendars,
                                                            workflow: workflow)
                 checked += 1
-                if !exists {
+                if let remote, let warning = appointmentAlertGuidance(for: remote) {
+                    reviewErrors.append(warning)
+                }
+                if remote == nil {
                     guard let originalID = normalizedOptional(call.googleEventID) else {
                         throw GoogleCalendarWorkflowError.identity
                     }
@@ -1395,7 +1404,8 @@ enum GoogleCalendarScheduleSync {
                 do {
                     if call.status == .cancelled { _ = try await cancel(call: call, workflow: workflow) }
                     else {
-                        _ = try await publish(call: call, workflow: workflow)
+                        _ = try await publish(call: call, workflow: workflow,
+                            reminderWarning: { reviewErrors.append($0) })
                         if staffInvitationsNeedAttention(for: call, connectedGoogleEmail: workflow.auth.signedInEmail,
                                                          workspaceEmail: workflow.signedInEmail) {
                             reviewErrors.append(GoogleCalendarStaffDeliveryError.staffEmail.localizedDescription)
@@ -1501,7 +1511,7 @@ enum GoogleCalendarScheduleSync {
     /// search across accessible calendars. Neither result authorizes creation;
     /// Check Google Link retains the operator's guarded repair decision.
     private static func verifyConfirmedLink(call: ServiceCall, calendars: [GoogleCalendar],
-                                            workflow: GoogleCalendarWorkflow) async throws -> Bool {
+                                            workflow: GoogleCalendarWorkflow) async throws -> GoogleCalendarEvent? {
         try requireCall(call, workflow: workflow)
         guard let id = normalizedOptional(call.googleEventID),
               GoogleAuthManager.calendarPathComponent(id) != nil else {
@@ -1518,14 +1528,14 @@ enum GoogleCalendarScheduleSync {
             try requireCall(call, workflow: workflow)
             try await requireNoMovedEvent(id: id, originalCalendarID: calendar.id,
                                           calendars: calendars, workflow: workflow)
-            return false
+            return nil
         }
         try requireCall(call, workflow: workflow)
         try validateRemote(remote, id: id, call: call)
         guard remoteEventMatchesExactSchedule(call: call, remoteEvent: remote) else {
             throw GoogleCalendarWorkflowError.needsReview
         }
-        return true
+        return remote
     }
 
     static func deleteImmediately(call: ServiceCall, auth: GoogleAuthManager, modelContext: ModelContext,
@@ -1729,7 +1739,8 @@ enum GoogleCalendarScheduleSync {
         return value
     }
 
-    static func publish(call: ServiceCall, workflow: GoogleCalendarWorkflow) async throws -> String {
+    static func publish(call: ServiceCall, workflow: GoogleCalendarWorkflow,
+                        reminderWarning: ((String) -> Void)? = nil) async throws -> String {
         try requireCall(call, workflow: workflow)
         if !call.googleEventManagedByApp {
             guard isWriteBackRequested(call), canWriteBackImportedEvent(call) else {
@@ -1904,13 +1915,16 @@ enum GoogleCalendarScheduleSync {
             call.googleCalendarPendingAt = previousPending
             throw error
         }
+        let alert = appointmentAlertGuidance(for: delivered)
+        if let alert { reminderWarning?(alert) }
+        let alertSuffix = alert.map { " \($0)" } ?? ""
         if recipients == nil {
             markStaffInvitationReview(for: call, workflow: workflow)
-            return "Google event confirmed. Staff invitations need attention: assign every technician and crew member a unique valid calendar email, then use Sync Google."
+            return "Google event confirmed. Staff invitations need attention: assign every technician and crew member a unique valid calendar email, then use Sync Google.\(alertSuffix)"
         }
         clearStaffInvitationReview(for: call)
         clearCalendarCallLocallyEdited(call)
-        return "Schedule confirmed in Google Calendar. Assigned staff invitations, if any, use each recipient's Google Calendar notification settings; enable this calendar and alerts in your calendar app."
+        return "Schedule confirmed in Google Calendar. Assigned staff invitations, if any, use each recipient's Google Calendar notification settings; enable this calendar and alerts in your calendar app.\(alertSuffix)"
     }
 
     private static func hasExplicitAppointmentPopup(_ event: GoogleCalendarEvent) -> Bool {
