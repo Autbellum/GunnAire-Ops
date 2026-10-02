@@ -66,6 +66,12 @@ enum ScheduleGoogleLinkStatus {
         return (selectedDay + upcoming).filter { seen.insert($0.id).inserted }
     }
 
+    static func unlinkedReviewCount(selectedDay: [ServiceCall], upcoming: [ServiceCall]) -> Int {
+        verificationCalls(selectedDay: selectedDay, upcoming: upcoming).filter {
+            !$0.googleEventManagedByApp && needsUnlinkedReview($0)
+        }.count
+    }
+
     static func reconciledMissingIDs(existing: [UUID: String], verifiedNotFoundIDs: [UUID: String],
                                      visibleCalls: [ServiceCall]) -> [UUID: String] {
         var result = existing
@@ -162,6 +168,15 @@ struct ScheduleView: View {
         let sevenDaysAhead = calendar.date(byAdding: .day, value: 7, to: now) ?? now
         return callsForSignedInUser.filter { $0.scheduledDate >= now && $0.scheduledDate <= sevenDaysAhead }
             .sorted { $0.scheduledDate < $1.scheduledDate }
+    }
+
+    private var unlinkedGoogleReviewCount: Int {
+        ScheduleGoogleLinkStatus.unlinkedReviewCount(selectedDay: selectedDayCalls, upcoming: upcomingJobs)
+    }
+
+    private var unlinkedGoogleReviewTitle: String {
+        let count = unlinkedGoogleReviewCount
+        return "\(count) \(count == 1 ? "appointment needs" : "appointments need") Google publication review"
     }
 
     private var snapshotCalls: [ServiceCall] {
@@ -377,6 +392,19 @@ struct ScheduleView: View {
             NavigationStack(path: $navigationPath) {
                 List {
                     scheduleCardRow { snapshotSection }
+
+                    if canManageDispatch, unlinkedGoogleReviewCount > 0 {
+                        scheduleCardRow {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Label(unlinkedGoogleReviewTitle,
+                                      systemImage: "calendar.badge.exclamationmark")
+                                    .font(.subheadline.weight(.semibold))
+                                Text("Among the selected day and next seven days, these saved appointments have no confirmed Google event link. Sync Google will not create them. Open each appointment's Schedule card and choose Review Google publication. The review checks only calendars accessible to the connected Google account near the saved appointment time; an event may exist in another account or time slot.")
+                                    .font(.caption)
+                            }
+                            .accessibilityIdentifier("UnlinkedGoogleAppointmentsStatus")
+                        }
+                    }
 
                     if let message = syncMessage ?? googleAuth.calendarSyncMessage {
                         scheduleCardRow {
