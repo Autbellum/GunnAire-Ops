@@ -96,6 +96,24 @@ class EstimateJobTests(BillingFixture, unittest.TestCase):
             connection.execute("UPDATE auth_sessions SET revoked_at=? WHERE id=?", (backend.utc_now(), self.admin))
         self.assert_job_stops_for_review(queued["publication"]["id"])
 
+    def test_expired_session_never_posts(self):
+        queued = self.queue.enqueue(self.admin, self.estimate())
+        with backend.db() as connection:
+            connection.execute("UPDATE auth_sessions SET expires_at='2020-01-01T00:00:00+00:00' WHERE id=?", (self.admin,))
+        self.assert_job_stops_for_review(queued["publication"]["id"])
+
+    def test_removed_office_role_never_posts(self):
+        queued = self.queue.enqueue(self.admin, self.estimate())
+        with backend.db() as connection:
+            connection.execute("UPDATE users SET role='Standard' WHERE email=?", (self.email("Admin"),))
+        self.assert_job_stops_for_review(queued["publication"]["id"])
+
+    def test_changed_quickbooks_realm_never_posts(self):
+        queued = self.queue.enqueue(self.admin, self.estimate())
+        with backend.db() as connection:
+            connection.execute("UPDATE qbo_connections SET realm_id='other-realm' WHERE id=1")
+        self.assert_job_stops_for_review(queued["publication"]["id"])
+
     def test_changed_grant_never_posts(self):
         queued = self.queue.enqueue(self.admin, self.estimate())
         with backend.db() as connection:
