@@ -21,6 +21,7 @@ at the start of every turn; append to it rather than rewriting it.
 ## Claims
 
 
+
 ## Shared rules
 
 1. The project sets `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`. A helper reached
@@ -43,6 +44,8 @@ at the start of every turn; append to it rather than rewriting it.
    pins the old behavior and the new one.
 
 ## Status log
+
+- 2026-10-02 Codex QBO PR #48 estimate-job decode follow-up: The bounded backend acknowledgement for queued estimates now decodes in a cancellation-aware detached task, while the original workflow/session checks still surround transport. A malformed acknowledgement leaves the original journal at `queueRequested` and cannot fall back to direct QuickBooks creation. Signed iPad Pro 13-inch M5 `BillingNativeWorkflowTests` passed 25/25, zero failures/skips/expected (`/private/tmp/GunnAire-0122-qbo-native-omni-dd/Logs/Test/Test-GunnAire Ops-2026.10.02_01-43-35--0400.xcresult`); `generated/omni_runner.py` passed zero-warning simulator compile (`/private/tmp/gunnaire-qbo-job-decode-omni-r1.log`). The initial up-to-20 Item capture and legacy MainActor work remain release gates; this does not prove live delivery or change frozen 0122. Claim released.
 
 - 2026-10-02 Codex QBO PR #48 off-main follow-up: The queued-estimate path now double-reads normalized AppUser/Technician identities, selected Item revisions, catalog mapping ownership, and confirmed provider ownership in detached private SwiftData contexts. Exact child Item reads are capped at two; inventory account input is guarded. A saved-during-provider-write or unsaved in-context competing mapping prevents the local link. The full signed iPad Pro 13-inch M5 unit suite passed 2,973 logical tests / 3,054 executions, zero failures/skips/expected failures (`/private/tmp/GunnAire-0122-qbo-native-omni-dd/Logs/Test/Test-GunnAire Ops-2026.10.02_01-32-56--0400.xcresult`); `generated/omni_runner.py` passed zero-warning simulator compile (`/private/tmp/gunnaire-qbo-offmain-omni-r2.log`). This is a draft latency candidate: the initial up-to-20 selected-Item capture still fetches on MainActor, and legacy invoice/catalog/manual-review paths retain MainActor scans; the billing transport setup/response decode is also actor-isolated although URLSession transfer is asynchronous and nonisolated. Backend deployment, live QBO posting, physical-device closed-app delivery, merge, archive, and upload are not claimed. Claim released.
 

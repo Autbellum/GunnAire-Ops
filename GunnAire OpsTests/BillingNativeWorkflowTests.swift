@@ -16,6 +16,7 @@ import Testing
         var failReply = false
         var reserveOnly = false
         var queueUnavailable = false
+        var malformedQueueReply = false
         var queueJobMissing = false
         var backgroundJobState = "pending"
         var failJournal = false
@@ -41,7 +42,8 @@ import Testing
         func response() throws -> Data { try encoded(["publication": record!, "document": remote!]) }
 
         func queuedResponse() throws -> Data {
-            try encoded(["publication": record!, "background": ["publicationID": attempt.uuidString,
+            if malformedQueueReply { return Data("{}".utf8) }
+            return try encoded(["publication": record!, "background": ["publicationID": attempt.uuidString,
                 "state": record?["state"] as? String == "confirmed" ? "confirmed" : backgroundJobState,
                 "attempts": 0, "lastErrorCode": NSNull(), "updatedAt": "2026-09-07T12:00:00Z"]])
         }
@@ -188,6 +190,16 @@ import Testing
         let flow = try f.flow(estimate: true)
         await #expect(throws: BillingPublicationError.unavailable) { try await flow.execute() }
         #expect(f.writes == 0); #expect(f.app.estimate.quickBooksID == nil)
+        #expect(f.journals.values.first?.pending?.backgroundState == .queueRequested)
+        #expect(!f.calls.contains { $0.0 == "/api/billing-publications" && $0.1 == "POST" })
+        f.finish(flow)
+    }
+
+    @Test func malformedQueueAcknowledgmentRetainsOriginalWithoutDirectProviderWrite() async throws {
+        let f = try Fixture(); f.malformedQueueReply = true
+        let flow = try f.flow(estimate: true)
+        await #expect(throws: BillingPublicationError.invalidResponse) { try await flow.execute() }
+        #expect(f.writes == 0 && f.app.estimate.quickBooksID == nil)
         #expect(f.journals.values.first?.pending?.backgroundState == .queueRequested)
         #expect(!f.calls.contains { $0.0 == "/api/billing-publications" && $0.1 == "POST" })
         f.finish(flow)

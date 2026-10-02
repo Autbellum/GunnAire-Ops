@@ -1,6 +1,6 @@
 import Foundation
 
-enum BillingPublicationError: LocalizedError, Equatable {
+nonisolated enum BillingPublicationError: LocalizedError, Equatable {
     case unavailable, accessRequired, reviewRequired, invalidProposal, invalidResponse, savedDocumentRequired
 
     var errorDescription: String? {
@@ -16,8 +16,8 @@ enum BillingPublicationError: LocalizedError, Equatable {
 }
 
 nonisolated enum BillingPublicationDocumentKind: String, Codable, Sendable { case invoice = "Invoice", estimate = "Estimate" }
-enum BillingPublicationOperation: String, Codable { case create, update }
-enum BillingPublicationState: String, Codable { case reserved, sending, unknown, confirmed, cancelled }
+nonisolated enum BillingPublicationOperation: String, Codable, Sendable { case create, update }
+nonisolated enum BillingPublicationState: String, Codable, Sendable { case reserved, sending, unknown, confirmed, cancelled }
 
 nonisolated struct BillingDocumentScope: Codable, Equatable, Sendable {
     let companyID: UUID
@@ -133,7 +133,7 @@ struct BillingPublicationRequest: Codable {
     }
 }
 
-struct BillingPublicationRecord: Codable, Identifiable {
+nonisolated struct BillingPublicationRecord: Codable, Identifiable, Sendable {
     let id: UUID
     let companyID: UUID
     let realmID: String
@@ -210,12 +210,12 @@ struct BillingPublicationPage: Decodable {
     let nextCursor: String?
 }
 
-enum BillingEstimateJobState: String, Decodable {
+nonisolated enum BillingEstimateJobState: String, Decodable, Sendable {
     case pending, running, confirmed, review
 }
 
-struct BillingEstimateJobResponse: Decodable {
-    struct Background: Decodable {
+nonisolated struct BillingEstimateJobResponse: Decodable, Sendable {
+    nonisolated struct Background: Decodable, Sendable {
         let publicationID: UUID
         let state: BillingEstimateJobState
         let attempts: Int
@@ -224,6 +224,21 @@ struct BillingEstimateJobResponse: Decodable {
     }
     let publication: BillingPublicationRecord
     let background: Background
+
+    nonisolated static func decodeAsync(_ data: Data) async throws -> Self {
+        let decoder = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            return try JSONDecoder().decode(Self.self, from: data)
+        }
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            let value = try await decoder.value
+            try Task.checkCancellation()
+            return value
+        } onCancel: {
+            decoder.cancel()
+        }
+    }
 
     func validate(_ request: BillingPublicationRequest, expectedID: UUID? = nil) throws {
         try publication.validate(request.scope, customerID: request.localCustomerID)
@@ -328,6 +343,12 @@ struct BillingPublicationClient {
                     data = try await operation.performExternalMutation { try await transport(path, "POST", body) }
                 } else { data = try await transport(path, "GET", nil) }
                 try workflow.check()
+                if type == BillingEstimateJobResponse.self {
+                    guard let decoded = try await BillingEstimateJobResponse.decodeAsync(data) as? T else {
+                        throw BillingPublicationError.invalidResponse
+                    }
+                    return decoded
+                }
                 return try JSONDecoder().decode(type, from: data)
             }
         } catch {
