@@ -543,7 +543,10 @@ import UniformTypeIdentifiers
     static func captureManual(access: Access, url: URL, call: ServiceCall?, stage: String,
                               targets: [QBODocumentTarget], context: ModelContext,
                               store: QBODocumentCaptureStore? = nil, directory: URL? = nil,
-                              save: (ModelContext) throws -> Void = { try $0.save() }) async throws -> QBODocumentCapture {
+                              save: (ModelContext) throws -> Void = { try $0.save() },
+                              wakeArchive: @MainActor (ServiceDocumentAttachment, ModelContext) -> Void = {
+                                  AutomaticGoogleDriveArchive.shared.wakeAfterSave($0, context: $1)
+                              }) async throws -> QBODocumentCapture {
         try access.check()
         guard ["before", "after", "supporting"].contains(stage) else { throw QBODocumentError.invalid }
         let store = store ?? .device
@@ -625,6 +628,7 @@ import UniformTypeIdentifiers
             call.beforePhotoCount = before; call.afterPhotoCount = after; call.documentationStartedAt = started; call.documentationChecklist = checklist
             throw QBODocumentError.storage
         }
+        wakeArchive(attachment, context)
         return row
     }
 
