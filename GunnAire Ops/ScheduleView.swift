@@ -1791,6 +1791,12 @@ struct ScheduleView: View {
                 verifiedGoogleEventButton(for: call)
             } else if canManageDispatch, !call.googleEventManagedByApp,
                       call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                Button(checkingGoogleLinkID == call.id ? "Checking Google Event…" : "Check Google Event & Alerts") {
+                    checkGoogleLink(for: call)
+                }
+                .buttonStyle(.bordered)
+                .disabled(checkingGoogleLinkID != nil || repairingGoogleLinkID != nil)
+                .accessibilityIdentifier("CheckImportedGoogleEvent-\(call.id.uuidString)")
                 if let message = googleLinkCheckMessages[call.id] {
                     Text(message)
                         .font(.caption)
@@ -2168,7 +2174,9 @@ struct ScheduleView: View {
                     let linkDetail = verifiedGoogleEventLinks[call.id] == nil
                         ? " Google did not provide a direct web link for this event."
                         : " Use Open in Google Calendar to view it outside the app."
-                    reportGoogleLinkCheck("The original event is present for \(account). \(route).\(linkDetail) No new event was created.", for: call.id)
+                    let alertDetail = check.alertGuidance.map { " Alert check: \($0)" } ??
+                        " Google reminder settings may still need review; a linked event does not guarantee a device notification."
+                    reportGoogleLinkCheck("The original event is present for \(account). \(route).\(linkDetail) No new event was created.\(alertDetail)", for: call.id)
                 }
             case .failure(let error):
                 reportGoogleLinkCheck("Google link check needs review: \(error.localizedDescription) No event was created.", for: call.id)
