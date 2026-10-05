@@ -3713,6 +3713,31 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertEqual(app.state, .runningForeground)
     }
 
+    /// A job can arrive from CloudKit before its customer does
+    /// (`ServiceCall.customer` is an implicitly unwrapped relationship). The
+    /// schedule must stay usable and the job must open without ending the app.
+    @MainActor
+    func testScheduleOpensAJobWhoseCustomerIsStillSyncing() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob", "-uiTestDocumentationJobPending"]
+        app.launch()
+        revealSidebarDestination("Schedule & Jobs", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.state, .runningForeground, "Schedule ended the app while a job's customer was missing")
+        let job = app.buttons["OpenServiceCall-\(screenshotServiceCallID)"]
+        for _ in 0..<8 where !job.exists || !job.isHittable {
+            app.swipeUp()
+            XCTAssertEqual(app.state, .runningForeground, "Scrolling Schedule ended the app while a job's customer was missing")
+        }
+        let evidence = XCTAttachment(screenshot: app.screenshot())
+        evidence.name = "Schedule with a job whose customer is still syncing"
+        evidence.lifetime = .keepAlways; add(evidence)
+        XCTAssertTrue(waitForHittable(job)); job.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["ServiceCallCustomerSyncing"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.state, .runningForeground, "Opening the job ended the app while its customer was missing")
+    }
+
     @MainActor private func assertHVACSafetyCheckOpensAndKeepsAnAnswer(_ app: XCUIApplication) {
         let close = app.buttons["CloseFieldFormDraft"]
         XCTAssertTrue(close.waitForExistence(timeout: 5))
