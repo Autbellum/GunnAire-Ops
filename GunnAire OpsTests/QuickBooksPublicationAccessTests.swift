@@ -109,6 +109,46 @@ struct QuickBooksPublicationAccessTests {
             invoices: [fixture.invoice], estimates: [fixture.estimate]).isEmpty)
     }
 
+    @Test func automaticRecoveryWaitsForCustomersThenRediscoversOriginalDocuments() throws {
+        let waiting = Fixture()
+        let ready = Fixture()
+        let invoiceCustomer = try #require(waiting.invoice.customer)
+        let estimateCustomer = try #require(waiting.estimate.customer)
+        let invoiceID = waiting.invoice.id
+        let estimateID = waiting.estimate.id
+        let invoiceSnapshot = waiting.invoice.catalogSnapshotJSON
+        let estimateSnapshot = waiting.estimate.catalogSnapshotJSON
+        let invoiceStatus = waiting.invoice.quickBooksSyncStatus
+        let estimateStatus = waiting.estimate.status
+        waiting.invoice.customer = nil
+        waiting.estimate.customer = nil
+
+        func scan() -> [AutomaticOutboundSync.DocumentKey] {
+            AutomaticOutboundSync.pendingRecoveryKeys(
+                invoices: [waiting.invoice, ready.invoice],
+                estimates: [waiting.estimate, ready.estimate],
+                customers: [], includeCustomers: false)
+        }
+
+        #expect(scan() == [.estimate(ready.estimate.id), .invoice(ready.invoice.id)])
+        #expect(waiting.invoice.id == invoiceID)
+        #expect(waiting.estimate.id == estimateID)
+        #expect(waiting.invoice.catalogSnapshotJSON == invoiceSnapshot)
+        #expect(waiting.estimate.catalogSnapshotJSON == estimateSnapshot)
+        #expect(waiting.invoice.quickBooksSyncStatus == invoiceStatus)
+        #expect(waiting.estimate.status == estimateStatus)
+
+        ready.invoice.quickBooksSyncStatus = "synced"
+        ready.estimate.quickBooksID = "ready-estimate"
+        waiting.invoice.customer = invoiceCustomer
+        waiting.estimate.customer = estimateCustomer
+        #expect(scan() == [.estimate(estimateID), .invoice(invoiceID)])
+
+        waiting.invoice.quickBooksSyncStatus = "synced"
+        waiting.estimate.quickBooksID = "recovered-estimate"
+        #expect(scan().isEmpty)
+    }
+
     @Test func automaticRecoveryDiscoversApprovedSavedCatalogOnlyWithAdministratorAccess() {
         let fixture = Fixture()
         let pending = Item(name: "Offline approved line", unitPrice: 190)
