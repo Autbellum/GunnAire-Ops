@@ -1,5 +1,7 @@
 """Loopback-only HTTP fixture for authenticated billing artifact upload/read."""
 
+from contextlib import closing
+
 import base64
 import hashlib
 import json
@@ -42,7 +44,7 @@ class BillingPDFArtifactHTTPTests(unittest.TestCase):
             with mock.patch.multiple(backend, DB_PATH=database, STORAGE_ROOT=storage,
                                      PRIMARY_ADMIN_EMAIL="owner@gunnaire.com",
                                      CLOUDKIT_CONTAINER_ID="iCloud.com.gunnaire.businesssuite"):
-                with sqlite3.connect(database) as connection:
+                with closing(sqlite3.connect(database)) as connection, connection:
                     connection.executescript("""
                         CREATE TABLE company_identity(singleton INTEGER PRIMARY KEY, company_id TEXT NOT NULL);
                         CREATE TABLE cloudkit_workspace_bindings(container_id TEXT, environment TEXT,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import closing
 import base64
 import hashlib
 import hmac
@@ -178,7 +179,7 @@ class QuickBooksWebhookTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             database = root / "legacy.sqlite3"
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection, connection:
                 connection.execute("""CREATE TABLE qbo_webhook_events (
                     event_id TEXT PRIMARY KEY, realm_id TEXT NOT NULL, entity_type TEXT NOT NULL,
                     entity_id TEXT NOT NULL, operation TEXT NOT NULL, occurred_at TEXT NOT NULL,

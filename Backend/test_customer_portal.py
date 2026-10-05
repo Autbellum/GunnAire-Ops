@@ -8,7 +8,7 @@ import unittest
 import urllib.error
 import urllib.request
 import uuid
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
@@ -163,10 +163,11 @@ class CustomerPortalTests(unittest.TestCase):
                     return wrapped
                 return cursor
 
-        def connection() -> sqlite3.Connection:
-            result = sqlite3.connect(backend.DB_PATH, factory=PausingConnection)
-            result.row_factory = sqlite3.Row
-            return result
+        @contextmanager
+        def connection() -> Iterator[sqlite3.Connection]:
+            with closing(sqlite3.connect(backend.DB_PATH, factory=PausingConnection)) as result, result:
+                result.row_factory = sqlite3.Row
+                yield result
 
         with mock.patch.object(backend, "db", side_effect=connection):
             try:

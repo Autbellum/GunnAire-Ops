@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import closing
 import base64
 import json
 import sqlite3
@@ -51,7 +52,7 @@ class DocumentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             database = root / "gunnaire_backend.sqlite3"
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection, connection:
                 connection.execute(
                     """
                     CREATE TABLE documents (
