@@ -43,6 +43,7 @@ class NativeWorkflowShardTests(unittest.TestCase):
             "testStaffCloudKitAdministratorReviewReturnsToSettingsAndRetainsOriginalInvitation",
             "testReceiptRejectsAnotherJobsScheduledEstimateAndRecoversOriginalTarget",
             "testCatalogEditingControlsStayInsideTheSheetAcrossRotation",
+            "testScheduleOpensAJobWhoseCustomerIsStillSyncing",
         ):
             self.assertIn(name, declared)
         self.assertEqual(len(declared), len(set(declared)))
@@ -70,7 +71,7 @@ class NativeWorkflowShardTests(unittest.TestCase):
         self.assertNotIn(creation, second)
         self.assertEqual(second.count(saved_list), 1)
         self.assertNotIn(saved_list, first)
-        self.assertEqual(len(first), len(second))
+        self.assertLessEqual(abs(len(first) - len(second)), 1)
 
     def test_invoice_delivery_journeys_execute_on_separate_ipad_shards(self):
         prefix = "-only-testing:GunnAire OpsUITests/GunnAire_OpsUITests/"
@@ -82,7 +83,7 @@ class NativeWorkflowShardTests(unittest.TestCase):
         self.assertNotIn(creation, second)
         self.assertEqual(second.count(saved_list), 1)
         self.assertNotIn(saved_list, first)
-        self.assertEqual(len(first), len(second))
+        self.assertLessEqual(abs(len(first) - len(second)), 1)
 
     def test_mac_keeps_the_complete_logic_target(self):
         self.assertEqual(self.selectors("Mac", 0), ["-only-testing:GunnAire OpsTests"])

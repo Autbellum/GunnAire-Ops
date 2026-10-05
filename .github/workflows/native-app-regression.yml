@@ -145,7 +145,8 @@ jobs:
               testNewEstimateOpensMailDraftWithPDFWithoutQuickBooksConnection \
               testSavedEstimateListOpensMailDraftWithPDFWithoutQuickBooksConnection \
               testNewInvoiceOpensMailDraftWithPDFWithoutQuickBooksConnection \
-              testSavedInvoiceListOpensMailDraftWithPDFWithoutQuickBooksConnection; do
+              testSavedInvoiceListOpensMailDraftWithPDFWithoutQuickBooksConnection \
+              testScheduleOpensAJobWhoseCustomerIsStillSyncing; do
               if (( index % 2 == CI_SHARD )); then
                 selectors+=("-only-testing:GunnAire OpsUITests/GunnAire_OpsUITests/$test")
               fi
