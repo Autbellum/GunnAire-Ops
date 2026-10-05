@@ -52,9 +52,8 @@ struct EquipmentWarrantyClaimsSheet: View {
     }
 
     private var relevantPurchaseOrders: [PurchaseOrder] {
-        let customerCallIDs = Set(serviceCalls.compactMap { call in
-            call.customer.id == equipment.customer?.id ? call.id : nil
-        })
+        let customerCallIDs = EquipmentWarrantyClaimPolicy.relatedServiceCallIDs(
+            customerID: equipment.customer?.id, serviceCalls: serviceCalls)
         return purchaseOrders.filter { order in
             guard let serviceCallID = order.serviceCallID else { return false }
             return customerCallIDs.contains(serviceCallID)

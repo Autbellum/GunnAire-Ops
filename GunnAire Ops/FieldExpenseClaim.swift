@@ -112,6 +112,7 @@ struct FieldExpenseAuditEvent: Codable, Equatable, Identifiable {
 enum FieldExpenseClaimError: LocalizedError, Equatable {
     case unauthorized
     case jobAccessChanged
+    case jobCustomerSyncing
     case claimantRequired
     case merchantRequired
     case detailRequired
@@ -132,6 +133,8 @@ enum FieldExpenseClaimError: LocalizedError, Equatable {
             "This account is not allowed to change field expense claims."
         case .jobAccessChanged:
             "The selected job is no longer available to this account. Reopen an assigned job and try again."
+        case .jobCustomerSyncing:
+            "The selected job’s customer is still syncing. Wait for syncing to finish, then submit this claim."
         case .claimantRequired:
             "A signed-in business account is required."
         case .merchantRequired:
@@ -493,6 +496,9 @@ enum FieldExpenseClaimPolicy {
     ) throws -> FieldExpenseClaim {
         let email = AppAccess.normalizedEmail(claimantEmail)
         guard !email.isEmpty else { throw FieldExpenseClaimError.claimantRequired }
+        if let serviceCall, serviceCall.customer == nil {
+            throw FieldExpenseClaimError.jobCustomerSyncing
+        }
         let facts = try validatedFacts(
             claimType: claimType,
             category: category,
@@ -507,8 +513,8 @@ enum FieldExpenseClaimPolicy {
         return FieldExpenseClaim(
             id: id,
             serviceCallID: serviceCall?.id,
-            customerID: serviceCall?.customer.id,
-            customerName: serviceCall?.customer.name,
+            customerID: serviceCall?.customer?.id,
+            customerName: serviceCall?.customer?.name,
             jobSummary: serviceCall.map {
                 "\($0.type.displayName) • \($0.scheduledDate.formatted(date: .abbreviated, time: .omitted))"
             },

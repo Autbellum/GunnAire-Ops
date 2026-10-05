@@ -838,7 +838,7 @@ private enum GunnAireIntentStore {
                 let lhsDistance = abs(lhs.scheduledDate.timeIntervalSince(now))
                 let rhsDistance = abs(rhs.scheduledDate.timeIntervalSince(now))
                 if lhsDistance != rhsDistance { return lhsDistance < rhsDistance }
-                return lhs.customer.name.localizedCaseInsensitiveCompare(rhs.customer.name) == .orderedAscending
+                return lhs.customerDisplayName.localizedCaseInsensitiveCompare(rhs.customerDisplayName) == .orderedAscending
             }
             .first
     }
@@ -850,7 +850,7 @@ private enum GunnAireIntentStore {
             .filter { $0.status != .cancelled && $0.scheduledDate >= now }
             .sorted { lhs, rhs in
                 if lhs.scheduledDate != rhs.scheduledDate { return lhs.scheduledDate < rhs.scheduledDate }
-                return lhs.customer.name.localizedCaseInsensitiveCompare(rhs.customer.name) == .orderedAscending
+                return lhs.customerDisplayName.localizedCaseInsensitiveCompare(rhs.customerDisplayName) == .orderedAscending
             }
             .first
     }
@@ -975,7 +975,7 @@ struct GunnAireServiceCallQuery: EntityStringQuery {
     func entities(for identifiers: [UUID]) async throws -> [GunnAireServiceCallEntity] {
         let matches = try await GunnAireIntentStore.serviceCalls().filter { identifiers.contains($0.id) }
         return matches.map {
-            GunnAireServiceCallEntity(id: $0.id, customerName: $0.customer.name, scheduledDate: $0.scheduledDate, jobType: $0.type.rawValue)
+            GunnAireServiceCallEntity(id: $0.id, customerName: $0.customerDisplayName, scheduledDate: $0.scheduledDate, jobType: $0.type.rawValue)
         }
     }
 
@@ -983,13 +983,13 @@ struct GunnAireServiceCallQuery: EntityStringQuery {
         let normalized = string.trimmingCharacters(in: .whitespacesAndNewlines)
         let matches = try await GunnAireIntentStore.serviceCalls().filter {
             normalized.isEmpty ||
-            $0.customer.name.localizedCaseInsensitiveContains(normalized) ||
+            $0.customerDisplayName.localizedCaseInsensitiveContains(normalized) ||
             ($0.siteAddress?.localizedCaseInsensitiveContains(normalized) ?? false) ||
             ($0.notes?.localizedCaseInsensitiveContains(normalized) ?? false)
         }
         let ranked = rankServiceCalls(matches, search: normalized)
         return ranked.prefix(20).map {
-            GunnAireServiceCallEntity(id: $0.id, customerName: $0.customer.name, scheduledDate: $0.scheduledDate, jobType: $0.type.rawValue)
+            GunnAireServiceCallEntity(id: $0.id, customerName: $0.customerDisplayName, scheduledDate: $0.scheduledDate, jobType: $0.type.rawValue)
         }
     }
 
@@ -997,7 +997,7 @@ struct GunnAireServiceCallQuery: EntityStringQuery {
         let ranked = rankServiceCalls(try await GunnAireIntentStore.serviceCalls(), search: "")
         return ranked
             .prefix(20)
-            .map { GunnAireServiceCallEntity(id: $0.id, customerName: $0.customer.name, scheduledDate: $0.scheduledDate, jobType: $0.type.rawValue) }
+            .map { GunnAireServiceCallEntity(id: $0.id, customerName: $0.customerDisplayName, scheduledDate: $0.scheduledDate, jobType: $0.type.rawValue) }
     }
 
     private func rankServiceCalls(_ calls: [ServiceCall], search: String) -> [ServiceCall] {
@@ -1012,15 +1012,15 @@ struct GunnAireServiceCallQuery: EntityStringQuery {
             if lhsActionable != rhsActionable { return lhsActionable }
 
             if !search.isEmpty {
-                let lhsExact = lhs.customer.name.caseInsensitiveCompare(search) == .orderedSame
-                let rhsExact = rhs.customer.name.caseInsensitiveCompare(search) == .orderedSame
+                let lhsExact = lhs.customerDisplayName.caseInsensitiveCompare(search) == .orderedSame
+                let rhsExact = rhs.customerDisplayName.caseInsensitiveCompare(search) == .orderedSame
                 if lhsExact != rhsExact { return lhsExact }
             }
 
             let lhsDistance = abs(lhs.scheduledDate.timeIntervalSince(now))
             let rhsDistance = abs(rhs.scheduledDate.timeIntervalSince(now))
             if lhsDistance != rhsDistance { return lhsDistance < rhsDistance }
-            return lhs.customer.name.localizedCaseInsensitiveCompare(rhs.customer.name) == .orderedAscending
+            return lhs.customerDisplayName.localizedCaseInsensitiveCompare(rhs.customerDisplayName) == .orderedAscending
         }
     }
 }
@@ -1363,7 +1363,7 @@ struct OpenNextScheduledJobIntent: AppIntent {
             return .result(dialog: "There are no upcoming scheduled jobs right now.")
         }
         GunnAireAppIntentRouter.storeScheduleCallRoute(call.id)
-        return .result(dialog: "Opening the next scheduled job for \(call.customer.name).")
+        return .result(dialog: "Opening the next scheduled job for \(call.customerDisplayName).")
     }
 }
 
@@ -1400,7 +1400,7 @@ struct OpenNextJobDocumentationIntent: AppIntent {
             return .result(dialog: "There are no actionable jobs right now.")
         }
         GunnAireAppIntentRouter.storeDocumentationRoute(call.id)
-        return .result(dialog: "Opening documentation for \(call.customer.name).")
+        return .result(dialog: "Opening documentation for \(call.customerDisplayName).")
     }
 }
 

@@ -831,7 +831,7 @@ struct ReceiptsAndBillsView: View {
             Picker("Job", selection: $newPurchaseOrderServiceCallID) {
                 Text("Stock / no job").tag(UUID?.none)
                 ForEach(serviceCalls) { call in
-                    Text("\(call.customer.name) • \(call.type.displayName)").tag(UUID?.some(call.id))
+                    Text("\(call.customerDisplayName) • \(call.type.displayName)").tag(UUID?.some(call.id))
                 }
             }
 
@@ -1068,7 +1068,7 @@ struct ReceiptsAndBillsView: View {
                             Picker("Job", selection: $inventoryServiceCallID) {
                                 Text("Choose job").tag(UUID?.none)
                                 ForEach(serviceCalls) { call in
-                                    Text("\(call.customer.name) • \(call.type.displayName)").tag(UUID?.some(call.id))
+                                    Text("\(call.customerDisplayName) • \(call.type.displayName)").tag(UUID?.some(call.id))
                                 }
                             }
                         }

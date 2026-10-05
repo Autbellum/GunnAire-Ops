@@ -455,6 +455,14 @@ enum EquipmentWarrantyClaimError: Error, Equatable, LocalizedError {
 }
 
 enum EquipmentWarrantyClaimPolicy {
+    static func relatedServiceCallIDs(customerID: UUID?, serviceCalls: [ServiceCall]) -> Set<UUID> {
+        guard let customerID else { return [] }
+        return Set(serviceCalls.compactMap { call in
+            guard let customer = call.customer, customer.id == customerID else { return nil }
+            return call.id
+        })
+    }
+
     static func request(
         id: UUID = UUID(),
         for equipment: CustomerEquipment,
