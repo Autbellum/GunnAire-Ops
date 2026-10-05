@@ -23,6 +23,8 @@ import urllib.parse
 import urllib.request
 import uuid
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1903,11 +1905,17 @@ def validate_supplier_order_acceptance(
     }
 
 
-def db() -> sqlite3.Connection:
+@contextmanager
+def db() -> Iterator[sqlite3.Connection]:
+    """Commit or roll back each database scope, then release its connection."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DB_PATH)
-    connection.row_factory = sqlite3.Row
-    return connection
+    try:
+        connection.row_factory = sqlite3.Row
+        with connection:
+            yield connection
+    finally:
+        connection.close()
 
 
 def path_is_within(path: Path, root: Path) -> bool:

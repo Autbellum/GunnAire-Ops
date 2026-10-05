@@ -4,8 +4,10 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 from Backend import backup_backend
 
@@ -13,7 +15,7 @@ from Backend import backup_backend
 class BackupBackendTests(unittest.TestCase):
     def create_source(self, root: Path) -> tuple[Path, Path]:
         database = root / "source.sqlite3"
-        with sqlite3.connect(database) as connection:
+        with closing(sqlite3.connect(database)) as connection, connection:
             connection.execute("CREATE TABLE jobs(id TEXT PRIMARY KEY, summary TEXT NOT NULL)")
             connection.execute("INSERT INTO jobs VALUES ('job-1', 'Verified service visit')")
         storage = root / "storage"
@@ -21,6 +23,45 @@ class BackupBackendTests(unittest.TestCase):
         (storage / "jobs" / "job-1" / "report.pdf").write_bytes(b"fictional report bytes")
         (storage / "receipt.jpg").write_bytes(b"fictional receipt bytes")
         return database, storage
+
+    def test_backup_closes_source_when_destination_cannot_open(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database, storage = self.create_source(root)
+            artifact = root / "failed-backup"
+            with closing(sqlite3.connect(database)) as source:
+                with mock.patch.object(backup_backend.sqlite3, "connect", side_effect=[
+                    source, sqlite3.OperationalError("synthetic destination failure")
+                ]):
+                    with self.assertRaisesRegex(sqlite3.OperationalError, "synthetic destination failure"):
+                        backup_backend.create_backup(database, storage, artifact)
+                with self.assertRaises(sqlite3.ProgrammingError):
+                    source.execute("SELECT 1")
+            self.assertFalse(artifact.exists())
+
+    def test_backup_closes_source_even_when_destination_close_fails(self) -> None:
+        class FailingCloseConnection(sqlite3.Connection):
+            def close(self) -> None:
+                super().close()
+                raise sqlite3.OperationalError("synthetic close failure")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database, storage = self.create_source(root)
+            artifact = root / "failed-backup"
+            destination = sqlite3.connect(":memory:", factory=FailingCloseConnection)
+            try:
+                with closing(sqlite3.connect(database)) as source:
+                    with mock.patch.object(backup_backend.sqlite3, "connect", side_effect=[source, destination]):
+                        with self.assertRaisesRegex(sqlite3.OperationalError, "synthetic close failure"):
+                            backup_backend.create_backup(database, storage, artifact)
+                    with self.assertRaises(sqlite3.ProgrammingError):
+                        source.execute("SELECT 1")
+                    with self.assertRaises(sqlite3.ProgrammingError):
+                        destination.execute("SELECT 1")
+            finally:
+                sqlite3.Connection.close(destination)
+            self.assertFalse(artifact.exists())
 
     def test_backup_verifies_database_documents_and_readiness_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -64,7 +105,7 @@ class BackupBackendTests(unittest.TestCase):
             backup_backend.create_backup(database, storage, artifact)
 
             summary = backup_backend.restore_drill(artifact, restored)
-            with sqlite3.connect(restored / backup_backend.DATABASE_FILENAME) as connection:
+            with closing(sqlite3.connect(restored / backup_backend.DATABASE_FILENAME)) as connection:
                 job = connection.execute("SELECT summary FROM jobs WHERE id = 'job-1'").fetchone()
 
             self.assertEqual(job, ("Verified service visit",))
