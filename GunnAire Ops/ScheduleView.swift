@@ -1747,11 +1747,12 @@ struct ScheduleView: View {
                 Button(CustomerDataMaintenance.isSystemCalendarCustomer(call.customer) ? "Assign Customer" : "Customer") {
                     if CustomerDataMaintenance.isSystemCalendarCustomer(call.customer) {
                         editingCall = call
-                    } else {
-                        GunnAireAppIntentRouter.storeCustomerRoute(call.customer.id)
+                    } else if let customer = call.customer {
+                        GunnAireAppIntentRouter.storeCustomerRoute(customer.id)
                     }
                 }
                 .buttonStyle(.bordered)
+                .disabled(call.customer == nil)
 
                 if hasNavigableAddress(for: call) {
                     Button("Navigate") {
@@ -1882,13 +1883,14 @@ struct ScheduleView: View {
             Text(call.status.rawValue.capitalized)
                 .font(.caption)
                 .foregroundColor(.gray)
-            if let alert = CustomerOperationalAlertPolicy.activeAlerts(
-                customerID: call.customer.id,
+            if let customerID = call.customer?.id,
+               let alert = CustomerOperationalAlertPolicy.activeAlerts(
+                customerID: customerID,
                 serviceLocationID: call.serviceLocationID,
                 in: operationalAlerts
             ).first {
                 let activeCount = CustomerOperationalAlertPolicy.activeAlerts(
-                    customerID: call.customer.id,
+                    customerID: customerID,
                     serviceLocationID: call.serviceLocationID,
                     in: operationalAlerts
                 ).count
@@ -1930,7 +1932,7 @@ struct ScheduleView: View {
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(Color.brandGold)
             }
-            if let address = call.siteAddress ?? call.customer.address,
+            if let address = call.siteAddress ?? call.customer?.address,
                !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(address)
                     .font(.caption2)
@@ -2067,7 +2069,7 @@ struct ScheduleView: View {
             return noteTitle
         }
         guard CustomerDataMaintenance.isSystemCalendarCustomer(call.customer) else {
-            return call.customer.name
+            return call.customerDisplayName
         }
         return "Unassigned calendar event"
     }
@@ -2084,7 +2086,7 @@ struct ScheduleView: View {
             return "Unassigned customer • \(call.type.displayName)"
         }
         if call.eventTitle?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-            return "\(call.customer.name) • \(call.type.displayName)"
+            return "\(call.customerDisplayName) • \(call.type.displayName)"
         }
         return call.type.displayName
     }
@@ -2564,6 +2566,12 @@ struct ScheduleView: View {
         _ call: ServiceCall,
         at destination: ScheduleDocumentationPresentation.Destination
     ) {
+        // Job Documentation, closeout and payment collection all bill and
+        // contact the customer. A job whose customer has not synced yet waits.
+        guard call.customer != nil else {
+            syncMessage = "This job's customer is still syncing. Documentation opens after sync completes."
+            return
+        }
         documentationPresentation = ScheduleDocumentationPresentation(
             call: call,
             destination: destination
@@ -2636,7 +2644,8 @@ struct ScheduleView: View {
     }
 
     private func followUpEmailDraft(for call: ServiceCall) -> (to: String, subject: String, body: String)? {
-        guard let email = call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
+        guard let customer = call.customer,
+              let email = customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
               !email.isEmpty else { return nil }
         let trimmedFollowUpAction = call.followUpAction?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2647,7 +2656,7 @@ struct ScheduleView: View {
             to: email,
             subject: "Follow-Up From GunnAire",
             body: """
-Hello \(call.customer.name),
+Hello \(customer.name),
 
 Following up on your recent \(call.type.rawValue) appointment with GunnAire.
 
@@ -2716,12 +2725,12 @@ GunnAire
     }
 
     private func openFollowUpEmail(for call: ServiceCall, fallbackURL: URL) {
-        if googleAuth.isAuthenticated, let draft = followUpEmailDraft(for: call) {
+        if googleAuth.isAuthenticated, let draft = followUpEmailDraft(for: call), let customer = call.customer {
             GunnAireAppIntentRouter.storeMailDraftRoute(
                 to: draft.to,
                 subject: draft.subject,
                 body: draft.body,
-                customerID: call.customer.id,
+                customerID: customer.id,
                 serviceCallID: call.id,
                 workflow: .serviceFollowUp
             )
@@ -2829,8 +2838,12 @@ GunnAire
             syncMessage = "Dispatcher or administrator access is required to schedule follow-up visits."
             return
         }
+        guard let sourceCustomer = sourceCall.customer else {
+            syncMessage = "This job's customer is still syncing. Schedule the follow-up after sync completes."
+            return
+        }
         if let blocker = CustomerOperationalAlertPolicy.schedulingBlocker(
-            customerID: sourceCall.customer.id,
+            customerID: sourceCustomer.id,
             serviceLocationID: sourceCall.serviceLocationID,
             in: operationalAlerts
         ) {
@@ -3003,8 +3016,11 @@ GunnAire
         guard DispatchBoardScheduling.canMove(call) else {
             return .rejected("Completed and cancelled jobs cannot be moved from the dispatch board.")
         }
+        guard let customer = call.customer else {
+            return .rejected("This job's customer is still syncing. Move it after sync completes.")
+        }
         if let blocker = CustomerOperationalAlertPolicy.schedulingBlocker(
-            customerID: call.customer.id,
+            customerID: customer.id,
             serviceLocationID: call.serviceLocationID,
             in: operationalAlerts
         ) {
@@ -3301,7 +3317,7 @@ enum DispatchBoardScheduling {
                 let otherEnd = other.scheduledDate.addingTimeInterval(max(other.duration, 60))
                 return proposedStart < otherEnd && proposedEnd > other.scheduledDate
             }) {
-                return "\(technicianName) already has \(conflictingCall.customer.name) at \(conflictingCall.scheduledDate.formatted(date: .omitted, time: .shortened))."
+                return "\(technicianName) already has \(conflictingCall.customerDisplayName) at \(conflictingCall.scheduledDate.formatted(date: .omitted, time: .shortened))."
             }
             if let block = availabilityBlocks.first(where: {
                 $0.technicianID == technicianID && $0.overlaps(start: proposedStart, end: proposedEnd)
@@ -3787,7 +3803,8 @@ private struct DispatchWeekBoardView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(call.eventTitle?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? call.eventTitle! : call.customer.name)
+                    let eventTitle = call.eventTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    Text(eventTitle.isEmpty ? call.customerDisplayName : eventTitle)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(2)
@@ -3798,12 +3815,13 @@ private struct DispatchWeekBoardView: View {
                 Spacer()
                 moveMenu(for: call)
             }
-            Text(call.customer.name)
+            Text(call.customerDisplayName)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-            if let alert = CustomerOperationalAlertPolicy.activeAlerts(
-                customerID: call.customer.id,
+            if let customerID = call.customer?.id,
+               let alert = CustomerOperationalAlertPolicy.activeAlerts(
+                customerID: customerID,
                 serviceLocationID: call.serviceLocationID,
                 in: operationalAlerts
             ).first {
@@ -3835,7 +3853,7 @@ private struct DispatchWeekBoardView: View {
                 .stroke(call.dispatchUrgency == .normal ? Color.secondary.opacity(0.12) : Color.orange.opacity(0.55))
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(call.customer.name), \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened)), \(call.assignedTechnician?.name ?? "unassigned")")
+        .accessibilityLabel("\(call.customerDisplayName), \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened)), \(call.assignedTechnician?.name ?? "unassigned")")
     }
 
     @ViewBuilder
@@ -3858,7 +3876,7 @@ private struct DispatchWeekBoardView: View {
                 Image(systemName: "ellipsis.circle")
                     .frame(width: 28, height: 28)
             }
-            .accessibilityLabel("Move \(call.customer.name)")
+            .accessibilityLabel("Move \(call.customerDisplayName)")
         } else {
             Menu {
                 Button {

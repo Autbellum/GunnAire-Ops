@@ -2414,7 +2414,7 @@ enum GoogleCalendarScheduleSync {
     }
 
     private static func calendarEventLocation(for call: ServiceCall) -> String? {
-        normalizedOptional(call.siteAddress) ?? normalizedOptional(call.customer.address)
+        normalizedOptional(call.siteAddress) ?? normalizedOptional(call.customer?.address)
     }
 
     private static func calendarEventUserDescription(for call: ServiceCall) -> String? {
@@ -2436,12 +2436,15 @@ enum GoogleCalendarScheduleSync {
     }
 
     private static func fallbackCalendarTitle(for call: ServiceCall) -> String {
-        if !CustomerDataMaintenance.isSystemCalendarCustomer(call.customer),
+        // A job can arrive before its customer syncs; it then keeps the plain
+        // type title rather than a placeholder name in the calendar.
+        if let customer = call.customer,
+           !CustomerDataMaintenance.isSystemCalendarCustomer(customer),
            call.type != .meeting,
            call.type != .reminder,
            call.type != .siteVisit,
            call.type != .other {
-            return "\(call.type.displayName): \(call.customer.name)"
+            return "\(call.type.displayName): \(customer.name)"
         }
         return call.type.displayName
     }
