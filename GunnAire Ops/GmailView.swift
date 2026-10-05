@@ -384,6 +384,12 @@ struct GmailView: View {
                 }
             }
             .onAppear {
+                #if DEBUG
+                if usesMailUITestFixture && !usesServerMailFixture && !mailbox.hasLoaded && !isLoading
+                    && !showingDrafts && composeDraft == nil {
+                    loadMessages()
+                }
+                #endif
                 automaticRefreshIfDue()
                 applyPendingDraftIfNeeded()
             }
