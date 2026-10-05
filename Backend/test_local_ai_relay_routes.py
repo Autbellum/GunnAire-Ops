@@ -96,7 +96,8 @@ class LocalAIRelayRouteTests(unittest.TestCase):
             with urllib.request.urlopen(request, timeout=5) as response:
                 return response.status, json.load(response)
         except urllib.error.HTTPError as error:
-            return error.code, json.load(error)
+            with error:
+                return error.code, json.load(error)
 
     def change(self, statement, values=()):
         with backend.db() as connection:

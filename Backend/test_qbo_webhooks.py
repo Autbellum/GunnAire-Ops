@@ -145,6 +145,7 @@ class QuickBooksWebhookTests(unittest.TestCase):
 
                     with self.assertRaises(urllib.error.HTTPError) as unauthorized:
                         urllib.request.urlopen(f"{base_url}/api/qbo/webhook-events", timeout=5)
+                    self.addCleanup(unauthorized.exception.close)
                     self.assertEqual(unauthorized.exception.code, 401)
 
                     admin_headers = {"Authorization": f"Bearer {self.api_token}"}
@@ -219,6 +220,7 @@ class QuickBooksWebhookTests(unittest.TestCase):
                     )
                     with self.assertRaises(urllib.error.HTTPError) as rejected:
                         urllib.request.urlopen(request, timeout=5)
+                    self.addCleanup(rejected.exception.close)
                     self.assertEqual(rejected.exception.code, 401)
                     with backend.db() as connection:
                         count = connection.execute("SELECT COUNT(*) FROM qbo_webhook_events").fetchone()[0]

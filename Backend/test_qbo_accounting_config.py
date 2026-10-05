@@ -160,6 +160,7 @@ class QuickBooksAccountingConfigurationTests(unittest.TestCase):
                 try:
                     with self.assertRaises(urllib.error.HTTPError) as unauthorized:
                         urllib.request.urlopen(self.request(base_url), timeout=5)
+                    self.addCleanup(unauthorized.exception.close)
                     self.assertEqual(unauthorized.exception.code, 401)
 
                     with urllib.request.urlopen(
@@ -221,6 +222,7 @@ class QuickBooksAccountingConfigurationTests(unittest.TestCase):
                         urllib.request.urlopen(
                             self.request(url, token=self.api_token, payload=invalid), timeout=5
                         )
+                    self.addCleanup(rejected.exception.close)
                     self.assertEqual(rejected.exception.code, 400)
                     with backend.db() as connection:
                         count = connection.execute("SELECT COUNT(*) FROM qbo_accounting_config").fetchone()[0]
@@ -263,6 +265,7 @@ class QuickBooksAccountingConfigurationTests(unittest.TestCase):
                         urllib.request.urlopen(
                             self.request(url, token=session_token, payload=self.valid_payload()), timeout=5
                         )
+                    self.addCleanup(forbidden.exception.close)
                     self.assertEqual(forbidden.exception.code, 403)
                 finally:
                     server.shutdown()

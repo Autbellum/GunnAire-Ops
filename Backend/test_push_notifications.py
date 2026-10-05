@@ -474,6 +474,7 @@ class StaffPushNotificationTests(unittest.TestCase):
                             ),
                             timeout=5,
                         )
+                    self.addCleanup(rejected.exception.close)
                     self.assertEqual(rejected.exception.code, HTTPStatus.FORBIDDEN)
                     with backend.db() as connection:
                         self.assertEqual(connection.execute("SELECT COUNT(*) FROM push_devices").fetchone()[0], 0)

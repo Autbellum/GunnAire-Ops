@@ -144,7 +144,8 @@ class AppleAuthenticationTests(unittest.TestCase):
             with urllib.request.urlopen(request, timeout=5) as response:
                 return response.status, json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as error:
-            return error.code, json.loads(error.read().decode("utf-8"))
+            with error:
+                return error.code, json.loads(error.read().decode("utf-8"))
 
     def post_account_notification(
         self,
@@ -166,7 +167,8 @@ class AppleAuthenticationTests(unittest.TestCase):
             with urllib.request.urlopen(request, timeout=5) as response:
                 return response.status, json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as error:
-            return error.code, json.loads(error.read().decode("utf-8"))
+            with error:
+                return error.code, json.loads(error.read().decode("utf-8"))
 
     def get_session(self, token: str) -> tuple[int, dict[str, object]]:
         request = urllib.request.Request(
@@ -177,7 +179,8 @@ class AppleAuthenticationTests(unittest.TestCase):
             with urllib.request.urlopen(request, timeout=5) as response:
                 return response.status, json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as error:
-            return error.code, json.loads(error.read().decode("utf-8"))
+            with error:
+                return error.code, json.loads(error.read().decode("utf-8"))
 
     def test_verified_apple_identity_creates_hashed_revocable_role_session(self) -> None:
         nonce = "verified-apple-request-nonce-12345"
