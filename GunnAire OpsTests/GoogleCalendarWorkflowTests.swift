@@ -182,6 +182,74 @@ struct GoogleCalendarWorkflowTests {
         #expect(f.writes.count == 1)
     }
 
+    @Test(arguments: [false, true])
+    func pendingCustomerDoesNotBlockOtherCalendarJobsAndRecoversOnce(backgroundOnly: Bool) async throws {
+        let f = try Fixture()
+        f.call.scheduledDate = Date().addingTimeInterval(7200)
+        let pendingAt = Date()
+        let incomplete = ServiceCall(googleCalendarID: "primary", googleEventManagedByApp: true,
+            eventTitle: "Waiting for customer", type: .repair,
+            scheduledDate: f.call.scheduledDate.addingTimeInterval(-3600), duration: 3600,
+            customer: f.customer)
+        f.context.insert(incomplete)
+        incomplete.customer = nil
+        incomplete.googleCalendarPendingAt = pendingAt
+        try f.context.save()
+
+        let first = try await (try f.flow()).run {
+            let outcome = try await GoogleCalendarScheduleSync.publishPending(workflow: $0,
+                pageSize: 2, maximumPages: backgroundOnly ? 1 : nil,
+                maximumPublications: backgroundOnly ? 1 : nil,
+                backgroundCandidatesOnly: backgroundOnly)
+            #expect(outcome.published == 1)
+            #expect(outcome.reviewErrors.count == 1)
+            #expect(outcome.reviewErrors.first?.contains("customer") == true)
+            return "First batch completed"
+        }.get()
+        #expect(first == "First batch completed")
+        #expect(incomplete.customer == nil)
+        #expect(incomplete.googleCalendarPendingAt == pendingAt)
+        #expect(incomplete.googleEventID == nil)
+        #expect(incomplete.googleEventConfirmedAt == nil)
+        #expect(f.call.googleEventConfirmedAt != nil)
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 1)
+        #expect(f.remote[f.key(f.email, GoogleCalendarScheduleSync.eventID(for: incomplete.id))] == nil)
+
+        incomplete.customer = f.customer
+        try f.context.save()
+        for expectedPublications in [1, 0] {
+            _ = try await (try f.flow()).run {
+                let outcome = try await GoogleCalendarScheduleSync.publishPending(workflow: $0,
+                    pageSize: 2, maximumPages: backgroundOnly ? 1 : nil,
+                    maximumPublications: backgroundOnly ? 1 : nil,
+                    backgroundCandidatesOnly: backgroundOnly)
+                #expect(outcome.published == expectedPublications)
+                #expect(outcome.reviewErrors.isEmpty)
+                return "Recovery completed"
+            }.get()
+        }
+        #expect(incomplete.googleEventConfirmedAt != nil)
+        #expect(incomplete.googleCalendarPendingAt == nil)
+        #expect(incomplete.googleEventID == GoogleCalendarScheduleSync.eventID(for: incomplete.id))
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 2)
+    }
+
+    @Test func directCalendarPublicationStillRejectsAnUnresolvedCustomerBeforeRequests() async throws {
+        let f = try Fixture()
+        f.call.customer = nil
+        try f.context.save()
+        let result = try await f.publish()
+        switch result {
+        case .success:
+            Issue.record("An incomplete appointment must not be sent to Google.")
+        case .failure(let error):
+            #expect(error as? GoogleCalendarWorkflowError == .identity)
+        }
+        #expect(f.requests.isEmpty)
+        #expect(f.call.googleEventID == nil)
+        #expect(f.call.googleEventConfirmedAt == nil)
+    }
+
     @Test func verifiedWritableSelectionPublishesOnThatCalendarWithoutPrimaryRetarget() async throws {
         let f = try Fixture()
         var primary = GoogleCalendar(id: f.email, summary: "Owner", timeZone: nil, accessRole: "reader")

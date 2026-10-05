@@ -1397,6 +1397,10 @@ enum GoogleCalendarScheduleSync {
             pages += 1
             for call in page where needsOutboundSync(call) {
                 try workflow.focus(on: [call])
+                guard call.customer != nil else {
+                    reviewErrors.append("An appointment is waiting for its customer to finish syncing. It remains saved and will be retried automatically.")
+                    continue
+                }
                 // Keep the same company/provider operation throughout the batch.
                 // Any failed/uncertain write stops this run; its pending marker stays.
                 markCalendarCallLocallyEdited(call)
