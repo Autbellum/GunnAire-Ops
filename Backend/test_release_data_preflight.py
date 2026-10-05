@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -23,7 +24,7 @@ class ReleaseDataPreflightTests(unittest.TestCase):
         company = str(uuid.uuid4())
         attachment = str(uuid.uuid4())
         pdf_bytes = b"%PDF-verified-fixture"
-        with sqlite3.connect(database) as connection:
+        with closing(sqlite3.connect(database)) as connection, connection:
             connection.execute("CREATE TABLE billing_publications(id TEXT PRIMARY KEY)")
             connection.execute("INSERT INTO billing_publications VALUES ('pub-1')")
             if old_pdf:
@@ -90,7 +91,7 @@ class ReleaseDataPreflightTests(unittest.TestCase):
             self.assertEqual(backup_backend.sha256_file(artifact / backup_backend.DATABASE_FILENAME),
                              original_database)
             self.assertEqual(backup_backend.verify_backup(artifact)["artifactID"], artifact_id)
-            with sqlite3.connect(scratch / backup_backend.DATABASE_FILENAME) as connection:
+            with closing(sqlite3.connect(scratch / backup_backend.DATABASE_FILENAME)) as connection, connection:
                 estimate = connection.execute("SELECT name FROM sqlite_master WHERE name='billing_estimate_jobs'").fetchone()
                 pdf = {row[1] for row in connection.execute("PRAGMA table_info(billing_pdf_archive_intents)")}
                 retained = connection.execute("SELECT COUNT(*) FROM billing_pdf_archive_intents").fetchone()
@@ -120,7 +121,7 @@ class ReleaseDataPreflightTests(unittest.TestCase):
                 with self.assertRaises(release_data_preflight.PreflightError):
                     release_data_preflight.run(artifact, scratch, artifact_id)
                 self.assertEqual(backup_backend.verify_backup(artifact)["artifactID"], artifact_id)
-                with sqlite3.connect(artifact / backup_backend.DATABASE_FILENAME) as connection:
+                with closing(sqlite3.connect(artifact / backup_backend.DATABASE_FILENAME)) as connection, connection:
                     fields = {row[1] for row in connection.execute("PRAGMA table_info(billing_pdf_archive_intents)")}
                 self.assertNotIn("artifact_ready", fields)
 

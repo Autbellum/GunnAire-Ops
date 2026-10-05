@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import closing
 import copy
 import io
 import json
@@ -435,7 +436,7 @@ class GoogleMailTests(unittest.TestCase):
     def test_retained_body_and_metadata_survive_consistent_database_backup(self):
         self.prepare()
         destination = Path(self.fixture.directory.name) / "restore.sqlite3"
-        with backend.db() as source, sqlite3.connect(destination) as target:
+        with backend.db() as source, closing(sqlite3.connect(destination)) as target, target:
             source.backup(target)
         with mock.patch.object(backend, "DB_PATH", destination):
             restored = mail.GoogleMail(self.fixture.make_service(), request_transport=self.transport)

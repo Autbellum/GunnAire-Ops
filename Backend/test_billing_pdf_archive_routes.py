@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from pathlib import Path
 import hashlib
 import sqlite3
@@ -104,10 +105,15 @@ class BillingPDFArchiveRoutesTests(unittest.TestCase):
             "leaseToken": reservation["lease_token"], "contentDigest": self.digest},
             "approved-session", self.pdf)["reservation"]
 
+    @contextmanager
     def database(self):
         connection = sqlite3.connect(self.path)
-        connection.row_factory = sqlite3.Row
-        return connection
+        try:
+            connection.row_factory = sqlite3.Row
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def test_reserve_and_read_do_not_leak_live_lease(self):
         original = self.routes.dispatch("POST", "/api/google/drive/billing-pdf-intents/reserve",

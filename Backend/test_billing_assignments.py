@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 from unittest import mock
@@ -546,7 +546,7 @@ class BillingAssignmentTests(BillingFixture, unittest.TestCase):
         self.save_assignment()
         self.publish(self.field_payload(), "Field Technician")
         restored_path = backend.DATA_ROOT / "restored.sqlite3"
-        with backend.db() as original, sqlite3.connect(restored_path) as destination:
+        with backend.db() as original, closing(sqlite3.connect(restored_path)) as destination, destination:
             original.backup(destination)
         with mock.patch.object(backend, "DB_PATH", restored_path):
             result = self.jobs.read(self.sessions["Field Technician"], self.job_scope())
