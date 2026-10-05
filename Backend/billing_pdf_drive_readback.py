@@ -73,6 +73,8 @@ def transport(request: urllib.request.Request, *, media: bool):
             return {"sha256": digest.hexdigest(), "size": count}
     except (urllib.error.URLError, TimeoutError, UnicodeError, ValueError,
             json.JSONDecodeError, http.client.IncompleteRead, OSError) as error:
+        if isinstance(error, urllib.error.HTTPError):
+            error.close()
         raise ProviderReadbackError("Drive readback was not confirmed") from error
 
 
