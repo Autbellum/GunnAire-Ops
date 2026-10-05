@@ -712,8 +712,10 @@ final class AutomaticOutboundSync {
     }
 
     static func pendingDocumentKeys(invoices: [Invoice], estimates: [Estimate]) -> [DocumentKey] {
-        QuickBooksEstimatePublicationRecovery.queuedEstimates(from: estimates).map { .estimate($0.id) }
-            + QuickBooksInvoicePublicationRecovery.queuedInvoices(from: invoices).map { .invoice($0.id) }
+        QuickBooksEstimatePublicationRecovery.queuedEstimates(from: estimates)
+            .filter { $0.customer != nil }.map { .estimate($0.id) }
+            + QuickBooksInvoicePublicationRecovery.queuedInvoices(from: invoices)
+            .filter { $0.customer != nil }.map { .invoice($0.id) }
     }
 
     static func pendingCustomerKeys(_ customers: [Customer]) -> [DocumentKey] {
@@ -1088,6 +1090,13 @@ final class AutomaticOutboundSync {
                     continue
                 }
                 if isPendingInsertion(document, context: context) {
+                    deferredUntil[next] = Date().addingTimeInterval(recoveryInterval)
+                    currentKey = nil
+                    continue
+                }
+                // CloudKit can deliver the document before its customer. Keep
+                // it eligible for a later scan without reading or binding proof.
+                guard document.customer != nil else {
                     deferredUntil[next] = Date().addingTimeInterval(recoveryInterval)
                     currentKey = nil
                     continue
