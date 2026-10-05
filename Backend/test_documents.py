@@ -153,6 +153,7 @@ class DocumentTests(unittest.TestCase):
                 try:
                     with self.assertRaises(urllib.error.HTTPError) as rejected:
                         urllib.request.urlopen(request, timeout=5)
+                    self.addCleanup(rejected.exception.close)
                     self.assertEqual(rejected.exception.code, 400)
                     self.assertFalse(any((root / "storage").rglob("*")))
                 finally:
@@ -189,6 +190,7 @@ class DocumentTests(unittest.TestCase):
                 try:
                     with self.assertRaises(urllib.error.HTTPError) as rejected:
                         urllib.request.urlopen(request, timeout=5)
+                    self.addCleanup(rejected.exception.close)
                     self.assertEqual(rejected.exception.code, 403)
                 finally:
                     server.shutdown()
@@ -239,6 +241,7 @@ class DocumentTests(unittest.TestCase):
                             request("invoice", invoiceID=str(uuid.uuid4())),
                             timeout=5,
                         )
+                    self.addCleanup(rejected.exception.close)
                     self.assertEqual(rejected.exception.code, 403)
 
                     with urllib.request.urlopen(url, timeout=5) as response:

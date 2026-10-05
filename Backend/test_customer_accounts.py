@@ -97,6 +97,7 @@ class CustomerAccountsTests(unittest.TestCase):
             # The same token cannot be consumed twice.
             with self.assertRaises(urllib.error.HTTPError) as failure:
                 self.consume_magic_link(base_url, magic_token)
+            self.addCleanup(failure.exception.close)
             self.assertEqual(failure.exception.code, 401)
 
     def test_emailed_magic_link_opens_the_verification_page(self) -> None:
@@ -120,6 +121,7 @@ class CustomerAccountsTests(unittest.TestCase):
                 with self.assertRaises(urllib.error.HTTPError) as failure:
                     urllib.request.urlopen(self.json_request(base_url, "/api/customer/magic-link",
                                                          method="POST", payload=payload), timeout=5)
+                self.addCleanup(failure.exception.close)
                 self.assertEqual(failure.exception.code, 503)
             with backend.db() as connection:
                 self.assertEqual(connection.execute("SELECT count(*) FROM customer_magic_links").fetchone()[0], 0)
@@ -127,6 +129,7 @@ class CustomerAccountsTests(unittest.TestCase):
                 with self.assertRaises(urllib.error.HTTPError) as failure:
                     urllib.request.urlopen(self.json_request(base_url, "/api/customer/magic-link",
                                                          method="POST", payload=payload), timeout=5)
+                self.addCleanup(failure.exception.close)
                 self.assertEqual(failure.exception.code, 503)
                 self.assertIn("could not be confirmed", failure.exception.read().decode("utf-8"))
             token = re.search(r"token=([A-Za-z0-9_-]+)", sender.call_args.kwargs["text_body"])
@@ -152,6 +155,7 @@ class CustomerAccountsTests(unittest.TestCase):
             for path in ("/api/session", "/api/service-requests", "/api/customer-accounts", "/api/users"):
                 with self.assertRaises(urllib.error.HTTPError) as failure:
                     urllib.request.urlopen(self.json_request(base_url, path, token=session_token), timeout=5)
+                self.addCleanup(failure.exception.close)
                 self.assertEqual(failure.exception.code, 401, path)
 
     def test_staff_endpoints_reject_customer_session_and_accept_staff_token(self) -> None:
@@ -163,6 +167,7 @@ class CustomerAccountsTests(unittest.TestCase):
                 urllib.request.urlopen(
                     self.json_request(base_url, "/api/customer/account", token=self.api_token), timeout=5
                 )
+            self.addCleanup(failure.exception.close)
             self.assertEqual(failure.exception.code, 401)
 
     def test_service_request_from_customer_notifies_admins_by_push_and_email(self) -> None:
@@ -281,12 +286,14 @@ class CustomerAccountsTests(unittest.TestCase):
 
             with self.assertRaises(urllib.error.HTTPError) as failure:
                 urllib.request.urlopen(self.json_request(base_url, status_path, token=customer_session), timeout=5)
+            self.addCleanup(failure.exception.close)
             self.assertEqual(failure.exception.code, 401)
             with mock.patch.object(backend.GunnAireBackendHandler, "principal", return_value={
                 "email": "dispatcher@example.invalid", "role": "Dispatcher", "isActive": True,
             }):
                 with self.assertRaises(urllib.error.HTTPError) as failure:
                     urllib.request.urlopen(self.json_request(base_url, status_path, token=self.api_token), timeout=5)
+                self.addCleanup(failure.exception.close)
                 self.assertEqual(failure.exception.code, 403)
 
     def test_link_retry_is_idempotent_and_conflicting_relink_cannot_overwrite(self) -> None:
@@ -312,6 +319,7 @@ class CustomerAccountsTests(unittest.TestCase):
                                                    "quickBooksID": None})
             with self.assertRaises(urllib.error.HTTPError) as failure:
                 urllib.request.urlopen(different, timeout=5)
+            self.addCleanup(failure.exception.close)
             self.assertEqual(failure.exception.code, 409)
             with urllib.request.urlopen(
                 self.json_request(base_url, f"/api/customer-accounts/{account_id}", token=self.api_token), timeout=5
@@ -329,6 +337,7 @@ class CustomerAccountsTests(unittest.TestCase):
                                      payload={"customerID": "11111111-1111-1111-1111-111111111111", "quickBooksID": "42"})
             with self.assertRaises(urllib.error.HTTPError) as failure:
                 urllib.request.urlopen(link, timeout=5)
+            self.addCleanup(failure.exception.close)
             self.assertEqual(failure.exception.code, 503)
             with urllib.request.urlopen(self.json_request(base_url, "/api/customer-accounts", token=self.api_token), timeout=5) as response:
                 self.assertEqual(len(json.loads(response.read().decode("utf-8"))["customerAccounts"]), 1)
@@ -344,6 +353,7 @@ class CustomerAccountsTests(unittest.TestCase):
             })):
                 with self.assertRaises(urllib.error.HTTPError) as failure:
                     urllib.request.urlopen(link, timeout=5)
+                self.addCleanup(failure.exception.close)
                 self.assertEqual(failure.exception.code, 409)
 
             def qbo_transport(request):
@@ -375,6 +385,7 @@ class CustomerAccountsTests(unittest.TestCase):
                 )
                 with self.assertRaises(urllib.error.HTTPError) as failure:
                     urllib.request.urlopen(changed_customer, timeout=5)
+                self.addCleanup(failure.exception.close)
                 self.assertEqual(failure.exception.code, 409)
                 session = self.consume_magic_link(base_url, self.request_magic_link_and_capture_token(
                     base_url, email="alex@example.com", name="Alex Customer"))
@@ -386,18 +397,21 @@ class CustomerAccountsTests(unittest.TestCase):
                 })):
                     with self.assertRaises(urllib.error.HTTPError) as failure:
                         urllib.request.urlopen(self.json_request(base_url, "/api/customer/invoices", token=session), timeout=5)
+                    self.addCleanup(failure.exception.close)
                     self.assertEqual(failure.exception.code, 409)
                 with mock.patch.object(backend, "qbo_payment_read_transport", side_effect=backend.payment_attempts.AttemptError(
                     "provider_unavailable", "Provider unavailable", 502
                 )):
                     with self.assertRaises(urllib.error.HTTPError) as failure:
                         urllib.request.urlopen(self.json_request(base_url, "/api/customer/invoices", token=session), timeout=5)
+                    self.addCleanup(failure.exception.close)
                     self.assertEqual(failure.exception.code, 503)
                 before_rotation = transport.call_count
                 with backend.db() as connection:
                     connection.execute("UPDATE qbo_connections SET realm_id = 'different-realm' WHERE id = 1")
                 with self.assertRaises(urllib.error.HTTPError) as failure:
                     urllib.request.urlopen(self.json_request(base_url, "/api/customer/invoices", token=session), timeout=5)
+                self.addCleanup(failure.exception.close)
                 self.assertEqual(failure.exception.code, 503)
                 self.assertEqual(transport.call_count, before_rotation)
 
@@ -409,11 +423,13 @@ class CustomerAccountsTests(unittest.TestCase):
                 for path in ("/api/customer/account", "/api/customer/invoices"):
                     with self.assertRaises(urllib.error.HTTPError) as failure:
                         urllib.request.urlopen(self.json_request(base_url, path, token=session), timeout=5)
+                    self.addCleanup(failure.exception.close)
                     self.assertEqual(failure.exception.code, 404, path)
                 with self.assertRaises(urllib.error.HTTPError) as failure:
                     urllib.request.urlopen(self.json_request(base_url, "/api/customer/service-requests",
                                                          method="POST", token=session,
                                                          payload={"summary": "Maintenance request"}), timeout=5)
+                self.addCleanup(failure.exception.close)
                 self.assertEqual(failure.exception.code, 404)
 
     def test_portal_page_is_served_when_enabled_and_hidden_when_disabled(self) -> None:
@@ -427,11 +443,13 @@ class CustomerAccountsTests(unittest.TestCase):
             with mock.patch.object(backend, "EMAIL_PROVIDER_API_KEY", ""):
                 with self.assertRaises(urllib.error.HTTPError) as failure:
                     urllib.request.urlopen(f"{base_url}/account", timeout=5)
+                self.addCleanup(failure.exception.close)
                 self.assertEqual(failure.exception.code, 503)
 
         with self.running_server(accounts_enabled=False) as base_url:
             with self.assertRaises(urllib.error.HTTPError) as failure:
                 urllib.request.urlopen(f"{base_url}/account", timeout=5)
+            self.addCleanup(failure.exception.close)
             self.assertEqual(failure.exception.code, 404)
 
     def test_disabled_feature_flag_rejects_signup(self) -> None:
@@ -442,6 +460,7 @@ class CustomerAccountsTests(unittest.TestCase):
             )
             with self.assertRaises(urllib.error.HTTPError) as failure:
                 urllib.request.urlopen(request, timeout=5)
+            self.addCleanup(failure.exception.close)
             self.assertEqual(failure.exception.code, 404)
 
     def test_rate_limit_blocks_repeated_magic_link_requests_from_one_ip(self) -> None:
@@ -461,6 +480,7 @@ class CustomerAccountsTests(unittest.TestCase):
                 )
                 with self.assertRaises(urllib.error.HTTPError) as failure:
                     urllib.request.urlopen(request, timeout=5)
+                self.addCleanup(failure.exception.close)
                 self.assertEqual(failure.exception.code, 429)
 
     def test_forwarded_for_header_cannot_evade_rate_limit(self) -> None:
@@ -476,6 +496,7 @@ class CustomerAccountsTests(unittest.TestCase):
                 else:
                     with self.assertRaises(urllib.error.HTTPError) as failure:
                         urllib.request.urlopen(request, timeout=5)
+                    self.addCleanup(failure.exception.close)
                     self.assertEqual(failure.exception.code, 429)
 
 

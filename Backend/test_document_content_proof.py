@@ -38,7 +38,8 @@ class DocumentContentProofHTTPTests(unittest.TestCase):
             with urllib.request.urlopen(request, timeout=10) as response:
                 return response.status, response.read(), dict(response.headers)
         except urllib.error.HTTPError as error:
-            return error.code, error.read(), dict(error.headers)
+            with error:
+                return error.code, error.read(), dict(error.headers)
 
     def test_real_upload_persists_immutable_proof_and_native_manifest(self):
         status, uploaded = self.upload()

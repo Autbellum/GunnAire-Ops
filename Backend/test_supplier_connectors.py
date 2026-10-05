@@ -163,6 +163,7 @@ class SupplierConnectorTests(unittest.TestCase):
                 try:
                     with self.assertRaises(urllib.error.HTTPError) as unauthorized:
                         urllib.request.urlopen(f"{base_url}/api/supplier-connectors", timeout=5)
+                    self.addCleanup(unauthorized.exception.close)
                     self.assertEqual(unauthorized.exception.code, 401)
 
                     with urllib.request.urlopen(
@@ -233,6 +234,7 @@ class SupplierConnectorTests(unittest.TestCase):
                             ),
                             timeout=5,
                         )
+                    self.addCleanup(unavailable.exception.close)
                     self.assertEqual(unavailable.exception.code, 409)
                     error = self.error_payload(unavailable.exception)
                     self.assertFalse(error["connector"]["canSubmitOrders"])
@@ -322,6 +324,7 @@ class SupplierConnectorTests(unittest.TestCase):
                             ),
                             timeout=5,
                         )
+                    self.addCleanup(mismatch.exception.close)
                     self.assertEqual(mismatch.exception.code, 409)
 
                     with self.assertRaises(urllib.error.HTTPError) as duplicate_order:
@@ -334,6 +337,7 @@ class SupplierConnectorTests(unittest.TestCase):
                             ),
                             timeout=5,
                         )
+                    self.addCleanup(duplicate_order.exception.close)
                     self.assertEqual(duplicate_order.exception.code, 409)
 
                     with backend.db() as connection:
@@ -393,6 +397,7 @@ class SupplierConnectorTests(unittest.TestCase):
                             ),
                             timeout=5,
                         )
+                    self.addCleanup(mismatch.exception.close)
                     self.assertEqual(mismatch.exception.code, 502)
                     error = self.error_payload(mismatch.exception)
                     self.assertEqual(error["errorCode"], "invalid-adapter-response")
@@ -434,6 +439,7 @@ class SupplierConnectorTests(unittest.TestCase):
                             ),
                             timeout=5,
                         )
+                    self.addCleanup(uncertain.exception.close)
                     self.assertEqual(uncertain.exception.code, 502)
                     self.assertTrue(self.error_payload(uncertain.exception)["outcomeUnknown"])
 
@@ -447,6 +453,7 @@ class SupplierConnectorTests(unittest.TestCase):
                             ),
                             timeout=5,
                         )
+                    self.addCleanup(pending.exception.close)
                     self.assertEqual(pending.exception.code, 409)
                     self.assertTrue(self.error_payload(pending.exception)["outcomeUnknown"])
                     self.assertEqual(adapter.submit_calls, 1)
@@ -487,6 +494,7 @@ class SupplierConnectorTests(unittest.TestCase):
                             ),
                             timeout=5,
                         )
+                    self.addCleanup(uncertain.exception.close)
                     self.assertEqual(uncertain.exception.code, 502)
 
                     with urllib.request.urlopen(
@@ -532,6 +540,7 @@ class SupplierConnectorTests(unittest.TestCase):
                             ),
                             timeout=5,
                         )
+                    self.addCleanup(rejected.exception.close)
                     self.assertEqual(rejected.exception.code, 400)
                     self.assertEqual(adapter.submit_calls, 0)
 
@@ -547,6 +556,7 @@ class SupplierConnectorTests(unittest.TestCase):
                             ),
                             timeout=5,
                         )
+                    self.addCleanup(unsupported_version.exception.close)
                     self.assertEqual(unsupported_version.exception.code, 400)
                     self.assertEqual(adapter.submit_calls, 0)
                     with backend.db() as connection:
@@ -591,6 +601,7 @@ class SupplierConnectorTests(unittest.TestCase):
                             ),
                             timeout=5,
                         )
+                    self.addCleanup(forbidden_get.exception.close)
                     self.assertEqual(forbidden_get.exception.code, 403)
 
                     with self.assertRaises(urllib.error.HTTPError) as forbidden_post:
@@ -603,6 +614,7 @@ class SupplierConnectorTests(unittest.TestCase):
                             ),
                             timeout=5,
                         )
+                    self.addCleanup(forbidden_post.exception.close)
                     self.assertEqual(forbidden_post.exception.code, 403)
                     self.assertEqual(adapter.submit_calls, 0)
                 finally:

@@ -93,6 +93,7 @@ class CustomerCommunicationTests(unittest.TestCase):
                     )
                     with self.assertRaises(urllib.error.HTTPError) as invalid:
                         urllib.request.urlopen(invalid_request, timeout=5)
+                    self.addCleanup(invalid.exception.close)
                     self.assertEqual(invalid.exception.code, 400)
                 finally:
                     server.shutdown()
@@ -169,6 +170,7 @@ class CustomerCommunicationTests(unittest.TestCase):
 
                     with self.assertRaises(urllib.error.HTTPError) as conflict:
                         urllib.request.urlopen(request({**payload, "subject": "Different attempt"}), timeout=5)
+                    self.addCleanup(conflict.exception.close)
                     self.assertEqual(conflict.exception.code, 409)
 
                     with backend.db() as connection:
@@ -215,6 +217,7 @@ class CustomerCommunicationTests(unittest.TestCase):
                     )
                     with self.assertRaises(urllib.error.HTTPError) as invalid:
                         urllib.request.urlopen(request, timeout=5)
+                    self.addCleanup(invalid.exception.close)
                     self.assertEqual(invalid.exception.code, 400)
                 finally:
                     server.shutdown()

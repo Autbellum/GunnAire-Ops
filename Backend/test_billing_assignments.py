@@ -129,7 +129,8 @@ class BillingAssignmentTests(BillingFixture, unittest.TestCase):
                     with urllib.request.urlopen(req, timeout=5) as response:
                         return response.status, json.load(response)
                 except urllib.error.HTTPError as error:
-                    return error.code, json.load(error)
+                    with error:
+                        return error.code, json.load(error)
             try:
                 yield request
                 credentials.assert_not_called()

@@ -68,7 +68,8 @@ class WorkspaceIdentityTests(unittest.TestCase):
             with urllib.request.urlopen(request, timeout=10) as response:
                 return response.status, json.loads(response.read())
         except urllib.error.HTTPError as error:
-            return error.code, json.loads(error.read())
+            with error:
+                return error.code, json.loads(error.read())
 
     def workspace(self, role="Admin"):
         status, body = self.request(token=self.tokens[role])

@@ -107,6 +107,7 @@ class LocalAIBackendRouteTests(unittest.TestCase):
     def test_status_requires_authentication(self):
         with self.assertRaises(urllib.error.HTTPError) as caught:
             self.request(local_backend.STATUS_PATH, authorized=False)
+        self.addCleanup(caught.exception.close)
         self.assertEqual(caught.exception.code, 401)
 
     def test_status_reports_local_only_without_hosted_fallback(self):
@@ -148,6 +149,7 @@ class LocalAIBackendRouteTests(unittest.TestCase):
                 body=b"not-json",
                 content_type="text/plain",
             )
+        self.addCleanup(caught.exception.close)
         self.assertEqual(caught.exception.code, 415)
         self.assertEqual(self.fake.calls, [])
 
@@ -159,6 +161,7 @@ class LocalAIBackendRouteTests(unittest.TestCase):
                 method="POST",
                 body={"task": "operations_narrative", "input": "bad"},
             )
+        self.addCleanup(caught.exception.close)
         self.assertEqual(caught.exception.code, 400)
         payload = json.loads(caught.exception.read().decode("utf-8"))
         self.assertEqual(payload["code"], "prohibited_sensitive_data")
@@ -173,6 +176,7 @@ class LocalAIBackendRouteTests(unittest.TestCase):
                 method="POST",
                 body={"task": "operations_narrative", "input": "summary"},
             )
+        self.addCleanup(caught.exception.close)
         self.assertEqual(caught.exception.code, 503)
         payload = json.loads(caught.exception.read().decode("utf-8"))
         self.assertEqual(payload["code"], "local_ai_unavailable")
