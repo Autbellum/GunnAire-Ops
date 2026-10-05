@@ -445,14 +445,18 @@ struct GmailView: View {
                 }
             }
             .onChange(of: googleAuth.signedInEmail) { _, _ in
-                if mailbox.provider?.serverMail == nil { clearMailbox() }
+                if (!usesMailUITestFixture || usesServerMailFixture) && mailbox.provider?.serverMail == nil {
+                    clearMailbox()
+                }
                 if googleAuth.isAuthenticated {
                     lastAutomaticRefreshAt = nil
                     automaticRefreshIfDue()
                 }
             }
             .onChange(of: googleAuth.isAuthenticated) { _, connected in
-                if mailbox.provider?.serverMail == nil { clearMailbox() }
+                if (!usesMailUITestFixture || usesServerMailFixture) && mailbox.provider?.serverMail == nil {
+                    clearMailbox()
+                }
                 if connected {
                     lastAutomaticRefreshAt = nil
                     automaticRefreshIfDue()
