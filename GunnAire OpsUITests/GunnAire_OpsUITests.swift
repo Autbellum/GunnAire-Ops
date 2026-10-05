@@ -5725,7 +5725,13 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(composerNavigation.buttons["SaveBillingDocument"].waitForExistence(timeout: 4),
                       "Create must stay in the sheet toolbar, not below the visible form.")
         XCTAssertEqual(app.buttons.matching(identifier: "SaveBillingDocument").count, 1)
-        XCTAssertTrue(waitForHittable(save, timeout: 4))
+        // A single accessibility predicate can consume the four-second override
+        // on CI. Use the same bounded readiness wait as the bundle editors.
+        let saveIsHittable = waitForHittable(save)
+        if !saveIsHittable {
+            retainNavigationFailure(app, name: "Edited \(kind.lowercased()) primary action is not reachable")
+        }
+        XCTAssertTrue(saveIsHittable, "The edited document must be saveable from its toolbar.")
         XCTAssertTrue(composerNavigation.frame.contains(save.frame), "The full primary action must be visible.")
         XCTAssertTrue(save.isEnabled); save.tap()
         let savedCustomer = app.staticTexts["ManagementBillingSavedCustomer"]
