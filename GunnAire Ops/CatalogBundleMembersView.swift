@@ -120,10 +120,22 @@ private struct CatalogBundleQuantityEditor: View {
     var body: some View {
         NavigationStack {
             Form {
-                TextField("Bundle Quantity", text: $quantity).catalogNumericKeyboard()
-                    .focused($quantityFocused)
-                    .submitLabel(.done).onSubmit { quantityFocused = false }
-                    .accessibilityIdentifier("BundleQuantity")
+                HStack {
+                    TextField("Bundle Quantity", text: $quantity).catalogNumericKeyboard()
+                        .focused($quantityFocused)
+                        .submitLabel(.done).onSubmit { quantityFocused = false }
+                        .accessibilityIdentifier("BundleQuantity")
+                    Button {
+                        quantity = ""
+                        quantityFocused = true
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Clear quantity")
+                    .accessibilityIdentifier("ClearBundleQuantity")
+                    .disabled(quantity.isEmpty)
+                }
                 Text("Changing this quantity scales the saved included items. Removed items stay removed; saved prices stay unchanged.")
                     .foregroundStyle(.secondary)
                 if let message { Text(message).foregroundStyle(.orange) }
@@ -176,10 +188,22 @@ private struct CatalogBundleMemberEditor: View {
         NavigationStack {
             Form {
                 Section(member.line.name) {
-                    TextField("Quantity", text: $quantity).catalogNumericKeyboard()
-                        .focused($focusedField, equals: .quantity)
-                        .submitLabel(.done).onSubmit { focusedField = nil }
-                        .accessibilityIdentifier("BundleMemberQuantity")
+                    HStack {
+                        TextField("Quantity", text: $quantity).catalogNumericKeyboard()
+                            .focused($focusedField, equals: .quantity)
+                            .submitLabel(.done).onSubmit { focusedField = nil }
+                            .accessibilityIdentifier("BundleMemberQuantity")
+                        Button {
+                            quantity = ""
+                            focusedField = .quantity
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Clear quantity")
+                        .accessibilityIdentifier("ClearBundleMemberQuantity")
+                        .disabled(quantity.isEmpty)
+                    }
                     if canAuthorize {
                         TextField("Unit Price", text: $price).catalogNumericKeyboard()
                             .focused($focusedField, equals: .price)
