@@ -8523,6 +8523,7 @@ GunnAire
             actionMessage = firstSaveMarkerIssue.map {
                 "Invoice saved locally. Automatic QuickBooks delivery is not confirmed: \($0)"
             } ?? "Invoice saved locally. Preparing its documentation…"
+            queueSavedBillingPDF(.invoice(invoice))
             Task { @MainActor in
                 defer {
                     if billingSyncLifecycles[key] === owner {
@@ -8541,7 +8542,6 @@ GunnAire
                     realmMarkerIssue = error.localizedDescription
                     automaticRetryPending = false
                 }
-                queueSavedBillingPDF(.invoice(invoice))
                 do {
                     let validateReport = try await preparation.perform {
                         try GmailDraftBusinessSnapshot.validate(initiatingSource, business: initiatingBusiness, context: modelContext)
