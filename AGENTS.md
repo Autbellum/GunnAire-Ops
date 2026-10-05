@@ -244,3 +244,8 @@ at the start of every turn; append to it rather than rewriting it.
   after a failure (`retryPendingIfNeeded`, publish only, no import). Three tests that pinned the
   old read-only rule were updated to the new rule; four write-back tests added. After adoption the
   job is app-owned, so later edits made directly in Google no longer import over it.
+- 2026-10-05 Claude (cloud, PR #28): bumped to build 2026100501 (six occurrences; above the
+  2026092301-05 uploads from PR #27's branch) and added `generated/release-2026100501.sh`. Eric
+  runs it on the Mac after merging #28: it archives a detached worktree of origin/main (refusing
+  unless main carries this build and the PR #28 calendar fix) and uploads to TestFlight. It pushes
+  nothing. The PR must reach Eric's devices via TestFlight only (gunnaire-ship rule).
