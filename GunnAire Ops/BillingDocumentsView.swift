@@ -1859,6 +1859,10 @@ GunnAire
                             Text(document.customer?.name ?? "Customer syncing")
                                 .font(.headline)
                                 .accessibilityIdentifier("ManagementBillingSavedCustomer")
+                            if !billingPDFQueueMessage.isEmpty {
+                                Text(billingPDFQueueMessage)
+                                    .accessibilityIdentifier("BillingPDFQueueStatus")
+                            }
                             if case .invoice(let invoice) = document {
                                 LabeledContent("Work type", value: invoice.workType.displayName)
                                     .accessibilityElement(children: .ignore)
@@ -1894,9 +1898,6 @@ GunnAire
                         }
                         if !actionMessage.isEmpty {
                             Section { Text(actionMessage).accessibilityIdentifier("ManagementBillingSavedStatus") }
-                        }
-                        if !billingPDFQueueMessage.isEmpty {
-                            Section { Text(billingPDFQueueMessage).accessibilityIdentifier("BillingPDFQueueStatus") }
                         }
                     } else {
                         if startsNewDocument, !actionMessage.isEmpty {
