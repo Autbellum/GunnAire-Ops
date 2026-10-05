@@ -73,6 +73,77 @@ struct AutomaticGoogleDriveArchiveReadStoreTests {
         #expect(end.fetchedCount == 0)
     }
 
+    @Test(arguments: [3, 100, 102])
+    func backgroundCursorVisitsEveryFailedAttachmentBeforeRetryingTheFirst(count: Int) async throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let customer = Customer(name: "Background progress fixture")
+        context.insert(customer)
+        let base = Date(timeIntervalSince1970: 1_790_000_000)
+        var attachments: [ServiceDocumentAttachment] = []
+        for index in 0..<count {
+            let attachment = ServiceDocumentAttachment(customer: customer, serviceCallID: nil,
+                kind: .other, displayName: "pending-\(index).pdf", localFilePath: "/tmp/pending-\(index).pdf",
+                contentType: "application/pdf", fileSizeBytes: 12,
+                googleDriveFileID: "reserved-\(index)", createdAt: base.addingTimeInterval(TimeInterval(index)))
+            attachment.markGoogleDriveArchiveFailed("Synthetic upload failure")
+            context.insert(attachment)
+            attachments.append(attachment)
+        }
+        try context.save()
+        let reader = GoogleDriveArchiveReadStore(container: container)
+        var cursor = 0
+        var attemptedIDs: [UUID] = []
+        // Every attempted file stays failed. Subsequent short refreshes must
+        // still visit every other file before returning to the first one.
+        for _ in 0..<(count + 2) where attemptedIDs.count <= count {
+            let page = try await reader.attachmentPage(offset: cursor)
+            guard let candidate = page.candidates.first else {
+                cursor = page.nextPageOffset
+                continue
+            }
+            attemptedIDs.append(candidate.id)
+            cursor = page.nextBackgroundOffset(after: candidate)
+        }
+        let firstAttachment = try #require(attachments.first)
+        #expect(attemptedIDs == attachments.map(\.id) + [firstAttachment.id])
+        #expect(attachments.allSatisfy { $0.needsGoogleDriveArchive && $0.googleDriveSyncState == .needsAttention })
+        #expect(attachments.enumerated().allSatisfy { index, attachment in
+            attachment.googleDriveFileID == "reserved-\(index)"
+        })
+    }
+
+    @Test func backgroundCursorUsesOriginalRowPositionsAndRediscoversRestoredCustomers() async throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let customer = Customer(name: "Sparse background progress fixture")
+        context.insert(customer)
+        let base = Date(timeIntervalSince1970: 1_790_000_000)
+        var attachments: [ServiceDocumentAttachment] = []
+        for index in 0..<5 {
+            let attachment = ServiceDocumentAttachment(customer: index == 2 ? customer : nil,
+                serviceCallID: nil, kind: .other, displayName: "sparse-\(index).pdf",
+                localFilePath: "/tmp/sparse-\(index).pdf", contentType: "application/pdf", fileSizeBytes: 12,
+                createdAt: base.addingTimeInterval(TimeInterval(index)))
+            context.insert(attachment)
+            attachments.append(attachment)
+        }
+        try context.save()
+        let reader = GoogleDriveArchiveReadStore(container: container)
+        let page = try await reader.attachmentPage(offset: 0)
+        let candidate = try #require(page.candidates.first)
+        #expect(page.candidateIDs == [attachments[2].id])
+        #expect(page.nextBackgroundOffset(after: candidate) == 3)
+        let tail = try await reader.attachmentPage(offset: page.nextBackgroundOffset(after: candidate))
+        #expect(tail.candidateIDs.isEmpty)
+        #expect(tail.fetchedCount == 2)
+        #expect(tail.nextPageOffset == 0)
+        attachments[0].customer = customer
+        try context.save()
+        let restored = try await reader.attachmentPage(offset: tail.nextPageOffset)
+        #expect(restored.candidateIDs == [attachments[0].id, attachments[2].id])
+    }
+
     @Test func staleSavedFileSizeCannotStartBackgroundDriveUpload() async throws {
         let container = try makeContainer()
         let context = ModelContext(container)
