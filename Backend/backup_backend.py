@@ -11,6 +11,7 @@ import re
 import shutil
 import sqlite3
 import uuid
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -109,13 +110,9 @@ def create_backup(
         # Read-only source; the copy proceeds in bounded steps so the live
         # service's writers wait at most one step instead of the whole copy.
         # SQLite restarts the copy if a writer lands between steps.
-        source_connection = sqlite3.connect(f"{source_database.as_uri()}?mode=ro", uri=True)
-        destination_connection = sqlite3.connect(database_copy)
-        try:
-            source_connection.backup(destination_connection, pages=256, sleep=0.05)
-        finally:
-            destination_connection.close()
-            source_connection.close()
+        with closing(sqlite3.connect(f"{source_database.as_uri()}?mode=ro", uri=True)) as source_connection:
+            with closing(sqlite3.connect(database_copy)) as destination_connection:
+                source_connection.backup(destination_connection, pages=256, sleep=0.05)
         sqlite_integrity(database_copy)
 
         storage_copy = artifact / "storage"
