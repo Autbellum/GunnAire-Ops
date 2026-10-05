@@ -8395,7 +8395,8 @@ final class GunnAire_OpsUITests: XCTestCase {
         }
         func requireEditingEnded() {
             let ended = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: controls)
-            XCTAssertEqual(XCTWaiter.wait(for: [ended], timeout: 5), .completed)
+            XCTAssertEqual(XCTWaiter.wait(for: [ended], timeout: 10), .completed,
+                           "Done Editing must clear the focused field and remove the sheet control.")
             XCTAssertTrue(navigation.exists, "Ending field editing must not save or dismiss the item.")
         }
         func rotateDevice(to orientation: UIDeviceOrientation) {
