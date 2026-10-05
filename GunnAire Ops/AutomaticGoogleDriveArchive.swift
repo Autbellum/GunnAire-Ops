@@ -7,8 +7,25 @@ nonisolated struct GoogleDriveArchiveReadStore: Sendable {
     let container: ModelContainer
 
     nonisolated struct AttachmentPage: Sendable {
-        let candidateIDs: [UUID]
+        nonisolated struct Candidate: Sendable {
+            let id: UUID
+            let rowOffset: Int
+        }
+
+        let candidates: [Candidate]
+        let offset: Int
         let fetchedCount: Int
+
+        var candidateIDs: [UUID] { candidates.map(\.id) }
+
+        var nextPageOffset: Int {
+            fetchedCount < 100 ? 0 : offset + fetchedCount
+        }
+
+        func nextBackgroundOffset(after candidate: Candidate) -> Int {
+            let next = candidate.rowOffset + 1
+            return fetchedCount < 100 && next >= offset + fetchedCount ? 0 : next
+        }
     }
 
     func hasUnambiguousActiveUser(email: String) async throws -> Bool {
@@ -36,11 +53,12 @@ nonisolated struct GoogleDriveArchiveReadStore: Sendable {
             fetch.fetchOffset = offset
             let page = try context.fetch(fetch)
             return AttachmentPage(
-                candidateIDs: page.compactMap { attachment in
+                candidates: page.enumerated().compactMap { index, attachment in
                     guard (attachment.customer != nil || attachment.fleetVehicleID != nil),
                           attachment.needsGoogleDriveArchive else { return nil }
-                    return attachment.id
+                    return AttachmentPage.Candidate(id: attachment.id, rowOffset: offset + index)
                 },
+                offset: offset,
                 fetchedCount: page.count
             )
         }.value
@@ -174,7 +192,8 @@ final class AutomaticGoogleDriveArchive {
     }
 
     /// A refresh window inspects one detached read page and archives at most
-    /// one small file. A later refresh continues at the next page; the normal
+    /// one small file. A later refresh continues after that file even if its
+    /// upload failed, so another pending file can make progress; the normal
     /// foreground scan remains responsible for larger customer files.
     func recoverOneBackground(context: ModelContext, maximumBytes: Int = 2 * 1024 * 1024) async -> Bool {
         guard maximumBytes > 0, !running, canArchiveFast(context: context),
@@ -204,9 +223,8 @@ final class AutomaticGoogleDriveArchive {
                 UserDefaults.standard.set(0, forKey: cursorKey)
                 return true
             }
-            UserDefaults.standard.set(page.fetchedCount < 100 ? 0 : offset + page.fetchedCount,
-                                      forKey: cursorKey)
-            for id in page.candidateIDs {
+            for candidate in page.candidates {
+                let id = candidate.id
                 guard !Task.isCancelled, canArchiveFast(context: context),
                       CompanyWorkspaceAccessController.shared.operationStamp == stamp,
                       (try? providerOperation.check()) != nil else { return false }
@@ -220,11 +238,14 @@ final class AutomaticGoogleDriveArchive {
                       (1...maximumBytes).contains(attachment.fileSizeBytes),
                       await Self.backgroundLocalFileIsEligible(attachment.localFileURL,
                                                                maximumBytes: maximumBytes) else { continue }
+                UserDefaults.standard.set(page.nextBackgroundOffset(after: candidate),
+                                          forKey: cursorKey)
                 await archive(attachment, context: context, stamp: stamp,
                               providerOperation: providerOperation, reader: reader,
                               maximumBytes: maximumBytes)
                 return !Task.isCancelled && !attachment.needsGoogleDriveArchive
             }
+            UserDefaults.standard.set(page.nextPageOffset, forKey: cursorKey)
             return true
         } catch {
             return false
