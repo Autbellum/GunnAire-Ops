@@ -5551,9 +5551,12 @@ final class GunnAire_OpsUITests: XCTestCase {
                 XCTAssertEqual(field.value as? String, value)
                 return
             }
-            let prior = field.value as? String ?? ""
-            field.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
-            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: prior.count) + value)
+            let clearID = identifier == "BundleQuantity" ? "ClearBundleQuantity" : "ClearBundleMemberQuantity"
+            let clear = app.buttons[clearID]
+            XCTAssertTrue(clear.waitForExistence(timeout: 4))
+            clear.tap()
+            field.tap()
+            field.typeText(value)
             XCTAssertEqual(field.value as? String, value)
         }
         let customer = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Select Customer")).firstMatch
