@@ -35,71 +35,72 @@ struct FieldFormResponseEditor: View {
 
     private var editable: Bool { record?.state == .editing && !contextChanged && !accessDenied && !isSaving }
 
+    /// Both entry points push this editor onto an existing job navigation stack.
+    /// Keep the form, toolbar and saved-form links on that stack so Done returns
+    /// to the originating job workspace.
     var body: some View {
-        NavigationStack {
-            Form {
-                if !accessDenied, let record, let content = record.content {
-                    Section("Job") {
-                        LabeledContent("Customer", value: content.job.customerName)
-                        LabeledContent("Work", value: ServiceCallType(rawValue: content.job.workType)?.displayName ?? "Needs review")
-                        if !content.job.siteAddress.isEmpty { Text(content.job.siteAddress).font(.caption).foregroundStyle(.secondary) }
-                        if record.state == .editing && !unsaved && !contextChanged {
-                            Label("Draft saved on this device", systemImage: "checkmark.circle")
-                                .font(.caption).foregroundStyle(.secondary)
-                                .accessibilityIdentifier("FieldFormDraftSaved")
-                        } else if record.state == .completed {
-                            Label("Completed form saved in this job’s Files", systemImage: "checkmark.seal.fill")
-                                .foregroundStyle(.green).accessibilityIdentifier("FieldFormCompletionSaved")
-                        } else if record.state == .completing {
-                            Text("Finish saving to recover the original form and file.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    if let message {
-                        Section {
-                            Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
-                                .accessibilityIdentifier("FieldFormDraftIssue")
-                            if unsaved && !contextChanged {
-                                Button("Retry saving draft") { persistAnswers() }
-                                Button("Reload saved draft…") { showingReload = true }
-                            }
-                        }
-                    }
-                    Section(content.title) {
-                        ForEach(content.questions) { question in questionView(question) }
-                    }
-                    if record.state == .editing {
-                        Section {
-                            Button("Discard draft…", role: .destructive) { showingDiscard = true }
-                                .disabled(isSaving).accessibilityIdentifier("DiscardFieldFormDraft")
-                        } footer: {
-                            Text("Drafts stay private on this device. Complete the form to add its PDF to this job’s Files.")
-                        }
+        Form {
+            if !accessDenied, let record, let content = record.content {
+                Section("Job") {
+                    LabeledContent("Customer", value: content.job.customerName)
+                    LabeledContent("Work", value: ServiceCallType(rawValue: content.job.workType)?.displayName ?? "Needs review")
+                    if !content.job.siteAddress.isEmpty { Text(content.job.siteAddress).font(.caption).foregroundStyle(.secondary) }
+                    if record.state == .editing && !unsaved && !contextChanged {
+                        Label("Draft saved on this device", systemImage: "checkmark.circle")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("FieldFormDraftSaved")
                     } else if record.state == .completed {
-                        Section {
-                            savedFormLink(record)
-                            Button("Start another form") { load(startAnother: true) }
-                                .accessibilityIdentifier("StartAnotherFieldForm")
+                        Label("Completed form saved in this job’s Files", systemImage: "checkmark.seal.fill")
+                            .foregroundStyle(.green).accessibilityIdentifier("FieldFormCompletionSaved")
+                    } else if record.state == .completing {
+                        Text("Finish saving to recover the original form and file.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                if let message {
+                    Section {
+                        Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                            .accessibilityIdentifier("FieldFormDraftIssue")
+                        if unsaved && !contextChanged {
+                            Button("Retry saving draft") { persistAnswers() }
+                            Button("Reload saved draft…") { showingReload = true }
                         }
                     }
-                } else {
-                    ContentUnavailableView("Form unavailable", systemImage: "checklist",
-                        description: Text(message ?? "Checking your saved draft…"))
-                    Button("Try again") { load() }
                 }
-            }
-            .navigationTitle(record?.state == .completed ? "Saved Form" : "Complete Form")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }.disabled(isSaving || unsaved)
-                        .accessibilityIdentifier("CloseFieldFormDraft")
+                Section(content.title) {
+                    ForEach(content.questions) { question in questionView(question) }
                 }
-                if record?.state == .editing || record?.state == .completing {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button(isSaving ? "Saving…" : record?.state == .completing ? "Finish saving" : "Complete") { save() }
-                            .disabled(isSaving || unsaved || accessDenied || contextChanged)
-                            .accessibilityIdentifier("SaveCompletedFieldForm")
+                if record.state == .editing {
+                    Section {
+                        Button("Discard draft…", role: .destructive) { showingDiscard = true }
+                            .disabled(isSaving).accessibilityIdentifier("DiscardFieldFormDraft")
+                    } footer: {
+                        Text("Drafts stay private on this device. Complete the form to add its PDF to this job’s Files.")
                     }
+                } else if record.state == .completed {
+                    Section {
+                        savedFormLink(record)
+                        Button("Start another form") { load(startAnother: true) }
+                            .accessibilityIdentifier("StartAnotherFieldForm")
+                    }
+                }
+            } else {
+                ContentUnavailableView("Form unavailable", systemImage: "checklist",
+                    description: Text(message ?? "Checking your saved draft…"))
+                Button("Try again") { load() }
+            }
+        }
+        .navigationTitle(record?.state == .completed ? "Saved Form" : "Complete Form")
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Done") { dismiss() }.disabled(isSaving || unsaved)
+                    .accessibilityIdentifier("CloseFieldFormDraft")
+            }
+            if record?.state == .editing || record?.state == .completing {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(isSaving ? "Saving…" : record?.state == .completing ? "Finish saving" : "Complete") { save() }
+                        .disabled(isSaving || unsaved || accessDenied || contextChanged)
+                        .accessibilityIdentifier("SaveCompletedFieldForm")
                 }
             }
         }

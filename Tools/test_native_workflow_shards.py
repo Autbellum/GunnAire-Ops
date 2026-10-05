@@ -44,6 +44,8 @@ class NativeWorkflowShardTests(unittest.TestCase):
             "testReceiptRejectsAnotherJobsScheduledEstimateAndRecoversOriginalTarget",
             "testCatalogEditingControlsStayInsideTheSheetAcrossRotation",
             "testScheduleOpensAJobWhoseCustomerIsStillSyncing",
+            "testScheduledJobOpensHVACSafetyCheckAndReturnsToTheJob",
+            "testJobDocumentationOpensHVACSafetyCheckAndReturnsToTheJob",
         ):
             self.assertIn(name, declared)
         self.assertEqual(len(declared), len(set(declared)))
