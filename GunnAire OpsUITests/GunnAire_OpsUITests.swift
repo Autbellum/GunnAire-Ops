@@ -5543,7 +5543,12 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(waitForHittable(customer)); customer.tap()
         XCTAssertTrue(app.navigationBars["Customer"].waitForExistence(timeout: 4))
         let choice = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Blue Ridge Dental")).firstMatch
-        XCTAssertTrue(waitForHittable(choice)); choice.tap()
+        // Hosted accessibility queries were still in flight when the former
+        // ten-second deadline interrupted this otherwise visible customer row.
+        let customerReady = waitForHittable(choice, timeout: 20)
+        if !customerReady { retainNavigationFailure(app, name: "Invoice customer selection not ready") }
+        XCTAssertTrue(customerReady)
+        choice.tap()
         let search = app.textFields["Search items to add"]
         for _ in 0..<8 where !search.exists || !search.isHittable { app.swipeUp() }
         XCTAssertTrue(waitForHittable(search))
