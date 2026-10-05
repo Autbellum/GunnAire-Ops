@@ -213,3 +213,13 @@ at the start of every turn; append to it rather than rewriting it.
   views, every other one is presented as a sheet or cover). The nested stack is removed. Two new
   iPad UI tests cover both entry paths; the test-only commit runs first so CI shows the pre-fix
   behaviour. No crash log from the device yet; cause is a hypothesis until CI or a log confirms it.
+- 2026-10-05 Claude (PR #43; `ScheduleView.swift`, `ContentView.swift` job detail + `EditServiceCallView`
+  init, `GoogleCalendarScheduleSync.swift` title/location, `OperationsSupportViews.swift`,
+  `ServiceCall.swift`): `ServiceCall.customer` is `Customer!` so CloudKit can deliver a job before its
+  customer. CI run 37301751410 on d0b6573 (test only) reproduced it: with the existing
+  `-uiTestDocumentationJobPending` fixture the app terminated as soon as Schedule loaded (XCTest:
+  "Unable to monitor event loop", then crash-report check). Schedule now reads `customerDisplayName`,
+  the job detail shows a "Customer still syncing" notice until the customer exists, and customer-keyed
+  actions (documentation/payment, follow-up, dispatch move) refuse with a syncing message. Invoice,
+  estimate, agreement and communication `customer!` reads (~180 in billing/payment screens) are not
+  changed here; they are financial paths and need their own pinned tests.
