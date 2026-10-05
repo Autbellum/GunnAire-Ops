@@ -1859,6 +1859,10 @@ GunnAire
                             Text(document.customer?.name ?? "Customer syncing")
                                 .font(.headline)
                                 .accessibilityIdentifier("ManagementBillingSavedCustomer")
+                            if !billingPDFQueueMessage.isEmpty {
+                                Text(billingPDFQueueMessage)
+                                    .accessibilityIdentifier("BillingPDFQueueStatus")
+                            }
                             if case .invoice(let invoice) = document {
                                 LabeledContent("Work type", value: invoice.workType.displayName)
                                     .accessibilityElement(children: .ignore)
@@ -1894,9 +1898,6 @@ GunnAire
                         }
                         if !actionMessage.isEmpty {
                             Section { Text(actionMessage).accessibilityIdentifier("ManagementBillingSavedStatus") }
-                        }
-                        if !billingPDFQueueMessage.isEmpty {
-                            Section { Text(billingPDFQueueMessage).accessibilityIdentifier("BillingPDFQueueStatus") }
                         }
                     } else {
                         if startsNewDocument, !actionMessage.isEmpty {
@@ -8523,6 +8524,7 @@ GunnAire
             actionMessage = firstSaveMarkerIssue.map {
                 "Invoice saved locally. Automatic QuickBooks delivery is not confirmed: \($0)"
             } ?? "Invoice saved locally. Preparing its documentation…"
+            queueSavedBillingPDF(.invoice(invoice))
             Task { @MainActor in
                 defer {
                     if billingSyncLifecycles[key] === owner {
@@ -8541,7 +8543,6 @@ GunnAire
                     realmMarkerIssue = error.localizedDescription
                     automaticRetryPending = false
                 }
-                queueSavedBillingPDF(.invoice(invoice))
                 do {
                     let validateReport = try await preparation.perform {
                         try GmailDraftBusinessSnapshot.validate(initiatingSource, business: initiatingBusiness, context: modelContext)
