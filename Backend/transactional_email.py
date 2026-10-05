@@ -68,5 +68,7 @@ def send_transactional_email(
                 and isinstance(receipt.get("MessageID"), str)
                 and bool(receipt["MessageID"])
             )
-    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError, OSError):
+    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError, OSError) as error:
+        if isinstance(error, urllib.error.HTTPError):
+            error.close()
         return False

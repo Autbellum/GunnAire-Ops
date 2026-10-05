@@ -50,7 +50,9 @@ def transport(request):
             if not isinstance(value, dict):
                 raise ValueError()
             return value
-    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError):
+    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError) as error:
+        if isinstance(error, urllib.error.HTTPError):
+            error.close()
         raise failure("provider_unavailable", "QuickBooks could not confirm the billing request. Review the original attempt before retrying.", 502) from None
 
 

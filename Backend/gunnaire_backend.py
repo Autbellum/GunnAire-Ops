@@ -499,6 +499,8 @@ def apple_public_key(kid: str, *, force_refresh: bool = False) -> rsa.RSAPublicK
             with urllib.request.urlopen(request, timeout=5) as response:
                 raw = response.read(64 * 1024 + 1)
         except (urllib.error.URLError, TimeoutError, OSError) as error:
+            if isinstance(error, urllib.error.HTTPError):
+                error.close()
             raise ValueError("Apple signing keys are unavailable") from error
         if len(raw) > 64 * 1024:
             raise ValueError("Apple signing-key response is too large")
@@ -1075,6 +1077,7 @@ def qbo_request(form: dict[str, str], endpoint: str) -> tuple[int, dict[str, obj
             return response.status, payload if isinstance(payload, dict) else {}
     except urllib.error.HTTPError as error:
         # Do not expose Intuit's raw OAuth diagnostics; they may include sensitive context.
+        error.close()
         return error.code, {"error": "QuickBooks rejected the OAuth request", "status": error.code}
     except (urllib.error.URLError, TimeoutError):
         return HTTPStatus.BAD_GATEWAY, {"error": "QuickBooks is unavailable"}
@@ -1105,7 +1108,9 @@ def qbo_payment_read_transport(request):
             if not isinstance(payload, dict):
                 raise ValueError("invalid provider response")
             return response.status, payload
-    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError):
+    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError) as error:
+        if isinstance(error, urllib.error.HTTPError):
+            error.close()
         raise payment_attempts.AttemptError(
             "provider_unavailable", "The provider record could not be verified. No new payment was sent.", 502,
         ) from None
@@ -1223,7 +1228,9 @@ def qbo_catalog_transport(request):
             if not isinstance(payload, dict) or not 200 <= response.status < 300:
                 raise ValueError("unconfirmed response")
             return payload
-    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError):
+    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError) as error:
+        if isinstance(error, urllib.error.HTTPError):
+            error.close()
         raise payment_attempts.AttemptError(
             "provider_unavailable", "QuickBooks could not confirm the catalog request. Review the original attempt before retrying.", 502,
         ) from None
@@ -1334,7 +1341,9 @@ def qbo_customer_transport(request):
             if not isinstance(payload, dict) or not 200 <= response.status < 300:
                 raise ValueError("unconfirmed response")
             return payload
-    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError):
+    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError) as error:
+        if isinstance(error, urllib.error.HTTPError):
+            error.close()
         raise payment_attempts.AttemptError("provider_unavailable",
             "QuickBooks could not confirm the customer request. Review the original attempt before retrying.", 502) from None
 
