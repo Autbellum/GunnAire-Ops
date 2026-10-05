@@ -1833,6 +1833,31 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testExpenseJobPickerKeepsPendingCustomerVisibleAndBlocksSubmission() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-appStoreScreenshotFixtures", "-uiTestSeedCollectibleJob", "-uiTestDocumentationJobPending",
+            "-GunnAirePendingAppRoute", "timeClock"]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+        let expenses = app.buttons["OpenFieldExpenses"]
+        XCTAssertTrue(expenses.waitForExistence(timeout: 10)); expenses.tap()
+        let addClaim = app.buttons["AddFieldExpense"]
+        XCTAssertTrue(addClaim.waitForExistence(timeout: 10)); addClaim.tap()
+        XCTAssertTrue(app.navigationBars["New Expense Claim"].waitForExistence(timeout: 10))
+        let picker = app.buttons["FieldExpenseJob"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 5)); picker.tap()
+        let pendingJob = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Customer syncing")).firstMatch
+        XCTAssertTrue(pendingJob.waitForExistence(timeout: 5)); pendingJob.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["FieldExpenseCustomerSyncStatus"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["SubmitFieldExpense"].isEnabled)
+        XCTAssertEqual(app.state, .runningForeground)
+        let evidence = XCTAttachment(screenshot: app.screenshot())
+        evidence.name = "Pending customer keeps the expense draft open without allowing submission"
+        evidence.lifetime = .keepAlways; add(evidence)
+    }
+
+    @MainActor
     func testFieldTechnicianSubmitsJobLinkedMileageFromTimeClock() throws {
         let app = XCUIApplication()
         app.launchArguments = [

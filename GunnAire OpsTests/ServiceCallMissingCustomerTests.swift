@@ -75,4 +75,43 @@ struct ServiceCallMissingCustomerTests {
         #expect(addressedEvent.location == "42 Fixture Street")
     }
 
+    @Test func warrantyMatchingNeverJoinsUnresolvedCustomers() throws {
+        let (call, context) = try job(customerSynced: false)
+        defer { withExtendedLifetime(context) {} }
+        #expect(EquipmentWarrantyClaimPolicy.relatedServiceCallIDs(customerID: nil, serviceCalls: [call]).isEmpty)
+        #expect(EquipmentWarrantyClaimPolicy.relatedServiceCallIDs(customerID: UUID(), serviceCalls: [call]).isEmpty)
+        let customer = Customer(name: "Warranty customer")
+        context.insert(customer)
+        call.customer = customer
+        #expect(EquipmentWarrantyClaimPolicy.relatedServiceCallIDs(customerID: customer.id, serviceCalls: [call]) == [call.id])
+        #expect(EquipmentWarrantyClaimPolicy.relatedServiceCallIDs(customerID: UUID(), serviceCalls: [call]).isEmpty)
+    }
+
+    private func expense(for call: ServiceCall?) throws -> FieldExpenseClaim {
+        try FieldExpenseClaimPolicy.makeClaim(serviceCall: call, claimantEmail: "worker@example.com",
+            claimantName: "Fixture worker", claimType: .expense, category: .other,
+            expenseDate: Date(), merchant: "Fixture supplier", businessPurpose: "Job supplies",
+            amount: 12, mileageMiles: nil, mileageRatePerMile: nil,
+            mileageOrigin: nil, mileageDestination: nil, reimbursable: true)
+    }
+
+    @Test func expenseWaitsForCustomerAndThenKeepsTheOriginalJob() throws {
+        let (call, context) = try job(customerSynced: false)
+        defer { withExtendedLifetime(context) {} }
+        #expect(throws: FieldExpenseClaimError.jobCustomerSyncing) { try expense(for: call) }
+        let customer = Customer(name: "Expense customer")
+        context.insert(customer)
+        call.customer = customer
+        let claim = try expense(for: call)
+        #expect(claim.serviceCallID == call.id)
+        #expect(claim.customerID == customer.id)
+        #expect(claim.customerName == customer.name)
+    }
+
+    @Test func generalBusinessExpenseDoesNotRequireAJobCustomer() throws {
+        let claim = try expense(for: nil)
+        #expect(claim.serviceCallID == nil)
+        #expect(claim.customerID == nil)
+        #expect(claim.customerName == nil)
+    }
 }
