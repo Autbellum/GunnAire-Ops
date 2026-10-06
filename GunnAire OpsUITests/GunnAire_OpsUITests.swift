@@ -100,6 +100,44 @@ final class GunnAire_OpsUITests: XCTestCase {
         return XCTWaiter.wait(for: [hittable], timeout: timeout) == .completed
     }
 
+    /// SwiftUI applies a text field's keystrokes to its binding
+    /// asynchronously, so a single read taken straight after synthesized
+    /// typing can sample the sequence mid-flight. CI evidence from PR #27:
+    /// `testEstimateBundleComposerSavesEditsWithKeyboardActive` read "1" from
+    /// `BundleQuantity` 0.3 s after one `typeText` carrying three deletes and
+    /// "2" - exactly the value after two of those four keystrokes - while the
+    /// same call on the same shard read the finished "2" when it happened to
+    /// have 1.26 s. These waits return the moment the field settles, so a
+    /// field that types correctly costs nothing, and the value is read again
+    /// afterwards so a field that reaches the expected text and then changes
+    /// still fails the caller's own unchanged assertion.
+    private func settledValue(of field: XCUIElement, equals expected: String,
+                              timeout: TimeInterval = 10) -> String {
+        let settled = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in (field.value as? String) == expected },
+            object: field
+        )
+        _ = XCTWaiter.wait(for: [settled], timeout: timeout)
+        return field.value as? String ?? ""
+    }
+
+    /// The same wait for the cleared state. An empty SwiftUI field exposes its
+    /// placeholder as the value, so both readings count as cleared here
+    /// exactly as they do at the call sites.
+    private func settledClearedValue(of field: XCUIElement,
+                                     timeout: TimeInterval = 10) -> String {
+        let placeholder = field.placeholderValue
+        let settled = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                let current = field.value as? String ?? ""
+                return current.isEmpty || current == placeholder
+            },
+            object: field
+        )
+        _ = XCTWaiter.wait(for: [settled], timeout: timeout)
+        return field.value as? String ?? ""
+    }
+
     @MainActor
     private func openRoleAwareFind(in app: XCUIApplication) {
         let globalFind = app.buttons["GlobalFindButton"]
@@ -159,7 +197,7 @@ final class GunnAire_OpsUITests: XCTestCase {
                 field.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)).tap()
             }
             field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: priorValue.count))
-            let cleared = field.value as? String ?? ""
+            let cleared = settledClearedValue(of: field)
             guard cleared.isEmpty || cleared == field.placeholderValue else {
                 retainNavigationFailure(app, name: "Inventory quantity was not completely cleared")
                 XCTFail("Ordinary deletion must clear the prior quantity before replacement.", file: file, line: line)
@@ -167,10 +205,11 @@ final class GunnAire_OpsUITests: XCTestCase {
             }
         }
         field.typeText(replacement)
-        if field.value as? String != replacement {
+        let typed = settledValue(of: field, equals: replacement)
+        if typed != replacement {
             retainNavigationFailure(app, name: "Quantity replacement mismatch for \(field.identifier)")
         }
-        XCTAssertEqual(field.value as? String, replacement,
+        XCTAssertEqual(typed, replacement,
                        "Quantity replacement must produce the requested value exactly.",
                        file: file, line: line)
     }
@@ -276,8 +315,13 @@ final class GunnAire_OpsUITests: XCTestCase {
         }
         field.typeText(replacement)
 
-        guard (field.value as? String) != replacement else { return }
-        let currentValue = field.value as? String ?? ""
+        // A short settle, not an assertion gate: this decides whether the
+        // fallback is needed at all, and it also keeps the delete count below
+        // honest, since a mid-flight read would size it against a partial
+        // value. The retry stays as responsive as it was when the entry has
+        // genuinely failed.
+        let currentValue = settledValue(of: field, equals: replacement, timeout: 3)
+        guard currentValue != replacement else { return }
         field.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
         field.typeText(
             String(
@@ -787,7 +831,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         to.tap(); to.typeText("vendor@example.invalid")
         let subject = app.textFields["MailComposeSubject"]; subject.tap(); subject.typeText("Equipment request")
         let body = app.textFields["MailComposeBody"]; body.tap(); body.typeText("Please confirm equipment availability.")
-        XCTAssertEqual(subject.value as? String, "Equipment request")
+        XCTAssertEqual(settledValue(of: subject, equals: "Equipment request"), "Equipment request")
         app.buttons["MailSendButton"].tap()
         XCTAssertTrue(app.buttons["MailCheckSendingStatus"].waitForExistence(timeout: 6))
         XCTAssertFalse(app.buttons["MailSendButton"].isEnabled)
@@ -2366,7 +2410,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(quickBooksWorkerID.waitForExistence(timeout: 3))
         quickBooksWorkerID.tap()
         quickBooksWorkerID.typeText("QBO-EMP-42")
-        XCTAssertEqual(quickBooksWorkerID.value as? String, "QBO-EMP-42")
+        XCTAssertEqual(settledValue(of: quickBooksWorkerID, equals: "QBO-EMP-42"), "QBO-EMP-42")
         app.buttons["SharedTimeWorkerCheck"].tap()
         XCTAssertTrue(app.staticTexts["SharedTimeWorkerCandidate"].waitForExistence(timeout: 5))
         app.buttons["SharedTimeWorkerConfirm"].tap()
@@ -5442,13 +5486,13 @@ final class GunnAire_OpsUITests: XCTestCase {
             if hardwareKeys {
                 field.typeKey("a", modifierFlags: .command)
                 field.typeKey(value, modifierFlags: [])
-                XCTAssertEqual(field.value as? String, value)
+                XCTAssertEqual(settledValue(of: field, equals: value), value)
                 return
             }
             let prior = field.value as? String ?? ""
             field.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
             field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: prior.count) + value)
-            XCTAssertEqual(field.value as? String, value)
+            XCTAssertEqual(settledValue(of: field, equals: value), value)
         }
         let customer = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Select Customer")).firstMatch
         XCTAssertTrue(customer.waitForExistence(timeout: 4)); customer.tap()
@@ -8850,13 +8894,14 @@ final class GunnAire_OpsUITests: XCTestCase {
         savedQuantity.tap()
         savedQuantity.typeKey("a", modifierFlags: .command)
         for key in "6.5" { savedQuantity.typeKey(String(key), modifierFlags: []) }
-        if savedQuantity.value as? String != "6.5" {
+        let hardwareDraft = settledValue(of: savedQuantity, equals: "6.5")
+        if hardwareDraft != "6.5" {
             retainNavigationFailure(app, name: "Hardware quantity draft did not retain the full decimal")
         }
-        XCTAssertEqual(savedQuantity.value as? String, "6.5")
+        XCTAssertEqual(hardwareDraft, "6.5")
         XCTAssertTrue(waitForHittable(done)); done.tap()
         requireKeyboardDismissed()
-        XCTAssertEqual(savedQuantity.value as? String, "6.5")
+        XCTAssertEqual(settledValue(of: savedQuantity, equals: "6.5"), "6.5")
         app.buttons["Cancel"].tap()
         XCTAssertTrue(app.navigationBars["QuickBooks Management"].exists)
         XCTAssertTrue(waitForHittable(edit)); edit.tap()
@@ -8976,17 +9021,19 @@ final class GunnAire_OpsUITests: XCTestCase {
         for key in "4.25" {
             quantity.typeKey(String(key), modifierFlags: [])
             enteredHardwareQuantity.append(key)
-            XCTAssertEqual(quantity.value as? String, enteredHardwareQuantity)
+            XCTAssertEqual(settledValue(of: quantity, equals: enteredHardwareQuantity),
+                           enteredHardwareQuantity)
         }
-        XCTAssertEqual(quantity.value as? String, "4.25")
+        XCTAssertEqual(settledValue(of: quantity, equals: "4.25"), "4.25")
         quantity.typeKey("a", modifierFlags: .command)
         var expectedHardwareQuantity = ""
         for key in "6.5" {
             quantity.typeKey(String(key), modifierFlags: [])
             expectedHardwareQuantity.append(key)
-            XCTAssertEqual(quantity.value as? String, expectedHardwareQuantity)
+            XCTAssertEqual(settledValue(of: quantity, equals: expectedHardwareQuantity),
+                           expectedHardwareQuantity)
         }
-        XCTAssertEqual(quantity.value as? String, "6.5")
+        XCTAssertEqual(settledValue(of: quantity, equals: "6.5"), "6.5")
         requireContextualControl("Inventory action after hardware-style input")
         rotateDevice(to: .portrait)
         requireContextualControl("Inventory action after returning to portrait")

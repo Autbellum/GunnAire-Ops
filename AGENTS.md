@@ -1614,3 +1614,54 @@ at the start of every turn; append to it rather than rewriting it.
   they are environmental; CI's Python 3.13/3.14 jobs cover them. NOT run here: the app build and
   the native suites. CI on the merge commit is the gate for those, as it was for the four earlier
   Autofix pushes on this branch.
+
+- 2026-10-06 Claude, Autofix on PR #27 "iPad 1 of 2". One failure, and it is a test-side
+  sampling defect rather than anything the merge changed. Shard 0 ran 456 unit tests with 0
+  failures and 38 UI tests with 1: `testEstimateBundleComposerSavesEditsWithKeyboardActive`
+  at `GunnAire_OpsUITests.swift:5451`, `XCTAssertEqual` reading `"1"` where `"2"` was
+  requested.
+  **The merge is excluded as the cause, by evidence rather than by assumption.** The whole
+  native workflow was green at the pre-merge head `8fd6b518d` (run 36950995591), and this
+  same test passed there in 117.8 s on this same shard. Main's nine incoming commits
+  (`665f81e..6e27407`) touch twelve files and not one of them is a catalog, billing or
+  QuickBooks file, so `CatalogBundleMembersView` is untouched. The shard split is also
+  innocent: a byte comparison of the selector list shows all 72 pre-merge selectors kept
+  their exact index, with main's three appended at 72, 73 and 74, so no test changed shard.
+  **What the value "1" actually is.** `CatalogBundleQuantityEditor` seeds its `@State` from
+  `String(snapshot.quantity)` and `quantity` is a `Double`, so the field opens holding
+  `"1.0"`. `enterQuantity` sends one `typeText` carrying three deletes plus `"2"`, then reads
+  the value once. `"1"` is `"1.0"` with two of those four keystrokes applied — the sequence
+  read mid-flight. The timing confirms it: the failing run read 0.3 s after the synthesize
+  event, the green run read 1.26 s after it and saw the finished `"2"`. Corroboration from
+  the sibling: the `submitKeyboard: true` variant of the same journey goes through
+  `replaceText`, which already re-reads and retries, and it has been the stable one.
+  Fix: a bounded `settledValue(of:equals:)` (and `settledClearedValue(of:)` for the cleared
+  state), modelled on `waitForHittable` — it returns the moment the field settles, then reads
+  the value again, so a field that reaches the expected text and then changes still fails.
+  Applied to the whole family of post-typing value reads in one pass, 13 call sites, because
+  the 2026-09-25 and 2026-09-30 entries above record that taking these one CI failure at a
+  time does not converge: both `enterQuantity` paths, both reads in
+  `replaceInventoryQuantityText`, the inventory hardware draft and its two per-key loops, the
+  Mail subject and the shared-time worker reference. `replaceText`'s read gets the same wait
+  at 3 s because there it only decides whether the existing fallback is needed, and a
+  mid-flight read there would also have sized its delete count against a partial value.
+  NOTHING WAS WEAKENED: `XCTAssert` 2891 and `XCTFail` 10 before and after, 193 test methods
+  before and after, and every removed line is a value *read* feeding an unchanged comparison.
+  No assertion, message, test, exclusion or expected failure was touched, and no app source
+  was touched.
+  Verified: `swiftc -frontend -parse` exit 0 against iPhoneSimulator26.5; `git diff --check`
+  clean; 20/20 workflow-shard and native-execution contract tests pass; all 75 declared
+  selectors still resolve to a `func`.
+  NOT RUN HERE, and this is a real limit on the above: CoreSimulator is unreachable from this
+  session's sandbox ("Unable to discover any Simulator runtimes", "Operation not permitted"),
+  the same wall recorded on 2026-09-22, so no UI test was executed and the fix is reasoned
+  from CI evidence plus a parse. CI on this commit is the gate. Claude did not bypass the
+  sandbox.
+  LIMIT WORTH NAMING: this makes the test sample a settled field instead of a mid-flight one.
+  It does not explain why propagation occasionally takes longer than a second on a loaded
+  runner, which is the same unexplained slowness behind the animation-quiescence waits open
+  since 2026-09-22. If this recurs somewhere that is NOT a post-typing read, that is the
+  thread to pull rather than another family bump.
+  Open question for root, unchanged: with `2026100501` on main carrying the release, is PR #27
+  still the integration target or superseded? If superseded, its CI cycles are not worth
+  chasing.
