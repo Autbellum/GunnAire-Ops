@@ -67,7 +67,7 @@ class NativeWorkflowShardTests(unittest.TestCase):
 
     def test_hosted_ipad_has_time_for_the_complete_unweakened_suite(self):
         text = WORKFLOW.read_text()
-        self.assertIn("timeout-minutes: ${{ matrix.platform == 'iPad' && 90 || 60 }}", text)
+        self.assertIn("timeout-minutes: ${{ matrix.platform == 'iPad' && 120 || 90 }}", text)
         self.assertIn("-parallel-testing-enabled NO", text)
         # A test that stops idling must fail on its own instead of consuming
         # the job limit and discarding every later result. The slowest healthy
