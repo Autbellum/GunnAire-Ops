@@ -141,6 +141,9 @@ jobs:
               testScheduleDeletionRetainsTheConfirmedTargetAndProtectsBilledJobs \
               testUnreconciledStatementExplainsReviewAndHandsOffToInvoices \
               testReceiptRejectsAnotherJobsScheduledEstimateAndRecoversOriginalTarget \
+              testScheduledJobOpensHVACSafetyCheckAndReturnsToTheJob \
+              testJobDocumentationOpensHVACSafetyCheckAndReturnsToTheJob \
+              testScheduleOpensAJobWhoseCustomerIsStillSyncing \
               testCatalogEditingControlsStayInsideTheSheetAcrossRotation; do
               if (( index % 2 == CI_SHARD )); then
                 selectors+=("-only-testing:GunnAire OpsUITests/GunnAire_OpsUITests/$test")
