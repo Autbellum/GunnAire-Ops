@@ -1566,6 +1566,13 @@ final class ServiceCall {
         return "\(window.lowerBound.formatted(date: .abbreviated, time: .shortened)) – \(window.upperBound.formatted(date: .abbreviated, time: .shortened))"
     }
 
+    /// The customer relationship is implicitly unwrapped so CloudKit can
+    /// deliver a job before its customer. Display code reads this instead of
+    /// `customer.name`, which traps while that relationship is still nil.
+    var customerDisplayName: String {
+        customer?.name ?? "Customer syncing"
+    }
+
     var customerAppointmentSummary: String {
         if let promisedArrivalWindowSummary {
             return "\(scheduledDate.formatted(date: .abbreviated, time: .omitted)) • arrival \(promisedArrivalWindowSummary)"

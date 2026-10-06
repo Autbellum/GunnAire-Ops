@@ -3799,6 +3799,90 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertFalse(app.buttons["OpenSavedFieldForms-\(screenshotServiceCallID)"].exists)
     }
 
+    /// Reported path: Schedule → open the scheduled job → Work → the first
+    /// required form, HVAC Safety Check. The editor is pushed onto Schedule's
+    /// own stack inside the split view; it must open, keep an answer, and
+    /// return to the same job without ending the app.
+    @MainActor
+    func testScheduledJobOpensHVACSafetyCheckAndReturnsToTheJob() throws {
+        let app = fieldFormDraftApp()
+        app.launch()
+        revealSidebarDestination("Schedule & Jobs", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+        let job = app.buttons["OpenServiceCall-\(screenshotServiceCallID)"]
+        for _ in 0..<8 where !job.exists || !job.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(job)); job.tap()
+        let workspace = app.segmentedControls["ServiceCallWorkspacePicker"]
+        XCTAssertTrue(workspace.waitForExistence(timeout: 5))
+        workspace.buttons["Work"].tap()
+        let safetyCheck = app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "OpenFieldForm-", "HVAC Safety Check"
+        )).firstMatch
+        for _ in 0..<14 where !safetyCheck.exists || !safetyCheck.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(safetyCheck)); safetyCheck.tap()
+        assertHVACSafetyCheckOpensAndKeepsAnAnswer(app)
+        XCTAssertTrue(workspace.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.state, .runningForeground)
+    }
+
+    /// The same first form from the Job Documentation workspace, using the
+    /// starter template a real install or service job receives.
+    @MainActor
+    func testJobDocumentationOpensHVACSafetyCheckAndReturnsToTheJob() throws {
+        let app = fieldFormDraftApp()
+        app.launch(); openFieldFormDraftJob(app)
+        let safetyCheck = app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "CompleteRequiredFieldForm-", "HVAC Safety Check"
+        )).firstMatch
+        for _ in 0..<14 where !safetyCheck.exists || !safetyCheck.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitForHittable(safetyCheck)); safetyCheck.tap()
+        assertHVACSafetyCheckOpensAndKeepsAnAnswer(app)
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.state, .runningForeground)
+    }
+
+    /// A job can arrive from CloudKit before its customer does
+    /// (`ServiceCall.customer` is an implicitly unwrapped relationship). The
+    /// schedule must stay usable and the job must open without ending the app.
+    @MainActor
+    func testScheduleOpensAJobWhoseCustomerIsStillSyncing() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob", "-uiTestDocumentationJobPending"]
+        app.launch()
+        revealSidebarDestination("Schedule & Jobs", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.state, .runningForeground, "Schedule ended the app while a job's customer was missing")
+        let job = app.buttons["OpenServiceCall-\(screenshotServiceCallID)"]
+        for _ in 0..<8 where !job.exists || !job.isHittable {
+            app.swipeUp()
+            XCTAssertEqual(app.state, .runningForeground, "Scrolling Schedule ended the app while a job's customer was missing")
+        }
+        let evidence = XCTAttachment(screenshot: app.screenshot())
+        evidence.name = "Schedule with a job whose customer is still syncing"
+        evidence.lifetime = .keepAlways; add(evidence)
+        XCTAssertTrue(waitForHittable(job)); job.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["ServiceCallCustomerSyncing"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.state, .runningForeground, "Opening the job ended the app while its customer was missing")
+    }
+
+    @MainActor private func assertHVACSafetyCheckOpensAndKeepsAnAnswer(_ app: XCUIApplication) {
+        let close = app.buttons["CloseFieldFormDraft"]
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.state, .runningForeground)
+        XCTAssertTrue(app.staticTexts["Electrical disconnect inspected"].waitForExistence(timeout: 5))
+        let evidence = XCTAttachment(screenshot: app.screenshot())
+        evidence.name = "HVAC Safety Check editor opened from the job"
+        evidence.lifetime = .keepAlways; add(evidence)
+        let row = app.switches.matching(NSPredicate(format: "identifier BEGINSWITH %@", "FieldFormAnswer-")).firstMatch
+        XCTAssertTrue(waitForHittable(row))
+        let control = row.switches.firstMatch
+        XCTAssertTrue(waitForHittable(control)); control.tap()
+        XCTAssertEqual(row.value as? String, "1")
+        XCTAssertTrue(app.descendants(matching: .any)["FieldFormDraftSaved"].waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForHittable(close)); close.tap()
+    }
+
     @MainActor private func fieldFormDraftApp() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-uiTestAuthenticatedAdmin",

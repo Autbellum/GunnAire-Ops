@@ -1551,3 +1551,66 @@ at the start of every turn; append to it rather than rewriting it.
   Open question for root, unchanged from the last report and not decided by this agent: with 0119
   carrying the release, is PR #27 still the integration target or superseded? If superseded, its CI
   cycles are not worth chasing.
+- 2026-10-02 Claude (PR #43, `GunnAire Ops/FieldFormDraftEditor.swift`): Eric reported that
+  Schedule → job → Work → HVAC Safety Check ends the app. `FieldFormResponseEditor` was the only
+  pushed view in the app that wraps its body in its own `NavigationStack` (static scan: 105 such
+  views, every other one is presented as a sheet or cover). The nested stack is removed. Two new
+  iPad UI tests cover both entry paths; the test-only commit runs first so CI shows the pre-fix
+  behaviour. No crash log from the device yet; cause is a hypothesis until CI or a log confirms it.
+- 2026-10-05 Claude (PR #43; `ScheduleView.swift`, `ContentView.swift` job detail + `EditServiceCallView`
+  init, `GoogleCalendarScheduleSync.swift` title/location, `OperationsSupportViews.swift`,
+  `ServiceCall.swift`): `ServiceCall.customer` is `Customer!` so CloudKit can deliver a job before its
+  customer. CI run 37301751410 on d0b6573 (test only) reproduced it: with the existing
+  `-uiTestDocumentationJobPending` fixture the app terminated as soon as Schedule loaded (XCTest:
+  "Unable to monitor event loop", then crash-report check). Schedule now reads `customerDisplayName`,
+  the job detail shows a "Customer still syncing" notice until the customer exists, and customer-keyed
+  actions (documentation/payment, follow-up, dispatch move) refuse with a syncing message. Invoice,
+  estimate, agreement and communication `customer!` reads (~180 in billing/payment screens) are not
+  changed here; they are financial paths and need their own pinned tests.
+- 2026-10-05 Claude (cloud, PR #28): bumped to build 2026100501 (six occurrences; above the
+  2026092301-05 uploads from PR #27's branch) and added `generated/release-2026100501.sh`. Eric
+  runs it on the Mac after merging #28: it archives a detached worktree of origin/main (refusing
+  unless main carries this build and the PR #28 calendar fix) and uploads to TestFlight. It pushes
+  nothing. The PR must reach Eric's devices via TestFlight only (gunnaire-ship rule).
+- 2026-10-06 Claude (cloud, PR #28): merged main (317358e, PR #43) into the branch before merging.
+  Only AGENTS.md conflicted. #43 made `ServiceCall.customer` reads nil-safe in ScheduleView,
+  ContentView and GoogleCalendarScheduleSync; #28's new reads are already nil-safe
+  (`ScopedRevision` uses `customer.map`), and `rejectedMove` keeps both #43's syncing-customer
+  guard and #28's removal of the Google read-only rejection. Build stays 2026100501 (main is
+  still 2026091617).
+
+- 2026-10-05 Claude, Autofix on PR #27: merged `origin/main` (`6e27407`) into the branch to clear
+  GitHub's conflict verdict on head `8fd6b518d2`. Fetched from `origin` and merged the fetched ref,
+  not the local copy; no rebase, no force-push, and `main` itself was not pushed (rule 4). Nine
+  commits of main came in; 56 branch commits were already ahead. Six Swift files auto-merged
+  (`ContentView`, `GoogleCalendarScheduleSync`, `OperationsSupportViews`, `ScheduleView`,
+  `ServiceCall`, `GunnAire_OpsUITests`); three files conflicted.
+  **`project.pbxproj` (6 identical sites):** took main's `2026100501` over the branch's
+  `2026100117`. Build numbers are never reused and `2026100117` was already uploaded from this
+  lineage, so the branch's value was stale rather than a competing choice.
+  **`AGENTS.md`:** append-only, so both sides' entries are kept verbatim in the order they already
+  stood — this branch's four 2026-10-01 entries, then main's 2026-10-02 to 10-06 entries from
+  PR #43 and PR #28. Only the three marker lines were removed.
+  **`.github/workflows/native-app-regression.yml`:** both sides appended UI selectors to the same
+  shard-distribution loop. Took the union, deduplicated — this branch's four Mail-draft journeys
+  plus main's `testScheduledJobOpensHVACSafetyCheck…`,
+  `testJobDocumentationOpensHVACSafetyCheck…` and `testScheduleOpensAJobWhoseCustomerIsStillSyncing`,
+  with the shared `testCatalogEditingControlsStayInsideTheSheetAcrossRotation` kept once. Nothing
+  was dropped: 75 declared methods, 39/38 across the two shards.
+  **One assertion was deliberately relaxed, and this is the only judgement call here.**
+  `test_native_workflow_shards.py`'s two delivery-journey tests ended with
+  `assertEqual(len(first), len(second))`. Both are branch-only additions (absent from main) written
+  when the list held 72 methods, an even count. Main legitimately added three more, so the union is
+  75 and exact balance became arithmetically impossible, not broken. Those two now use
+  `assertLessEqual(abs(len(first) - len(second)), 1)` — the same tolerance the whole-suite contract
+  in the same file already uses — and every separation assertion is untouched: creation and
+  saved-list still run on different shards, verified for both estimate and invoice.
+  Checks run on the merged tree: 20/20 workflow-shard and native-execution contract tests pass;
+  all 75 declared selectors resolve to a `func` in the merged UI test source, which is also a
+  cross-check that main's three new methods arrived intact; the seven files the merge touched all
+  pass `swiftc -frontend -parse` (iOS simulator target); `git diff --check` clean. The wider Tools
+  discovery reports the two import errors this log already records for a local Python without
+  `cryptography` — `Backend/` was untouched by this merge and the same import fails outside it, so
+  they are environmental; CI's Python 3.13/3.14 jobs cover them. NOT run here: the app build and
+  the native suites. CI on the merge commit is the gate for those, as it was for the four earlier
+  Autofix pushes on this branch.
