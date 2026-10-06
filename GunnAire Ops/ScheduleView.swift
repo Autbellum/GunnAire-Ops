@@ -441,6 +441,13 @@ struct ScheduleView: View {
                 .onAppear {
                     AppAccess.ensureTechnicianRecords(for: users, technicians: technicians, modelContext: modelContext)
                     applyPendingScheduleIntentIfNeeded()
+                    if canManageDispatch {
+                        GoogleCalendarScheduleSync.retryPendingIfNeeded(
+                            auth: googleAuth,
+                            modelContext: modelContext,
+                            signedInEmail: AppIdentity.currentEmail
+                        )
+                    }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
                     applyPendingScheduleIntentIfNeeded()
@@ -2387,9 +2394,6 @@ GunnAire
             return .rejected("That job is no longer available in your schedule.")
         }
         guard DispatchBoardScheduling.canMove(call) else {
-            if GoogleCalendarScheduleSync.isExternalGoogleCalendarEvent(call), !call.googleEventManagedByApp {
-                return .rejected("Google-owned events are read-only. Move this event in Google Calendar, then sync again.")
-            }
             return .rejected("Completed and cancelled jobs cannot be moved from the dispatch board.")
         }
         // Do Not Service restrictions are keyed by customer. Until the customer
@@ -2643,8 +2647,8 @@ enum DispatchBoardScheduling {
     }
 
     static func canMove(_ call: ServiceCall) -> Bool {
-        guard call.status != .completed, call.status != .cancelled else { return false }
-        return !GoogleCalendarScheduleSync.isExternalGoogleCalendarEvent(call) || call.googleEventManagedByApp
+        // Imported Google events move too; the new time is written back to them.
+        return call.status != .completed && call.status != .cancelled
     }
 
     static func normalizedOverrideReason(_ value: String?) -> String? {

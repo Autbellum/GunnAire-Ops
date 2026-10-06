@@ -47,8 +47,9 @@ struct GoogleCalendarWorkflowTests {
             if linked { remote[key(email, "fixture-event")] = event(id: "fixture-event") }
         }
 
-        func flow(save: @escaping (ModelContext) throws -> Void = { try $0.save() }) throws -> GoogleCalendarWorkflow {
-            try GoogleCalendarWorkflow(auth: auth, context: context, signedInEmail: email,
+        func flow(scope: [ServiceCall]? = nil,
+                  save: @escaping (ModelContext) throws -> Void = { try $0.save() }) throws -> GoogleCalendarWorkflow {
+            try GoogleCalendarWorkflow(auth: auth, context: context, signedInEmail: email, scope: scope,
                 validateAccess: { if !self.authorized { throw GoogleCalendarWorkflowError.accessDenied } }, save: save)
         }
 
@@ -508,6 +509,158 @@ struct GoogleCalendarWorkflowTests {
         failed(try await f.publish())
         #expect(f.writes.isEmpty)
         #expect(f.call.notes == "New technician findings during sync")
+    }
+
+    /// The schedule's immediate send failed on-device with "The appointment or
+    /// related records changed during sync" because any record in the store
+    /// changing mid-request (a CloudKit merge from another device) aborted it.
+    @Test func unrelatedRecordChangesDuringASingleJobSendStillPublishIt() async throws {
+        let f = try Fixture()
+        let other = Customer(name: "Other customer")
+        let otherCall = ServiceCall(googleEventManagedByApp: true, eventTitle: "Other visit", type: .service,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_100_000), duration: 1800, customer: other)
+        f.context.insert(other); f.context.insert(otherCall)
+        try f.context.save()
+        var merged = false
+        f.beforeReply = { _ in
+            guard !merged else { return }
+            merged = true
+            other.name = "Renamed on another device"
+            otherCall.notes = "Edited on another device"
+            f.context.insert(Customer(name: "Created on another device"))
+            try f.context.save()
+        }
+        let result = await (try f.flow(scope: [f.call])).run {
+            try await GoogleCalendarScheduleSync.publish(call: f.call, workflow: $0)
+        }
+        #expect(try result.get().contains("Saved in Google Calendar"))
+        #expect(f.writes.map(\.httpMethod) == ["POST"])
+        #expect(f.call.googleEventID == GoogleCalendarScheduleSync.eventID(for: f.call.id))
+    }
+
+    @Test func scopedSendStillStopsWhenTheJobsOwnCustomerChanges() async throws {
+        let f = try Fixture()
+        f.beforeReply = { _ in f.customer.address = "Moved during sync" }
+        let result = await (try f.flow(scope: [f.call])).run {
+            try await GoogleCalendarScheduleSync.publish(call: f.call, workflow: $0)
+        }
+        // The in-flight request's own validity check reports the change, as in
+        // localEditDuringReadIsPreservedWithoutPublishingStaleValues.
+        failed(result)
+        #expect(!f.requests.isEmpty)
+        #expect(f.writes.isEmpty)
+        #expect(f.customer.address == "Moved during sync")
+    }
+
+    @Test func scopedSendStillStopsWhenTheAssignedTechnicianChanges() async throws {
+        let f = try Fixture()
+        let technician = Technician(name: "Fixture technician", contactInfo: "technician@gunnaire.com")
+        f.context.insert(technician)
+        f.call.assignedTechnician = technician
+        try f.context.save()
+        f.beforeReply = { _ in technician.contactInfo = "changed@gunnaire.com" }
+        let result = await (try f.flow(scope: [f.call])).run {
+            try await GoogleCalendarScheduleSync.publish(call: f.call, workflow: $0)
+        }
+        // The in-flight request's own validity check reports the change, as in
+        // localEditDuringReadIsPreservedWithoutPublishingStaleValues.
+        failed(result)
+        #expect(!f.requests.isEmpty)
+        #expect(f.writes.isEmpty)
+    }
+
+    @Test func syncPublishesAPendingJobDespiteAnUnrelatedMergeDuringItsSend() async throws {
+        let f = try Fixture()
+        f.call.scheduledDate = Date().addingTimeInterval(3600)
+        let other = Customer(name: "Other customer")
+        f.context.insert(other)
+        try f.context.save()
+        var merged = false
+        f.beforeReply = { _ in
+            guard !merged else { return }
+            merged = true
+            other.name = "Renamed on another device"
+            try f.context.save()
+        }
+        let result = await (try f.flow()).run { try await GoogleCalendarScheduleSync.synchronize(workflow: $0) }
+        #expect(try result.get().contains("Published 1"))
+        #expect(f.writes.map(\.httpMethod) == ["POST"])
+    }
+
+    /// Imported events used to be read-only, so rescheduling or staffing an
+    /// imported job never reached Google.
+    private func importedFixture(marker: String? = nil) throws -> Fixture {
+        let f = try Fixture(linked: true)
+        f.call.googleEventManagedByApp = false
+        var remote = f.event(id: "fixture-event", managed: false)
+        remote["description"] = "Owner's Google notes"
+        if let marker {
+            remote["extendedProperties"] = ["private": ["gunnaireServiceCallID": marker, "ownerKey": "kept"]]
+        } else {
+            remote["extendedProperties"] = ["private": ["ownerKey": "kept"]]
+        }
+        f.remote[f.key(f.email, "fixture-event")] = remote
+        try f.context.save()
+        return f
+    }
+
+    @Test func rescheduledImportedEventIsMarkedManagedAndPatchedInPlace() async throws {
+        let f = try importedFixture()
+        f.call.scheduledDate = f.call.scheduledDate.addingTimeInterval(7200)
+        try f.context.save()
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(f.call)
+        #expect(GoogleCalendarScheduleSync.isWriteBackRequested(f.call))
+        #expect(GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+        let result = await (try f.flow(scope: [f.call])).run {
+            try await GoogleCalendarScheduleSync.publish(call: f.call, workflow: $0)
+        }
+        #expect(try result.get().contains("Saved in Google Calendar"))
+        #expect(!f.writes.isEmpty)
+        #expect(f.writes.allSatisfy { $0.httpMethod == "PATCH" })
+        let first = try #require(f.writes.first)
+        #expect(first.url?.query == "sendUpdates=none")
+        let firstBody = try #require(JSONSerialization.jsonObject(with: first.httpBody!) as? [String: Any])
+        #expect(Set(firstBody.keys) == ["extendedProperties"])
+        let remote = try #require(f.remote[f.key(f.email, "fixture-event")])
+        let event = try f.decoded(remote)
+        #expect(event.isManagedByGunnAire)
+        #expect(event.extendedProperties?.privateProperties?["gunnaireServiceCallID"] == f.call.id.uuidString)
+        #expect(event.extendedProperties?.privateProperties?["ownerKey"] == "kept")
+        #expect(event.description == "Owner's Google notes")
+        #expect(event.summary == "Repair visit")
+        #expect(GoogleCalendarScheduleSync.remoteEventMatchesScheduleSlot(call: f.call, remoteEvent: event))
+        #expect(f.call.googleEventManagedByApp)
+        #expect(f.remote.count == 1)
+        #expect(!GoogleCalendarScheduleSync.isWriteBackRequested(f.call))
+        #expect(!GoogleCalendarScheduleSync.needsOutboundSync(f.call))
+    }
+
+    @Test func importedEventWithoutAWriteBackRequestIsNeverWritten() async throws {
+        let f = try importedFixture()
+        let result = await (try f.flow(scope: [f.call])).run {
+            try await GoogleCalendarScheduleSync.publish(call: f.call, workflow: $0)
+        }
+        #expect(try result.get().contains("Skipped"))
+        #expect(f.writes.isEmpty)
+        #expect(!f.call.googleEventManagedByApp)
+    }
+
+    @Test func importedEventMarkedForAnotherJobIsNotAdopted() async throws {
+        let f = try importedFixture(marker: UUID().uuidString)
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(f.call)
+        failed(await (try f.flow(scope: [f.call])).run {
+            try await GoogleCalendarScheduleSync.publish(call: f.call, workflow: $0)
+        })
+        #expect(f.writes.isEmpty)
+        #expect(!f.call.googleEventManagedByApp)
+    }
+
+    @Test func cancelledImportedJobIsNeverQueuedForWriteBack() throws {
+        let f = try importedFixture()
+        f.call.status = .cancelled
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(f.call)
+        #expect(!GoogleCalendarScheduleSync.isWriteBackRequested(f.call))
+        #expect(!GoogleCalendarScheduleSync.needsOutboundSync(f.call))
     }
 
     @Test func deletedModelDuringReadCannotBeLinkedOrDereferencedForPublication() async throws {

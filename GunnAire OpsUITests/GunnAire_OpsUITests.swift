@@ -5111,7 +5111,10 @@ final class GunnAire_OpsUITests: XCTestCase {
         if submitKeyboard { replaceText(in: app.textFields["BundleQuantity"], with: "2") }
         else { enterQuantity("BundleQuantity", "2") }
         if submitKeyboard { app.textFields["BundleQuantity"].typeText("\n") }
-        XCTAssertTrue(waitForHittable(app.buttons["SaveBundleQuantity"], timeout: 4))
+        // Submitting dismisses the keyboard, and on a loaded CI runner the Save
+        // control can still be unlaid-out well past four seconds. Use the
+        // helper's default, which was raised to 10 s on exactly this evidence.
+        XCTAssertTrue(waitForHittable(app.buttons["SaveBundleQuantity"]))
         app.buttons["SaveBundleQuantity"].tap()
         XCTAssertTrue(app.navigationBars["Bundle Quantity"].waitForNonExistence(timeout: 4))
         let second = app.buttons["EditBundleMember-\(root)-1"]
@@ -5122,7 +5125,8 @@ final class GunnAire_OpsUITests: XCTestCase {
         if submitKeyboard { replaceText(in: quantity, with: "3") }
         else { enterQuantity("BundleMemberQuantity", "3") }
         if submitKeyboard { quantity.typeText("\n") }
-        XCTAssertTrue(waitForHittable(app.buttons["SaveBundleMember"], timeout: 4))
+        // Same keyboard-dismissal transition as the bundle-quantity save above.
+        XCTAssertTrue(waitForHittable(app.buttons["SaveBundleMember"]))
         app.buttons["SaveBundleMember"].tap()
         XCTAssertTrue(app.navigationBars["Included Item"].waitForNonExistence(timeout: 4))
         XCTAssertTrue(app.buttons["EditBundleMember-\(root)-1"].waitForExistence(timeout: 4))
@@ -8316,7 +8320,11 @@ final class GunnAire_OpsUITests: XCTestCase {
         func requireKeyboardDismissed() {
             let dismissed = XCTNSPredicateExpectation(
                 predicate: NSPredicate(format: "exists == false"), object: app.keyboards.firstMatch)
-            let result = XCTWaiter.wait(for: [dismissed], timeout: 5)
+            // Keyboard teardown is the transition this suite has repeatedly
+            // measured running past a short bound on a loaded runner. Match the
+            // ten seconds waitForHittable already uses for the same reason; the
+            // wait still returns the moment the keyboard is gone.
+            let result = XCTWaiter.wait(for: [dismissed], timeout: 10)
             if result != .completed { retainNavigationFailure(app, name: "Catalog keyboard did not dismiss") }
             XCTAssertEqual(result, .completed, "Catalog controls must release the keyboard without losing the draft.")
         }
@@ -8471,7 +8479,8 @@ final class GunnAire_OpsUITests: XCTestCase {
         }
         func requireEditingEnded() {
             let ended = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: controls)
-            XCTAssertEqual(XCTWaiter.wait(for: [ended], timeout: 5), .completed)
+            XCTAssertEqual(XCTWaiter.wait(for: [ended], timeout: 10), .completed,
+                           "Done Editing must clear the focused field and remove the sheet control.")
             XCTAssertTrue(navigation.exists, "Ending field editing must not save or dismiss the item.")
         }
         func rotateDevice(to orientation: UIDeviceOrientation) {
