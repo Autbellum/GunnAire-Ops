@@ -244,8 +244,30 @@ at the start of every turn; append to it rather than rewriting it.
   after a failure (`retryPendingIfNeeded`, publish only, no import). Three tests that pinned the
   old read-only rule were updated to the new rule; four write-back tests added. After adoption the
   job is app-owned, so later edits made directly in Google no longer import over it.
+- 2026-10-02 Claude (PR #43, `GunnAire Ops/FieldFormDraftEditor.swift`): Eric reported that
+  Schedule → job → Work → HVAC Safety Check ends the app. `FieldFormResponseEditor` was the only
+  pushed view in the app that wraps its body in its own `NavigationStack` (static scan: 105 such
+  views, every other one is presented as a sheet or cover). The nested stack is removed. Two new
+  iPad UI tests cover both entry paths; the test-only commit runs first so CI shows the pre-fix
+  behaviour. No crash log from the device yet; cause is a hypothesis until CI or a log confirms it.
+- 2026-10-05 Claude (PR #43; `ScheduleView.swift`, `ContentView.swift` job detail + `EditServiceCallView`
+  init, `GoogleCalendarScheduleSync.swift` title/location, `OperationsSupportViews.swift`,
+  `ServiceCall.swift`): `ServiceCall.customer` is `Customer!` so CloudKit can deliver a job before its
+  customer. CI run 37301751410 on d0b6573 (test only) reproduced it: with the existing
+  `-uiTestDocumentationJobPending` fixture the app terminated as soon as Schedule loaded (XCTest:
+  "Unable to monitor event loop", then crash-report check). Schedule now reads `customerDisplayName`,
+  the job detail shows a "Customer still syncing" notice until the customer exists, and customer-keyed
+  actions (documentation/payment, follow-up, dispatch move) refuse with a syncing message. Invoice,
+  estimate, agreement and communication `customer!` reads (~180 in billing/payment screens) are not
+  changed here; they are financial paths and need their own pinned tests.
 - 2026-10-05 Claude (cloud, PR #28): bumped to build 2026100501 (six occurrences; above the
   2026092301-05 uploads from PR #27's branch) and added `generated/release-2026100501.sh`. Eric
   runs it on the Mac after merging #28: it archives a detached worktree of origin/main (refusing
   unless main carries this build and the PR #28 calendar fix) and uploads to TestFlight. It pushes
   nothing. The PR must reach Eric's devices via TestFlight only (gunnaire-ship rule).
+- 2026-10-06 Claude (cloud, PR #28): merged main (317358e, PR #43) into the branch before merging.
+  Only AGENTS.md conflicted. #43 made `ServiceCall.customer` reads nil-safe in ScheduleView,
+  ContentView and GoogleCalendarScheduleSync; #28's new reads are already nil-safe
+  (`ScopedRevision` uses `customer.map`), and `rejectedMove` keeps both #43's syncing-customer
+  guard and #28's removal of the Google read-only rejection. Build stays 2026100501 (main is
+  still 2026091617).

@@ -57,6 +57,13 @@ enum CustomerDataMaintenance {
         return genericCalendarCustomerNames.contains(name) && !hasQuickBooksLink
     }
 
+    /// A job's customer relationship can still be nil while CloudKit delivers
+    /// it. A missing customer is not the system calendar placeholder.
+    nonisolated static func isSystemCalendarCustomer(_ customer: Customer?) -> Bool {
+        guard let customer else { return false }
+        return isSystemCalendarCustomer(customer)
+    }
+
     nonisolated static func isSystemCalendarCustomer(_ customer: Customer) -> Bool {
         customer.quickBooksID == unassignedCalendarCustomerMarker ||
             customer.name.trimmingCharacters(in: .whitespacesAndNewlines)

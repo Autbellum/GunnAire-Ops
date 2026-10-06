@@ -1118,7 +1118,31 @@ private struct ServiceCallJobBriefView: View {
 
 // MARK: - Service Call Detail View
 
+/// `ServiceCall.customer` is implicitly unwrapped so CloudKit can deliver a
+/// job before its customer. The job workspace reads that relationship
+/// throughout (name, contact, agreements, alerts), so it opens only once the
+/// customer exists. Until then the job shows a syncing notice instead of
+/// ending the app, and nothing on the job is changed.
 struct ServiceCallDetailView: View {
+    let call: ServiceCall
+
+    var body: some View {
+        if call.customer == nil {
+            ContentUnavailableView {
+                Label("Customer still syncing", systemImage: "arrow.triangle.2.circlepath")
+            } description: {
+                Text("This job arrived before its customer record. It opens here once the customer finishes syncing. Nothing on the job has been changed.")
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("ServiceCallCustomerSyncing")
+            .navigationTitle("Job")
+        } else {
+            ServiceCallWorkspaceView(call: call)
+        }
+    }
+}
+
+struct ServiceCallWorkspaceView: View {
     @Environment(\.openURL) private var openURL
     @Environment(\.modelContext) private var modelContext
     @Environment(\.gunnaireReduceMotion) private var reduceMotion
@@ -5065,7 +5089,7 @@ struct EditServiceCallView: View {
         _arrivalWindowEnd = State(initialValue: call.promisedArrivalWindowEnd ?? call.scheduledDate.addingTimeInterval(2 * 3600))
         _status = State(initialValue: call.status)
         _cancellationReason = State(initialValue: call.cancellationReason ?? "")
-        _siteAddress = State(initialValue: call.siteAddress ?? call.customer.address ?? "")
+        _siteAddress = State(initialValue: call.siteAddress ?? call.customer?.address ?? "")
         _selectedServiceLocationID = State(initialValue: call.serviceLocationID)
         _equipmentType = State(initialValue: call.equipmentType ?? .splitSystemAC)
         _equipmentName = State(initialValue: call.equipmentName ?? "")
@@ -5165,7 +5189,7 @@ struct EditServiceCallView: View {
     }
 
     private var changesSchedulingCommitment: Bool {
-        customer?.id != call.customer.id ||
+        customer?.id != call.customer?.id ||
             selectedServiceLocationID != call.serviceLocationID ||
             scheduledTime != call.scheduledDate ||
             duration != call.duration ||
