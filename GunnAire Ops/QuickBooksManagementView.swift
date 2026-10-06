@@ -2309,6 +2309,7 @@ struct QuickBooksManagementView: View {
                                         .tint(Color.brandGold)
                                         .foregroundStyle(Color.primaryBlack)
                                         .disabled(
+                                            !isAuthenticated ||
                                             activeCatalogPublicationID != nil ||
                                             activePricebookReviewID != nil
                                         )

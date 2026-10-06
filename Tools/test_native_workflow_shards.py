@@ -97,6 +97,12 @@ class NativeWorkflowShardTests(unittest.TestCase):
         text = WORKFLOW.read_text()
         self.assertIn("timeout-minutes: ${{ matrix.platform == 'iPad' && 120 || 90 }}", text)
         self.assertIn("-parallel-testing-enabled NO", text)
+        # Bound a test that stops idling so the job can retain its failure.
+        # Some earlier tests passed only after repeated idle timeouts longer
+        # than 600 s; this watchdog intentionally exposes those degraded runs.
+        self.assertEqual(text.count("-test-timeouts-enabled YES"), 2)
+        self.assertEqual(text.count("-default-test-execution-time-allowance 600"), 2)
+        self.assertEqual(text.count("-maximum-test-execution-time-allowance 600"), 2)
         self.assertIn("python3 Tools/verify_native_test_execution.py", text)
         self.assertIn(".failedTests == 0 and .passedTests > 0", text)
 
@@ -125,6 +131,7 @@ class NativeWorkflowShardTests(unittest.TestCase):
         self.assertIn('catalog-large-text', script)
         self.assertIn('python3 Tools/verify_native_test_execution.py', script)
         self.assertIn('-parallel-testing-enabled NO', script)
+        self.assertIn('-test-timeouts-enabled YES', script)
 
     def test_ipad_requires_the_prepared_exact_device(self):
         for udid in ("", "not-a-device", "12345678-1234-1234-1234-123456789ABC\nX=1"):
