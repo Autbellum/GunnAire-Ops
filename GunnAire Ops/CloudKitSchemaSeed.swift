@@ -15,8 +15,8 @@ import Foundation
 ///    types a staff invitation writes exist in either schema and every
 ///    invitation fails with "Cannot create new type … in production schema".
 ///
-/// 2. **SwiftData model fields.** Nine stored properties added between
-///    2026-09-07 and 2026-09-14 are absent from the Development schema, because
+/// 2. **SwiftData model fields.** Eleven stored properties added between
+///    2026-09-07 and 2026-10-01 require Development schema registration, because
 ///    no development-environment sync has happened since. Seven of them are
 ///    QuickBooks sync-state fields.
 ///
@@ -61,14 +61,19 @@ enum CloudKitSchemaSeed {
         case string   // String? and UUID? both serialize as STRING
         case double   // Double
         case int64    // Bool
+        case date     // Date? serializes as DATE/TIME
     }
 
-    /// SwiftData stored properties missing from the Development schema, keyed
+    /// SwiftData stored properties requiring Development schema registration, keyed
     /// by the mirrored record type. Field names carry Core Data's `CD_` prefix.
     /// Only the missing fields are written: everything else on these types is
     /// already registered, and a sparser record is less likely to resemble a
     /// real financial record if it is ever seen.
     nonisolated static let missingModelFields: [String: [String: FieldKind]] = [
+        "CD_ServiceCall": [
+            "CD_googleEventConfirmedAt": .date,
+            "CD_googleCalendarPendingAt": .date,
+        ],
         "CD_Payment": [
             "CD_collectionAttemptID": .string,
             "CD_providerPaymentStatus": .string,
@@ -97,6 +102,7 @@ enum CloudKitSchemaSeed {
         case .string: return "ga-schema-seed" as CKRecordValue
         case .double: return NSNumber(value: Double(0)) as CKRecordValue
         case .int64: return NSNumber(value: Int64(0)) as CKRecordValue
+        case .date: return Date(timeIntervalSince1970: 1_704_067_200) as NSDate
         }
     }
 
@@ -220,7 +226,7 @@ enum CloudKitSchemaSeed {
         var lines = log
         lines.append("")
         if cleanedUp {
-            lines.append("Next: confirm the six GAStaff*/cloudkit.share types and the nine model fields appear in CloudKit Console → Development, then deploy Development to Production.")
+            lines.append("Next: confirm the six GAStaff*/cloudkit.share types and the eleven model fields appear in CloudKit Console → Development, then deploy Development to Production.")
         } else {
             lines.append("Zone \(zone.zoneID.zoneName) was left in place for inspection. Delete it once you have read the failure above.")
         }

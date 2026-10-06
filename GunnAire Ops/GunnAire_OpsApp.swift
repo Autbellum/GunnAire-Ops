@@ -20,6 +20,7 @@ struct GunnAire_OpsApp: App {
     @Environment(\.scenePhase) private var scenePhase
     private let startupState: StartupState
     @StateObject private var cloudKitEventMonitor: GunnAireCloudKitEventMonitor
+    @StateObject private var quickBooksAuth = QuickBooksAuthAPI.shared
 
     init() {
         #if DEBUG
@@ -71,18 +72,34 @@ struct GunnAire_OpsApp: App {
 
     @ViewBuilder
     private var appRoot: some View {
-        switch startupState {
-        case .ready(let sharedModelContainer):
-            AppRootView()
-                .modelContainer(sharedModelContainer)
-                .environmentObject(cloudKitEventMonitor)
-                .environmentObject(cloudKitEventMonitor.attention)
-        case .failed(let message):
-            StartupFailureView(message: message)
-        case .requiresAuthorization:
-            AppRootView()
-                .environmentObject(cloudKitEventMonitor)
-                .environmentObject(cloudKitEventMonitor.attention)
+        Group {
+            switch startupState {
+            case .ready(let sharedModelContainer):
+                AppRootView()
+                    .modelContainer(sharedModelContainer)
+                    .environmentObject(cloudKitEventMonitor)
+                    .environmentObject(cloudKitEventMonitor.attention)
+            case .failed(let message):
+                StartupFailureView(message: message)
+            case .requiresAuthorization:
+                AppRootView()
+                    .environmentObject(cloudKitEventMonitor)
+                    .environmentObject(cloudKitEventMonitor.attention)
+            }
+        }
+        .task {
+            await cloudKitEventMonitor.restorePersistedState()
+        }
+        .onOpenURL { url in
+            Task { await quickBooksAuth.resumeAuthorization(from: url) }
+        }
+        .alert("QuickBooks Connection", isPresented: Binding(
+            get: { quickBooksAuth.callbackErrorMessage != nil },
+            set: { if !$0 { quickBooksAuth.clearCallbackError() } }
+        )) {
+            Button("OK", role: .cancel) { quickBooksAuth.clearCallbackError() }
+        } message: {
+            Text(quickBooksAuth.callbackErrorMessage ?? "")
         }
     }
 

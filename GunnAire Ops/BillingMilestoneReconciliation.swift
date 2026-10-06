@@ -4,7 +4,7 @@ import SwiftData
 
 /// A retained draft is not deleted, merged, paid or voided. This receipt records
 /// an office-reviewed exclusion after the shared publisher confirms its original.
-struct BillingMilestoneDraftReceipt: Codable, Equatable {
+nonisolated struct BillingMilestoneDraftReceipt: Codable, Equatable, Sendable {
     let version: Int
     let scope: BillingDocumentScope
     let customerID: UUID
@@ -37,13 +37,13 @@ enum BillingMilestoneReconciliation {
     static let retainedMessage = "Retained duplicate draft. Use Billing Review to open the original invoice. This draft cannot be published, sent or paid; its saved details and files remain available."
     static let reviewMessage = "Milestone invoices need reconciliation. Open Billing Review from the duplicate draft and review the original before using financial totals or creating a customer statement."
 
-    struct Projection {
+    nonisolated struct Projection {
         let activeInvoices: [Invoice]
         let retainedDrafts: [Invoice]
         let needsReview: Bool
     }
 
-    static func digest(_ invoice: Invoice) throws -> String {
+    nonisolated static func digest(_ invoice: Invoice) throws -> String {
         func date(_ value: Date?) -> String? { value.map { String($0.timeIntervalSince1970) } }
         let values: [String?] = [invoice.id.uuidString, invoice.customer?.id.uuidString,
             invoice.customer?.quickBooksID, invoice.serviceCallID?.uuidString,
@@ -57,7 +57,7 @@ enum BillingMilestoneReconciliation {
         return SHA256.hash(data: try JSONEncoder().encode(values)).map { String(format: "%02x", $0) }.joined()
     }
 
-    static func isUnissued(_ invoice: Invoice, payments: [Payment]) -> Bool {
+    nonisolated static func isUnissued(_ invoice: Invoice, payments: [Payment]) -> Bool {
         QuickBooksBillingIdentity.identifier(invoice.quickBooksID) == nil &&
         invoice.quickBooksBalanceDue == nil && invoice.quickBooksLastSyncedAt == nil &&
         invoice.quickBooksSyncState == "pending" && invoice.normalizedStatus == "unpaid" &&
@@ -66,7 +66,7 @@ enum BillingMilestoneReconciliation {
         invoice.payments.isEmpty && !payments.contains { $0.invoice?.id == invoice.id }
     }
 
-    static func receipt(_ invoice: Invoice) -> BillingMilestoneDraftReceipt? {
+    nonisolated static func receipt(_ invoice: Invoice) -> BillingMilestoneDraftReceipt? {
         guard let raw = invoice.milestoneDraftReceiptJSON, raw.utf8.count < 16_384,
               let value = try? JSONDecoder().decode(BillingMilestoneDraftReceipt.self, from: Data(raw.utf8)),
               value.version == 1, value.scope.documentType == .invoice,
@@ -79,7 +79,7 @@ enum BillingMilestoneReconciliation {
         return value
     }
 
-    static func original(for draft: Invoice, in invoices: [Invoice], payments: [Payment]) -> Invoice? {
+    nonisolated static func original(for draft: Invoice, in invoices: [Invoice], payments: [Payment]) -> Invoice? {
         // Ordinary invoices have no receipt. Do not scan their payment history
         // on every dashboard/report row just to establish that fact.
         guard let receipt = receipt(draft), isUnissued(draft, payments: payments) else { return nil }
@@ -93,7 +93,7 @@ enum BillingMilestoneReconciliation {
         return original
     }
 
-    static func project(_ invoices: [Invoice], payments: [Payment]) -> Projection {
+    nonisolated static func project(_ invoices: [Invoice], payments: [Payment]) -> Projection {
         let retained = invoices.filter { original(for: $0, in: invoices, payments: payments) != nil }
         let retainedObjects = Set(retained.map(ObjectIdentifier.init))
         let active = invoices.filter { !retainedObjects.contains(ObjectIdentifier($0)) }
@@ -110,7 +110,7 @@ enum BillingMilestoneReconciliation {
     /// while preserving the historical job link and the unused draft's files.
     /// An incomplete receipt remains visible as a blocked draft, never as an
     /// absent invoice that would invite the user to create another one.
-    static func linkedInvoice(for call: ServiceCall, in invoices: [Invoice], payments: [Payment]) -> Invoice? {
+    nonisolated static func linkedInvoice(for call: ServiceCall, in invoices: [Invoice], payments: [Payment]) -> Invoice? {
         guard let id = call.linkedInvoiceID, let customer = call.customer else { return nil }
         let matches = invoices.filter { $0.id == id }
         guard matches.count == 1, let stored = matches.first,
@@ -122,7 +122,7 @@ enum BillingMilestoneReconciliation {
     /// Legacy documentation may predate the stored job link. Resolve only an
     /// exact, unique invoice for that customer and job; never guess by amount
     /// or bypass a present but unresolved historical link.
-    static func documentationInvoice(for call: ServiceCall, in invoices: [Invoice], payments: [Payment]) -> Invoice? {
+    nonisolated static func documentationInvoice(for call: ServiceCall, in invoices: [Invoice], payments: [Payment]) -> Invoice? {
         if call.linkedInvoiceID != nil { return linkedInvoice(for: call, in: invoices, payments: payments) }
         guard let customer = call.customer else { return nil }
         let matches = project(invoices, payments: payments).activeInvoices.filter {

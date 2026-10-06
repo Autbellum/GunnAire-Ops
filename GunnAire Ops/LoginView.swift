@@ -120,6 +120,7 @@ struct LoginView: View {
                 authErrorMessage = "Your GunnAire account has not been added to this app by an administrator."
                 return
             }
+            BusinessLoginSelection.choose(.apple)
             hasAuthenticatedUser = true
         } catch {
             isAuthenticating = false
@@ -137,11 +138,11 @@ struct LoginView: View {
             return
         }
 
-        googleAuth.startSignIn(presentationContext: presentationContext) { result in
+        googleAuth.startSignIn(presentationContext: presentationContext, forBusinessLogin: true) { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success:
-                    googleAuth.validateSignedInDomain { validation in
+                    googleAuth.validateSignedInDomain(forBusinessLogin: true) { validation in
                         DispatchQueue.main.async {
                             switch validation {
                             case .success(let profile):
@@ -173,6 +174,7 @@ struct LoginView: View {
             }
             // Model-backed user and technician writes occur only after the
             // workspace controller proves this device's operational store.
+            BusinessLoginSelection.choose(.google)
             hasAuthenticatedUser = true
         } catch {
             googleAuth.signOut()

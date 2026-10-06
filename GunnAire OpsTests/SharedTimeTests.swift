@@ -41,7 +41,8 @@ import Testing
                 ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]))
             context.autosaveEnabled = false
             let date = Date(timeIntervalSince1970: 1_788_000_000)
-            entry = TimeEntry(userEmail: technician.contactInfo!, clockIn: date, clockOut: date.addingTimeInterval(7200),
+            let workerEmail = try #require(technician.contactInfo)
+            entry = TimeEntry(userEmail: workerEmail, clockIn: date, clockOut: date.addingTimeInterval(7200),
                 notes: "Reviewed repair training", activity: .training, reviewStatus: .approved,
                 reviewedByEmail: actor, reviewedAt: date.addingTimeInterval(7500))
             context.insert(entry); context.insert(technician)
@@ -276,7 +277,8 @@ import Testing
             ("2026-03-08T01:30:00-05:00", "2026-03-08T03:30:00-04:00", 60),
             ("2026-11-01T01:30:00-04:00", "2026-11-01T01:30:00-05:00", 60)] {
             let f = try Fixture(); f.entry.clockIn = try #require(SharedTimeError.date(start))
-            f.entry.clockOut = try #require(SharedTimeError.date(end)); f.entry.reviewedAt = f.entry.clockOut!.addingTimeInterval(60)
+            guard let clockOut = SharedTimeError.date(end) else { throw SharedTimeError.invalid }
+            f.entry.clockOut = clockOut; f.entry.reviewedAt = clockOut.addingTimeInterval(60)
             let request = try SharedTimeRequest(source: .init(f.entry, context: f.context), connection: f.connection,
                 itemID: nil, timeZone: #require(TimeZone(identifier: "America/New_York")))
             #expect(request.payableMinutes == minutes && request.timeZone == "America/New_York")
@@ -363,7 +365,8 @@ import Testing
         await #expect(throws: SharedTimeError.unavailable) { try await owner.decide(review) }
         let restarted = try f.owner(), recovered = try await restarted.recover(review)
         #expect(try restarted.journal().confirmationRequested == false)
-        _ = try await restarted.decide(review, legacy: #require(recovered.legacyCandidate))
+        guard let legacy = recovered.legacyCandidate else { throw SharedTimeError.review }
+        _ = try await restarted.decide(review, legacy: legacy)
         #expect(f.creates == 0 && f.entry.quickBooksTimeActivityID == "T55")
     }
 
@@ -531,7 +534,8 @@ import Testing
         await #expect(throws: SharedTimeError.review) { try await owner.decide(review) }
         f.legacy = true
         let found = try await owner.recover(review)
-        _ = try await owner.decide(review, legacy: #require(found.legacyCandidate))
+        guard let legacy = found.legacyCandidate else { throw SharedTimeError.review }
+        _ = try await owner.decide(review, legacy: legacy)
         #expect(f.creates == 0 && f.entry.quickBooksTimeActivityID == "T55")
     }
 

@@ -14,11 +14,11 @@ nonisolated enum EstimateJobLineage {
 /// Resolve saved document identities, never creation order, display names or amounts.
 /// This only selects an existing record; it never rewrites historical file ownership.
 @MainActor enum JobBillingDocumentLinks {
-    static func unique<T: AnyObject>(_ records: [T]) -> T? {
+    nonisolated static func unique<T: AnyObject>(_ records: [T]) -> T? {
         Set(records.map(ObjectIdentifier.init)).count == 1 ? records.first : nil
     }
 
-    static func invoice(id: UUID, in invoices: [Invoice]) -> Invoice? {
+    nonisolated static func invoice(id: UUID, in invoices: [Invoice]) -> Invoice? {
         guard let invoice = unique(invoices.filter { $0.id == id }) else { return nil }
         if let providerID = QuickBooksBillingIdentity.identifier(invoice.quickBooksID),
            unique(invoices.filter { QuickBooksBillingIdentity.identifier($0.quickBooksID) == providerID }) == nil {
@@ -27,7 +27,7 @@ nonisolated enum EstimateJobLineage {
         return invoice
     }
 
-    static func estimate(id: UUID, in estimates: [Estimate]) -> Estimate? {
+    nonisolated static func estimate(id: UUID, in estimates: [Estimate]) -> Estimate? {
         guard let estimate = unique(estimates.filter { $0.id == id }) else { return nil }
         if let providerID = QuickBooksBillingIdentity.identifier(estimate.quickBooksID),
            unique(estimates.filter { QuickBooksBillingIdentity.identifier($0.quickBooksID) == providerID }) == nil {
@@ -36,14 +36,14 @@ nonisolated enum EstimateJobLineage {
         return estimate
     }
 
-    static func invoice(for call: ServiceCall, in invoices: [Invoice], payments: [Payment]) -> Invoice? {
+    nonisolated static func invoice(for call: ServiceCall, in invoices: [Invoice], payments: [Payment]) -> Invoice? {
         guard let resolved = BillingMilestoneReconciliation.documentationInvoice(for: call, in: invoices, payments: payments),
               invoice(id: resolved.id, in: invoices) === resolved,
               resolved.quickBooksIdentityReviewMessage == nil else { return nil }
         return resolved
     }
 
-    static func estimate(for call: ServiceCall, in estimates: [Estimate]) -> Estimate? {
+    nonisolated static func estimate(for call: ServiceCall, in estimates: [Estimate]) -> Estimate? {
         guard let customer = call.customer else { return nil }
         let matches: [Estimate]
         if let id = call.linkedEstimateID {
@@ -65,15 +65,23 @@ nonisolated enum EstimateJobLineage {
 
     /// A present invoice link has precedence, even while that record is still syncing.
     static func attachmentTarget(for call: ServiceCall, invoices: [Invoice], estimates: [Estimate], payments: [Payment]) -> AttachmentTarget? {
+        guard let destination = attachmentDestination(for: call, invoices: invoices, estimates: estimates, payments: payments) else { return nil }
+        return .init(type: destination.isInvoice ? .invoice : .estimate, id: destination.providerID)
+    }
+
+    /// The same resolution as `attachmentTarget`, as plain values (including the
+    /// resolved local document) so it can run in a private context off the main actor.
+    nonisolated static func attachmentDestination(for call: ServiceCall, invoices: [Invoice], estimates: [Estimate],
+                                                  payments: [Payment]) -> (isInvoice: Bool, providerID: String, documentID: UUID)? {
         if call.linkedInvoiceID != nil {
             guard let invoice = invoice(for: call, in: invoices, payments: payments),
                   let id = QuickBooksBillingIdentity.identifier(invoice.quickBooksID) else { return nil }
-            return .init(type: .invoice, id: id)
+            return (true, id, invoice.id)
         }
         if call.linkedEstimateID != nil {
             guard let estimate = estimate(for: call, in: estimates),
                   let id = QuickBooksBillingIdentity.identifier(estimate.quickBooksID) else { return nil }
-            return .init(type: .estimate, id: id)
+            return (false, id, estimate.id)
         }
         return nil
     }

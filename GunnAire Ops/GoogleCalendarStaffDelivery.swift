@@ -20,12 +20,13 @@ struct GoogleCalendarStaffDeliveryPatch: Encodable {
     var extendedProperties: GoogleCalendarExtendedProperties?
 }
 
-enum GoogleCalendarStaffDeliveryError: LocalizedError {
-    case staffEmail, guestReview
+enum GoogleCalendarStaffDeliveryError: LocalizedError, Equatable {
+    case staffEmail, guestReview, unsafeScheduleUpdate
     var errorDescription: String? {
         switch self {
         case .staffEmail: "An assigned technician or crew member needs a unique staff record and valid calendar email. Update the technician contact, then sync again."
         case .guestReview: "The Google event has external or incomplete guest details. Review its staff invitations in Google Calendar; no customer invitation was sent."
+        case .unsafeScheduleUpdate: "Google event was not moved because existing guests could receive the new schedule while an assigned staff email is invalid or duplicated. Give each assigned technician and crew member a unique valid email, then Sync Google. No Google update was sent."
         }
     }
 }
@@ -33,7 +34,7 @@ enum GoogleCalendarStaffDeliveryError: LocalizedError {
 enum GoogleCalendarStaffDelivery {
     static let managedEmailsKey = "gunnaireStaffAttendees"
 
-    static func email(_ value: String?) -> String? {
+    nonisolated static func email(_ value: String?) -> String? {
         guard let value else { return nil }
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard normalized.range(of: #"^[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9.-]*[A-Z0-9])?\.[A-Z]{2,}$"#,
@@ -60,7 +61,12 @@ enum GoogleCalendarStaffDelivery {
         }
         let existingEmails = Set(existing.compactMap { email($0.email) })
         let properties = remote.extendedProperties?.privateProperties ?? [:]
-        let previouslyManaged = Set((properties[managedEmailsKey] ?? "").split(separator: ",").map(String.init))
+        let managedEntries = (properties[managedEmailsKey] ?? "").split(separator: ",").map(String.init)
+        let previouslyManaged = Set(managedEntries)
+        guard previouslyManaged.count == managedEntries.count,
+              previouslyManaged.allSatisfy({ email($0) == $0 }) else {
+            throw GoogleCalendarStaffDeliveryError.guestReview
+        }
         let remove = previouslyManaged.subtracting(desiredEmails).intersection(existingEmails)
         let add = desiredEmails.subtracting(existingEmails)
         var patch = GoogleCalendarStaffDeliveryPatch()
@@ -68,7 +74,7 @@ enum GoogleCalendarStaffDelivery {
             // PATCH replaces the guest array. Never act on an omitted guest list,
             // invite customers, or remove guests the app did not originally add.
             guard remote.attendeesOmitted != true,
-                  existing.isEmpty || canNotify(remote, knownStaff: knownStaff) else {
+                  existing.isEmpty || canNotify(remote, knownStaff: knownStaff.union(previouslyManaged)) else {
                 throw GoogleCalendarStaffDeliveryError.guestReview
             }
             patch.attendees = existing.filter { !remove.contains(email($0.email) ?? "") }

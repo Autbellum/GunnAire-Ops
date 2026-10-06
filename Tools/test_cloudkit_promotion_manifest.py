@@ -17,7 +17,7 @@ class CloudKitPromotionManifestTests(unittest.TestCase):
             for record_name in release_preflight.EXPECTED_CLOUDKIT_BASELINE_RECORD_TYPES
         }
         self.development = copy.deepcopy(self.production)
-        for record_name, fields in release_preflight.EXPECTED_CLOUDKIT_V27_ADDITIONS.items():
+        for record_name, fields in release_preflight.EXPECTED_CLOUDKIT_V28_ADDITIONS.items():
             self.development.setdefault(record_name, {}).update(fields)
 
         metadata = {
@@ -41,7 +41,7 @@ class CloudKitPromotionManifestTests(unittest.TestCase):
             production_sha256="production-hash",
         )
 
-    def test_exact_v27_delta_is_additive_and_safe_to_promote(self) -> None:
+    def test_exact_v28_delta_is_additive_and_safe_to_promote(self) -> None:
         manifest = self.manifest()
 
         self.assertTrue(manifest["summary"]["safeToPromote"])
@@ -51,7 +51,7 @@ class CloudKitPromotionManifestTests(unittest.TestCase):
             manifest["summary"]["addedFieldCount"],
             sum(
                 len(fields)
-                for fields in release_preflight.EXPECTED_CLOUDKIT_V27_ADDITIONS.values()
+                for fields in release_preflight.EXPECTED_CLOUDKIT_V28_ADDITIONS.values()
             ),
         )
         self.assertEqual(manifest["changes"]["changedOrRemovedFields"], [])
@@ -126,7 +126,31 @@ class CloudKitPromotionManifestTests(unittest.TestCase):
         self.assertTrue(manifest["summary"]["safeToPromote"])
         self.assertEqual(manifest["summary"]["addedFieldCount"], 1)
         self.assertEqual(manifest["summary"]["addedRecordTypeCount"], 0)
-        self.assertEqual(manifest["targetBootstrapVersion"], 27)
+        self.assertEqual(manifest["targetBootstrapVersion"], 28)
+
+    def test_v28_requires_both_calendar_publication_dates_with_exact_types(self) -> None:
+        production = copy.deepcopy(self.development)
+        production["CD_ServiceCall"].pop("CD_googleEventConfirmedAt")
+        production["CD_ServiceCall"].pop("CD_googleCalendarPendingAt")
+        manifest = self.manifest(production=production, production_metadata=self.development_metadata)
+        self.assertTrue(manifest["summary"]["safeToPromote"])
+        self.assertEqual(manifest["summary"]["addedFieldCount"], 2)
+        for field in ("CD_googleEventConfirmedAt", "CD_googleCalendarPendingAt"):
+            for definition in (None, ("STRING", "QUERYABLE")):
+                development = copy.deepcopy(self.development)
+                development["CD_ServiceCall"].pop(field)
+                if definition is not None:
+                    development["CD_ServiceCall"][field] = definition
+                candidate = self.manifest(
+                    development=development,
+                    production=production,
+                    production_metadata=self.development_metadata,
+                )
+                self.assertFalse(candidate["summary"]["safeToPromote"])
+                self.assertIn(
+                    "CD_ServiceCall." + field,
+                    candidate["changes"]["missingOrChangedDevelopmentV28Fields"],
+                )
 
     def test_v27_adds_only_optional_invoice_review_to_complete_v26(self) -> None:
         production = copy.deepcopy(self.development)

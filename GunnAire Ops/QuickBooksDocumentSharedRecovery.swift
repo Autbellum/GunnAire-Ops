@@ -75,8 +75,10 @@ import SwiftData
         try fresh.validateUpdate(from: original)
         let data = try await client.file(fresh)
         let final = try await client.read(original.id, scope: access.scope)
-        try final.validateUpdate(from: fresh); try final.file.verify(data); try access.check()
-        let local = try retain(final, data: data)
+        try final.validateUpdate(from: fresh)
+        try await Self.verifyOffMain(final.file, data)
+        try access.check()
+        let local = try await retain(final, data: data)
         replace(final)
         return local
     }
@@ -85,17 +87,24 @@ import SwiftData
         if let index = rows.firstIndex(where: { $0.id == value.id }) { rows[index] = value }
     }
 
-    private func retain(_ remote: QBODocumentUploadRecord, data: Data) throws -> QBODocumentCapture {
-        try access.check(); try remote.validate(access.scope); try remote.file.verify(data)
-        let saved = try store.list(access.owner)
+    /// SHA-256 of an original (up to 25 MB) is computed off the main actor.
+    private static func verifyOffMain(_ file: QBODocumentFileInfo, _ data: Data) async throws {
+        try await Task.detached(priority: .userInitiated) { try file.verify(data) }.value
+    }
+
+    private func retain(_ remote: QBODocumentUploadRecord, data: Data) async throws -> QBODocumentCapture {
+        try access.check(); try remote.validate(access.scope)
+        try await Self.verifyOffMain(remote.file, data)
+        let saved = try await store.list(access.owner)
+        try access.check()
         let matches = saved.filter { $0.server?.id == remote.id || $0.id == remote.operationID }
         guard matches.count <= 1 else { throw QBODocumentError.changed }
         if let local = matches.first {
             guard local.scope == remote.scope, let server = local.server, server.matchesOriginal(remote),
                   !local.cancelledLocally else { throw QBODocumentError.changed }
-            try local.file.verify(store.bytes(access.owner, local.id))
-            let session = try QBODocumentCaptureSession(record: local, store: store, check: access.check)
-            try session.observe(remote)
+            try await Self.verifyOffMain(local.file, try await store.bytes(access.owner, local.id))
+            let session = try await QBODocumentCaptureSession(record: local, store: store, check: access.check)
+            try await session.observe(remote)
             return session.record
         }
         // Do not silently adopt an unsent local proposal with a different
@@ -117,20 +126,23 @@ import SwiftData
             file: remote.file, targets: remote.targets, jobDocument: remote.jobDocument, createdAt: Date(),
             server: remote, dispatchStarted: [.sending, .uncertain, .confirmed].contains(remote.state),
             localAttachment: identity, sharedSource: remote)
-        try store.write(row, nil, data)
+        // Inserted against the same listing the checks above used: a row added
+        // meanwhile fails `.changed` on the serial journal writer.
+        try await store.insert(row, data, saved)
+        try access.check()
         return row
     }
 
     /// Applying a confirmed receipt never creates a missing CloudKit attachment,
     /// changes another device's path, increments photos, or claims job closeout.
     func apply(_ row: QBODocumentCapture, context: ModelContext,
-               save: (ModelContext) throws -> Void = { try $0.save() }) throws -> QBODocumentCapture {
+               save: (ModelContext) throws -> Void = { try $0.save() }) async throws -> QBODocumentCapture {
         try access.check()
         guard row.owner == access.owner, row.scope == access.scope else { throw QBODocumentError.access }
-        let session = try QBODocumentCaptureSession(record: row, store: store, check: access.check)
-        let bytes = try store.bytes(row.owner, row.id)
-        try QBODocumentNativeWorkflow.applyConfirmed(row, context: context, retainedOriginal: bytes, save: save)
-        try session.markLocalApplied()
+        let session = try await QBODocumentCaptureSession(record: row, store: store, check: access.check)
+        let bytes = try await store.bytes(row.owner, row.id)
+        try await QBODocumentNativeWorkflow.applyConfirmed(row, context: context, retainedOriginal: bytes, save: save)
+        try await session.markLocalApplied()
         return session.record
     }
 }

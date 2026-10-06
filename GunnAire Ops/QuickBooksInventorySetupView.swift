@@ -8,6 +8,27 @@ enum QuickBooksCatalogInputField: Hashable {
     case openingQuantity, openingDate, assemblySearch
 }
 
+/// Keeps each input separate from its persistent label when large text stacks
+/// the row, preserving the field's native editing and selection target.
+private struct InventoryInputRow<Field: View>: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    let label: LocalizedStringKey
+    @ViewBuilder var field: () -> Field
+
+    var body: some View {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
+            : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 8))
+        layout {
+            Text(label)
+            field()
+                .frame(maxWidth: .infinity)
+        }
+        // Preserve distinct accessibility targets for the label and input.
+        .accessibilityElement(children: .contain)
+    }
+}
+
 extension View {
     /// iPad's decimal pad can present a floating popover over nearby controls.
     /// Use its standard numeric keyboard; iPhone keeps the compact decimal pad.
@@ -65,7 +86,7 @@ struct QuickBooksInventorySetupSection: View {
 
     var body: some View {
         Section("Inventory Setup") {
-            LabeledContent("Opening quantity") {
+            InventoryInputRow(label: "Opening quantity") {
                 TextField("Quantity", text: $quantityDraft.text)
                     .multilineTextAlignment(.trailing)
                     .catalogNumericKeyboard()
@@ -82,7 +103,7 @@ struct QuickBooksInventorySetupSection: View {
                     .font(.caption).foregroundStyle(.orange)
                     .accessibilityIdentifier("InventoryOpeningQuantityValidation")
             }
-            LabeledContent("Opening date") {
+            InventoryInputRow(label: "Opening date") {
                 TextField("YYYY-MM-DD", text: Binding(
                     get: { setup.openingDate ?? "" }, set: { setup.openingDate = $0.isEmpty ? nil : $0 }))
                     .multilineTextAlignment(.trailing)

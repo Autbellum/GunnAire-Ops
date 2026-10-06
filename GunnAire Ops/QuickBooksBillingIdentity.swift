@@ -6,7 +6,7 @@ enum QuickBooksBillingIdentity {
     static let invoiceReviewState = "identity_conflict"
     static let invoiceReviewMessage = "This invoice has conflicting QuickBooks identity evidence. Review its customer and linked records in QuickBooks Management before changing it or collecting payment. No billing history was removed."
 
-    static func identifier(_ value: String?) -> String? {
+    nonisolated static func identifier(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
     }

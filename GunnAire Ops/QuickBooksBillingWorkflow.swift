@@ -2,7 +2,7 @@ import Foundation
 import SwiftData
 import CryptoKit
 
-enum QuickBooksBillingWorkflowError: LocalizedError, Equatable {
+nonisolated enum QuickBooksBillingWorkflowError: LocalizedError, Equatable {
     case busy, accessDenied, changed, customerConflict, remoteIdentity, remoteLines, paidRemoteInvoice, saveFailed
 
     var errorDescription: String? {
@@ -16,6 +16,54 @@ enum QuickBooksBillingWorkflowError: LocalizedError, Equatable {
         case .paidRemoteInvoice: "QuickBooks reports payment activity or an unconfirmed balance. Refresh and review this invoice before changing its lines."
         case .saveFailed: "QuickBooks may have accepted the request, but its confirmation could not be saved locally. Review the original document before retrying."
         }
+    }
+}
+
+nonisolated struct QuickBooksSavedLineEvidence: Sendable {
+    let snapshotJSON: String?
+    let expectedSubtotal: Double
+    let selectedItemIDs: Set<UUID>
+    let checkedItemIDs: [UUID]
+    let bundleScopes: [QuickBooksChangeHistoryScope]
+
+    private init(snapshotJSON: String?, expectedSubtotal: Double, selectedItemIDs: Set<UUID>,
+                 checkedItemIDs: [UUID], bundleScopes: [QuickBooksChangeHistoryScope]) {
+        self.snapshotJSON = snapshotJSON
+        self.expectedSubtotal = expectedSubtotal
+        self.selectedItemIDs = selectedItemIDs
+        self.checkedItemIDs = checkedItemIDs
+        self.bundleScopes = bundleScopes
+    }
+
+    static func capture(snapshotJSON: String?, expectedSubtotal: Double) throws -> Self {
+        try QuickBooksDocumentLinePublication.validateSnapshotTotals(
+            snapshotJSON: snapshotJSON, expectedSubtotal: expectedSubtotal)
+        let snapshots = try CatalogSnapshotPayload.read(snapshotJSON)?.lines ?? []
+        guard !snapshots.isEmpty else { throw QuickBooksBillingWorkflowError.changed }
+        let selected = Set(snapshots.flatMap { [$0.catalogItemID] + $0.soldLeaves.map(\.catalogItemID) })
+        var checked = snapshots
+        var scopes: [QuickBooksChangeHistoryScope] = []
+        for snapshot in snapshots where snapshot.bundle != nil {
+            try CatalogBundlePolicy.validate(snapshot)
+            if let bundle = snapshot.bundle {
+                scopes.append(bundle.scope)
+            }
+            checked.append(contentsOf: snapshot.soldLeaves)
+        }
+        for snapshot in checked {
+            guard snapshot.quantity.isFinite, snapshot.quantity > 0,
+                  snapshot.unitPrice.isFinite, snapshot.unitPrice >= 0 else {
+                throw QuickBooksBillingWorkflowError.changed
+            }
+        }
+        return .init(snapshotJSON: snapshotJSON, expectedSubtotal: expectedSubtotal,
+            selectedItemIDs: selected, checkedItemIDs: checked.map(\.catalogItemID), bundleScopes: scopes)
+    }
+
+    static func captureAsync(snapshotJSON: String?, expectedSubtotal: Double) async throws -> Self {
+        try await Task.detached(priority: .userInitiated) {
+            try capture(snapshotJSON: snapshotJSON, expectedSubtotal: expectedSubtotal)
+        }.value
     }
 }
 
@@ -212,7 +260,7 @@ enum QuickBooksBillingAccessPolicy {
 }
 
 struct QuickBooksBillingPaymentRevision: Equatable {
-    let object: ObjectIdentifier
+    let recordID: PersistentIdentifier
     let id: UUID
     let amount: Double
     let refund: Bool
@@ -220,7 +268,7 @@ struct QuickBooksBillingPaymentRevision: Equatable {
     let accountingID: String?
     let chargeID: String?
     init(_ value: Payment) {
-        object = ObjectIdentifier(value); id = value.id; amount = value.amount; refund = value.isRefund
+        recordID = value.persistentModelID; id = value.id; amount = value.amount; refund = value.isRefund
         providerState = value.providerPaymentStatus; accountingID = value.quickBooksID; chargeID = value.quickBooksChargeID
     }
 }
@@ -247,7 +295,10 @@ final class QuickBooksBillingWorkflow {
     private let actorEmail: String?
     private var customerID: String?
     private let items: [Item]
-    private var itemRevisions: [ObjectIdentifier: QuickBooksCatalogItemRevision]
+    private let lineEvidence: QuickBooksSavedLineEvidence
+    private var itemRevisions: [UUID: QuickBooksCatalogItemRevision]
+    private var itemRecordIDs: [UUID: PersistentIdentifier]
+    private var newlyInsertedItemIDs: Set<UUID>
     private var validateDocument: () throws -> Void
     private let paymentRevisions: [QuickBooksBillingPaymentRevision]
     private let validateCatalogAccess: () throws -> Void
@@ -265,6 +316,7 @@ final class QuickBooksBillingWorkflow {
          validateCatalogAccess: (() throws -> Void)? = nil,
          billingJournal: BillingNativeJournalStore? = nil,
          documentUploads: QBODocumentNativeWorkflow.Dependencies? = nil,
+         preparedLineEvidence: QuickBooksSavedLineEvidence? = nil,
          save: @escaping (ModelContext) throws -> Void = { try $0.save() },
          actorEmail: String? = nil) throws {
         guard lifecycle.activeID == nil else { throw QuickBooksBillingWorkflowError.busy }
@@ -281,11 +333,24 @@ final class QuickBooksBillingWorkflow {
         self.validateCatalogAccess = validateCatalogAccess ?? { try QuickBooksSyncAccessPolicy.validate(context: context) }
         validateDocument = document.validation(context: context)
         try validateDocument()
+        let evidence: QuickBooksSavedLineEvidence
+        if let preparedLineEvidence {
+            evidence = preparedLineEvidence
+        } else {
+            evidence = try QuickBooksSavedLineEvidence.capture(
+                snapshotJSON: document.snapshotJSON, expectedSubtotal: document.subtotal)
+        }
+        guard evidence.snapshotJSON == document.snapshotJSON,
+              evidence.expectedSubtotal == document.subtotal else { throw QuickBooksBillingWorkflowError.changed }
+        lineEvidence = evidence
         let allItems = try context.fetch(FetchDescriptor<Item>())
-        let selectedIDs = Set(CatalogLineItemSnapshot.decoded(from: document.snapshotJSON)
-            .flatMap { [$0.catalogItemID] + $0.soldLeaves.map(\.catalogItemID) })
-        items = allItems.filter { selectedIDs.contains($0.id) }
-        itemRevisions = Dictionary(uniqueKeysWithValues: items.map { (ObjectIdentifier($0), QuickBooksCatalogItemRevision($0)) })
+        items = allItems.filter { evidence.selectedItemIDs.contains($0.id) }
+        guard Set(items.map(\.id)).count == items.count else { throw QuickBooksBillingWorkflowError.changed }
+        itemRevisions = Dictionary(uniqueKeysWithValues: items.map { ($0.id, QuickBooksCatalogItemRevision($0)) })
+        itemRecordIDs = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0.persistentModelID) })
+        newlyInsertedItemIDs = Set(items.filter { item in
+            context.insertedModelsArray.contains { ($0 as? Item) === item }
+        }.map(\.id))
         paymentRevisions = try context.fetch(FetchDescriptor<Payment>()).filter { $0.invoice?.id == document.id }
             .sorted { $0.id.uuidString < $1.id.uuidString }.map(QuickBooksBillingPaymentRevision.init)
         run = try lifecycle.begin(api: api, validateAccess: validate)
@@ -296,8 +361,8 @@ final class QuickBooksBillingWorkflow {
         try run.check()
         try validateDocument()
         guard document.hasValidStoredAmounts else { throw QuickBooksBillingWorkflowError.changed }
-        try QuickBooksDocumentLinePublication.validateSnapshotTotals(snapshotJSON: document.snapshotJSON,
-                                                                    expectedSubtotal: document.subtotal)
+        guard document.snapshotJSON == lineEvidence.snapshotJSON,
+              document.subtotal == lineEvidence.expectedSubtotal else { throw QuickBooksBillingWorkflowError.changed }
         let customers = try context.fetch(FetchDescriptor<Customer>()).filter { $0.id == customerDraft.localCustomerID }
         guard customers.count == 1, customers.first === customer,
               QuickBooksCustomerCreateOperation.draft(for: customer) == customerDraft,
@@ -307,11 +372,20 @@ final class QuickBooksBillingWorkflow {
         }
         let currentItems = try context.fetch(FetchDescriptor<Item>())
         for item in items {
-            guard let revision = itemRevisions[ObjectIdentifier(item)] else { throw QuickBooksBillingWorkflowError.changed }
+            let persistentID = item.persistentModelID
+            guard let revision = itemRevisions[item.id],
+                  let capturedID = itemRecordIDs[item.id] else { throw QuickBooksBillingWorkflowError.changed }
             let matches = currentItems.filter { $0.id == revision.id }
-            guard matches.count == 1, matches.first === item,
-                  QuickBooksCatalogItemRevision(item) == itemRevisions[ObjectIdentifier(item)] else {
+            guard matches.count == 1, let current = matches.first,
+                  current.persistentModelID == persistentID,
+                  (capturedID == persistentID || newlyInsertedItemIDs.contains(item.id)),
+                  QuickBooksCatalogItemRevision(item) == revision,
+                  QuickBooksCatalogItemRevision(current) == revision else {
                 throw QuickBooksBillingWorkflowError.changed
+            }
+            if capturedID != persistentID {
+                itemRecordIDs[item.id] = persistentID
+                newlyInsertedItemIDs.remove(item.id)
             }
             if item.requiresPricebookReview { throw PricebookPublicationError.reviewRequired(item.name) }
             if item.isCatalogArchived { throw PricebookPublicationError.archived(item.name) }
@@ -322,21 +396,20 @@ final class QuickBooksBillingWorkflow {
         try QuickBooksCatalogMappingIntegrity.validateDocumentItems(items, against: currentItems)
         // Validate sold values before any customer/catalog write, while allowing
         // unmapped approved items to obtain their identity during preparation.
-        let snapshots = try CatalogSnapshotPayload.read(document.snapshotJSON)?.lines ?? []
-        if snapshots.contains(where: { $0.bundle != nil }) {
+        if !lineEvidence.bundleScopes.isEmpty {
             guard let companyID = run.workflow.companyID, let realmID = run.workflow.realmID else {
                 throw CatalogBundleError.originalBusiness
             }
-            try CatalogBundlePolicy.validateScope(document.snapshotJSON,
-                expected: .init(companyID: companyID, realmID: realmID, environment: run.workflow.environment))
+            let expectedScope = QuickBooksChangeHistoryScope(companyID: companyID,
+                realmID: realmID, environment: run.workflow.environment)
+            guard lineEvidence.bundleScopes.allSatisfy({ $0 == expectedScope }) else {
+                throw CatalogBundleError.originalBusiness
+            }
         }
-        guard !snapshots.isEmpty else { throw QuickBooksBillingWorkflowError.changed }
-        var allSnapshots = snapshots
-        for snapshot in snapshots where snapshot.bundle != nil { allSnapshots.append(contentsOf: snapshot.soldLeaves) }
-        for snapshot in allSnapshots {
-            let count = items.filter { $0.id == snapshot.catalogItemID }.count
-            guard count == 1, snapshot.quantity.isFinite, snapshot.quantity > 0,
-                  snapshot.unitPrice.isFinite, snapshot.unitPrice >= 0 else { throw QuickBooksBillingWorkflowError.changed }
+        for identifier in lineEvidence.checkedItemIDs {
+            guard items.filter({ $0.id == identifier }).count == 1 else {
+                throw QuickBooksBillingWorkflowError.changed
+            }
         }
         if api.billingPublicationClient == nil, !completed, case .invoice(let invoice) = document,
            invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
@@ -358,7 +431,7 @@ final class QuickBooksBillingWorkflow {
                    let original = try await self.originalMilestone(), original.localDocumentID != self.document.id {
                     throw BillingNativeError.milestoneOriginal(original.localDocumentID)
                 }
-                let revision = try self.billingDraftRevision()
+                let revision = try await self.billingDraftRevisionAsync()
                 if let pending = journal.journal.pending,
                    !pending.settled || pending.draftRevision == revision {
                     let response = try await journal.recover(revision: revision)
@@ -401,7 +474,7 @@ final class QuickBooksBillingWorkflow {
                     let result = try await child.execute()
                     self.attemptedWrite = self.attemptedWrite || child.attemptedWrite
                     guard let revision = child.committedRevision else { throw QuickBooksBillingWorkflowError.changed }
-                    self.itemRevisions[ObjectIdentifier(item)] = revision
+                    self.itemRevisions[item.id] = revision
                     try self.check()
                     if result.remote.Active == false { throw PricebookPublicationError.inactiveQuickBooksMatch(item.name) }
                 } catch {
@@ -503,7 +576,10 @@ final class QuickBooksBillingWorkflow {
 
     func resumeOriginalFromReview() async throws -> Outcome {
         let shared = try openSharedReview()
-        guard let pending = shared.journal.pending, pending.draftRevision == (try billingDraftRevision()) else { throw BillingNativeError.originalDraft }
+        let revision = try await billingDraftRevisionAsync()
+        guard let pending = shared.journal.pending, pending.draftRevision == revision else {
+            throw BillingNativeError.originalDraft
+        }
         try check()
         if case .invoice(let invoice) = document,
            let reason = BillingInvoiceMutationPolicy.blockedMessage(for: invoice,
@@ -518,7 +594,8 @@ final class QuickBooksBillingWorkflow {
 
     func recoverOriginalFromReview() async throws -> Outcome {
         let shared = try openSharedReview()
-        let result = try await shared.recover(revision: billingDraftRevision())
+        let revision = try await billingDraftRevisionAsync()
+        let result = try await shared.recover(revision: revision)
         return try applySharedConfirmation(invoice: result.invoice, estimate: result.estimate, recovered: true)
     }
 
@@ -526,6 +603,21 @@ final class QuickBooksBillingWorkflow {
     /// sync messages and balance), but includes the sold snapshot, customer,
     /// location, dates, approvals, signatures and payment history.
     func billingDraftRevision() throws -> String {
+        try Self.digestDraftRevision(try draftRevisionValues())
+    }
+
+    func billingDraftRevisionAsync() async throws -> String {
+        try check()
+        let values = try draftRevisionValues()
+        let digest = try await Task.detached(priority: .userInitiated) {
+            try Self.digestDraftRevision(values)
+        }.value
+        try check()
+        guard try draftRevisionValues() == values else { throw QuickBooksBillingWorkflowError.changed }
+        return digest
+    }
+
+    private func draftRevisionValues() throws -> [String?] {
         var values: [String?] = [document.label, document.id.uuidString, customer.id.uuidString,
             document.serviceCallID?.uuidString, document.snapshotJSON]
         func date(_ value: Date?) -> String? { value.map { String($0.timeIntervalSince1970) } }
@@ -549,7 +641,11 @@ final class QuickBooksBillingWorkflow {
             values += [payment.id.uuidString, String(payment.amount), String(payment.isRefund), payment.providerPaymentStatus,
                        payment.quickBooksID, payment.quickBooksChargeID]
         }
-        return SHA256.hash(data: try JSONEncoder().encode(values)).map { String(format: "%02x", $0) }.joined()
+        return values
+    }
+
+    nonisolated private static func digestDraftRevision(_ values: [String?]) throws -> String {
+        SHA256.hash(data: try JSONEncoder().encode(values)).map { String(format: "%02x", $0) }.joined()
     }
 
     private func publishSharedDocument(_ shared: BillingNativePublication) async throws -> Outcome {
@@ -567,8 +663,9 @@ final class QuickBooksBillingWorkflow {
         let operation: BillingPublicationOperation
         switch document {
         case .invoice(let invoice):
-            let inputs = try QuickBooksInvoicePublicationRecovery.publicationInputs(for: invoice, catalogItems: catalog,
-                payments: context.fetch(FetchDescriptor<Payment>()).filter { $0.invoice != nil })
+            let inputs = try await QuickBooksInvoicePublicationRecovery.publicationInputsAsync(for: invoice, catalogItems: catalog,
+                payments: context.fetch(FetchDescriptor<Payment>()).filter { $0.invoice != nil }, validateCurrent: check)
+            try check()
             let localID = invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines)
             if let localID, !localID.isEmpty, localID != evidence.providerID { throw BillingNativeError.mapping }
             if (localID?.isEmpty ?? true), let existing = evidence.invoice {
@@ -591,7 +688,9 @@ final class QuickBooksBillingWorkflow {
                 ShipAddr: tax?.service, ShipFromAddr: tax?.origin, ApplyTaxAfterDiscount: invoice.documentDiscount == nil ? nil : true,
                 Id: evidence.providerID, SyncToken: evidence.invoice?.SyncToken, sparse: operation == .update ? true : nil)
         case .estimate(let estimate):
-            let inputs = try QuickBooksEstimatePublicationRecovery.publicationInputs(for: estimate, catalogItems: catalog)
+            let inputs = try await QuickBooksEstimatePublicationRecovery.publicationInputsAsync(for: estimate, catalogItems: catalog,
+                validateCurrent: check)
+            try check()
             let localID = estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines)
             if let localID, !localID.isEmpty, localID != evidence.providerID { throw BillingNativeError.mapping }
             if let existing = evidence.estimate {
@@ -603,12 +702,13 @@ final class QuickBooksBillingWorkflow {
                 PrivateNote: BillingPublicationProposal.userNote(inputs.privateNote), BillEmail: inputs.billEmail,
                 ShipAddr: tax?.service, ShipFromAddr: tax?.origin, ApplyTaxAfterDiscount: estimate.documentDiscount == nil ? nil : true)
         }
+        let revision = try await billingDraftRevisionAsync()
         let request = BillingPublicationRequest(companyID: scope.companyID, realmID: scope.realmID, environment: scope.environment,
             documentType: scope.documentType, localDocumentID: document.id, localCustomerID: customer.id, operation: operation,
             document: proposal, connectionRevision: evidence.connectionRevision, serviceCallID: document.serviceCallID,
             assignmentRevision: evidence.authority == "assigned" ? evidence.assignment?.revision : nil,
-            draftRevision: try billingDraftRevision(), projectMilestoneID: document.projectMilestoneID)
-        try shared.prepare(request, revision: billingDraftRevision())
+            draftRevision: revision, projectMilestoneID: document.projectMilestoneID)
+        try shared.prepare(request, revision: revision)
         attemptedWrite = true
         let result = try await shared.submitOriginal()
         return try applySharedConfirmation(invoice: result.invoice, estimate: result.estimate, recovered: false)
@@ -638,8 +738,12 @@ final class QuickBooksBillingWorkflow {
         }
         do { try saveDocumentConfirmation(recovered: recovered) } catch { restore(); throw error }
         validateDocument = document.validation(context: context)
+        // Preserve the post-save hash and journal settlement as one uninterrupted
+        // MainActor operation so recovery never observes a linked document with
+        // the old pending revision after a suspension.
+        let settlementRevision = sharedPublication?.journal.pending?.publicationID == nil ? nil : try billingDraftRevision()
         completed = true
-        if sharedPublication?.journal.pending?.publicationID != nil { try sharedPublication?.settle(revision: billingDraftRevision()) }
+        if let settlementRevision { try sharedPublication?.settle(revision: settlementRevision) }
         return outcome
     }
 
@@ -689,8 +793,9 @@ final class QuickBooksBillingWorkflow {
         let taxAddresses = try BillingTaxAddressContext.forPublication(document)
         switch document {
         case .invoice(let invoice):
-            let inputs = try QuickBooksInvoicePublicationRecovery.publicationInputs(for: invoice, catalogItems: catalog,
-                payments: context.fetch(FetchDescriptor<Payment>()).filter { $0.invoice != nil })
+            let inputs = try await QuickBooksInvoicePublicationRecovery.publicationInputsAsync(for: invoice, catalogItems: catalog,
+                payments: context.fetch(FetchDescriptor<Payment>()).filter { $0.invoice != nil }, validateCurrent: check)
+            try check()
             let payload = QuickBooksInvoiceCreate(CustomerRef: inputs.customerRef, Line: inputs.lines,
                 PrivateNote: inputs.privateNote, BillEmail: inputs.billEmail,
                 ShipAddr: taxAddresses?.service.quickBooksAddress ?? inputs.shipAddress,
@@ -748,7 +853,9 @@ final class QuickBooksBillingWorkflow {
                 : (recovered ? "Existing QuickBooks invoice recovered without creating a duplicate." : "Invoice saved and synced to QuickBooks."),
                 recovered: recovered, invoice: remote)
         case .estimate(let estimate):
-            let inputs = try QuickBooksEstimatePublicationRecovery.publicationInputs(for: estimate, catalogItems: catalog)
+            let inputs = try await QuickBooksEstimatePublicationRecovery.publicationInputsAsync(for: estimate, catalogItems: catalog,
+                validateCurrent: check)
+            try check()
             let remotes = try await run.receive(api.fetchEstimates)
             try check()
             let remote: QuickBooksEstimate
@@ -833,10 +940,26 @@ final class QuickBooksBillingWorkflow {
             case .invoice(let value): invoiceList = [value]; estimateList = []
             case .estimate(let value): invoiceList = []; estimateList = [value]
             }
-            let candidates = try self.context.fetch(FetchDescriptor<ServiceDocumentAttachment>()).map { ($0.id, $0) }
-            for (identifier, attachment) in candidates {
-                let current = try self.context.fetch(FetchDescriptor<ServiceDocumentAttachment>()).filter { $0.id == identifier }
-                guard current.count == 1, current.first === attachment else { throw QuickBooksBillingWorkflowError.changed }
+            // Only files saved against this document can need its reference.
+            // Their identities are read off the main actor by exact link; each
+            // is resolved through this context by model identity.
+            let container = self.context.container, documentID = self.document.id
+            let isInvoice: Bool
+            if case .invoice = self.document { isInvoice = true } else { isInvoice = false }
+            let candidates = try await Task.detached(priority: .userInitiated) { () throws -> [(PersistentIdentifier, UUID)] in
+                let reader = ModelContext(container)
+                reader.autosaveEnabled = false
+                let fetch = isInvoice
+                    ? FetchDescriptor<ServiceDocumentAttachment>(predicate: #Predicate { $0.invoiceID == documentID })
+                    : FetchDescriptor<ServiceDocumentAttachment>(predicate: #Predicate { $0.estimateID == documentID })
+                return try reader.fetch(fetch).map { ($0.persistentModelID, $0.id) }
+            }.value
+            try self.check()
+            for (model, identifier) in candidates {
+                let attachment: ServiceDocumentAttachment
+                do { attachment = try QBODocumentNativeWorkflow.exactAttachment(model, id: identifier, context: self.context) }
+                catch { throw QuickBooksBillingWorkflowError.changed }
+                guard attachment.modelContext === self.context else { throw QuickBooksBillingWorkflowError.changed }
                 let references = QuickBooksInvoiceAttachmentSync.missingQuickBooksAttachableReferences(
                     for: attachment, estimates: estimateList, invoices: invoiceList)
                 guard !references.isEmpty else { continue }
@@ -845,16 +968,17 @@ final class QuickBooksBillingWorkflow {
                 let path = attachment.localFilePath, caption = attachment.caption, kind = attachment.kindRaw
                 let oldID = attachment.quickBooksAttachableID, oldKeys = attachment.quickBooksAttachedEntityKeysRaw
                 let oldError = attachment.quickBooksSyncError
-                let bytes = try QBODocumentNativeWorkflow.fileData(attachment.localFileURL)
+                // In-memory identity and labels only: no fetch, no file read.
+                // The upload's own fence re-reads and re-hashes the original
+                // off the main actor before every step.
                 let validate = {
                     try self.check()
-                    let matches = try self.context.fetch(FetchDescriptor<ServiceDocumentAttachment>()).filter { $0.id == identifier }
-                    guard matches.count == 1, matches.first === attachment, attachment.customer === customer,
+                    guard attachment.modelContext === self.context, !attachment.isDeleted, attachment.id == identifier,
+                          attachment.persistentModelID == model, attachment.customer === customer,
                           attachment.invoiceID == invoiceID, attachment.estimateID == estimateID,
                           attachment.localFilePath == path, attachment.caption == caption, attachment.kindRaw == kind,
                           attachment.quickBooksAttachableID == oldID, attachment.quickBooksAttachedEntityKeysRaw == oldKeys,
-                          attachment.quickBooksSyncError == oldError,
-                          try QBODocumentNativeWorkflow.fileData(attachment.localFileURL) == bytes else {
+                          attachment.quickBooksSyncError == oldError else {
                         throw QuickBooksBillingWorkflowError.changed
                     }
                 }

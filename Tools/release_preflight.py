@@ -581,6 +581,14 @@ EXPECTED_CLOUDKIT_V27_ADDITIONS = {
         "CD_quickBooksPaymentReviewJSON": _CLOUDKIT_STRING_FIELD,
     },
 }
+EXPECTED_CLOUDKIT_V28_ADDITIONS = {
+    **EXPECTED_CLOUDKIT_V27_ADDITIONS,
+    "CD_ServiceCall": {
+        **EXPECTED_CLOUDKIT_V27_ADDITIONS["CD_ServiceCall"],
+        "CD_googleEventConfirmedAt": _CLOUDKIT_DATE_FIELD,
+        "CD_googleCalendarPendingAt": _CLOUDKIT_DATE_FIELD,
+    },
+}
 EXPECTED_CLOUDKIT_BASELINE_RECORD_TYPES = {
     "CD_AppUser",
     "CD_Customer",
@@ -1201,6 +1209,25 @@ def binary_uuids(path: Path) -> set[str]:
     return set(re.findall(r"UUID: ([0-9A-F-]+)", output))
 
 
+def forbidden_release_markers(strings_text: str) -> list[str]:
+    # Release dd5d56d's dSYM identifies this exact string as the private
+    # JobBillingDispatch property for its production encrypted offline queue.
+    # Exclude only that complete strings-output line, never a substring or
+    # other spelling; unknown lowercase bootstrap strings remain forbidden.
+    inspected = "\n".join(
+        line for line in strings_text.splitlines() if line != "bootstrapStore"
+    )
+    markers = (
+        "-uiTest", "bootstrap", "localhost", "127.0.0.1",
+        "-disableCloudKitForTesting",
+        "-initializeCloudKitSchema", "-cleanupCloudKitSchemaBootstrap",
+        "GunnAireCloudKitSchemaBootstrap", "__GUNNAIRE_CLOUDKIT_SCHEMA_BOOTSTRAP__",
+        "SCHEMA-BOOTSTRAP",
+        "GunnAireCloudKitRoundTripProbe", "CloudKitRoundTripCanary", "CloudKitConflict",
+    )
+    return [marker for marker in markers if marker in inspected]
+
+
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -1500,10 +1527,10 @@ def check_archive(
 
     strings_process = run(["strings", str(binary_path)], check=False)
     strings_text = strings_process.stdout.decode("utf-8", errors="replace")
-    forbidden = [marker for marker in ("-uiTest", "bootstrap", "localhost", "127.0.0.1") if marker in strings_text]
+    forbidden = forbidden_release_markers(strings_text)
     results.require(
         strings_process.returncode == 0 and not forbidden,
-        "Release binary contains no UI-test, bootstrap, or local-host markers",
+        "Release binary contains no forbidden UI-test, schema-bootstrap, or local-host markers",
         f"Release binary contains forbidden markers: {forbidden}",
     )
 
@@ -1730,14 +1757,10 @@ def check_mac_app(
 
     strings_process = run(["strings", str(binary_path)], check=False)
     strings_text = strings_process.stdout.decode("utf-8", errors="replace")
-    forbidden = [
-        marker
-        for marker in ("-uiTest", "bootstrap", "localhost", "127.0.0.1")
-        if marker in strings_text
-    ]
+    forbidden = forbidden_release_markers(strings_text)
     results.require(
         strings_process.returncode == 0 and not forbidden,
-        "Mac Catalyst binary contains no UI-test, bootstrap, or local-host markers",
+        "Mac Catalyst binary contains no forbidden UI-test, schema-bootstrap, or local-host markers",
         f"Mac Catalyst binary contains forbidden markers: {forbidden}",
     )
 
@@ -1934,7 +1957,7 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
             f"Development removes or alters Production fields: {changed_or_removed}",
         )
         malformed_existing_v23_fields: list[str] = []
-        for record_name, expected_fields in EXPECTED_CLOUDKIT_V27_ADDITIONS.items():
+        for record_name, expected_fields in EXPECTED_CLOUDKIT_V28_ADDITIONS.items():
             production_fields = prod.get(record_name, {})
             for field_name, expected_definition in expected_fields.items():
                 if (
@@ -1946,8 +1969,8 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
                     )
         results.require(
             not malformed_existing_v23_fields,
-            "Existing Production fields through v27 match their approved definitions",
-            "CloudKit Production contains malformed approved fields through v27: "
+            "Existing Production fields through v28 match their approved definitions",
+            "CloudKit Production contains malformed approved fields through v28: "
             f"{malformed_existing_v23_fields}",
         )
 
@@ -1979,11 +2002,13 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
             f"{record}.{field}"
             for record, fields in actual_additions.items()
             for field, definition in fields.items()
-            if EXPECTED_CLOUDKIT_V27_ADDITIONS.get(record, {}).get(field) != definition
+            if EXPECTED_CLOUDKIT_V28_ADDITIONS.get(record, {}).get(field) != definition
         ]
         results.require(not unexpected_additions,
-                        "All CloudKit additions match approved definitions through v27",
-                        f"Unexpected CloudKit additions through v27: {unexpected_additions}")
+                        "All CloudKit additions match approved definitions through v28",
+                        f"Unexpected CloudKit additions through v28: {unexpected_additions}")
+        expected_remaining_v28_additions = expected_remaining(EXPECTED_CLOUDKIT_V28_ADDITIONS)
+        dev_missing_v28 = missing_or_changed(dev, EXPECTED_CLOUDKIT_V28_ADDITIONS)
         expected_remaining_v27_additions = expected_remaining(EXPECTED_CLOUDKIT_V27_ADDITIONS)
         dev_missing_v27 = missing_or_changed(dev, EXPECTED_CLOUDKIT_V27_ADDITIONS)
         expected_remaining_v26_additions = expected_remaining(EXPECTED_CLOUDKIT_V26_ADDITIONS)
@@ -2016,8 +2041,11 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
         dev_missing_v16 = missing_or_changed(dev, EXPECTED_CLOUDKIT_V16_ADDITIONS)
         prod_missing_v16 = missing_or_changed(prod, EXPECTED_CLOUDKIT_V16_ADDITIONS)
 
-        if not dev_missing_v27 and actual_additions == expected_remaining_v27_additions:
+        if not dev_missing_v28 and actual_additions == expected_remaining_v28_additions:
+            results.pass_("CloudKit Development contains the exact cumulative v28 Calendar publication recovery schema")
+        elif not dev_missing_v27 and actual_additions == expected_remaining_v27_additions:
             results.pass_("CloudKit Development contains the exact cumulative v27 invoice accounting review schema")
+            results.warn("CloudKit v28 Calendar publication recovery dates are not staged; seed Development before promotion review")
         elif not dev_missing_v26 and actual_additions == expected_remaining_v26_additions:
             results.pass_("CloudKit Development contains the exact cumulative v26 retained milestone draft schema")
             results.warn("CloudKit v27 invoice accounting reviews are not staged; run the signed v27 bootstrap before promotion review")
@@ -2277,7 +2305,7 @@ def main() -> int:
             results,
         )
     else:
-        results.warn("CloudKit exports were not supplied; the exact v13/v14/v15/v16/v17/v18/v19/v20/v21/v22/v23 Production delta was not rechecked")
+        results.warn("CloudKit exports were not supplied; the exact cumulative v28 Production delta was not rechecked")
 
     if args.online:
         check_online(backend_version, results)

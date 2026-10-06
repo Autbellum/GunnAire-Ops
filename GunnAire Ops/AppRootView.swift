@@ -49,6 +49,23 @@ enum GunnAireAccessibilityTextSizePolicy {
     }
 }
 
+@MainActor
+enum AppRootAuthenticationPolicy {
+    /// An Apple credential may remain stored after Google becomes the selected
+    /// business login. Revoking that old credential must not close Google.
+    static func shouldEndBusinessSessionAfterAppleRevocation(
+        selectedProvider: BusinessLoginProvider?,
+        appleBusinessSessionAvailable: Bool,
+        googleBusinessSessionAvailable: Bool
+    ) -> Bool {
+        BusinessLoginSelection.resolvedProvider(
+            selected: selectedProvider,
+            appleBusinessSessionAvailable: appleBusinessSessionAvailable,
+            googleBusinessSessionAvailable: googleBusinessSessionAvailable
+        ) != .google
+    }
+}
+
 private struct GunnAireAccessibilityTextSizeModifier: ViewModifier {
     let forcedSize: DynamicTypeSize?
 
@@ -76,17 +93,21 @@ struct AppRootView: View {
     @AppStorage("hasAuthenticatedUser") private var hasAuthenticatedUser = false
     @AppStorage("enableSplashVideo") private var enableSplashVideo = true
     @State private var showingSplash = true
+    @State private var authenticationRestored = false
+    @State private var splashURL: URL?
 
     var body: some View {
         Group {
-            if showingSplash && GunnAireAccessibilityMotionPolicy.shouldPlaySplashVideo(
+            if showingSplash && !authenticationRestored && GunnAireAccessibilityMotionPolicy.shouldPlaySplashVideo(
                 enabled: enableSplashVideo,
-                hasVideo: SplashVideoLocator.resolveURL() != nil,
+                hasVideo: splashURL != nil,
                 reduceMotion: reduceMotion
-            ) {
-                VideoSplashView {
+            ), let splashURL {
+                VideoSplashView(url: splashURL) {
                     showingSplash = false
                 }
+            } else if !authenticationRestored {
+                ProgressView("Opening GunnAire Ops")
             } else {
                 if hasAuthenticatedUser {
                     if GunnAireCloudKit.usesTestDatabase && !ProcessInfo.processInfo.arguments.contains("-uiTestWorkspaceProofMismatch") {
@@ -108,13 +129,6 @@ struct AppRootView: View {
         )
         .onAppear {
             applyUITestAuthenticationIfRequested()
-            if !GunnAireAccessibilityMotionPolicy.shouldPlaySplashVideo(
-                enabled: enableSplashVideo,
-                hasVideo: SplashVideoLocator.resolveURL() != nil,
-                reduceMotion: reduceMotion
-            ) {
-                showingSplash = false
-            }
         }
         .onChange(of: reduceMotion) { _, isReduced in
             if isReduced {
@@ -124,10 +138,18 @@ struct AppRootView: View {
         .task {
             await validatePersistedAuthenticationIfNeeded()
         }
+        .task {
+            let resolved = await Task.detached(priority: .utility) {
+                SplashVideoLocator.resolveURL()
+            }.value
+            splashURL = resolved
+            if resolved == nil { showingSplash = false }
+        }
         .onChange(of: hasAuthenticatedUser) { _, isAuthenticated in
             if !isAuthenticated {
                 StaffReplicaReceiveController.shared.stopRecovery()
                 CompanyWorkspaceAccessController.shared.invalidate()
+                BusinessLoginSelection.clear()
             }
         }
         .onContinueUserActivity(FieldPaymentHandoff.activityType) { activity in
@@ -143,14 +165,25 @@ struct AppRootView: View {
             )
         ) { _ in
             guard AppleAuthManager.shared.isAuthenticated else { return }
-            FieldPaymentHandoff.shared.end()
+            let shouldEndBusinessSession = AppRootAuthenticationPolicy
+                .shouldEndBusinessSessionAfterAppleRevocation(
+                    selectedProvider: BusinessLoginSelection.selected,
+                    appleBusinessSessionAvailable: AppleAuthManager.shared.isAuthenticated &&
+                        AppleAuthManager.shared.workspaceSessionProof != nil,
+                    googleBusinessSessionAvailable: GoogleAuthManager.shared.isAuthenticated &&
+                        GoogleAuthManager.shared.workspaceSessionProof != nil
+                )
             AppleAuthManager.shared.signOut()
-            hasAuthenticatedUser = false
+            if shouldEndBusinessSession {
+                FieldPaymentHandoff.shared.end()
+                hasAuthenticatedUser = false
+            }
         }
     }
 
     @MainActor
     private func validatePersistedAuthenticationIfNeeded() async {
+        defer { authenticationRestored = true }
         #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
         if arguments.contains("-uiTestAuthenticatedAdmin") ||
@@ -161,15 +194,30 @@ struct AppRootView: View {
             return
         }
         #endif
+        async let appleRestored: Void = AppleAuthManager.shared.restoreStoredSession()
+        async let googleRestored: Void = GoogleAuthManager.shared.restoreStoredSession()
+        _ = await (appleRestored, googleRestored)
         guard hasAuthenticatedUser else { return }
-        if AppleAuthManager.shared.isAuthenticated {
+        let provider = BusinessLoginSelection.resolvedProvider(
+            selected: BusinessLoginSelection.selected,
+            appleBusinessSessionAvailable: AppleAuthManager.shared.isAuthenticated &&
+                AppleAuthManager.shared.workspaceSessionProof != nil,
+            googleBusinessSessionAvailable: GoogleAuthManager.shared.isAuthenticated &&
+                GoogleAuthManager.shared.workspaceSessionProof != nil
+        )
+        switch provider {
+        case .apple:
             if !(await AppleAuthManager.shared.validateCredentialState()) {
                 FieldPaymentHandoff.shared.end()
                 hasAuthenticatedUser = false
+            } else if BusinessLoginSelection.selected == nil {
+                BusinessLoginSelection.choose(.apple)
             }
-            return
-        }
-        if !GoogleAuthManager.shared.isAuthenticated {
+        case .google:
+            if BusinessLoginSelection.selected == nil {
+                BusinessLoginSelection.choose(.google)
+            }
+        case nil:
             FieldPaymentHandoff.shared.end()
             hasAuthenticatedUser = false
         }
@@ -210,6 +258,7 @@ enum GunnAireUITestIdentity {
 #endif
 
 private struct VideoSplashView: View {
+    let url: URL
     let onFinished: () -> Void
 
     @State private var player: AVPlayer?
@@ -272,44 +321,35 @@ private struct VideoSplashView: View {
         // Load and play the first available splash video once (muted).
         // This supports either a bundled asset or a Loading.mp4 dropped into
         // the app's Application Support / Documents directories.
-        if let url = SplashVideoLocator.resolveURL() {
-            let work = DispatchWorkItem {
-                finishOnce()
-            }
-            timeoutWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + splashTimeoutDelay, execute: work)
-
-            let item = AVPlayerItem(url: url)
-            let player = AVPlayer(playerItem: item)
-            player.isMuted = true
-            player.actionAtItemEnd = .pause
-            self.player = player
-
-            playbackEndObserver = NotificationCenter.default.addObserver(
-                forName: .AVPlayerItemDidPlayToEndTime,
-                object: item,
-                queue: .main
-            ) { _ in
-                finishOnce()
-            }
-
-            playbackFailureObserver = NotificationCenter.default.addObserver(
-                forName: .AVPlayerItemFailedToPlayToEndTime,
-                object: item,
-                queue: .main
-            ) { _ in
-                finishOnce()
-            }
-
-            player.play()
-        } else {
-            // Ensure we transition even if no video exists to load.
-            let work = DispatchWorkItem {
-                finishOnce()
-            }
-            timeoutWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
+        let work = DispatchWorkItem {
+            finishOnce()
         }
+        timeoutWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + splashTimeoutDelay, execute: work)
+
+        let item = AVPlayerItem(url: url)
+        let player = AVPlayer(playerItem: item)
+        player.isMuted = true
+        player.actionAtItemEnd = .pause
+        self.player = player
+
+        playbackEndObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { _ in
+            finishOnce()
+        }
+
+        playbackFailureObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { _ in
+            finishOnce()
+        }
+
+        player.play()
     }
 
     private var splashTimeoutDelay: TimeInterval {
@@ -358,7 +398,7 @@ enum SplashVideoLocator {
         }
     }
 
-    struct VideoDetails {
+    struct VideoDetails: Sendable {
         let filename: String
         let fileSizeDescription: String
         let modifiedDescription: String
@@ -420,34 +460,38 @@ enum SplashVideoLocator {
         return urls
     }
 
-    nonisolated static func installVideo(from sourceURL: URL, fileManager: FileManager = .default) throws -> VideoDetails {
-        _ = try inspectVideo(at: sourceURL, fileManager: fileManager)
-        let destinationURL = try ensureStorageURL(fileManager: fileManager)
+    nonisolated static func installVideoAsync(from sourceURL: URL) async throws -> VideoDetails {
         let shouldStopAccessing = sourceURL.startAccessingSecurityScopedResource()
         defer {
-            if shouldStopAccessing {
-                sourceURL.stopAccessingSecurityScopedResource()
+            if shouldStopAccessing { sourceURL.stopAccessingSecurityScopedResource() }
+        }
+        _ = try await inspectVideo(at: sourceURL, fileManager: .default)
+        let destinationURL = try await Task.detached(priority: .utility) {
+            let fileManager = FileManager.default
+            let destinationURL = try ensureStorageURL(fileManager: fileManager)
+            if fileManager.fileExists(atPath: destinationURL.path) {
+                try fileManager.removeItem(at: destinationURL)
             }
-        }
-
-        if fileManager.fileExists(atPath: destinationURL.path) {
-            try fileManager.removeItem(at: destinationURL)
-        }
-        try fileManager.copyItem(at: sourceURL, to: destinationURL)
-        return try inspectVideo(at: destinationURL, fileManager: fileManager)
+            try fileManager.copyItem(at: sourceURL, to: destinationURL)
+            return destinationURL
+        }.value
+        return try await inspectVideo(at: destinationURL, fileManager: .default)
     }
 
-    nonisolated static func removeStoredVideo(fileManager: FileManager = .default) throws {
-        guard let storedURL = storedCandidateURLs(fileManager: fileManager).first else { return }
-        guard fileManager.fileExists(atPath: storedURL.path) else { return }
-        try fileManager.removeItem(at: storedURL)
+    nonisolated static func removeStoredVideoAsync() async throws {
+        try await Task.detached(priority: .utility) {
+            let fileManager = FileManager.default
+            guard let storedURL = storedCandidateURLs(fileManager: fileManager).first,
+                  fileManager.fileExists(atPath: storedURL.path) else { return }
+            try fileManager.removeItem(at: storedURL)
+        }.value
     }
 
     nonisolated static func currentSourceDescription(fileManager: FileManager = .default) -> String {
         currentSource(fileManager: fileManager).description
     }
 
-    nonisolated static func currentStoredVideoDetails(fileManager: FileManager = .default) -> VideoDetails? {
+    nonisolated static func currentStoredVideoDetails(fileManager: FileManager = .default) async -> VideoDetails? {
         guard case .custom = currentSource(fileManager: fileManager) else { return nil }
         guard let storedURL = storedCandidateURLs(fileManager: fileManager).first,
               fileManager.fileExists(atPath: storedURL.path),
@@ -460,7 +504,7 @@ enum SplashVideoLocator {
         let formatter = ByteCountFormatter()
         formatter.allowedUnits = [.useKB, .useMB]
         formatter.countStyle = .file
-        let videoMetrics = inspectVideoMetrics(at: storedURL)
+        let videoMetrics = await inspectVideoMetrics(at: storedURL)
 
         return VideoDetails(
             filename: storedURL.lastPathComponent,
@@ -472,19 +516,17 @@ enum SplashVideoLocator {
         )
     }
 
-    nonisolated static func currentResolvedVideoDetails(fileManager: FileManager = .default) -> VideoDetails? {
+    nonisolated static func currentResolvedVideoDetails(fileManager: FileManager = .default) async -> VideoDetails? {
         guard let resolvedURL = resolveURL(fileManager: fileManager) else { return nil }
-        return try? inspectVideo(at: resolvedURL, fileManager: fileManager)
+        return try? await inspectVideo(at: resolvedURL, fileManager: fileManager)
     }
 
     nonisolated static func currentResolvedVideoDetailsAsync(fileManager: FileManager = .default) async -> VideoDetails? {
-        await Task.detached(priority: .utility) {
-            currentResolvedVideoDetails(fileManager: fileManager)
-        }.value
+        await currentResolvedVideoDetails(fileManager: fileManager)
     }
 
-    nonisolated static func preferredFinishDelay(for url: URL, maximumDuration: TimeInterval = 6.0) -> TimeInterval {
-        let durationSeconds = inspectVideoMetrics(at: url)?.durationSeconds ?? 0
+    nonisolated static func preferredFinishDelay(for url: URL, maximumDuration: TimeInterval = 6.0) async -> TimeInterval {
+        let durationSeconds = await inspectVideoMetrics(at: url)?.durationSeconds ?? 0
         return preferredFinishDelay(durationSeconds: durationSeconds, maximumDuration: maximumDuration)
     }
 
@@ -498,7 +540,7 @@ enum SplashVideoLocator {
         return min(max(paddedDuration, 1.2), max(maximumDuration, 1.2))
     }
 
-    nonisolated private static func inspectVideo(at url: URL, fileManager: FileManager) throws -> VideoDetails {
+    nonisolated private static func inspectVideo(at url: URL, fileManager: FileManager) async throws -> VideoDetails {
         guard url.pathExtension.lowercased() == "mp4" else {
             throw ValidationError.unsupportedFormat
         }
@@ -511,7 +553,7 @@ enum SplashVideoLocator {
             throw ValidationError.unreadableVideo
         }
 
-        guard let videoMetrics = inspectVideoMetrics(at: url) else {
+        guard let videoMetrics = await inspectVideoMetrics(at: url) else {
             throw ValidationError.unreadableVideo
         }
 
@@ -531,44 +573,27 @@ enum SplashVideoLocator {
         )
     }
 
-    nonisolated private static func inspectVideoMetrics(at url: URL) -> (durationSeconds: TimeInterval, pixelSize: CGSize?)? {
-        let semaphore = DispatchSemaphore(value: 0)
-        var result: (durationSeconds: TimeInterval, pixelSize: CGSize?)?
+    nonisolated private static func inspectVideoMetrics(at url: URL) async -> (durationSeconds: TimeInterval, pixelSize: CGSize?)? {
+        let asset = AVURLAsset(url: url)
+        do {
+            let duration = try await asset.load(.duration)
+            let isPlayable = try await asset.load(.isPlayable)
+            let tracks = try await asset.loadTracks(withMediaType: .video)
+            guard isPlayable || !tracks.isEmpty else { return nil }
 
-        Task {
-            defer { semaphore.signal() }
-
-            let asset = AVURLAsset(url: url)
-
-            do {
-                let duration = try await asset.load(.duration)
-                let isPlayable = try await asset.load(.isPlayable)
-                let tracks = try await asset.loadTracks(withMediaType: .video)
-
-                guard isPlayable || !tracks.isEmpty else { return }
-
-                let pixelSize: CGSize?
-                if let track = tracks.first {
-                    let naturalSize = try await track.load(.naturalSize)
-                    let preferredTransform = try await track.load(.preferredTransform)
-                    let transformedSize = naturalSize.applying(preferredTransform)
-                    pixelSize = CGSize(
-                        width: abs(transformedSize.width),
-                        height: abs(transformedSize.height)
-                    )
-                } else {
-                    pixelSize = nil
-                }
-
-                let durationSeconds = CMTimeGetSeconds(duration)
-                result = (durationSeconds, pixelSize)
-            } catch {
-                result = nil
+            let pixelSize: CGSize?
+            if let track = tracks.first {
+                let naturalSize = try await track.load(.naturalSize)
+                let preferredTransform = try await track.load(.preferredTransform)
+                let transformedSize = naturalSize.applying(preferredTransform)
+                pixelSize = CGSize(width: abs(transformedSize.width), height: abs(transformedSize.height))
+            } else {
+                pixelSize = nil
             }
+            return (CMTimeGetSeconds(duration), pixelSize)
+        } catch {
+            return nil
         }
-
-        semaphore.wait()
-        return result
     }
 
     nonisolated private static func describe(duration: TimeInterval?) -> String? {

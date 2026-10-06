@@ -16,26 +16,87 @@ final class GmailSendWorkflow {
     private let access: () throws -> Void
     private let save: (ModelContext) throws -> Void
     private var baseline: [String] = []
+    private var sourceLease: GmailDraftSourceLease?
     private var communications: [CustomerCommunication] = []
     private var running = false
     private var outcome: GmailSendOutcome?
 
-    private lazy var operation = WorkspaceProviderOperation(parent: provider) { [weak self] in
-        guard let self else { return false }
-        return (try? self.checkRecordsAndAccess()) != nil
+    private lazy var operation = WorkspaceProviderOperation(parent: provider,
+        beforeTransport: { [weak self] in
+            guard let self else { throw GmailDraftError.businessChanged }
+            try await self.checkAsync()
+        }, transportFence: { [weak self] in
+            guard let self else { throw GmailDraftError.businessChanged }
+            try self.check()
+            try self.sourceLease?.checkTransportPermit(context: self.context)
+        }, isCurrent: { [weak self] in
+            guard let self else { return false }
+            return (try? self.checkRecordsAndAccess()) != nil
+        })
+
+    static func prepare(auth: GoogleAuthManager, context: ModelContext, message: GmailOutgoingMessage,
+                        business: GmailBusinessContext? = nil, provider: WorkspaceProviderOperation? = nil,
+                        validateAccess: (() throws -> Void)? = nil, journal: GmailDraftSession? = nil,
+                        sourceSnapshot: [String]? = nil,
+                        save: @escaping (ModelContext) throws -> Void = { try $0.save() }) async throws -> GmailSendWorkflow {
+        let retainedProvider = try provider ?? auth.captureProviderOperation()
+        try retainedProvider.check()
+        guard retainedProvider.serverMail == nil || business == nil else { throw GmailComposeError.access }
+        let sender = AppAccess.normalizedEmail(retainedProvider.serverMail?.scope.company.actorEmail ?? auth.signedInEmail)
+        let access = validateAccess ?? { try requireAccess(context: context, business: business, sender: sender) }
+        try access()
+        let lease: GmailDraftSourceLease?
+        if let business {
+            lease = try await GmailDraftSourceLease.prepare(business: business, context: context)
+        } else { lease = nil }
+        try retainedProvider.check(); try access()
+        return try GmailSendWorkflow(auth: auth, context: context, message: message, business: business,
+            provider: retainedProvider, validateAccess: access, journal: journal, sourceSnapshot: sourceSnapshot,
+            preparedSourceLease: lease, save: save)
     }
 
     init(auth: GoogleAuthManager, context: ModelContext, message: GmailOutgoingMessage,
          business: GmailBusinessContext? = nil, provider: WorkspaceProviderOperation? = nil,
          validateAccess: (() throws -> Void)? = nil,
          journal: GmailDraftSession? = nil,
+         sourceSnapshot: [String]? = nil,
+         preparedSourceLease: GmailDraftSourceLease? = nil,
          save: @escaping (ModelContext) throws -> Void = { try $0.save() }) throws {
         self.auth = auth; self.context = context; self.message = message; self.business = business
         sender = AppAccess.normalizedEmail(provider?.serverMail?.scope.company.actorEmail ?? auth.signedInEmail)
-        self.provider = try provider ?? auth.captureProviderOperation()
+        let capturedProvider = try provider ?? auth.captureProviderOperation()
+        self.provider = capturedProvider
         self.save = save
         let retainedSender = sender
-        access = validateAccess ?? { try Self.requireAccess(context: context, business: business, sender: retainedSender) }
+        let accessCheck = validateAccess ?? { try Self.requireAccess(context: context, business: business, sender: retainedSender) }
+        access = accessCheck
+        try capturedProvider.check()
+        try accessCheck()
+        guard capturedProvider.serverMail == nil || business == nil else { throw GmailComposeError.access }
+        var preparedState: [String] = []
+        let preparedLease: GmailDraftSourceLease?
+        if let business {
+            let validate: () throws -> Void = {
+                do {
+                    preparedState = try Self.recordState(message: message, business: business, context: context)
+                } catch GmailComposeError.changed {
+                    if sourceSnapshot != nil || journal != nil { throw GmailDraftError.businessChanged }
+                    throw GmailComposeError.changed
+                }
+            }
+            if let preparedSourceLease {
+                try validate(); try preparedSourceLease.check(context: context)
+                preparedLease = preparedSourceLease
+            } else {
+                preparedLease = try GmailDraftSourceLease(business: business, context: context, validatePreparation: validate)
+            }
+        } else {
+            preparedLease = nil
+            preparedState = try Self.recordState(message: message, business: business, context: context)
+        }
+        if let sourceSnapshot {
+            guard sourceSnapshot == preparedLease?.snapshot else { throw GmailDraftError.businessChanged }
+        }
         if let journal {
             self.journal = journal
         } else if !GunnAireCloudKit.usesTestDatabase {
@@ -43,7 +104,7 @@ final class GmailSendWorkflow {
             let content = GmailDraftContent(to: message.to, subject: message.subject, body: message.body,
                 files: message.attachments.map { GmailDraftFile($0) }, reply: message.reply,
                 business: business, requiresBusinessContext: business != nil,
-                businessSnapshot: try GmailDraftBusinessSnapshot.capture(business, context: context))
+                businessSnapshot: preparedLease?.snapshot)
             self.journal = try GmailDraftSession(record: .init(id: UUID(), scope: scope, content: content), store: .device) {
                 guard try GmailDraftScope.capture(auth: auth, context: context) == scope else { throw GmailDraftError.access }
                 try Self.requireAccess(context: context, business: business, sender: auth.signedInEmail)
@@ -56,6 +117,7 @@ final class GmailSendWorkflow {
         messageID = self.journal?.record.messageID ?? "<gunnaire-\(UUID().uuidString.lowercased())@gunnaire.com>"
         try self.provider.check()
         try access()
+        try preparedLease?.check(context: context)
         if let journal = self.journal {
             try journal.verify()
             guard journal.record.scope.googleEmail == sender else { throw GmailDraftError.access }
@@ -69,9 +131,10 @@ final class GmailSendWorkflow {
                   saved.body == message.body, saved.files == message.attachments.map({ GmailDraftFile($0) }),
                   saved.reply == message.reply, saved.business == business,
                   saved.attachmentError == nil, !saved.requiresBusinessContext || business != nil else { throw GmailDraftError.changed }
-            guard try saved.businessSnapshot == GmailDraftBusinessSnapshot.capture(business, context: context) else { throw GmailDraftError.businessChanged }
+            guard saved.businessSnapshot == preparedLease?.snapshot else { throw GmailDraftError.businessChanged }
         }
-        baseline = try recordState()
+        sourceLease = preparedLease
+        baseline = preparedState
     }
 
     func send() async -> GmailSendOutcome {
@@ -81,32 +144,44 @@ final class GmailSendWorkflow {
         defer { running = false }
         var receivedSendResponse = false
         do {
-            try check()
+            try await checkAsync()
+            try checkClassified()
             let customers = try matchingCustomers()
             let consentAllowed = customers.allSatisfy {
                 business?.workflow.requiresMarketingConsent == true ? $0.allowsMarketing : $0.allowsTransactionalEmail
             }
-            communications = customers.map { customer in
-                CustomerCommunication(customer: customer, serviceCallID: business?.serviceCallID,
-                    invoiceID: business?.invoiceID, estimateID: business?.estimateID,
-                    maintenanceContractID: business?.maintenanceContractID, recipient: AppAccess.normalizedEmail(customer.email),
-                    subject: message.subject.trimmingCharacters(in: .whitespaces).isEmpty ? "(No subject)" :
-                        String(String.UnicodeScalarView(message.subject.unicodeScalars.prefix(500))),
-                    deliveryStatus: consentAllowed ? "pending" : "suppressed",
-                    workflow: business?.workflow ?? .general, actorEmail: sender,
-                    consentSnapshot: CustomerCommunicationConsentSnapshot(customer: customer),
-                    providerStatusDetail: consentAllowed ? "Prepared for Gmail; sending outcome is not yet confirmed." :
-                        GmailComposeError.consent.localizedDescription,
-                    attachmentFileNames: message.attachments.map(\.fileName))
+            do {
+                try await saveHistoryPreservingSource {
+                    communications = customers.map { customer in
+                        CustomerCommunication(customer: customer, serviceCallID: business?.serviceCallID,
+                            invoiceID: business?.invoiceID, estimateID: business?.estimateID,
+                            maintenanceContractID: business?.maintenanceContractID, recipient: AppAccess.normalizedEmail(customer.email),
+                            subject: message.subject.trimmingCharacters(in: .whitespaces).isEmpty ? "(No subject)" :
+                                String(String.UnicodeScalarView(message.subject.unicodeScalars.prefix(500))),
+                            deliveryStatus: consentAllowed ? "pending" : "suppressed",
+                            workflow: business?.workflow ?? .general, actorEmail: sender,
+                            consentSnapshot: CustomerCommunicationConsentSnapshot(customer: customer),
+                            providerStatusDetail: consentAllowed ? "Prepared for Gmail; sending outcome is not yet confirmed." :
+                                GmailComposeError.consent.localizedDescription,
+                            attachmentFileNames: message.attachments.map(\.fileName))
+                    }
+                    for record in communications { context.insert(record) }
+                }
             }
-            for record in communications { context.insert(record) }
-            do { if !communications.isEmpty { try save(context) } }
             catch {
-                for record in communications { context.delete(record) }
+                // Only undo unsaved insertions while their original access is
+                // still valid. A persisted pending row remains audit evidence.
+                if (try? provider.check()) != nil, (try? access()) != nil {
+                    let inserted = context.insertedModelsArray
+                    for record in communications where inserted.contains(where: { $0 === record }) {
+                        context.delete(record)
+                    }
+                }
                 communications = []
                 throw GmailComposeError.save
             }
-            try check()
+            try await checkAsync()
+            try checkClassified()
             if !consentAllowed {
                 let result = GmailSendOutcome.notSent(GmailComposeError.consent)
                 outcome = result
@@ -131,7 +206,8 @@ final class GmailSendWorkflow {
                     }
             }
             receivedSendResponse = true
-            try check()
+            try await checkAsync()
+            try checkClassified()
             guard GoogleAuthManager.calendarPathComponent(sent.id) != nil,
                   GoogleAuthManager.calendarPathComponent(sent.threadId) != nil else {
                 throw GoogleAuthError.decoding
@@ -139,7 +215,8 @@ final class GmailSendWorkflow {
             let confirmed: GmailMessageDetail = try await withCheckedThrowingContinuation { continuation in
                 auth.fetchGmailMessage(id: sent.id, operation: operation) { continuation.resume(with: $0) }
             }
-            try check()
+            try await checkAsync()
+            try checkClassified()
             guard confirmed.id == sent.id, confirmed.threadId == sent.threadId,
                   confirmed.labelIds?.contains("SENT") == true,
                   GmailMessagePresentation.headerValue(named: "Message-ID", in: confirmed) == messageID,
@@ -150,29 +227,31 @@ final class GmailSendWorkflow {
                   Set(try GmailAddressList.parse(message.to).map { $0.lowercased() }) else {
                 throw GoogleAuthError.decoding
             }
-            let now = Date()
-            for record in communications {
-                record.deliveryStatus = "sent"
-                record.providerMessageID = sent.id
-                record.providerStatusDetail = "Gmail accepted the message for sending; recipient delivery is not verified."
-                record.deliveredAt = now
-            }
-            if let business {
-                CustomerCommunicationWorkflow.applyConfirmedSend(workflow: business.workflow,
-                    customerID: business.customerID, serviceCallID: business.serviceCallID,
-                    invoiceID: business.invoiceID, estimateID: business.estimateID,
-                    maintenanceContractID: business.maintenanceContractID,
-                    estimates: try context.fetch(FetchDescriptor<Estimate>()),
-                    invoices: try context.fetch(FetchDescriptor<Invoice>()),
-                    serviceCalls: try context.fetch(FetchDescriptor<ServiceCall>()),
-                    recurringContracts: try context.fetch(FetchDescriptor<RecurringMaintenanceContract>()),
-                    now: now, actorEmail: sender, deliveryEvidenceText: "Gmail accepted the message for sending",
-                    in: context)
-            }
-            // Intentional operational follow-up becomes this workflow's new baseline.
-            baseline = try recordState()
-            do { if !communications.isEmpty { try save(context) } }
-            catch {
+            do {
+                try await saveHistoryPreservingSource(sourceTransition: true) {
+                    let now = Date()
+                    for record in communications {
+                        record.deliveryStatus = "sent"
+                        record.providerMessageID = sent.id
+                        record.providerStatusDetail = "Gmail accepted the message for sending; recipient delivery is not verified."
+                        record.deliveredAt = now
+                    }
+                    if let business {
+                        CustomerCommunicationWorkflow.applyConfirmedSend(workflow: business.workflow,
+                            customerID: business.customerID, serviceCallID: business.serviceCallID,
+                            invoiceID: business.invoiceID, estimateID: business.estimateID,
+                            maintenanceContractID: business.maintenanceContractID,
+                            estimates: try context.fetch(FetchDescriptor<Estimate>()),
+                            invoices: try context.fetch(FetchDescriptor<Invoice>()),
+                            serviceCalls: try context.fetch(FetchDescriptor<ServiceCall>()),
+                            recurringContracts: try context.fetch(FetchDescriptor<RecurringMaintenanceContract>()),
+                            now: now, actorEmail: sender, deliveryEvidenceText: "Gmail accepted the message for sending",
+                            in: context)
+                    }
+                }
+                try checkClassified()
+                baseline = try recordState()
+            } catch {
                 let result = GmailSendOutcome(state: .reviewRequired,
                     message: "Gmail accepted the message, but its local history could not be saved. Do not send another copy. Review customer history and Gmail Sent.")
                 outcome = result
@@ -200,7 +279,7 @@ final class GmailSendWorkflow {
             let result: GmailSendOutcome = operation.mayHaveReachedProvider && !rejected
                 ? .uncertain : .notSent(error)
             // Never attach a late result to another workspace or changed job.
-            if (try? check()) != nil {
+            if (try? await checkAsync()) != nil, (try? checkClassified()) != nil {
                 for record in communications {
                     record.deliveryStatus = result.canRetry ? "failed" : "unconfirmed"
                     record.providerStatusDetail = result.message
@@ -219,6 +298,21 @@ final class GmailSendWorkflow {
         }
     }
 
+    private func checkAsync() async throws {
+        for attempt in 0..<2 {
+            try check()
+            try await sourceLease?.validateHistory(context: context)
+            try check()
+            do { try sourceLease?.checkTransportPermit(context: context); return }
+            catch { if attempt == 1 { throw error } }
+        }
+    }
+
+    private func checkClassified() throws {
+        try check()
+        try sourceLease?.checkTransportPermit(context: context)
+    }
+
     private func check() throws {
         try provider.check()
         try checkRecordsAndAccess()
@@ -227,14 +321,63 @@ final class GmailSendWorkflow {
 
     private func checkRecordsAndAccess() throws {
         try access()
-        guard try recordState() == baseline else { throw GmailComposeError.changed }
-        let current = try context.fetch(FetchDescriptor<CustomerCommunication>())
-        guard communications.allSatisfy({ retained in current.contains { $0 === retained } }) else {
-            throw GmailComposeError.changed
+        if business != nil {
+            guard let sourceLease else { throw GmailDraftError.businessChanged }
+            try sourceLease.check(context: context)
+            // External saves/imports expire the lease; unsaved deletion/changes
+            // fail its clean-context check before retained models are touched.
+            guard communications.allSatisfy({ record in
+                guard record.modelContext === context, !record.isDeleted else { return false }
+                let registered: CustomerCommunication? = context.registeredModel(for: record.persistentModelID)
+                return registered === record
+            }) else { throw GmailComposeError.changed }
+        } else {
+            guard try recordState() == baseline else { throw GmailComposeError.changed }
+            let current = try context.fetch(FetchDescriptor<CustomerCommunication>())
+            guard communications.allSatisfy({ retained in current.contains { $0 === retained } }) else {
+                throw GmailComposeError.changed
+            }
         }
     }
 
+    private func saveHistoryPreservingSource(sourceTransition: Bool = false,
+                                            _ mutation: () throws -> Void = {}) async throws {
+        guard let business, let original = sourceLease else {
+            try mutation()
+            if !communications.isEmpty { try save(context) }
+            return
+        }
+        var expectedState = baseline
+        var expectedSnapshot = original.snapshot
+        let replacement = try await original.replacingAfterHistoryWrite(business: business, context: context,
+            expectedSnapshot: { expectedSnapshot }, beforeWrite: { try check() }, validatePreparation: {
+                try provider.check()
+                try access()
+                guard try recordState() == expectedState else { throw GmailComposeError.changed }
+            }, write: {
+                try mutation()
+                if sourceTransition {
+                    // Capture the intended operational transition before the
+                    // save hook can mutate consent, recipient or source data.
+                    expectedState = try recordState()
+                    expectedSnapshot = try GmailDraftBusinessSnapshot.capture(business, context: context)
+                }
+                let touched = context.insertedModelsArray + context.changedModelsArray + context.deletedModelsArray
+                if !communications.isEmpty { try save(context) }
+                return Set(touched.map(\.persistentModelID))
+            })
+        try provider.check()
+        try access()
+        try replacement.checkTransportPermit(context: context)
+        guard try recordState() == expectedState else { throw GmailComposeError.changed }
+        sourceLease = replacement
+    }
+
     private func matchingCustomers() throws -> [Customer] {
+        try Self.matchingCustomers(message: message, business: business, context: context)
+    }
+
+    private static func matchingCustomers(message: GmailOutgoingMessage, business: GmailBusinessContext?, context: ModelContext) throws -> [Customer] {
         let all = try context.fetch(FetchDescriptor<Customer>())
         let recipients = try GmailAddressList.parse(message.to).map { AppAccess.normalizedEmail($0) }
         let matches: [Customer]
@@ -255,17 +398,35 @@ final class GmailSendWorkflow {
     }
 
     private func recordState() throws -> [String] {
-        let customers = try matchingCustomers()
+        try Self.recordState(message: message, business: business, context: context)
+    }
+
+    private static func recordState(message: GmailOutgoingMessage, business: GmailBusinessContext?, context: ModelContext) throws -> [String] {
+        let customers = try matchingCustomers(message: message, business: business, context: context)
         var state = customers.flatMap {
             [String(describing: ObjectIdentifier($0)), $0.id.uuidString, $0.name, $0.email ?? "",
              $0.address ?? "", String($0.allowsTransactionalEmail), String($0.allowsMarketing),
              $0.communicationConsentUpdatedAt?.description ?? ""]
         }
         guard let business else { return state }
-        let calls = try context.fetch(FetchDescriptor<ServiceCall>())
-        let invoices = try context.fetch(FetchDescriptor<Invoice>())
-        let estimates = try context.fetch(FetchDescriptor<Estimate>())
-        let contracts = try context.fetch(FetchDescriptor<RecurringMaintenanceContract>())
+        let calls = try business.serviceCallID.map { id in
+            try context.fetch(FetchDescriptor<ServiceCall>(predicate: #Predicate { $0.id == id }))
+        } ?? []
+        let invoices: [Invoice]
+        if let id = business.invoiceID {
+            invoices = try context.fetch(FetchDescriptor<Invoice>(predicate: #Predicate { $0.id == id }))
+        } else if business.workflow == .accountStatement {
+            let customerID = business.customerID
+            var descriptor = FetchDescriptor<Invoice>(predicate: #Predicate { $0.customer?.id == customerID })
+            descriptor.fetchLimit = 1
+            invoices = try context.fetch(descriptor)
+        } else { invoices = [] }
+        let estimates = try business.estimateID.map { id in
+            try context.fetch(FetchDescriptor<Estimate>(predicate: #Predicate { $0.id == id }))
+        } ?? []
+        let contracts = try business.maintenanceContractID.map { id in
+            try context.fetch(FetchDescriptor<RecurringMaintenanceContract>(predicate: #Predicate { $0.id == id }))
+        } ?? []
         func requireUnique<T: AnyObject>(_ values: [T], customer: (T) -> Customer?) throws -> T {
             guard values.count == 1, customer(values[0]) === customers[0] else { throw GmailComposeError.changed }
             return values[0]
@@ -371,15 +532,19 @@ final class GmailSendWorkflow {
         Task { @MainActor in
             for record in communications {
                 do {
-                    try check()
-                    let remote = try await GunnAireBackendService.uploadCustomerCommunication(record)
-                    try check()
-                    record.markSharedCompanySynced(id: remote.id)
-                    try save(context)
+                    try await checkAsync()
+                    try checkClassified()
+                    let payload = GunnAireBackendService.communicationPayload(for: record)
+                    let remote = try await GunnAireBackendService.uploadCustomerCommunication(payload: payload,
+                        originatingOperation: operation)
+                    try await checkAsync()
+                    try checkClassified()
+                    try await saveHistoryPreservingSource { record.markSharedCompanySynced(id: remote.id) }
                 } catch {
-                    guard (try? check()) != nil else { return }
-                    record.markSharedCompanySyncFailed("Company email history needs another sync attempt.")
-                    try? save(context)
+                    guard (try? await checkAsync()) != nil, (try? checkClassified()) != nil else { return }
+                    try? await saveHistoryPreservingSource {
+                        record.markSharedCompanySyncFailed("Company email history needs another sync attempt.")
+                    }
                 }
             }
         }
