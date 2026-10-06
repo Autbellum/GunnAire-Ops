@@ -271,3 +271,10 @@ at the start of every turn; append to it rather than rewriting it.
   (`ScopedRevision` uses `customer.map`), and `rejectedMove` keeps both #43's syncing-customer
   guard and #28's removal of the Google read-only rejection. Build stays 2026100501 (main is
   still 2026091617).
+- 2026-10-06 Claude (`.github/workflows/native-app-regression.yml`, `Tools/test_native_workflow_shards.py`,
+  one hunk of `GunnAire OpsUITests/GunnAire_OpsUITests.swift`): `testAdministratorCreatesInventoryOfflineAndReopensExactSetup`
+  intermittently leaves the app never answering XCTest's "animations idle" request (PR #43 run 37308333921 twice,
+  PR #89 run 37340735430 once; PR #85 passed in 362 s). In the app's own log the first unanswered request is
+  0.6 s after typing `2026-09-08` into `InventoryOpeningDate`; no app error. The idle wait never recovers, even
+  after leaving the editor. Root cause NOT found. Containment: per-test limit of 600 s (slowest healthy UI test
+  362 s) so a hang fails only that test, plus a screenshot and hierarchy when the date entry takes over 30 s.

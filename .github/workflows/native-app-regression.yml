@@ -163,6 +163,9 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/native-derived" \
             -resultBundlePath "$RUNNER_TEMP/native-results/$CI_PLATFORM.xcresult" \
             -parallel-testing-enabled NO \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 600 \
+            -maximum-test-execution-time-allowance 600 \
             "${selectors[@]}" \
             CODE_SIGNING_ALLOWED=NO test 2>&1 |
             tee "$RUNNER_TEMP/native-results/test.log"
@@ -203,7 +206,9 @@ jobs:
           xcodebuild -project "GunnAire Ops.xcodeproj" -scheme "GunnAire Ops" -configuration Debug \
             -destination "platform=iOS Simulator,id=$CI_IPAD_UDID" -destination-timeout 120 \
             -derivedDataPath "$RUNNER_TEMP/native-derived" -resultBundlePath "$evidence/iPad.xcresult" \
-            -parallel-testing-enabled NO "${selectors[@]}" CODE_SIGNING_ALLOWED=NO test 2>&1 |
+            -parallel-testing-enabled NO -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 600 -maximum-test-execution-time-allowance 600 \
+            "${selectors[@]}" CODE_SIGNING_ALLOWED=NO test 2>&1 |
             tee "$evidence/test.log"
           xcrun xcresulttool get test-results summary --path "$evidence/iPad.xcresult" > "$evidence/summary.json"
           xcrun xcresulttool get test-results tests --path "$evidence/iPad.xcresult" > "$evidence/tests.json"
