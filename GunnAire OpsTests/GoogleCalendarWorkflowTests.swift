@@ -234,6 +234,64 @@ struct GoogleCalendarWorkflowTests {
         #expect(f.writes.filter { $0.httpMethod == "POST" }.count == 2)
     }
 
+    @Test(arguments: [3, 8, 10])
+    func backgroundCalendarFailuresRotateWithoutLosingPendingJobs(jobCount: Int) async throws {
+        let f = try Fixture()
+        f.call.scheduledDate = Date().addingTimeInterval(3600)
+        var calls = [f.call]
+        for index in 1..<jobCount {
+            let call = ServiceCall(googleCalendarID: "primary", googleEventManagedByApp: true,
+                eventTitle: "Background fixture \(index)", type: .repair,
+                scheduledDate: f.call.scheduledDate.addingTimeInterval(TimeInterval(index * 3600)),
+                duration: 3600, customer: f.customer)
+            f.context.insert(call)
+            calls.append(call)
+        }
+        try f.context.save()
+        let expectedIDs = calls.map { GoogleCalendarScheduleSync.eventID(for: $0.id) }
+        var attemptedIDs: [String] = []
+        f.beforeReply = { request in
+            guard request.httpMethod == "GET", let url = request.url,
+                  url.path.contains("/events/") else { return }
+            attemptedIDs.append(url.lastPathComponent)
+            throw URLError(.timedOut)
+        }
+        var cursor = 0
+        for _ in 0..<(jobCount * 2) {
+            let previousAttempts = attemptedIDs.count
+            let result = await (try f.flow()).run {
+                let outcome = try await GoogleCalendarScheduleSync.publishPending(workflow: $0,
+                    pageSize: 8, maximumPages: 1, maximumPublications: 1,
+                    startingOffset: cursor, backgroundCandidatesOnly: true,
+                    onBackgroundPage: { cursor = $0 })
+                return "Published \(outcome.published)"
+            }
+            failed(result)
+            #expect(attemptedIDs.count == previousAttempts + 1)
+            #expect(f.writes.isEmpty)
+        }
+        #expect(attemptedIDs == expectedIDs + expectedIDs)
+        #expect(calls.allSatisfy { $0.googleEventID == nil && $0.googleEventConfirmedAt == nil })
+        #expect(calls.allSatisfy { GoogleCalendarScheduleSync.needsOutboundSync($0) })
+
+        f.beforeReply = nil
+        for _ in 0..<(jobCount * 2) {
+            let previousWrites = f.writes.count
+            _ = try await (try f.flow()).run {
+                let outcome = try await GoogleCalendarScheduleSync.publishPending(workflow: $0,
+                    pageSize: 8, maximumPages: 1, maximumPublications: 1,
+                    startingOffset: cursor, backgroundCandidatesOnly: true,
+                    onBackgroundPage: { cursor = $0 })
+                #expect(outcome.published <= 1)
+                return "Published \(outcome.published)"
+            }.get()
+            #expect(f.writes.count <= previousWrites + 1)
+        }
+        #expect(calls.allSatisfy { $0.googleEventConfirmedAt != nil && $0.googleCalendarPendingAt == nil })
+        #expect(f.writes.filter { $0.httpMethod == "POST" }.count == jobCount)
+        #expect(f.remote.count == jobCount)
+    }
+
     @Test func directCalendarPublicationStillRejectsAnUnresolvedCustomerBeforeRequests() async throws {
         let f = try Fixture()
         f.call.customer = nil

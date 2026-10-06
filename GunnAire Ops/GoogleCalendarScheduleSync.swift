@@ -22,7 +22,13 @@ enum GoogleCalendarScheduleSync {
 
     struct BackgroundCandidatePage {
         let calls: [ServiceCall]
+        let offset: Int
         let nextOffset: Int
+
+        func nextOffset(afterInspecting index: Int) -> Int {
+            guard calls.indices.contains(index) else { return nextOffset }
+            return index + 1 < calls.count ? offset + index + 1 : nextOffset
+        }
     }
 
     private final class VerifiedLinkEvidence {
@@ -1380,12 +1386,14 @@ enum GoogleCalendarScheduleSync {
             try workflow.focus(on: nil)
             try workflow.check()
             let page: [ServiceCall]
+            let backgroundPage: BackgroundCandidatePage?
             if backgroundCandidatesOnly {
                 let candidatePage = try backgroundCandidatePage(context: workflow.context,
                                                                 offset: offset, pageSize: pageSize)
                 page = candidatePage.calls
-                onBackgroundPage?(candidatePage.nextOffset)
+                backgroundPage = candidatePage
             } else {
+                backgroundPage = nil
                 var descriptor = FetchDescriptor<ServiceCall>(
                     predicate: #Predicate { $0.googleEventManagedByApp || $0.googleCalendarPendingAt != nil },
                     sortBy: [SortDescriptor(\.scheduledDate), SortDescriptor(\.id)])
@@ -1393,9 +1401,20 @@ enum GoogleCalendarScheduleSync {
                 descriptor.fetchOffset = offset
                 page = try workflow.context.fetch(descriptor)
             }
-            guard !page.isEmpty else { break }
+            guard !page.isEmpty else {
+                if let backgroundPage { onBackgroundPage?(backgroundPage.nextOffset) }
+                break
+            }
             pages += 1
-            for call in page where needsOutboundSync(call) {
+            for (index, call) in page.enumerated() {
+                // Advance only past inspected rows, even when this attempt fails.
+                // A short queue must not restart at the same failing first job.
+                defer {
+                    if let backgroundPage {
+                        onBackgroundPage?(backgroundPage.nextOffset(afterInspecting: index))
+                    }
+                }
+                guard needsOutboundSync(call) else { continue }
                 try workflow.focus(on: [call])
                 guard call.customer != nil else {
                     reviewErrors.append("An appointment is waiting for its customer to finish syncing. It remains saved and will be retried automatically.")
@@ -1439,7 +1458,7 @@ enum GoogleCalendarScheduleSync {
     /// cursor also advances past stale/review-only rows and survives relaunches.
     static func backgroundCandidatePage(context: ModelContext, offset: Int, pageSize: Int = 8,
                                         now: Date = Date()) throws -> BackgroundCandidatePage {
-        guard pageSize > 0 else { return BackgroundCandidatePage(calls: [], nextOffset: 0) }
+        guard pageSize > 0 else { return BackgroundCandidatePage(calls: [], offset: 0, nextOffset: 0) }
         let today = Calendar.current.startOfDay(for: now)
         var descriptor = FetchDescriptor<ServiceCall>(
             predicate: #Predicate {
@@ -1456,7 +1475,7 @@ enum GoogleCalendarScheduleSync {
             descriptor.fetchOffset = 0
             calls = try context.fetch(descriptor)
         }
-        return BackgroundCandidatePage(calls: calls,
+        return BackgroundCandidatePage(calls: calls, offset: start,
             nextOffset: calls.count < pageSize ? 0 : start + calls.count)
     }
 
