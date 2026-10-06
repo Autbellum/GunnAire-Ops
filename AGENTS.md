@@ -223,3 +223,10 @@ at the start of every turn; append to it rather than rewriting it.
   actions (documentation/payment, follow-up, dispatch move) refuse with a syncing message. Invoice,
   estimate, agreement and communication `customer!` reads (~180 in billing/payment screens) are not
   changed here; they are financial paths and need their own pinned tests.
+- 2026-10-06 Claude (`.github/workflows/native-app-regression.yml`, `Tools/test_native_workflow_shards.py`,
+  one hunk of `GunnAire OpsUITests/GunnAire_OpsUITests.swift`): `testAdministratorCreatesInventoryOfflineAndReopensExactSetup`
+  intermittently leaves the app never answering XCTest's "animations idle" request (PR #43 run 37308333921 twice,
+  PR #89 run 37340735430 once; PR #85 passed in 362 s). In the app's own log the first unanswered request is
+  0.6 s after typing `2026-09-08` into `InventoryOpeningDate`; no app error. The idle wait never recovers, even
+  after leaving the editor. Root cause NOT found. Containment: per-test limit of 600 s (slowest healthy UI test
+  362 s) so a hang fails only that test, plus a screenshot and hierarchy when the date entry takes over 30 s.

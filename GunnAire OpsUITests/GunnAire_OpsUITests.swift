@@ -8336,7 +8336,15 @@ final class GunnAire_OpsUITests: XCTestCase {
         requireKeyboardDismissed()
         let date = app.textFields["InventoryOpeningDate"]
         for _ in 0..<8 where !date.isHittable { composeForm.swipeUp() }
-        XCTAssertTrue(waitForHittable(date)); replaceText(in: date, with: "2026-09-08")
+        XCTAssertTrue(waitForHittable(date))
+        // On CI this entry has intermittently left the app never reporting
+        // idle again (every later action waits 60 s). Keep what is on screen
+        // when it happens; healthy entry takes a few seconds.
+        let dateEntryStart = Date()
+        replaceText(in: date, with: "2026-09-08")
+        if Date().timeIntervalSince(dateEntryStart) > 30 {
+            retainNavigationFailure(app, name: "Inventory date entry did not settle")
+        }
         let typed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "2026-09-08"), object: date)
         XCTAssertEqual(XCTWaiter.wait(for: [typed], timeout: 5), .completed)
         XCTAssertTrue(waitForHittable(done)); done.tap()
