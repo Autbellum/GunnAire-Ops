@@ -9197,10 +9197,6 @@ final class GunnAire_OpsUITests: XCTestCase {
         let create = app.buttons["CreateQuickBooksCatalogItem"]
         XCTAssertTrue(create.isEnabled)
 
-        // Establish hardware input before the quantity field owns focus,
-        // matching the bundle keyboard test. Replacement still gets one
-        // Command-A and must preserve every exact decimal character.
-        app.typeKey(XCUIKeyboardKey.shift.rawValue, modifierFlags: [])
         app.segmentedControls["QuickBooksCatalogItemType"].buttons["Inventory"].tap()
         let form = app.collectionViews["CatalogItemComposeForm"]
         let quantity = app.textFields["InventoryOpeningQuantity"]
@@ -9208,23 +9204,16 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(waitForHittable(quantity))
         let initialQuantity = quantity.value as? String ?? ""
         XCTAssertTrue(initialQuantity.isEmpty || initialQuantity == quantity.placeholderValue)
-        quantity.tap()
-        var enteredHardwareQuantity = ""
-        for key in "4.25" {
-            quantity.typeKey(String(key), modifierFlags: [])
-            enteredHardwareQuantity.append(key)
-            XCTAssertEqual(quantity.value as? String, enteredHardwareQuantity)
-        }
+        // The companion largest-text inventory setup test keeps the hardware
+        // Command-A/per-key decimal coverage. This rotation acceptance focuses
+        // the same field in landscape and verifies exact decimal replacement
+        // without letting XCTest's hardware-key idle wait dominate the layout
+        // assertion this test owns.
+        replaceInventoryQuantityText(app, quantity, in: form, with: "4.25")
         XCTAssertEqual(quantity.value as? String, "4.25")
-        quantity.typeKey("a", modifierFlags: .command)
-        var expectedHardwareQuantity = ""
-        for key in "6.5" {
-            quantity.typeKey(String(key), modifierFlags: [])
-            expectedHardwareQuantity.append(key)
-            XCTAssertEqual(quantity.value as? String, expectedHardwareQuantity)
-        }
+        replaceInventoryQuantityText(app, quantity, in: form, with: "6.5", alreadyFocused: true)
         XCTAssertEqual(quantity.value as? String, "6.5")
-        requireContextualControl("Inventory action after hardware-style input")
+        requireContextualControl("Inventory action after exact quantity entry")
         rotateDevice(to: .portrait)
         requireContextualControl("Inventory action after returning to portrait")
         done.tap(); requireEditingEnded()
