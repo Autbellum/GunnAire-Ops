@@ -14,9 +14,15 @@ import Foundation
     static let localID = UUID(uuidString: "D1000000-0000-4000-8000-000000000002")!
     static let serverID = UUID(uuidString: "D1000000-0000-4000-8000-000000000003")!
     static var key: String { "OriginalFilesFixture-" + (ProcessInfo.processInfo.environment["GUNNAIRE_ORIGINAL_FILE_FIXTURE"] ?? "invalid") }
+    static var directory: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!.appendingPathComponent(key)
+    }
     static var store: QBODocumentCaptureStore {
-        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return .encrypted(directory: root.appendingPathComponent(key)) { _ in Data(repeating: 71, count: 32) }
+        .encrypted(directory: directory) { _ in Data(repeating: 71, count: 32) }
+    }
+    /// DEBUG fixture seeding only: the same journal format, written directly.
+    static var journal: QBOEncryptedCaptureJournal {
+        QBOEncryptedCaptureJournal(directory: directory, key: { _ in Data(repeating: 71, count: 32) })
     }
     static func check() throws {
         guard enabled, !ProcessInfo.processInfo.arguments.contains("-uiTestOriginalFilesDenied") else { throw QBODocumentError.access }
@@ -25,21 +31,27 @@ import Foundation
         precondition(enabled)
         return .init(owner: { _ in try check(); try seed(); return owner }, access: { _, _ in
             try check(); return .init(owner: owner, scope: scope, check: check)
-        }, store: store, transport: request)
+        }, store: store, transport: request, realmProof: { records in
+            // The synthetic business has exactly one proven company scope.
+            try check()
+            guard !records.isEmpty, records.allSatisfy({
+                $0.companyID == scope.companyID && $0.realmID == scope.realmID && $0.environment == scope.environment
+            }) else { throw AutomaticOutboundSync.RealmError.reviewRequired }
+        })
     }
     static func seed() throws {
         if ProcessInfo.processInfo.arguments.contains("-uiTestSharedOriginalFiles") { return }
-        guard try store.read(owner, localID) == nil else { return }
+        guard try journal.header(owner, localID) == nil else { return }
         let data = Data("Original service report. Equipment checked; customer findings retained.".utf8)
         let row = QBODocumentCapture(id: localID, owner: owner, scope: scope,
             file: try .init(filename: "Service report.txt", contentType: "text/plain", data: data),
             targets: [.init(type: "Invoice", id: "original-invoice")], jobDocument: nil, createdAt: Date())
-        try store.write(row, nil, data)
+        try journal.write(row, expected: nil, original: data, knownRows: nil)
     }
     static func request(_ path: String, _ method: String, _ body: Data?) async throws -> Data {
         try check()
         if ProcessInfo.processInfo.arguments.contains("-uiTestSharedOriginalFiles") { return try sharedRequest(path, method) }
-        guard let row = try store.read(owner, localID), let route = URLComponents(string: path)?.path else { throw QBODocumentError.invalid }
+        guard let row = try await store.read(owner, localID), let route = URLComponents(string: path)?.path else { throw QBODocumentError.invalid }
         let data = UserDefaults.standard.data(forKey: key)
         var remote = try data.map { try JSONDecoder().decode(QBODocumentUploadRecord.self, from: $0) }
         if route == "/api/qbo-document-uploads", method == "GET" {

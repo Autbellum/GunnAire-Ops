@@ -27,12 +27,12 @@ import Testing
         #expect(restored.sharedSource == reserved && restored.id == reserved.operationID)
         #expect(restored.owner.actorEmail == "second-admin@example.invalid")
         #expect(restored.connectionRevision == nil && !restored.dispatchStarted)
-        let reopened = try #require(try fixture.store.read(browser.access.owner, restored.id))
+        let reopened = try #require(try await fixture.store.read(browser.access.owner, restored.id))
         #expect(reopened == restored)
-        #expect(try fixture.store.bytes(browser.access.owner, restored.id) == Data("Retained original".utf8))
-        #expect(try fixture.store.list(fixture.owner).isEmpty)
+        #expect(try await fixture.store.bytes(browser.access.owner, restored.id) == Data("Retained original".utf8))
+        #expect(try await fixture.store.list(fixture.owner).isEmpty)
         _ = try await browser.restore(reserved)
-        #expect(try fixture.store.list(browser.access.owner).count == 1)
+        #expect(try await fixture.store.list(browser.access.owner).count == 1)
         #expect(fixture.sends == 0 && fixture.reservations == 1)
     }
 
@@ -40,7 +40,7 @@ import Testing
         let fixture = try QuickBooksDocumentWorkflowFixture(); defer { fixture.cleanup() }
         let reserved = try await reserve(fixture), browser = try history(fixture)
         let local = try await browser.restore(reserved)
-        let session = try QBODocumentCaptureSession(record: local, store: fixture.store, check: fixture.check)
+        let session = try await QBODocumentCaptureSession(record: local, store: fixture.store, check: fixture.check)
         try await session.send(client: browser.client)
         #expect(session.record.server?.id == reserved.id && session.record.server?.state == .confirmed)
         #expect(fixture.reservations == 1 && fixture.sends == 1)
@@ -53,14 +53,14 @@ import Testing
         let reserved = try await reserve(fixture), browser = try history(fixture)
         fixture.remote?["state"] = "uncertain"
         let local = try await browser.restore(reserved)
-        let session = try QBODocumentCaptureSession(record: local, store: fixture.store, check: fixture.check)
+        let session = try await QBODocumentCaptureSession(record: local, store: fixture.store, check: fixture.check)
         #expect(local.dispatchStarted && local.server?.state == .uncertain)
         await #expect(throws: QBODocumentError.review) { try await session.send(client: browser.client) }
         await #expect(throws: QBODocumentError.review) { try await session.cancel(client: browser.client) }
         #expect(fixture.sends == 0)
         fixture.remote?["state"] = "reserved"
         await #expect(throws: QBODocumentError.changed) { try await browser.restore(local.server!) }
-        #expect(try fixture.store.read(browser.access.owner, local.id) == local)
+        #expect(try await fixture.store.read(browser.access.owner, local.id) == local)
     }
 
     @Test func alteredBytesAndRevokedAccessCannotCreateADeviceCopy() async throws {
@@ -68,11 +68,11 @@ import Testing
         let reserved = try await reserve(fixture), browser = try history(fixture)
         fixture.remoteBytes = Data("Different original".utf8)
         await #expect(throws: QBODocumentError.invalid) { try await browser.restore(reserved) }
-        #expect(try fixture.store.list(browser.access.owner).isEmpty)
+        #expect(try await fixture.store.list(browser.access.owner).isEmpty)
         fixture.remoteBytes = Data("Retained original".utf8)
         fixture.beforeResponse = { path in if path.hasSuffix("/file") { fixture.authorized = false } }
         await #expect(throws: QBODocumentError.access) { try await browser.restore(reserved) }
-        #expect(try fixture.store.list(browser.access.owner).isEmpty)
+        #expect(try await fixture.store.list(browser.access.owner).isEmpty)
         #expect(fixture.sends == 0)
     }
 
@@ -86,7 +86,7 @@ import Testing
         let reserved = try await reserve(fixture, job: job), browser = try history(fixture)
         fixture.remote?["state"] = "confirmed"; fixture.remote?["providerID"] = "A1"
         let local = try await browser.restore(reserved)
-        #expect(throws: QBODocumentError.syncPending) { try browser.apply(local, context: app.context) }
+        await #expect(throws: QBODocumentError.syncPending) { try await browser.apply(local, context: app.context) }
         #expect(local.needsLocalApplication && local.needsAttention)
         #expect(try app.context.fetch(FetchDescriptor<ServiceDocumentAttachment>()).isEmpty)
         let otherDevicePath = fixture.root.appendingPathComponent("other-device-missing/Original.txt").path
@@ -95,30 +95,31 @@ import Testing
             contentType: "text/plain", fileSizeBytes: Data("Retained original".utf8).count)
         app.context.insert(attachment); try app.context.save()
         let dependencies = QBODocumentNativeWorkflow.Dependencies(owner: { _ in try fixture.check(); return browser.access.owner },
-            access: { _, _ in browser.access }, store: fixture.store, transport: fixture.request)
+            access: { _, _ in browser.access }, store: fixture.store, transport: fixture.request,
+            realmProof: { try fixture.proveRealm($0) })
         let previewFolder = fixture.root.appendingPathComponent("previews", isDirectory: true)
-        let preview = try QBODocumentNativeWorkflow.previewURL(for: attachment, context: app.context,
+        let preview = try await QBODocumentNativeWorkflow.previewURL(for: attachment, context: app.context,
             dependencies: dependencies, directory: previewFolder)
         #expect(try Data(contentsOf: preview) == Data("Retained original".utf8))
         #expect(preview.path != otherDevicePath && attachment.localFilePath == otherDevicePath)
-        #expect(try QBODocumentNativeWorkflow.previewURL(for: attachment, context: app.context,
+        #expect(try await QBODocumentNativeWorkflow.previewURL(for: attachment, context: app.context,
             dependencies: dependencies, directory: previewFolder) == preview)
         try Data("Corrupt cached preview".utf8).write(to: preview)
-        #expect(throws: QBODocumentError.storage) {
-            try QBODocumentNativeWorkflow.previewURL(for: attachment, context: app.context,
+        await #expect(throws: QBODocumentError.storage) {
+            try await QBODocumentNativeWorkflow.previewURL(for: attachment, context: app.context,
                 dependencies: dependencies, directory: previewFolder)
         }
-        #expect(try fixture.store.bytes(browser.access.owner, local.id) == Data("Retained original".utf8))
+        #expect(try await fixture.store.bytes(browser.access.owner, local.id) == Data("Retained original".utf8))
         let requestsBeforeApplication = fixture.requests.count
-        let applied = try browser.apply(local, context: app.context)
+        let applied = try await browser.apply(local, context: app.context)
         #expect(attachment.quickBooksAttachableID == "A1" && attachment.localFilePath == otherDevicePath)
         #expect(!FileManager.default.fileExists(atPath: otherDevicePath))
         #expect(!applied.needsAttention && applied.localAppliedAt != nil)
-        _ = try browser.apply(applied, context: app.context)
+        _ = try await browser.apply(applied, context: app.context)
         #expect(fixture.requests.count == requestsBeforeApplication)
         fixture.authorized = false
-        #expect(throws: QBODocumentError.access) {
-            try QBODocumentNativeWorkflow.previewURL(for: attachment, context: app.context,
+        await #expect(throws: QBODocumentError.access) {
+            try await QBODocumentNativeWorkflow.previewURL(for: attachment, context: app.context,
                 dependencies: dependencies, directory: previewFolder)
         }
         #expect(try app.context.fetch(FetchDescriptor<ServiceDocumentAttachment>()).count == 1)
@@ -141,14 +142,14 @@ import Testing
             invoiceID: app.invoice.id, kind: .serviceReport, displayName: "Original.txt", localFilePath: url.path,
             contentType: "text/plain", fileSizeBytes: Data("Retained original".utf8).count)
         app.context.insert(attachment); try app.context.save()
-        #expect(throws: QBODocumentError.changed) { try browser.apply(local, context: app.context) }
+        await #expect(throws: QBODocumentError.changed) { try await browser.apply(local, context: app.context) }
         #expect(attachment.quickBooksAttachableID == nil)
         _ = try fixture.file("Original.txt", data: Data("Retained original".utf8))
-        #expect(throws: QBODocumentError.storage) { try browser.apply(local, context: app.context, save: { _ in throw QBODocumentError.storage }) }
+        await #expect(throws: QBODocumentError.storage) { try await browser.apply(local, context: app.context, save: { _ in throw QBODocumentError.storage }) }
         #expect(attachment.quickBooksAttachableID == nil && attachment.quickBooksAttachedEntityKeysRaw == nil)
-        #expect(try fixture.store.read(browser.access.owner, local.id)?.needsLocalApplication == true)
+        #expect(try await fixture.store.read(browser.access.owner, local.id)?.needsLocalApplication == true)
         attachment.customer = Customer(name: "Wrong customer")
-        #expect(throws: (any Error).self) { try browser.apply(local, context: app.context) }
+        await #expect(throws: (any Error).self) { try await browser.apply(local, context: app.context) }
         #expect(fixture.sends == 0)
     }
 
@@ -158,8 +159,8 @@ import Testing
         fixture.remote?["state"] = "cancelled"
         let local = try await browser.restore(reserved)
         #expect(local.status == "Cancelled — original retained" && !local.needsAttention)
-        #expect(try fixture.store.bytes(browser.access.owner, local.id) == Data("Retained original".utf8))
-        let session = try QBODocumentCaptureSession(record: local, store: fixture.store, check: fixture.check)
+        #expect(try await fixture.store.bytes(browser.access.owner, local.id) == Data("Retained original".utf8))
+        let session = try await QBODocumentCaptureSession(record: local, store: fixture.store, check: fixture.check)
         await #expect(throws: QBODocumentError.review) { try await session.send(client: browser.client) }
         #expect(fixture.sends == 0)
     }
@@ -171,7 +172,7 @@ import Testing
         await #expect(throws: QBODocumentError.invalid) { try await browser.load() }
         await #expect(throws: QBODocumentError.invalid) { try await browser.restore(reserved) }
         #expect(browser.rows.isEmpty && !browser.loaded)
-        #expect(try fixture.store.list(browser.access.owner).isEmpty)
+        #expect(try await fixture.store.list(browser.access.owner).isEmpty)
         #expect(!fixture.requests.contains(where: { $0.path.hasSuffix("/file") }))
     }
 
@@ -203,6 +204,6 @@ import Testing
         try await browser.load(.previous)
         #expect(browser.rows.count == 50 && browser.pageNumber == 1 && !browser.hasPrevious)
         #expect(paths.allSatisfy { $0.hasPrefix("/api/qbo-document-uploads?") && !$0.contains("/file") })
-        #expect(try fixture.store.list(fixture.owner).isEmpty)
+        #expect(try await fixture.store.list(fixture.owner).isEmpty)
     }
 }

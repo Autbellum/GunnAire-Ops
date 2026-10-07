@@ -12,21 +12,31 @@ extension Notification.Name {
 /// offline→online transition and post a notification, so existing sync paths
 /// (e.g. the manual "Sync Saved Document" button) can be triggered
 /// automatically instead of requiring a tap. Owns no sync logic itself.
+@MainActor
 final class NetworkConnectivityMonitor {
     static let shared = NetworkConnectivityMonitor()
 
     private let monitor = NWPathMonitor()
     private let queue = DispatchQueue(label: "com.gunnaire.businesssuite.connectivity-monitor")
+    private let notificationCenter: NotificationCenter
     private var wasSatisfied = true
 
-    private init() {
+    init(notificationCenter: NotificationCenter = .default) {
+        self.notificationCenter = notificationCenter
         monitor.pathUpdateHandler = { [weak self] path in
+            self?.receivePathStatus(isSatisfied: path.status == .satisfied)
+        }
+    }
+
+    /// Path callbacks arrive on the monitor queue. FIFO main-queue delivery
+    /// preserves their order and lets SwiftUI subscribers update recovery UI.
+    nonisolated func receivePathStatus(isSatisfied: Bool) {
+        DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            let isSatisfied = path.status == .satisfied
             let previouslySatisfied = self.wasSatisfied
             self.wasSatisfied = isSatisfied
             guard isSatisfied, !previouslySatisfied else { return }
-            NotificationCenter.default.post(name: .gunnaireConnectivityRestored, object: nil)
+            self.notificationCenter.post(name: .gunnaireConnectivityRestored, object: nil)
         }
     }
 

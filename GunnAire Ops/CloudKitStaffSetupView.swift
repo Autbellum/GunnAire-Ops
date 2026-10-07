@@ -1,10 +1,13 @@
 import SwiftUI
 import UIKit
+import CloudKit
 
 struct CloudKitStaffSetupView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var model: CloudKitStaffSetupController
     @ObservedObject private var inbox = CloudKitStaffInvitationInbox.shared
+    @ObservedObject private var accountFence = CloudKitStaffAccountFence.shared
+    @ObservedObject private var workspaceAccess = CompanyWorkspaceAccessController.shared
     @State private var confirmsAccount = false
     private let embedded: Bool
 
@@ -13,17 +16,29 @@ struct CloudKitStaffSetupView: View {
         _model = StateObject(wrappedValue: CloudKitStaffSetupController(dependencies: dependencies ?? CloudKitStaffSetupUIFixture.dependencies))
     }
 
+    private var requiresRestart: Bool {
+        CloudKitStaffRelaunchPolicy.requiresRestart(
+            staffAccountChanged: accountFence.mustRestart, workspacePhase: workspaceAccess.phase)
+    }
+
     var body: some View {
         navigation
             .accessibilityIdentifier("StaffCloudKitSetup")
             .task {
-                await model.refresh()
+                if !requiresRestart { await model.refresh() }
+                #if DEBUG
+                if GunnAireCloudKit.usesTestDatabase,
+                   ProcessInfo.processInfo.arguments.contains("-uiTestStaffAccountChanged") {
+                    NotificationCenter.default.post(name: .CKAccountChanged, object: nil)
+                }
+                #endif
                 while !Task.isCancelled {
                     do { try await Task.sleep(for: .seconds(1)) } catch { break }
-                    model.checkLifetime()
+                    if !requiresRestart { model.checkLifetime() }
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                guard !requiresRestart else { return }
                 model.checkLifetime()
                 Task { await model.refresh() }
             }
@@ -42,69 +57,73 @@ struct CloudKitStaffSetupView: View {
                     Text("Use your own iCloud account with your approved business login. This setup does not move or replace saved work.")
                         .foregroundStyle(.secondary)
                 }
-                if let error = model.error ?? inbox.error {
-                    Section("Needs attention") {
-                        Text(error.localizedDescription).accessibilityIdentifier("StaffCloudKitSetupError")
-                        if error == .unavailable, !CloudKitStaffSetupDiagnostics.lastUnavailableDetail.isEmpty {
-                            Text(CloudKitStaffSetupDiagnostics.lastUnavailableDetail)
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(.secondary)
-                                .accessibilityIdentifier("StaffCloudKitSetupUnavailableDetail")
-                        }
-                        Button("Check Again") { Task { await model.refresh() } }
-                            .disabled(model.busy)
-                    }
-                }
-                if model.busy { ProgressView("Checking original access…") }
-                if model.needsRecovery {
-                    Section("Original setup retained") {
-                        Text("A previous action needs confirmation. Recover that same request before starting another. No invitation or saved work has been discarded.")
-                        Button("Recover Original Setup") { Task { await model.recover() } }
-                            .disabled(model.busy).accessibilityIdentifier("StaffCloudKitRecoverOriginal")
-                    }
-                }
-                if let context = model.context {
-                    if context.ownerAdministrator {
-                        Section {
-                            Text("Review each person's business role before creating their private invitation. Administrator actions require a sign-in within the last 10 minutes.")
-                        }
-                    } else if model.canEnroll {
-                        Section {
-                            Toggle("Use the iCloud account signed in on this device", isOn: $confirmsAccount)
-                                .accessibilityIdentifier("StaffCloudKitAccountConfirmation")
-                            Button("Request Staff Access") { Task { await model.enroll(confirmed: confirmsAccount) } }
-                                .disabled(!confirmsAccount || model.busy)
-                                .accessibilityIdentifier("StaffCloudKitRequestAccess")
-                        } header: { Text("Request access") } footer: {
-                            Text("Your administrator receives the iCloud account reference needed to invite you. Your Apple password is never shared.")
-                        }
-                    }
-                    if let invitation = inbox.pending {
-                        Section("Opened invitation") {
-                            if model.visiblePlans.contains(where: { invitation.matches($0) }) {
-                                Text("Open your matching staff request below to review this invitation.")
-                            } else {
-                                Text("This link does not match a sharing request available to this business login. No invitation was accepted. Sign in with the invited business account or ask your administrator to review it.")
+                if requiresRestart {
+                    StaffCloudKitRestartNotice()
+                } else {
+                    if let error = model.error ?? inbox.error {
+                        Section("Needs attention") {
+                            Text(error.localizedDescription).accessibilityIdentifier("StaffCloudKitSetupError")
+                            if error == .unavailable, !CloudKitStaffSetupDiagnostics.lastUnavailableDetail.isEmpty {
+                                Text(CloudKitStaffSetupDiagnostics.lastUnavailableDetail)
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("StaffCloudKitSetupUnavailableDetail")
                             }
-                            Button("Dismiss Opened Link") { inbox.dismissOriginal(invitation.id) }
-                            Text("Dismissing a link does not revoke sharing or erase saved setup.").font(.footnote).foregroundStyle(.secondary)
+                            Button("Check Again") { Task { await model.refresh() } }
+                                .disabled(model.busy)
                         }
                     }
-                    Section(context.ownerAdministrator ? "Team requests" : "Your requests") {
-                        if model.visiblePlans.isEmpty {
-                            Text(context.ownerAdministrator ? "No staff requests yet. Team members request access from their own device." : "No staff access has been requested.")
-                                .foregroundStyle(.secondary)
+                    if model.busy { ProgressView("Checking original access…") }
+                    if model.needsRecovery {
+                        Section("Original setup retained") {
+                            Text("A previous action needs confirmation. Recover that same request before starting another. No invitation or saved work has been discarded.")
+                            Button("Recover Original Setup") { Task { await model.recover() } }
+                                .disabled(model.busy).accessibilityIdentifier("StaffCloudKitRecoverOriginal")
                         }
-                        ForEach(model.visiblePlans, id: \.id) { plan in
-                            NavigationLink {
-                                CloudKitStaffRequestView(model: model, id: plan.id, incoming: inbox.pending)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(context.ownerAdministrator ? plan.memberEmail : "Staff workspace")
-                                    Text("\(plan.memberRole) · \(plan.setupStatus)").font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    if let context = model.context {
+                        if context.ownerAdministrator {
+                            Section {
+                                Text("Review each person's business role before creating their private invitation. Administrator actions require a sign-in within the last 10 minutes.")
+                            }
+                        } else if model.canEnroll {
+                            Section {
+                                Toggle("Use the iCloud account signed in on this device", isOn: $confirmsAccount)
+                                    .accessibilityIdentifier("StaffCloudKitAccountConfirmation")
+                                Button("Request Staff Access") { Task { await model.enroll(confirmed: confirmsAccount) } }
+                                    .disabled(!confirmsAccount || model.busy)
+                                    .accessibilityIdentifier("StaffCloudKitRequestAccess")
+                            } header: { Text("Request access") } footer: {
+                                Text("Your administrator receives the iCloud account reference needed to invite you. Your Apple password is never shared.")
+                            }
+                        }
+                        if let invitation = inbox.pending {
+                            Section("Opened invitation") {
+                                if model.visiblePlans.contains(where: { invitation.matches($0) }) {
+                                    Text("Open your matching staff request below to review this invitation.")
+                                } else {
+                                    Text("This link does not match a sharing request available to this business login. No invitation was accepted. Sign in with the invited business account or ask your administrator to review it.")
                                 }
+                                Button("Dismiss Opened Link") { inbox.dismissOriginal(invitation.id) }
+                                Text("Dismissing a link does not revoke sharing or erase saved setup.").font(.footnote).foregroundStyle(.secondary)
                             }
-                            .accessibilityIdentifier("StaffCloudKitRequest-\(plan.id.uuidString.lowercased())")
+                        }
+                        Section(context.ownerAdministrator ? "Team requests" : "Your requests") {
+                            if model.visiblePlans.isEmpty {
+                                Text(context.ownerAdministrator ? "No staff requests yet. Team members request access from their own device." : "No staff access has been requested.")
+                                    .foregroundStyle(.secondary)
+                            }
+                            ForEach(model.visiblePlans, id: \.id) { plan in
+                                NavigationLink {
+                                    CloudKitStaffRequestView(model: model, id: plan.id, incoming: inbox.pending)
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(context.ownerAdministrator ? plan.memberEmail : "Staff workspace")
+                                        Text("\(plan.memberRole) · \(plan.setupStatus)").font(.subheadline).foregroundStyle(.secondary)
+                                    }
+                                }
+                                .accessibilityIdentifier("StaffCloudKitRequest-\(plan.id.uuidString.lowercased())")
+                            }
                         }
                     }
                 }
@@ -114,13 +133,26 @@ struct CloudKitStaffSetupView: View {
             .toolbar {
                 if !embedded { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
             }
-            .refreshable { await model.refresh() }
+            .refreshable {
+                if !requiresRestart { await model.refresh() }
+            }
+    }
+}
+
+private struct StaffCloudKitRestartNotice: View {
+    var body: some View {
+        Section("Restart required") {
+            Text(CloudKitStaffRelaunchPolicy.message)
+                .accessibilityIdentifier("StaffCloudKitRestartRequired")
+        }
     }
 }
 
 private struct CloudKitStaffRequestView: View {
     @Environment(\.scenePhase) private var scenePhase
     @ObservedObject var model: CloudKitStaffSetupController
+    @ObservedObject private var accountFence = CloudKitStaffAccountFence.shared
+    @ObservedObject private var workspaceAccess = CompanyWorkspaceAccessController.shared
     @StateObject private var receive: StaffReplicaReceiveController
     let id: UUID
     let incoming: CloudKitStaffInvitation?
@@ -134,6 +166,10 @@ private struct CloudKitStaffRequestView: View {
     }
 
     private var plan: CloudKitStaffSharePlan? { model.visiblePlans.first { $0.id == id } }
+    private var requiresRestart: Bool {
+        CloudKitStaffRelaunchPolicy.requiresRestart(
+            staffAccountChanged: accountFence.mustRestart, workspacePhase: workspaceAccess.phase)
+    }
     private var originalURL: URL? {
         guard let plan else { return nil }
         if let value = model.journal?.invitationURLs[id.uuidString.lowercased()] { return value }
@@ -146,14 +182,16 @@ private struct CloudKitStaffRequestView: View {
         return url
     }
     private var receiveIdentity: StaffReplicaReceiveIdentity? {
-        guard let context = model.context, let plan, context.owns(plan), plan.state == "accepted",
+        guard !requiresRestart, let context = model.context, let plan, context.owns(plan), plan.state == "accepted",
               !model.needsRecovery, !GunnAireCloudKit.usesTestDatabase || StaffReplicaReceiveUIFixture.isEnabled else { return nil }
         return .init(stamp: context.stamp, plan: plan, invitation: originalURL, isActive: scenePhase == .active)
     }
 
     var body: some View {
         Form {
-            if let plan, let context = model.context {
+            if requiresRestart {
+                StaffCloudKitRestartNotice()
+            } else if let plan, let context = model.context {
                 Section {
                     Text(context.ownerAdministrator ? plan.memberEmail : "Your staff workspace").font(.headline)
                     LabeledContent("Business role", value: plan.memberRole)
@@ -249,11 +287,17 @@ private struct CloudKitStaffRequestView: View {
         }
         .navigationTitle("Staff request").navigationBarTitleDisplayMode(.inline)
         .confirmationDialog(removal == "cleanup" ? "Remove this person's original iCloud sharing access?" : "Revoke this original business request?",
-            isPresented: Binding(get: { removal != nil }, set: { if !$0 { removal = nil } }), titleVisibility: .visible) {
+            isPresented: Binding(get: { removal != nil && !requiresRestart }, set: { if !$0 { removal = nil } }), titleVisibility: .visible) {
                 if removal == "cleanup" {
-                    Button("Remove iCloud Access", role: .destructive) { Task { await model.cleanup(id, confirmed: true) }; removal = nil }
+                    Button("Remove iCloud Access", role: .destructive) {
+                        guard !requiresRestart else { removal = nil; return }
+                        Task { await model.cleanup(id, confirmed: true) }; removal = nil
+                    }
                 } else {
-                    Button("Revoke Business Access", role: .destructive) { Task { await model.revoke(id, confirmed: true) }; removal = nil }
+                    Button("Revoke Business Access", role: .destructive) {
+                        guard !requiresRestart else { removal = nil; return }
+                        Task { await model.revoke(id, confirmed: true) }; removal = nil
+                    }
                 }
                 Button("Cancel", role: .cancel) { removal = nil }
             } message: {

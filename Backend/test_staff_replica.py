@@ -464,6 +464,7 @@ class StaffReplicaTests(unittest.TestCase):
                                              headers={"Authorization": "Bearer " + self.tokens["Admin"], "Content-Type": "application/json"})
             with self.assertRaises(urllib.error.HTTPError) as caught:
                 urllib.request.urlopen(request)
+            self.addCleanup(caught.exception.close)
             self.assertEqual(caught.exception.code, 400)
         self.assertEqual(self.source_page(extra="unknown")[0], 400)
         self.assertEqual(self.source_page(sequence="00")[0], 409)

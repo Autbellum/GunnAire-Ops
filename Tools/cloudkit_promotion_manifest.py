@@ -104,13 +104,14 @@ def build_manifest(
     expected_v25 = release_preflight.EXPECTED_CLOUDKIT_V25_ADDITIONS
     expected_v26 = release_preflight.EXPECTED_CLOUDKIT_V26_ADDITIONS
     expected_v27 = release_preflight.EXPECTED_CLOUDKIT_V27_ADDITIONS
+    expected_v28 = release_preflight.EXPECTED_CLOUDKIT_V28_ADDITIONS
     expected_remaining = {
         record_name: {
             field_name: definition
             for field_name, definition in expected_fields.items()
             if production.get(record_name, {}).get(field_name) != definition
         }
-        for record_name, expected_fields in expected_v27.items()
+        for record_name, expected_fields in expected_v28.items()
     }
     expected_remaining = {
         record_name: fields
@@ -149,6 +150,12 @@ def build_manifest(
         for field_name, definition in fields.items()
         if development.get(record_name, {}).get(field_name) != definition
     )
+    missing_or_changed_development_v28_fields = sorted(
+        _field_path(record_name, field_name)
+        for record_name, fields in expected_v28.items()
+        for field_name, definition in fields.items()
+        if development.get(record_name, {}).get(field_name) != definition
+    )
 
     checks = {
         "productionRecordTypesAreSubsetOfDevelopment": production_types.issubset(
@@ -166,7 +173,8 @@ def build_manifest(
         "developmentContainsExactV25Fields": not missing_or_changed_development_v25_fields,
         "developmentContainsExactV26Fields": not missing_or_changed_development_v26_fields,
         "developmentContainsExactV27Fields": not missing_or_changed_development_v27_fields,
-        "deltaExactlyMatchesRemainingV27Additions": actual_additions
+        "developmentContainsExactV28Fields": not missing_or_changed_development_v28_fields,
+        "deltaExactlyMatchesRemainingV28Additions": actual_additions
         == expected_remaining,
     }
     safe_to_promote = all(checks.values())
@@ -174,7 +182,7 @@ def build_manifest(
 
     return {
         "schemaVersion": 2,
-        "targetBootstrapVersion": 27,
+        "targetBootstrapVersion": 28,
         "operation": "CloudKit schema export comparison",
         "environmentDirection": "Development to Production",
         "privacy": {
@@ -223,6 +231,7 @@ def build_manifest(
             "missingOrChangedDevelopmentV25Fields": missing_or_changed_development_v25_fields,
             "missingOrChangedDevelopmentV26Fields": missing_or_changed_development_v26_fields,
             "missingOrChangedDevelopmentV27Fields": missing_or_changed_development_v27_fields,
+            "missingOrChangedDevelopmentV28Fields": missing_or_changed_development_v28_fields,
         },
     }
 

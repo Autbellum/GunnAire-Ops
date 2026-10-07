@@ -314,8 +314,13 @@ struct GmailServerActionStore {
               record.action.confirmed(by: message) else { throw GmailServerMailError.pending }
         try validate(message, id: record.messageID, thread: record.threadID); return message
     }
-    func recoverActions(operation: WorkspaceProviderOperation) async throws -> Int {
-        for record in try actions() {
+    func recoverActions(operation: WorkspaceProviderOperation, maximum: Int = 128, offset: Int = 0) async throws -> Int {
+        guard (1...128).contains(maximum), offset >= 0 else { throw GmailServerMailError.invalid }
+        let pending = try actions()
+        guard !pending.isEmpty else { return 0 }
+        let start = offset % pending.count
+        for index in 0..<min(maximum, pending.count) {
+            let record = pending[(start + index) % pending.count]
             do {
                 let result = try await request(ActionReply.self, resource: "operations/" + record.id.uuidString.lowercased() + "/recovery", operation: operation)
                 _ = try confirm(result, record: record); try remove(record)

@@ -36,7 +36,9 @@ def transport(request):
             if not isinstance(result, dict):
                 raise ValueError()
             return result
-    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError):
+    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError) as error:
+        if isinstance(error, urllib.error.HTTPError):
+            error.close()
         raise failure("worker_unavailable", "QuickBooks could not verify this worker. The saved mapping is unchanged.", 502) from None
 
 

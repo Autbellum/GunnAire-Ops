@@ -292,6 +292,23 @@ import XCTest
         XCTAssertTrue(f.container.mainContext.hasChanges)
     }
 
+    func testFailedSaveKeepsIndependentGooglePublicationState() async throws {
+        let f = try Fixture(); defer { f.cleanup() }
+        let confirmedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let pendingAt = Date(timeIntervalSince1970: 1_800_000_100)
+        f.saveModel = { _ in
+            f.job.googleEventConfirmedAt = confirmedAt
+            f.job.googleCalendarPendingAt = pendingAt
+            throw StaffReplicaSourceSyncError.storage
+        }
+        try await f.coordinator().synchronize(f.source)
+        XCTAssertEqual(try f.savedValue(), .text("Original office note"))
+        XCTAssertEqual(f.job.notes, "Original office note")
+        XCTAssertEqual(f.job.googleEventConfirmedAt, confirmedAt)
+        XCTAssertEqual(f.job.googleCalendarPendingAt, pendingAt)
+        XCTAssertTrue(f.container.mainContext.hasChanges)
+    }
+
     func testEveryJournalWriteBoundaryRetainsOriginalAndRecovers() async throws {
         let baseline = try Fixture(); defer { baseline.cleanup() }
         try await baseline.coordinator().synchronize(baseline.source)

@@ -102,6 +102,159 @@ class StaffPushNotificationTests(unittest.TestCase):
         thread.start()
         return server, thread, f"http://127.0.0.1:{server.server_port}"
 
+    @staticmethod
+    def apns_response(
+        status: HTTPStatus,
+        *,
+        reason: str | None = None,
+        apns_id: str | None = None,
+    ) -> mock.Mock:
+        response = mock.Mock()
+        response.status_code = int(status)
+        response.headers = {"apns-id": apns_id} if apns_id is not None else {}
+        response.content = b"" if reason is None else json.dumps({"reason": reason}).encode("utf-8")
+        response.json.return_value = {"reason": reason} if reason is not None else {}
+        return response
+
+    def test_apns_provider_jwt_cache_refreshes_before_apple_expiry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.configured_backend(root):
+                backend.clear_apns_authentication_token_cache()
+                issued = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+
+                first = backend.apns_authentication_token(now=issued)
+                cached = backend.apns_authentication_token(now=issued + timedelta(minutes=49))
+                refreshed = backend.apns_authentication_token(now=issued + timedelta(minutes=51))
+                forced = backend.apns_authentication_token(
+                    now=issued + timedelta(minutes=52),
+                    force_refresh=True,
+                )
+
+        self.assertEqual(first, cached)
+        self.assertNotEqual(first, refreshed)
+        self.assertNotEqual(refreshed, forced)
+
+    def test_expired_apns_provider_token_is_refreshed_and_retried_once(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.configured_backend(root):
+                now = datetime.now(timezone.utc)
+                backend.APNS_AUTH_TOKEN_CACHE.update(
+                    {
+                        "configuration_fingerprint": backend.apns_configuration_fingerprint(),
+                        "issued_at": int(now.timestamp()),
+                        "token": "stale-provider-token",
+                    }
+                )
+                expired = self.apns_response(
+                    HTTPStatus.FORBIDDEN,
+                    reason="ExpiredProviderToken",
+                )
+                accepted_id = str(uuid.uuid4())
+                accepted = self.apns_response(HTTPStatus.OK, apns_id=accepted_id)
+                client_class = mock.MagicMock()
+                client = client_class.return_value.__enter__.return_value
+                client.post.side_effect = [expired, accepted]
+                fake_httpx = mock.Mock(Client=client_class)
+
+                with mock.patch.dict("sys.modules", {"httpx": fake_httpx}):
+                    status, reason, apns_id = backend.send_apns_request(
+                        device_token="ab" * 32,
+                        environment="production",
+                        payload={"aps": {"alert": "test"}},
+                        collapse_id="field-payment-test",
+                    )
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertIsNone(reason)
+        self.assertEqual(apns_id, accepted_id)
+        self.assertEqual(client.post.call_count, 2)
+        authorization_headers = [
+            call.kwargs["headers"]["authorization"]
+            for call in client.post.call_args_list
+        ]
+        self.assertEqual(authorization_headers[0], "bearer stale-provider-token")
+        self.assertTrue(authorization_headers[1].startswith("bearer "))
+        self.assertNotEqual(authorization_headers[0], authorization_headers[1])
+
+    def test_provider_authentication_rejections_retry_once_with_the_same_alert(self) -> None:
+        for reason in ("ExpiredProviderToken", "InvalidProviderToken", "MissingProviderToken"):
+            with self.subTest(reason=reason):
+                client_class = mock.MagicMock()
+                client = client_class.return_value.__enter__.return_value
+                client.post.side_effect = [
+                    self.apns_response(HTTPStatus.FORBIDDEN, reason=reason),
+                    self.apns_response(HTTPStatus.OK),
+                ]
+                payload = {"aps": {"alert": "test"}}
+                with mock.patch.dict("sys.modules", {"httpx": mock.Mock(Client=client_class)}), \
+                     mock.patch.object(backend, "apns_authentication_token", side_effect=["old", "new"]) as signer:
+                    result = backend.send_apns_request(device_token="ab" * 32,
+                        environment="production", payload=payload, collapse_id="same-alert")
+                self.assertEqual(result, (HTTPStatus.OK, None, None))
+                self.assertEqual(client.post.call_count, 2)
+                self.assertEqual(signer.call_args_list, [mock.call(force_refresh=False), mock.call(force_refresh=True)])
+                first, second = client.post.call_args_list
+                self.assertEqual(first.args, second.args)
+                self.assertEqual(first.kwargs["json"], second.kwargs["json"])
+                self.assertEqual(first.kwargs["headers"]["apns-collapse-id"], "same-alert")
+                self.assertEqual(second.kwargs["headers"]["apns-collapse-id"], "same-alert")
+                self.assertEqual(first.kwargs["headers"]["authorization"], "bearer old")
+                self.assertEqual(second.kwargs["headers"]["authorization"], "bearer new")
+
+    def test_repeated_provider_token_rejection_stops_after_one_refresh(self) -> None:
+        client_class = mock.MagicMock()
+        client = client_class.return_value.__enter__.return_value
+        client.post.return_value = self.apns_response(HTTPStatus.FORBIDDEN, reason="ExpiredProviderToken")
+        with mock.patch.dict("sys.modules", {"httpx": mock.Mock(Client=client_class)}), \
+             mock.patch.object(backend, "apns_authentication_token", return_value="synthetic-token"):
+            result = backend.send_apns_request(device_token="ab" * 32,
+                environment="development", payload={"aps": {}}, collapse_id="one-retry")
+        self.assertEqual(result, (HTTPStatus.FORBIDDEN, "ExpiredProviderToken", None))
+        self.assertEqual(client.post.call_count, 2)
+        self.assertEqual(client.post.call_args.args[0], "https://api.sandbox.push.apple.com/3/device/" + "ab" * 32)
+
+    def test_other_apns_responses_are_not_immediately_retried(self) -> None:
+        cases = [(HTTPStatus.OK, None), (HTTPStatus.BAD_REQUEST, "BadDeviceToken"),
+                 (HTTPStatus.FORBIDDEN, "DeviceTokenNotForTopic"), (HTTPStatus.FORBIDDEN, "Forbidden"),
+                 (HTTPStatus.GONE, "Unregistered"), (HTTPStatus.TOO_MANY_REQUESTS, "TooManyRequests"),
+                 (HTTPStatus.TOO_MANY_REQUESTS, "TooManyProviderTokenUpdates"),
+                 (HTTPStatus.INTERNAL_SERVER_ERROR, "InternalServerError"),
+                 (HTTPStatus.BAD_REQUEST, "ExpiredProviderToken")]
+        for status, reason in cases:
+            with self.subTest(status=status, reason=reason):
+                client_class = mock.MagicMock()
+                client = client_class.return_value.__enter__.return_value
+                client.post.return_value = self.apns_response(status, reason=reason)
+                with mock.patch.dict("sys.modules", {"httpx": mock.Mock(Client=client_class)}), \
+                     mock.patch.object(backend, "apns_authentication_token", return_value="synthetic-token"):
+                    result = backend.send_apns_request(device_token="ab" * 32,
+                        environment="production", payload={"aps": {}}, collapse_id="no-retry")
+                self.assertEqual(result, (status, reason, None))
+                self.assertEqual(client.post.call_count, 1)
+
+    def test_refresh_connection_failure_stops_without_a_third_request(self) -> None:
+        client_class = mock.MagicMock()
+        client = client_class.return_value.__enter__.return_value
+        client.post.side_effect = [self.apns_response(HTTPStatus.FORBIDDEN, reason="ExpiredProviderToken"),
+                                   OSError("synthetic connection failure")]
+        with mock.patch.dict("sys.modules", {"httpx": mock.Mock(Client=client_class)}), \
+             mock.patch.object(backend, "apns_authentication_token", return_value="synthetic-token"):
+            result = backend.send_apns_request(device_token="ab" * 32,
+                environment="production", payload={"aps": {}}, collapse_id="retry-failed")
+        self.assertEqual(result, (HTTPStatus.SERVICE_UNAVAILABLE, "ProviderConnectionFailed", None))
+        self.assertEqual(client.post.call_count, 2)
+
+    def test_signing_failure_returns_a_bounded_failure_before_sending(self) -> None:
+        client_class = mock.MagicMock()
+        with mock.patch.dict("sys.modules", {"httpx": mock.Mock(Client=client_class)}), \
+             mock.patch.object(backend, "apns_authentication_token", side_effect=ValueError("synthetic invalid key")):
+            result = backend.send_apns_request(device_token="ab" * 32,
+                environment="production", payload={"aps": {}}, collapse_id="signing-failed")
+        self.assertEqual(result, (HTTPStatus.SERVICE_UNAVAILABLE, "ProviderConnectionFailed", None))
+        client_class.assert_not_called()
+
     def test_registration_is_session_bound_encrypted_and_assignment_delivery_is_private(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -321,6 +474,7 @@ class StaffPushNotificationTests(unittest.TestCase):
                             ),
                             timeout=5,
                         )
+                    self.addCleanup(rejected.exception.close)
                     self.assertEqual(rejected.exception.code, HTTPStatus.FORBIDDEN)
                     with backend.db() as connection:
                         self.assertEqual(connection.execute("SELECT COUNT(*) FROM push_devices").fetchone()[0], 0)

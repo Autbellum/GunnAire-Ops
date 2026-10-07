@@ -68,7 +68,9 @@ def transport(request):
             if not isinstance(value, dict):
                 raise ValueError()
             return value
-    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeError):
+    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeError) as error:
+        if isinstance(error, urllib.error.HTTPError):
+            error.close()
         raise failure("provider_unavailable", "QuickBooks could not confirm the original file. Check its saved upload status; no automatic replacement was sent.", 502) from None
 
 
@@ -110,7 +112,9 @@ class DocumentQBOProvider:
             self.authorize()
         try:
             result = self.send(request)
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError, UnicodeError):
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError, UnicodeError) as error:
+            if isinstance(error, urllib.error.HTTPError):
+                error.close()
             raise failure("provider_unavailable", "QuickBooks could not confirm the original file. Check its saved upload status.", 502) from None
         self.authorize()
         return result

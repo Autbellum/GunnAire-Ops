@@ -240,6 +240,7 @@ import SwiftData
         // If this acknowledgement fails, the committed response/file remain.
         // A subsequent explicit retry recovers those exact IDs, not new ones.
         try session.finish()
+        AutomaticGoogleDriveArchive.shared.wakeAfterSave(attachment, context: transaction)
         return Completion(context: transaction, attachment: attachment, newFileData: data, record: session.record)
     }
 

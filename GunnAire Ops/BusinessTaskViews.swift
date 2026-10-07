@@ -447,7 +447,7 @@ private struct BusinessTaskEditorView: View {
         selectedCustomerID.flatMap { id in customers.first { $0.id == id } } ?? selectedCall?.customer
     }
     private var linksAreResolved: Bool {
-        (selectedServiceCallID == nil || selectedCall != nil) &&
+        (selectedServiceCallID == nil || selectedCall?.customer != nil) &&
             (selectedCustomerID == nil || selectedCustomer != nil)
     }
     private var canSave: Bool {
@@ -513,7 +513,7 @@ private struct BusinessTaskEditorView: View {
                             guard fixedCustomerID == nil,
                                   let newValue,
                                   let call = serviceCalls.first(where: { $0.id == newValue }) else { return }
-                            selectedCustomerID = call.customer.id
+                            selectedCustomerID = call.customer?.id
                         }
                     }
                 }

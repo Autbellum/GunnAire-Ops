@@ -8,7 +8,7 @@ import unittest
 import urllib.error
 import urllib.request
 import uuid
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
@@ -163,10 +163,11 @@ class CustomerPortalTests(unittest.TestCase):
                     return wrapped
                 return cursor
 
-        def connection() -> sqlite3.Connection:
-            result = sqlite3.connect(backend.DB_PATH, factory=PausingConnection)
-            result.row_factory = sqlite3.Row
-            return result
+        @contextmanager
+        def connection() -> Iterator[sqlite3.Connection]:
+            with closing(sqlite3.connect(backend.DB_PATH, factory=PausingConnection)) as result, result:
+                result.row_factory = sqlite3.Row
+                yield result
 
         with mock.patch.object(backend, "db", side_effect=connection):
             try:
@@ -182,6 +183,7 @@ class CustomerPortalTests(unittest.TestCase):
                         payload = {**self.portal_approval_payload(), field: amount}
                         with self.assertRaises(urllib.error.HTTPError) as invalid:
                             self.create_link(base_url, payload)
+                        self.addCleanup(invalid.exception.close)
                         self.assertEqual(invalid.exception.code, 400)
             with backend.db() as connection:
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM customer_portal_links").fetchone()[0], 0)
@@ -215,6 +217,7 @@ class CustomerPortalTests(unittest.TestCase):
                 resume.set()
                 with self.assertRaises(urllib.error.HTTPError) as conflict:
                     stale.result(timeout=10)
+                self.addCleanup(conflict.exception.close)
                 self.assertEqual(conflict.exception.code, 409)
 
             replayed = resolve("applied", "Later request must preserve original evidence")
@@ -249,6 +252,7 @@ class CustomerPortalTests(unittest.TestCase):
                         resume.set()
                         with self.assertRaises(urllib.error.HTTPError) as unavailable:
                             pending.result(timeout=10)
+                        self.addCleanup(unavailable.exception.close)
                         self.assertEqual(unavailable.exception.code, 404)
                     with backend.db() as connection:
                         stored = connection.execute(
@@ -331,6 +335,7 @@ class CustomerPortalTests(unittest.TestCase):
                 resume.set()
                 with self.assertRaises(urllib.error.HTTPError) as unavailable:
                     pending.result(timeout=10)
+                self.addCleanup(unavailable.exception.close)
                 self.assertEqual(unavailable.exception.code, 404)
             with backend.db() as connection:
                 row = connection.execute(
@@ -418,6 +423,7 @@ class CustomerPortalTests(unittest.TestCase):
                     self.request(base_url, public_path, authenticated=False),
                     timeout=5,
                 )
+            self.addCleanup(unavailable.exception.close)
             self.assertEqual(unavailable.exception.code, 404)
             with backend.db() as connection:
                 actions = connection.execute(
@@ -468,6 +474,7 @@ class CustomerPortalTests(unittest.TestCase):
                             ),
                             timeout=5,
                         )
+                    self.addCleanup(invalid.exception.close)
                     self.assertEqual(invalid.exception.code, 400)
             with backend.db() as connection:
                 count = connection.execute("SELECT COUNT(*) FROM customer_portal_links").fetchone()[0]
@@ -502,6 +509,7 @@ class CustomerPortalTests(unittest.TestCase):
             )
             with self.assertRaises(urllib.error.HTTPError) as invalid_name:
                 urllib.request.urlopen(invalid_approval_request, timeout=5)
+            self.addCleanup(invalid_name.exception.close)
             self.assertEqual(invalid_name.exception.code, 400)
 
             form_data = urlencode(
@@ -579,6 +587,7 @@ class CustomerPortalTests(unittest.TestCase):
                     ),
                     timeout=5,
                 )
+            self.addCleanup(downgrade.exception.close)
             self.assertEqual(downgrade.exception.code, 409)
 
             with self.assertRaises(urllib.error.HTTPError) as invalid_link_id:
@@ -591,6 +600,7 @@ class CustomerPortalTests(unittest.TestCase):
                     ),
                     timeout=5,
                 )
+            self.addCleanup(invalid_link_id.exception.close)
             self.assertEqual(invalid_link_id.exception.code, 400)
 
     def test_expired_or_corrupt_links_never_render_or_increment(self) -> None:
@@ -622,6 +632,7 @@ class CustomerPortalTests(unittest.TestCase):
                         self.request(base_url, f"/portal/{token}", authenticated=False),
                         timeout=5,
                     )
+                self.addCleanup(unavailable.exception.close)
                 self.assertEqual(unavailable.exception.code, 404)
             with backend.db() as connection:
                 counts = connection.execute(
@@ -696,6 +707,7 @@ class CustomerPortalTests(unittest.TestCase):
             for request in requests:
                 with self.assertRaises(urllib.error.HTTPError) as forbidden:
                     urllib.request.urlopen(request, timeout=5)
+                self.addCleanup(forbidden.exception.close)
                 self.assertEqual(forbidden.exception.code, 403)
 
     def test_initialize_database_migrates_portal_access_metadata(self) -> None:

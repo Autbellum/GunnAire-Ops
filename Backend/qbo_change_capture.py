@@ -160,6 +160,7 @@ def transport(request):
                 raise ValueError()
             return result
     except urllib.error.HTTPError as error:
+        error.close()
         if error.code == 429:
             raise failure("provider_throttled", "QuickBooks is busy. Retry this original capture later; its cursor has not advanced.", 503) from None
         raise failure("provider_unavailable", "QuickBooks changes could not be confirmed. The saved capture cursor is retained.", 502) from None

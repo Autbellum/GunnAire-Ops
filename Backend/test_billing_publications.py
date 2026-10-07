@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import closing
 import copy
 import json
 import sqlite3
@@ -582,7 +583,7 @@ class BillingPublicationTests(BillingFixture, unittest.TestCase):
             self.publish()
         identifier = self.row()["id"]
         restored_path = Path(self.directory.name) / "restored.sqlite3"
-        with backend.db() as source, sqlite3.connect(restored_path) as destination:
+        with backend.db() as source, closing(sqlite3.connect(restored_path)) as destination, destination:
             source.backup(destination)
         with mock.patch.object(backend, "DB_PATH", restored_path):
             backend.initialize_database()

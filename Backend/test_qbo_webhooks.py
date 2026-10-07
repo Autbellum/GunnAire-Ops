@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import closing
 import base64
 import hashlib
 import hmac
@@ -144,6 +145,7 @@ class QuickBooksWebhookTests(unittest.TestCase):
 
                     with self.assertRaises(urllib.error.HTTPError) as unauthorized:
                         urllib.request.urlopen(f"{base_url}/api/qbo/webhook-events", timeout=5)
+                    self.addCleanup(unauthorized.exception.close)
                     self.assertEqual(unauthorized.exception.code, 401)
 
                     admin_headers = {"Authorization": f"Bearer {self.api_token}"}
@@ -178,7 +180,7 @@ class QuickBooksWebhookTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             database = root / "legacy.sqlite3"
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection, connection:
                 connection.execute("""CREATE TABLE qbo_webhook_events (
                     event_id TEXT PRIMARY KEY, realm_id TEXT NOT NULL, entity_type TEXT NOT NULL,
                     entity_id TEXT NOT NULL, operation TEXT NOT NULL, occurred_at TEXT NOT NULL,
@@ -218,6 +220,7 @@ class QuickBooksWebhookTests(unittest.TestCase):
                     )
                     with self.assertRaises(urllib.error.HTTPError) as rejected:
                         urllib.request.urlopen(request, timeout=5)
+                    self.addCleanup(rejected.exception.close)
                     self.assertEqual(rejected.exception.code, 401)
                     with backend.db() as connection:
                         count = connection.execute("SELECT COUNT(*) FROM qbo_webhook_events").fetchone()[0]

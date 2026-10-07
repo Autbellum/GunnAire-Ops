@@ -118,6 +118,32 @@ struct GunnAireIPadKeyCommandBridge: UIViewRepresentable {
 
 // MARK: - ContentView with NavigationSplitView Sidebar
 
+@MainActor
+enum GoogleForegroundSessionRecovery {
+    static func restoreThenWake(
+        restore: () async -> Void,
+        wake: () -> Void
+    ) async {
+        await restore()
+        wake()
+    }
+
+    static func finishIdentityValidation(
+        _ result: Result<GoogleUserProfile, Error>,
+        onVerified: (GoogleUserProfile) -> Void,
+        onFailure: (Error) -> Void,
+        wake: () -> Void
+    ) {
+        switch result {
+        case .success(let profile):
+            onVerified(profile)
+            wake()
+        case .failure(let error):
+            onFailure(error)
+        }
+    }
+}
+
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.gunnaireReduceMotion) private var reduceMotion
@@ -533,15 +559,29 @@ struct ContentView: View {
             }
         }
         .task {
-            // Startup work that used to run in `onAppear`, on the main context,
-            // before the first screen could respond. The credential reads stay
-            // on the main actor; the store maintenance runs on a background
-            // context (`ContentStartupMaintenance`).
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(5 * 60)) }
+                catch { return }
+                AutomaticOutboundSync.shared.recoverPending(context: modelContext, force: true)
+                AutomaticPaymentSync.shared.recoverPending(context: modelContext, force: true)
+                await restoreGoogleSessionAndRecoverOutboundWork()
+                recoverPendingBillingPDFs()
+            }
+        }
+        .task {
+            // Restore credentials and maintain the store without blocking the
+            // first interactive screen while secure storage or SQLite responds.
             NetworkConnectivityMonitor.shared.start()
-            QuickBooksDataAPI.shared.loadTokens()
+            await QuickBooksDataAPI.shared.resumeStoredSessionForCurrentBusiness()
             isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+            await GoogleAuthManager.shared.restoreStoredSession()
             isGoogleAuthenticated = GoogleAuthManager.shared.isAuthenticated
             refreshGoogleAccountIdentityIfNeeded()
+            AutomaticOutboundSync.shared.recoverPending(context: modelContext, force: true)
+            AutomaticPaymentSync.shared.recoverPending(context: modelContext, force: true)
+            AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
+            AutomaticGoogleDriveArchive.shared.recover(context: modelContext)
+            recoverPendingBillingPDFs()
             await runStartupDataMaintenance()
             retryPendingSharedCompanyDocumentUploadsIfNeeded()
             retryPendingCustomerCommunicationUploadsIfNeeded()
@@ -555,7 +595,13 @@ struct ContentView: View {
                 authenticateQuickBooks: authenticateQuickBooks,
                 authenticateGoogle: authenticateGoogle,
                 disconnectQuickBooks: {
-                    QuickBooksAuthAPI.shared.signOut()
+                    QuickBooksAuthAPI.shared.disconnect { succeeded in
+                        isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+                        if !succeeded {
+                            presentAuthAlert(title: "QuickBooks Disconnect Failed",
+                                message: "The disconnect was not confirmed. Check QuickBooks connection status before reconnecting.")
+                        }
+                    }
                 },
                 disconnectGoogle: {
                     GoogleAuthManager.shared.signOut()
@@ -610,8 +656,16 @@ struct ContentView: View {
             }
         )
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-            QuickBooksAuthAPI.shared.reloadStoredSession()
-            isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+            Task { @MainActor in
+                await QuickBooksAuthAPI.shared.reloadStoredSession()
+                isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+                AutomaticOutboundSync.shared.recoverPending(context: modelContext)
+                AutomaticPaymentSync.shared.recoverPending(context: modelContext)
+            }
+            Task { @MainActor in
+                await restoreGoogleSessionAndRecoverOutboundWork()
+            }
+            recoverPendingBillingPDFs()
             retryPendingSharedCompanyDocumentUploadsIfNeeded()
             retryPendingCustomerCommunicationUploadsIfNeeded()
             applyPendingAppRouteIfNeeded()
@@ -623,8 +677,26 @@ struct ContentView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .quickBooksAuthenticationDidChange)) { _ in
-            QuickBooksAuthAPI.shared.reloadStoredSession()
-            isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+            Task { @MainActor in
+                await QuickBooksAuthAPI.shared.reloadStoredSession()
+                isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+                AutomaticOutboundSync.shared.recoverPending(context: modelContext, force: true)
+                AutomaticPaymentSync.shared.recoverPending(context: modelContext, force: true)
+            }
+        }
+        .onChange(of: isGoogleAuthenticated) { _, authenticated in
+            guard authenticated else { return }
+            AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
+            AutomaticGoogleDriveArchive.shared.recover(context: modelContext)
+            recoverPendingBillingPDFs()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .gunnaireConnectivityRestored)) { _ in
+            AutomaticOutboundSync.shared.recoverPending(context: modelContext, force: true)
+            AutomaticPaymentSync.shared.recoverPending(context: modelContext, force: true)
+            Task { @MainActor in
+                await restoreGoogleSessionAndRecoverOutboundWork()
+            }
+            recoverPendingBillingPDFs()
         }
         .onReceive(NotificationCenter.default.publisher(for: .CKAccountChanged)) { _ in
             Task {
@@ -681,6 +753,31 @@ struct ContentView: View {
     @MainActor
     private func refreshOperationalContinuityState() async {
         await refreshCloudKitContinuityReadiness()
+    }
+
+    @MainActor
+    private func recoverPendingBillingPDFs() {
+        let access = CompanyWorkspaceAccessController.shared
+        guard access.verifiedRole == .admin,
+              let binding = access.verifiedBinding,
+              let stamp = access.operationStamp,
+              access.authorizedContainer === modelContext.container else { return }
+        let container = modelContext.container
+        let check: BillingPDFLocalQueue.Check = {
+            try await MainActor.run {
+                let current = CompanyWorkspaceAccessController.shared
+                guard current.verifiedRole == .admin,
+                      current.verifiedBinding == binding,
+                      current.operationStamp == stamp,
+                      current.authorizedContainer === container else {
+                    throw BillingPDFGenerationError.changed
+                }
+            }
+        }
+        Task {
+            _ = await BillingPDFLocalQueue.shared.recoverPending(
+                companyID: binding.companyID, container: container, check: check)
+        }
     }
 
     @ViewBuilder
@@ -786,16 +883,27 @@ struct ContentView: View {
     }
 
     /// The store maintenance that used to run on the main context at first
-    /// appearance. The fetches and the user-duplicate collapse run on
-    /// `ContentStartupMaintenance`; the customer deletion pass, which walks
-    /// every related table, stays on the main context and runs only when the
-    /// actor has found something to delete.
+    /// appearance. The full-table fetches, user-duplicate collapse, and
+    /// relationship cleanup run on a private context on a background queue.
     private func runStartupDataMaintenance() async {
-        let maintenance = ContentStartupMaintenance(modelContainer: modelContext.container)
+        let container = modelContext.container
+        let maintenance = ContentStartupColdMaintenance(modelContainer: container)
+        let generation = CompanyWorkspaceAccessController.shared.generation
         await maintenance.collapseCloudKitUserDuplicates()
-        guard AppAccess.canDeleteCustomerRecords(email: currentUserEmail, users: users),
+        guard !Task.isCancelled,
+              CompanyWorkspaceAccessController.shared.generation == generation,
+              AppAccess.canDeleteCustomerRecords(email: currentUserEmail, users: users),
               await maintenance.hasCalendarCreatedCustomersToClean() else { return }
-        _ = CustomerDataMaintenance.cleanupCalendarNamedCustomers(modelContext: modelContext)
+        guard !Task.isCancelled,
+              CompanyWorkspaceAccessController.shared.generation == generation,
+              AppAccess.canDeleteCustomerRecords(email: currentUserEmail, users: users) else { return }
+        _ = try? await maintenance.cleanupCalendarNamedCustomers {
+            guard AppAccess.canDeleteCustomerRecords(email: currentUserEmail, users: users) else {
+                throw CustomerCalendarCleanupError.accessChanged
+            }
+            return try CompanyWorkspaceAccessController.shared.customerCleanupPermit(
+                generation: generation, container: container)
+        }
     }
 
     private func retryPendingSharedCompanyDocumentUploadsIfNeeded() {
@@ -806,7 +914,8 @@ struct ContentView: View {
         isRetryingSharedCompanyDocumentUploads = true
         let container = modelContext.container
         Task { @MainActor in
-            await ContentStartupMaintenance(modelContainer: container).retryPendingSharedCompanyDocumentUploads()
+            let maintenance = ContentStartupUploadMaintenance(modelContainer: container)
+            await maintenance.retryPendingSharedCompanyDocumentUploads()
             isRetryingSharedCompanyDocumentUploads = false
         }
     }
@@ -817,7 +926,8 @@ struct ContentView: View {
         isRetryingCustomerCommunicationUploads = true
         let container = modelContext.container
         Task { @MainActor in
-            await ContentStartupMaintenance(modelContainer: container).retryPendingCustomerCommunicationUploads()
+            let maintenance = ContentStartupUploadMaintenance(modelContainer: container)
+            await maintenance.retryPendingCustomerCommunicationUploads()
             isRetryingCustomerCommunicationUploads = false
         }
     }
@@ -2094,23 +2204,40 @@ GunnAire
             jobActionStatus = CustomerOperationalAlertPolicy.bookingRestrictionMessage(for: blocker)
             return
         }
+        let previousFollowUpID = call.scheduledFollowUpServiceCallID
+        let previousFollowUpRequired = call.followUpRequired
+        let previousFollowUpAction = call.followUpAction
+        let previousFollowUpDueDate = call.followUpDueDate
         let followUpCall = call.makeFollowUpVisit()
         modelContext.insert(followUpCall)
         let sourceID = String(call.id.uuidString.prefix(8)).uppercased()
-        ServiceCallActivity.record(
+        let sourceActivity = ServiceCallActivity.record(
             for: call,
             action: call.isCorrectiveWorkClassification ? "Corrective visit scheduled" : "Follow-up visit scheduled",
             detail: "Linked follow-up for \(followUpCall.scheduledDate.formatted(date: .abbreviated, time: .shortened)).",
             actorEmail: currentActivityActor,
             in: modelContext
         )
-        ServiceCallActivity.record(
+        let followUpActivity = ServiceCallActivity.record(
             for: followUpCall,
             action: "Created from prior job",
             detail: "Linked to source job \(sourceID).",
             actorEmail: currentActivityActor,
             in: modelContext
         )
+        do {
+            try ServiceCallCalendarOutbox.save(followUpCall) { try modelContext.save() }
+            AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
+        } catch {
+            modelContext.delete(sourceActivity)
+            modelContext.delete(followUpActivity)
+            modelContext.delete(followUpCall)
+            call.scheduledFollowUpServiceCallID = previousFollowUpID
+            call.followUpRequired = previousFollowUpRequired
+            call.followUpAction = previousFollowUpAction
+            call.followUpDueDate = previousFollowUpDueDate
+            jobActionStatus = "Could not save the follow-up visit: \(error.localizedDescription)"
+        }
     }
 
     private func createMaintenanceAgreementFromJob(_ submission: MaintenanceAgreementOfferSubmission) {
@@ -2267,6 +2394,7 @@ GunnAire
             modelContext.insert(attachment)
             agreement.linkGeneratedDocument(attachment.id)
             try modelContext.save()
+            AutomaticGoogleDriveArchive.shared.wakeAfterSave(attachment, context: modelContext)
             syncMaintenanceAgreementDocumentFromJob(attachment, data: data)
         } catch {
             maintenanceAgreementMessage = "Agreement saved, but its PDF could not be generated: \(error.localizedDescription)"
@@ -2277,27 +2405,38 @@ GunnAire
         _ attachment: ServiceDocumentAttachment,
         data: Data
     ) {
-        guard GunnAireBackendService.isConfigured else { return }
-        Task {
-            do {
-                let response = try await GunnAireBackendService.uploadDocument(
-                    data: data,
-                    filename: attachment.displayName,
-                    contentType: attachment.contentType,
-                    kind: attachment.kindRaw,
-                    serviceCallID: call.id,
-                    maintenanceContractID: attachment.maintenanceContractID,
-                    customerEquipmentID: nil,
-                    customerName: call.customer.name
-                )
-                attachment.markSharedCompanyStored(id: response.id)
-                try? modelContext.save()
-            } catch {
-                attachment.markSharedCompanyUploadFailed(error.localizedDescription)
-                try? modelContext.save()
-                maintenanceAgreementMessage = "Agreement saved locally. Company storage upload failed: \(error.localizedDescription)"
+        guard GunnAireBackendService.isConfigured,
+              GunnAireCloudKit.usesTestDatabase ||
+                CompanyWorkspaceAccessController.shared.authorizedContainer === modelContext.container,
+              CustomerDocumentUpload.isCurrentRecord(call, in: modelContext),
+              let customer = call.customer,
+              CustomerDocumentUpload.isCurrentRecord(customer, in: modelContext) else { return }
+        let context = modelContext
+        let originalCall = call
+        let callID = call.id, callPersistentID = call.persistentModelID
+        let email = AppAccess.normalizedEmail(currentActivityActor)
+        do {
+            let upload = try CustomerDocumentUpload(attachment: attachment, customer: customer,
+                context: context, data: data) {
+                guard modelContext === context,
+                      GunnAireCloudKit.usesTestDatabase ||
+                        CompanyWorkspaceAccessController.shared.authorizedContainer === context.container,
+                      AppAccess.normalizedEmail(currentActivityActor) == email,
+                      call === originalCall, CustomerDocumentUpload.isCurrentRecord(originalCall, in: context),
+                      originalCall.persistentModelID == callPersistentID, originalCall.id == callID,
+                      originalCall.customer === customer else { throw GmailDraftError.businessChanged }
+                let currentUsers = try context.fetch(FetchDescriptor<AppUser>())
+                let currentTechnicians = try context.fetch(FetchDescriptor<Technician>())
+                guard AppAccess.canOfferMaintenanceAgreements(email: currentActivityActor, users: currentUsers),
+                      AppAccess.canAccessServiceCall(originalCall, email: currentActivityActor, users: currentUsers,
+                          serviceCalls: [originalCall], technicians: currentTechnicians) else { throw GmailComposeError.access }
             }
-        }
+            Task { @MainActor in
+                await upload.perform { detail in
+                    maintenanceAgreementMessage = "Agreement saved locally. Company storage: \(detail)"
+                }
+            }
+        } catch { return }
     }
 
     private func scheduledApprovedWork(for estimate: Estimate) -> ServiceCall? {
@@ -2375,6 +2514,7 @@ GunnAire
                 in: modelContext
             )
             try modelContext.save()
+            AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: GoogleAuthManager.shared)
             selectedEstimateForScheduling = nil
             GunnAireAppIntentRouter.storeScheduleCallRoute(approvedWorkCall.id)
             return true
@@ -3834,6 +3974,12 @@ GunnAire
                             call.status = .completed
                             call.completeLinkedMaintenanceAgreementIfNeeded()
                             ServiceCallActivity.record(for: call, action: "Job completed", detail: "Status changed from in progress to completed.", actorEmail: currentActivityActor, in: modelContext)
+                        } else {
+                            // The button is disabled only on operational blockers, which do
+                            // not evaluate the service report's own readiness. Without this
+                            // the tap changed nothing and explained nothing. Name the missing
+                            // items, as the other completion surfaces already do.
+                            jobActionStatus = call.documentationCompletionBlockedMessage
                         }
                     } label: {
                         Label("Mark Complete", systemImage: "checkmark.circle.fill")
@@ -4117,6 +4263,42 @@ struct ServiceCalendarRouteOption: Identifiable, Equatable {
     let label: String
 }
 
+/// Persist the Calendar outbox marker with the appointment mutation. The
+/// provider wake happens after this local save succeeds.
+enum ServiceCallCalendarOutbox {
+    struct PreviousState {
+        let confirmedAt: Date?
+        let pendingAt: Date?
+    }
+
+    static func prepareForLocalSave(_ call: ServiceCall) -> PreviousState? {
+        guard GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call) else { return nil }
+        let previous = PreviousState(confirmedAt: call.googleEventConfirmedAt,
+                                     pendingAt: call.googleCalendarPendingAt)
+        call.googleEventConfirmedAt = nil
+        call.googleCalendarPendingAt = GoogleCalendarScheduleSync.pendingDateAfterLocalEdit(call)
+        return previous
+    }
+
+    static func restoreAfterFailedSave(_ previous: PreviousState?, on call: ServiceCall) {
+        guard let previous else { return }
+        call.googleEventConfirmedAt = previous.confirmedAt
+        call.googleCalendarPendingAt = previous.pendingAt
+    }
+
+    @discardableResult
+    static func save(_ call: ServiceCall, shouldPublish: Bool = true, using action: () throws -> Void) throws -> Bool {
+        let previous = shouldPublish ? prepareForLocalSave(call) : nil
+        do {
+            try action()
+            return previous != nil
+        } catch {
+            restoreAfterFailedSave(previous, on: call)
+            throw error
+        }
+    }
+}
+
 enum ServiceCalendarRouting {
     static func routeOptions(from calendars: [GoogleCalendar]) -> [ServiceCalendarRouteOption] {
         var options = calendars
@@ -4124,18 +4306,19 @@ enum ServiceCalendarRouting {
             .sorted { $0.displayLabel.localizedCaseInsensitiveCompare($1.displayLabel) == .orderedAscending }
             .map { ServiceCalendarRouteOption(id: $0.id, label: $0.displayLabel) }
 
-        if !options.contains(where: { $0.id == "primary" }) {
+        if calendars.contains(where: { $0.isWritable && ($0.primary == true || $0.id == "primary") }),
+           !options.contains(where: { $0.id == "primary" }) {
             options.insert(ServiceCalendarRouteOption(id: "primary", label: "Primary Calendar"), at: 0)
         }
         return options
     }
 
     static func preferredCalendarID(for technician: Technician?, calendars: [GoogleCalendar]) -> String {
-        guard let technician else { return "primary" }
+        guard let technician else { return routeOptions(from: calendars).contains(where: { $0.id == "primary" }) ? "primary" : "" }
         if let matchedCalendar = calendars.first(where: { $0.isWritable && $0.matchesTechnicianEmail(technician.contactInfo) }) {
             return matchedCalendar.id
         }
-        return "primary"
+        return routeOptions(from: calendars).contains(where: { $0.id == "primary" }) ? "primary" : ""
     }
 
     static func assignedCalendarID(for technician: Technician?) -> String {
@@ -4151,14 +4334,22 @@ enum ServiceCalendarRouting {
         return resolvedCalendarID != expectedCalendarID
     }
 
-    static func validSelection(_ selectedCalendarID: String, technician: Technician?, calendars: [GoogleCalendar]) -> String {
-        if routeOptions(from: calendars).contains(where: { $0.id == selectedCalendarID }) {
-            return selectedCalendarID
-        }
-        return preferredCalendarID(for: technician, calendars: calendars)
+    static func validSelection(_ selectedCalendarID: String, technician: Technician?, calendars: [GoogleCalendar]) -> String? {
+        routeOptions(from: calendars).contains(where: { $0.id == selectedCalendarID }) ? selectedCalendarID : nil
+    }
+
+    static func routeIssue(selectedCalendarID: String, calendars: [GoogleCalendar], verified: Bool) -> String? {
+        guard verified else { return nil }
+        guard validSelection(selectedCalendarID, technician: nil, calendars: calendars) == nil else { return nil }
+        return routeOptions(from: calendars).isEmpty
+            ? "No writable calendar was returned by Google. Check Calendar access in Google Settings, then reconnect Google and retry. The appointment has not been saved."
+            : "Choose a writable Google calendar before saving. The previously selected calendar is unavailable or read-only; the appointment has not been saved."
     }
 
     static func routingMessage(for technician: Technician?, selectedCalendarID: String, calendars: [GoogleCalendar]) -> String {
+        guard validSelection(selectedCalendarID, technician: technician, calendars: calendars) != nil else {
+            return "Google calendar route is unverified. Choose a writable calendar when access is restored."
+        }
         guard let technician else {
             return selectedCalendarID == "primary"
                 ? "Unassigned jobs will sync to the connected account's primary calendar."
@@ -4192,6 +4383,7 @@ enum ServiceCalendarRouting {
     }
 
     static func routingTint(for technician: Technician?, selectedCalendarID: String, calendars: [GoogleCalendar]) -> Color {
+        guard validSelection(selectedCalendarID, technician: technician, calendars: calendars) != nil else { return .orange }
         guard let technician else { return .orange }
         let assessment = TechnicianCalendarAccessAssessment.evaluate(
             calendarID: technician.contactInfo,
@@ -4223,6 +4415,9 @@ struct AddServiceCallView: View {
     
     @State private var callType: ServiceCallType = .service
     @State private var jobSaveMessage: String?
+    @State private var savedCall: ServiceCall?
+    @State private var showingSaveAcknowledgement = false
+    @State private var calendarSaveMessage = ""
     @State private var dispatchUrgency: ServiceRequestUrgency = .normal
     @State private var eventTitle = ""
     @State private var customer: Customer?
@@ -4264,6 +4459,8 @@ struct AddServiceCallView: View {
     @State private var followUpAction = ""
     @State private var followUpDueDate = Date()
     @State private var accessibleCalendars: [GoogleCalendar] = []
+    @State private var calendarListVerified = false
+    @State private var calendarAccessMessage: String?
     @State private var selectedCalendarID: String = "primary"
     @State private var openDocumentationAfterSave = false
 
@@ -4648,9 +4845,20 @@ struct AddServiceCallView: View {
                         .foregroundStyle(.secondary)
                 }
                 Picker("Calendar", selection: $selectedCalendarID) {
+                    if calendarListVerified && selectedCalendarID.isEmpty {
+                        Text("Choose a writable calendar").tag("")
+                    }
                     ForEach(availableCalendars, id: \.id) { calendar in
                         Text(calendar.label).tag(calendar.id)
                     }
+                }
+                if let issue = ServiceCalendarRouting.routeIssue(
+                    selectedCalendarID: selectedCalendarID, calendars: accessibleCalendars,
+                    verified: calendarListVerified
+                ) {
+                    Text(issue).font(.caption).foregroundStyle(.orange)
+                } else if let calendarAccessMessage {
+                    Text(calendarAccessMessage).font(.caption).foregroundStyle(.orange)
                 }
                 Text(ServiceCalendarRouting.routingMessage(for: technician, selectedCalendarID: selectedCalendarID, calendars: accessibleCalendars))
                     .font(.caption)
@@ -4734,7 +4942,7 @@ struct AddServiceCallView: View {
                 }
                 Toggle("Open Documentation After Save", isOn: $openDocumentationAfterSave)
             }
-            .disabled(!canManageDispatch)
+            .disabled(!canManageDispatch || savedCall != nil)
             .scrollContentBackground(.hidden)
             .background(Color.primaryBlack)
             .navigationTitle("New Service Call")
@@ -4747,7 +4955,7 @@ struct AddServiceCallView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add") {
                         addCall()
-                    }.disabled(!canSaveCall)
+                    }.disabled(!canSaveCall || savedCall != nil)
                     .tint(Color.brandGold)
                 }
             }
@@ -4756,6 +4964,11 @@ struct AddServiceCallView: View {
         .alert("Job not saved", isPresented: Binding(get: { jobSaveMessage != nil }, set: { if !$0 { jobSaveMessage = nil } })) {
             Button("Keep Editing", role: .cancel) { jobSaveMessage = nil }
         } message: { Text(jobSaveMessage ?? "Keep this form open and try Save again.") }
+        .alert("Appointment saved", isPresented: $showingSaveAcknowledgement) {
+            Button("View Schedule") { finishSavedCall() }
+        } message: {
+            Text(calendarSaveMessage)
+        }
         .sheet(isPresented: $showingEquipmentNameplateCapture) {
             EquipmentNameplateCaptureSheet { draft in
                 applyEquipmentNameplateDraft(draft)
@@ -4807,6 +5020,13 @@ struct AddServiceCallView: View {
         }
         guard equipmentLifecycleSnapshot.validationMessage == nil else { return }
         guard let resolvedCustomer = resolvedCustomerForSave() else { return }
+        if let routeIssue = ServiceCalendarRouting.routeIssue(
+            selectedCalendarID: selectedCalendarID, calendars: accessibleCalendars,
+            verified: calendarListVerified
+        ) {
+            jobSaveMessage = routeIssue
+            return
+        }
         guard CustomerOperationalAlertPolicy.schedulingBlocker(
             customerID: resolvedCustomer.id,
             serviceLocationID: selectedServiceLocationID,
@@ -4814,11 +5034,7 @@ struct AddServiceCallView: View {
         ) == nil else { return }
         let trimmedSiteAddress = siteAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedSiteAddress = trimmedSiteAddress.isEmpty ? resolvedCustomer.address : trimmedSiteAddress
-        let resolvedCalendarID = ServiceCalendarRouting.validSelection(
-            selectedCalendarID,
-            technician: technician,
-            calendars: accessibleCalendars
-        )
+        let resolvedCalendarID = selectedCalendarID.isEmpty ? "primary" : selectedCalendarID
         let call = ServiceCall(
             googleCalendarID: resolvedCalendarID,
             googleEventManagedByApp: true,
@@ -4861,7 +5077,9 @@ struct AddServiceCallView: View {
         }
         modelContext.insert(call)
         do {
-            try JobBillingDispatch.shared.save(call, original: nil, context: modelContext)
+            try ServiceCallCalendarOutbox.save(call) {
+                try JobBillingDispatch.shared.save(call, original: nil, context: modelContext)
+            }
         } catch {
             // Only the just-inserted unsaved job is removed; form values and
             // unrelated model changes are retained. Never dismiss on failure.
@@ -4869,13 +5087,10 @@ struct AddServiceCallView: View {
             jobSaveMessage = (error as? JobBillingDispatchError)?.localizedDescription ?? JobBillingDispatchError.save.localizedDescription
             return
         }
+        savedCall = call
+        calendarSaveMessage = "Saved on this device. Google Calendar publication is pending until the event and its 30-minute reminder are verified. View Schedule for the current status and Sync Google if it needs attention."
+        showingSaveAcknowledgement = true
         publishToGoogleCalendar(call)
-        dismiss()
-        if openDocumentationAfterSave {
-            DispatchQueue.main.async {
-                onCreated?(call)
-            }
-        }
     }
 
     private func applyEquipmentNameplateDraft(_ draft: EquipmentNameplateDraft) {
@@ -4968,7 +5183,26 @@ struct AddServiceCallView: View {
             modelContext: modelContext,
             signedInEmail: signedInEmail,
             isAdminUser: isAdminUser
-        )
+        ) { result in
+            guard savedCall?.id == call.id else { return }
+            switch result {
+            case .success(let message):
+                calendarSaveMessage = message
+            case .failure(let error):
+                calendarSaveMessage = "Saved on this device, but Google Calendar has not confirmed this appointment. \(error.localizedDescription) View Schedule for the current status and use Sync Google to retry."
+            }
+        }
+    }
+
+    private func finishSavedCall() {
+        guard let call = savedCall else { return }
+        savedCall = nil
+        dismiss()
+        if openDocumentationAfterSave {
+            DispatchQueue.main.async {
+                onCreated?(call)
+            }
+        }
     }
 
     private func resetNewCustomerFields() {
@@ -4979,26 +5213,35 @@ struct AddServiceCallView: View {
     }
 
     private func loadAccessibleCalendarsIfNeeded() {
-        guard googleAuth.isAuthenticated else { return }
+        guard googleAuth.isAuthenticated else {
+            calendarAccessMessage = "Google is disconnected. Saving keeps this appointment local and pending until Calendar access is restored."
+            return
+        }
         googleAuth.fetchCalendars { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success(let calendars):
                     accessibleCalendars = calendars
+                    calendarListVerified = true
+                    calendarAccessMessage = nil
                     selectedCalendarID = ServiceCalendarRouting.validSelection(
                         selectedCalendarID,
                         technician: technician,
                         calendars: calendars
-                    )
+                    ) ?? ""
                 case .failure:
-                    break
+                    calendarAccessMessage = "Google calendar access could not be checked. Saving now keeps the appointment local and pending until Google reconnects."
                 }
             }
         }
     }
 
     private var availableCalendars: [(id: String, label: String)] {
-        ServiceCalendarRouting.routeOptions(from: accessibleCalendars)
+        guard calendarListVerified else {
+            let route = selectedCalendarID.isEmpty ? "primary" : selectedCalendarID
+            return [(id: route, label: "\(route == "primary" ? "Primary Calendar" : route) (pending verification)")]
+        }
+        return ServiceCalendarRouting.routeOptions(from: accessibleCalendars)
             .map { (id: $0.id, label: $0.label) }
     }
 }
@@ -5061,6 +5304,8 @@ struct EditServiceCallView: View {
     @State private var followUpAction: String
     @State private var followUpDueDate: Date
     @State private var accessibleCalendars: [GoogleCalendar] = []
+    @State private var calendarListVerified = false
+    @State private var calendarAccessMessage: String?
     @State private var selectedCalendarID: String
 
     init(call: ServiceCall) {
@@ -5339,9 +5584,21 @@ struct EditServiceCallView: View {
                     }
                 }
                 Picker("Calendar", selection: $selectedCalendarID) {
+                    if calendarListVerified && selectedCalendarID.isEmpty {
+                        Text("Choose a writable calendar").tag("")
+                    }
                     ForEach(availableCalendars, id: \.id) { calendar in
                         Text(calendar.label).tag(calendar.id)
                     }
+                }
+                if GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call),
+                   let issue = ServiceCalendarRouting.routeIssue(
+                    selectedCalendarID: selectedCalendarID, calendars: accessibleCalendars,
+                    verified: calendarListVerified
+                   ) {
+                    Text(issue).font(.caption).foregroundStyle(.orange)
+                } else if let calendarAccessMessage {
+                    Text(calendarAccessMessage).font(.caption).foregroundStyle(.orange)
                 }
                 Text(ServiceCalendarRouting.routingMessage(for: technician, selectedCalendarID: selectedCalendarID, calendars: accessibleCalendars))
                     .font(.caption)
@@ -5654,6 +5911,14 @@ struct EditServiceCallView: View {
         guard !workLogBlocksRequestedStatus else { return }
         guard let customer else { return }
         guard !serviceRestrictionBlocksSave else { return }
+        if GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call),
+           let routeIssue = ServiceCalendarRouting.routeIssue(
+            selectedCalendarID: selectedCalendarID, calendars: accessibleCalendars,
+            verified: calendarListVerified
+           ) {
+            jobSaveMessage = routeIssue
+            return
+        }
         let originalBillingTarget: JobBillingTarget
         let restoreFailedEdit: () -> Void
         do {
@@ -5688,11 +5953,7 @@ struct EditServiceCallView: View {
             call.cancellationReason = cancellationReason.nilIfBlank
         }
         if GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call) {
-            call.googleCalendarID = ServiceCalendarRouting.validSelection(
-                selectedCalendarID,
-                technician: technician,
-                calendars: accessibleCalendars
-            )
+            call.googleCalendarID = calendarListVerified ? selectedCalendarID : (call.googleCalendarID ?? "primary")
         }
         if !preserveExternalCalendarDetails {
             call.siteAddress = siteAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? customer.address : siteAddress.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -5769,11 +6030,12 @@ struct EditServiceCallView: View {
         let changesGoogleEvent = call.googleEventManagedByApp ||
             call.scheduledDate != originalStart || call.duration != originalDuration ||
             call.assignedTechnician?.id != originalTechnicianID || call.additionalTechnicianIDs != originalCrewIDs
-        let shouldPublishCalendarChanges = changesGoogleEvent &&
-            GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call)
+        let shouldPublishCalendarChanges: Bool
         billingEditRevision = JobBillingLocalRevision(call)
         do {
-            try JobBillingDispatch.shared.save(call, original: originalBillingTarget, context: modelContext)
+            shouldPublishCalendarChanges = try ServiceCallCalendarOutbox.save(call, shouldPublish: changesGoogleEvent) {
+                try JobBillingDispatch.shared.save(call, original: originalBillingTarget, context: modelContext)
+            }
         } catch {
             restoreFailedEdit()
             billingEditRevision = JobBillingLocalRevision(call)
@@ -5811,26 +6073,35 @@ struct EditServiceCallView: View {
     }
 
     private func loadAccessibleCalendarsIfNeeded() {
-        guard googleAuth.isAuthenticated else { return }
+        guard googleAuth.isAuthenticated else {
+            calendarAccessMessage = "Google is disconnected. Saving keeps this appointment local and pending until Calendar access is restored."
+            return
+        }
         googleAuth.fetchCalendars { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success(let calendars):
                     accessibleCalendars = calendars
+                    calendarListVerified = true
+                    calendarAccessMessage = nil
                     selectedCalendarID = ServiceCalendarRouting.validSelection(
                         selectedCalendarID,
                         technician: technician,
                         calendars: calendars
-                    )
+                    ) ?? ""
                 case .failure:
-                    break
+                    calendarAccessMessage = "Google calendar access could not be checked. Saving now keeps the appointment local and pending until Google reconnects."
                 }
             }
         }
     }
 
     private var availableCalendars: [(id: String, label: String)] {
-        ServiceCalendarRouting.routeOptions(from: accessibleCalendars)
+        guard calendarListVerified else {
+            let route = selectedCalendarID.isEmpty ? "primary" : selectedCalendarID
+            return [(id: route, label: "\(route == "primary" ? "Primary Calendar" : route) (pending verification)")]
+        }
+        return ServiceCalendarRouting.routeOptions(from: accessibleCalendars)
             .map { (id: $0.id, label: $0.label) }
     }
 }
@@ -5894,8 +6165,10 @@ extension ContentView {
                     switch validationResult {
                     case .success:
                         DispatchQueue.main.async {
+                            let wasGoogleAuthenticated = isGoogleAuthenticated
                             isGoogleAuthenticated = true
                             googleOAuthState = nil
+                            if wasGoogleAuthenticated { recoverOutboundGoogleWork() }
                             fetchAndSyncGoogleData()
                         }
                     case .failure(let error):
@@ -5936,16 +6209,41 @@ extension ContentView {
         }
         GoogleAuthManager.shared.validateSignedInDomain { result in
             DispatchQueue.main.async {
-                switch result {
-                case .success(let profile):
-                    isGoogleAuthenticated = true
-                    renewGoogleApplicationSessionIfNeeded(profile: profile)
-                case .failure(let error):
-                    isGoogleAuthenticated = false
-                    presentAuthAlert(title: "Google Account Needs Attention", message: error.localizedDescription)
-                }
+                GoogleForegroundSessionRecovery.finishIdentityValidation(
+                    result,
+                    onVerified: { profile in
+                        isGoogleAuthenticated = true
+                        renewGoogleApplicationSessionIfNeeded(profile: profile)
+                    },
+                    onFailure: { error in
+                        isGoogleAuthenticated = false
+                        presentAuthAlert(title: "Google Account Needs Attention", message: error.localizedDescription)
+                    },
+                    wake: { recoverOutboundGoogleWork() }
+                )
             }
         }
+    }
+
+    private func restoreGoogleSessionAndRecoverOutboundWork() async {
+        await GoogleForegroundSessionRecovery.restoreThenWake(
+            restore: { await GoogleAuthManager.shared.restoreStoredSession() },
+            wake: {
+                isGoogleAuthenticated = GoogleAuthManager.shared.isAuthenticated
+                refreshGoogleAccountIdentityIfNeeded()
+                recoverOutboundGoogleWork()
+            }
+        )
+    }
+
+    private func recoverOutboundGoogleWork() {
+        // OAuth can add Calendar or Drive permission to an account that was
+        // already signed in. The Bool above then remains true, so its onChange
+        // handler cannot wake pending outbound work.
+        AutomaticOutboundSync.shared.recoverCalendar(
+            context: modelContext, auth: GoogleAuthManager.shared
+        )
+        AutomaticGoogleDriveArchive.shared.recover(context: modelContext)
     }
 
     private func renewGoogleApplicationSessionIfNeeded(profile: GoogleUserProfile? = nil) {
@@ -5977,6 +6275,7 @@ extension ContentView {
                     currentUsers: users,
                     technicians: technicians
                 )
+                recoverOutboundGoogleWork()
             } catch {
                 // Preserve offline access to already-synchronized local work,
                 // but keep shared-server actions visibly unavailable until the
@@ -6030,8 +6329,10 @@ extension ContentView {
                                 failures.append("\(label): \(error.localizedDescription)")
                                 if let qbError = error as? QuickBooksDataAPI.QBError,
                                    qbError.requiresReconnect {
-                                    QuickBooksAuthAPI.shared.reloadStoredSession()
-                                    isQuickBooksAuthenticated = false
+                                    Task { @MainActor in
+                                        await QuickBooksAuthAPI.shared.reloadStoredSession()
+                                        isQuickBooksAuthenticated = false
+                                    }
                                 }
                                 continuation.resume(returning: [])
                             }
@@ -6167,11 +6468,11 @@ extension ContentView {
             guard let calendarID = primaryCalendarID else {
                 if failures.isEmpty {
                     presentAuthAlert(
-                        title: "Google Sync Complete",
-                        message: "Loaded profile \(profileEmail ?? "unknown"), \(calendarCount) calendars."
+                        title: "Google Account Data Loaded",
+                        message: "Loaded profile \(profileEmail ?? "unknown"), \(calendarCount) calendars. Saved appointments and files publish separately; check their delivery status in Schedule and Settings."
                     )
                 } else {
-                    presentAuthAlert(title: "Google Sync Partial", message: failures.joined(separator: "\n"))
+                    presentAuthAlert(title: "Google Account Check Incomplete", message: failures.joined(separator: "\n"))
                 }
                 return
             }
@@ -6190,11 +6491,11 @@ extension ContentView {
                     }
                     if failures.isEmpty {
                         presentAuthAlert(
-                            title: "Google Sync Complete",
-                            message: "Loaded profile \(profileEmail ?? "unknown"), \(calendarCount) calendars, \(eventCount) events."
+                            title: "Google Account Data Loaded",
+                            message: "Loaded profile \(profileEmail ?? "unknown"), \(calendarCount) calendars, \(eventCount) events. Saved appointments and files publish separately; check their delivery status in Schedule and Settings."
                         )
                     } else {
-                        presentAuthAlert(title: "Google Sync Partial", message: failures.joined(separator: "\n"))
+                        presentAuthAlert(title: "Google Account Check Incomplete", message: failures.joined(separator: "\n"))
                     }
                 }
             }

@@ -293,12 +293,17 @@ struct FieldExpenseClaimEditor: View {
                     Picker("Job", selection: $selectedServiceCallID) {
                         Text("General business").tag(UUID?.none)
                         ForEach(selectableCalls) { call in
-                            Text("\(call.customer.name) • \(call.type.displayName) • \(call.scheduledDate.formatted(date: .abbreviated, time: .omitted))")
+                            Text("\(call.customerDisplayName) • \(call.type.displayName) • \(call.scheduledDate.formatted(date: .abbreviated, time: .omitted))")
                                 .tag(UUID?.some(call.id))
                         }
                     }
                     .accessibilityIdentifier("FieldExpenseJob")
                     .disabled(existingClaim != nil)
+                    if selectedServiceCallID != nil && selectedServiceCall?.customer == nil {
+                        Label("The job’s customer is still syncing. Submit after syncing finishes.", systemImage: "icloud.and.arrow.down")
+                            .foregroundStyle(.orange)
+                            .accessibilityIdentifier("FieldExpenseCustomerSyncStatus")
+                    }
                     Text(existingClaim != nil
                         ? "The original job link is retained during corrections to preserve cost attribution and the approval audit."
                         : selectedServiceCallID == nil
@@ -393,6 +398,7 @@ struct FieldExpenseClaimEditor: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button(existingClaim == nil ? "Submit" : "Resubmit") { save() }
                         .accessibilityIdentifier("SubmitFieldExpense")
+                        .disabled(selectedServiceCallID != nil && selectedServiceCall?.customer == nil)
                 }
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
@@ -444,8 +450,14 @@ struct FieldExpenseClaimEditor: View {
             guard AppAccess.canSubmitFieldExpenses(email: currentEmail, users: users) else {
                 throw FieldExpenseClaimError.unauthorized
             }
-            if let selectedServiceCall, !visibleCallIDs.contains(selectedServiceCall.id) {
-                throw FieldExpenseClaimError.jobAccessChanged
+            if let selectedServiceCallID {
+                guard let selectedServiceCall, selectedServiceCall.id == selectedServiceCallID,
+                      visibleCallIDs.contains(selectedServiceCallID) else {
+                    throw FieldExpenseClaimError.jobAccessChanged
+                }
+                guard selectedServiceCall.customer != nil else {
+                    throw FieldExpenseClaimError.jobCustomerSyncing
+                }
             }
             if let existingClaim {
                 guard existingClaim.status == .correctionRequested,

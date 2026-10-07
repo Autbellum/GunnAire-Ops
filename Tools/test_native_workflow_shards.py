@@ -43,6 +43,10 @@ class NativeWorkflowShardTests(unittest.TestCase):
             "testStaffCloudKitAdministratorReviewReturnsToSettingsAndRetainsOriginalInvitation",
             "testReceiptRejectsAnotherJobsScheduledEstimateAndRecoversOriginalTarget",
             "testCatalogEditingControlsStayInsideTheSheetAcrossRotation",
+            "testScheduleOpensAJobWhoseCustomerIsStillSyncing",
+            "testScheduledJobOpensHVACSafetyCheckAndReturnsToTheJob",
+            "testJobDocumentationOpensHVACSafetyCheckAndReturnsToTheJob",
+            "testExpenseJobPickerKeepsPendingCustomerVisibleAndBlocksSubmission",
         ):
             self.assertIn(name, declared)
         self.assertEqual(len(declared), len(set(declared)))
@@ -60,6 +64,30 @@ class NativeWorkflowShardTests(unittest.TestCase):
         self.assertLessEqual(abs(len(left) - len(right)), 1)
         self.assertIn("${{ matrix.platform }}-${{ matrix.shard }}-native-", WORKFLOW.read_text())
 
+    def test_estimate_delivery_journeys_execute_on_separate_ipad_shards(self):
+        prefix = "-only-testing:GunnAire OpsUITests/GunnAire_OpsUITests/"
+        creation = prefix + "testNewEstimateOpensMailDraftWithPDFWithoutQuickBooksConnection"
+        saved_list = prefix + "testSavedEstimateListOpensMailDraftWithPDFWithoutQuickBooksConnection"
+        first = self.selectors("iPad", 0)
+        second = self.selectors("iPad", 1)
+        self.assertEqual(first.count(creation), 1)
+        self.assertNotIn(creation, second)
+        self.assertEqual(second.count(saved_list), 1)
+        self.assertNotIn(saved_list, first)
+        self.assertLessEqual(abs(len(first) - len(second)), 1)
+
+    def test_invoice_delivery_journeys_execute_on_separate_ipad_shards(self):
+        prefix = "-only-testing:GunnAire OpsUITests/GunnAire_OpsUITests/"
+        creation = prefix + "testNewInvoiceOpensMailDraftWithPDFWithoutQuickBooksConnection"
+        saved_list = prefix + "testSavedInvoiceListOpensMailDraftWithPDFWithoutQuickBooksConnection"
+        first = self.selectors("iPad", 0)
+        second = self.selectors("iPad", 1)
+        self.assertEqual(first.count(creation), 1)
+        self.assertNotIn(creation, second)
+        self.assertEqual(second.count(saved_list), 1)
+        self.assertNotIn(saved_list, first)
+        self.assertLessEqual(abs(len(first) - len(second)), 1)
+
     def test_mac_keeps_the_complete_logic_target(self):
         self.assertEqual(self.selectors("Mac", 0), ["-only-testing:GunnAire OpsTests"])
         self.assertIn('ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO', WORKFLOW.read_text())
@@ -69,6 +97,12 @@ class NativeWorkflowShardTests(unittest.TestCase):
         text = WORKFLOW.read_text()
         self.assertIn("timeout-minutes: ${{ matrix.platform == 'iPad' && 120 || 90 }}", text)
         self.assertIn("-parallel-testing-enabled NO", text)
+        # Bound a test that stops idling so the job can retain its failure.
+        # Some earlier tests passed only after repeated idle timeouts longer
+        # than 600 s; this watchdog intentionally exposes those degraded runs.
+        self.assertEqual(text.count("-test-timeouts-enabled YES"), 2)
+        self.assertEqual(text.count("-default-test-execution-time-allowance 600"), 2)
+        self.assertEqual(text.count("-maximum-test-execution-time-allowance 600"), 2)
         self.assertIn("python3 Tools/verify_native_test_execution.py", text)
         self.assertIn(".failedTests == 0 and .passedTests > 0", text)
 
@@ -97,6 +131,7 @@ class NativeWorkflowShardTests(unittest.TestCase):
         self.assertIn('catalog-large-text', script)
         self.assertIn('python3 Tools/verify_native_test_execution.py', script)
         self.assertIn('-parallel-testing-enabled NO', script)
+        self.assertIn('-test-timeouts-enabled YES', script)
 
     def test_ipad_requires_the_prepared_exact_device(self):
         for udid in ("", "not-a-device", "12345678-1234-1234-1234-123456789ABC\nX=1"):
