@@ -256,6 +256,46 @@ enum GunnAireMailWorkflow: String, Codable, Sendable, CaseIterable {
     }
 }
 
+nonisolated struct GunnAireMailDraftRouteOrigin: Codable, Equatable {
+    let companyID: UUID
+    let backendOrigin: String
+    let actorEmail: String
+    let workspaceGeneration: UUID
+    let sessionDigest: String
+    let connectedGoogleEmail: String
+
+    @MainActor func matches(_ scope: GmailDraftScope) -> Bool {
+        companyID == scope.companyID && backendOrigin == scope.backendOrigin &&
+        actorEmail == scope.actorEmail && actorEmail == scope.googleEmail
+    }
+
+    @MainActor static func current() -> Self? {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-uiTestSeedMailInbox") {
+            guard let companyID = UUID(uuidString: "3BF63F8D-C536-4BC2-826B-EF5CA1B1C9DA") else { return nil }
+            return Self(companyID: companyID, backendOrigin: "https://fixture.example.invalid",
+                actorEmail: "mail-fixture@gunnaire.com",
+                workspaceGeneration: companyID, sessionDigest: "mail-fixture-session", connectedGoogleEmail: "mail-fixture@gunnaire.com")
+        }
+        #endif
+        let controller = CompanyWorkspaceAccessController.shared
+        guard controller.authorizedContainer != nil,
+              let companyID = controller.verifiedCompanyID,
+              let generation = controller.operationStamp?.generation,
+              let session = CompanyWorkspaceSession.current,
+              session.email == AppAccess.normalizedEmail(AppIdentity.currentEmail) else { return nil }
+        let scope = GmailDraftScope(companyID: companyID, backendOrigin: session.backendOrigin,
+            actorEmail: session.email, googleEmail: session.email)
+        guard (try? scope.validate()) != nil else { return nil }
+        let google = GoogleAuthManager.shared
+        let connectedGoogleEmail = google.isAuthenticated ? AppAccess.normalizedEmail(google.signedInEmail) : ""
+        return Self(companyID: scope.companyID, backendOrigin: scope.backendOrigin,
+            actorEmail: scope.actorEmail, workspaceGeneration: generation,
+            sessionDigest: CompanyWorkspaceSession.digest(session.tokenFingerprint + "\n" + companyID.uuidString),
+            connectedGoogleEmail: connectedGoogleEmail)
+    }
+}
+
 enum GunnAireAppIntentRouter {
     struct PaymentCollectionRoute: Equatable {
         let invoiceID: UUID
@@ -286,6 +326,7 @@ enum GunnAireAppIntentRouter {
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingCustomerID")
         case .schedule:
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingScheduleServiceCallID")
+            UserDefaults.standard.removeObject(forKey: "GunnAirePendingServiceRequestID")
         case .documentation, .invoices:
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingServiceCallID")
         case .payments:
@@ -302,6 +343,8 @@ enum GunnAireAppIntentRouter {
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailEstimateID")
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailMaintenanceContractID")
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailWorkflow")
+            UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailSourceSnapshot")
+            UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailOrigin")
         case .quickBooks:
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingQuickBooksWorkspace")
         case .commandCenter, .timeClock, .estimates, .invoicesEstimates, .reports, .receiptsBills, .sync:
@@ -316,6 +359,7 @@ enum GunnAireAppIntentRouter {
             "GunnAirePendingAppRoute",
             "GunnAirePendingCustomerID",
             "GunnAirePendingScheduleServiceCallID",
+            "GunnAirePendingServiceRequestID",
             "GunnAirePendingServiceCallID",
             "GunnAirePendingInvoiceID",
             "GunnAirePendingOpenPaymentCollection",
@@ -335,6 +379,8 @@ enum GunnAireAppIntentRouter {
             "GunnAirePendingMailEstimateID",
             "GunnAirePendingMailMaintenanceContractID",
             "GunnAirePendingMailWorkflow",
+            "GunnAirePendingMailSourceSnapshot",
+            "GunnAirePendingMailOrigin",
             "GunnAirePendingQuickBooksWorkspace"
         ]
         for key in keys {
@@ -345,6 +391,18 @@ enum GunnAireAppIntentRouter {
     nonisolated static func storeQuickBooksRoute(workspace: QuickBooksManagementWorkspace) {
         UserDefaults.standard.set(workspace.rawValue, forKey: "GunnAirePendingQuickBooksWorkspace")
         store(.quickBooks)
+    }
+
+    nonisolated static func storeServiceRequestsQueueRoute(_ requestID: UUID) {
+        UserDefaults.standard.set(requestID.uuidString, forKey: "GunnAirePendingServiceRequestID")
+        store(.schedule)
+    }
+
+    nonisolated static func consumePendingServiceRequestID() -> UUID? {
+        let key = "GunnAirePendingServiceRequestID"
+        guard let rawValue = UserDefaults.standard.string(forKey: key) else { return nil }
+        UserDefaults.standard.removeObject(forKey: key)
+        return UUID(uuidString: rawValue)
     }
 
     nonisolated static func consumePendingQuickBooksWorkspace() -> QuickBooksManagementWorkspace? {
@@ -540,7 +598,9 @@ enum GunnAireAppIntentRouter {
         invoiceID: UUID? = nil,
         estimateID: UUID? = nil,
         maintenanceContractID: UUID? = nil,
-        workflow: GunnAireMailWorkflow = .general
+        workflow: GunnAireMailWorkflow = .general,
+        sourceSnapshot: [String]? = nil,
+        origin: GunnAireMailDraftRouteOrigin? = nil
     ) {
         UserDefaults.standard.set(to, forKey: "GunnAirePendingMailTo")
         UserDefaults.standard.set(subject, forKey: "GunnAirePendingMailSubject")
@@ -552,10 +612,44 @@ enum GunnAireAppIntentRouter {
         UserDefaults.standard.set(estimateID?.uuidString, forKey: "GunnAirePendingMailEstimateID")
         UserDefaults.standard.set(maintenanceContractID?.uuidString, forKey: "GunnAirePendingMailMaintenanceContractID")
         UserDefaults.standard.set(workflow.rawValue, forKey: "GunnAirePendingMailWorkflow")
+        UserDefaults.standard.set(sourceSnapshot, forKey: "GunnAirePendingMailSourceSnapshot")
+        #if DEBUG
+        let persistedOrigin: GunnAireMailDraftRouteOrigin? = if ProcessInfo.processInfo.arguments.contains("-uiTestMailOriginSwitch"),
+            let origin {
+            .init(companyID: origin.companyID, backendOrigin: origin.backendOrigin,
+                actorEmail: origin.actorEmail, workspaceGeneration: origin.workspaceGeneration,
+                sessionDigest: origin.sessionDigest + "-previous-session",
+                connectedGoogleEmail: origin.connectedGoogleEmail)
+        } else { origin }
+        #else
+        let persistedOrigin = origin
+        #endif
+        UserDefaults.standard.set(try? persistedOrigin.map(JSONEncoder().encode), forKey: "GunnAirePendingMailOrigin")
         store(.mail)
     }
 
-    nonisolated static func consumePendingMailDraft() -> (to: String, subject: String, body: String, attachmentPaths: [String], customerID: UUID?, serviceCallID: UUID?, invoiceID: UUID?, estimateID: UUID?, maintenanceContractID: UUID?, workflow: GunnAireMailWorkflow)? {
+    nonisolated static func hasPendingMailDraft() -> Bool {
+        UserDefaults.standard.string(forKey: "GunnAirePendingMailTo") != nil &&
+        UserDefaults.standard.string(forKey: "GunnAirePendingMailSubject") != nil &&
+        UserDefaults.standard.string(forKey: "GunnAirePendingMailBody") != nil
+    }
+
+    nonisolated static func pendingMailDraftRequiresOrigin() -> Bool {
+        UserDefaults.standard.string(forKey: "GunnAirePendingMailWorkflow") == GunnAireMailWorkflow.customerDocument.rawValue &&
+        UserDefaults.standard.string(forKey: "GunnAirePendingMailEstimateID") != nil
+    }
+
+    nonisolated static func hasPendingMailDraftOrigin() -> Bool {
+        UserDefaults.standard.data(forKey: "GunnAirePendingMailOrigin") != nil
+    }
+
+    @MainActor static func pendingMailDraftOriginMatches(_ expected: GunnAireMailDraftRouteOrigin) -> Bool {
+        guard let data = UserDefaults.standard.data(forKey: "GunnAirePendingMailOrigin"),
+              let original = try? JSONDecoder().decode(GunnAireMailDraftRouteOrigin.self, from: data) else { return false }
+        return original == expected
+    }
+
+    nonisolated static func consumePendingMailDraft() -> (to: String, subject: String, body: String, attachmentPaths: [String], customerID: UUID?, serviceCallID: UUID?, invoiceID: UUID?, estimateID: UUID?, maintenanceContractID: UUID?, workflow: GunnAireMailWorkflow, sourceSnapshot: [String]?)? {
         guard let to = UserDefaults.standard.string(forKey: "GunnAirePendingMailTo"),
               let subject = UserDefaults.standard.string(forKey: "GunnAirePendingMailSubject"),
               let body = UserDefaults.standard.string(forKey: "GunnAirePendingMailBody") else {
@@ -567,6 +661,7 @@ enum GunnAireAppIntentRouter {
         let invoiceID = UserDefaults.standard.string(forKey: "GunnAirePendingMailInvoiceID").flatMap(UUID.init(uuidString:))
         let estimateID = UserDefaults.standard.string(forKey: "GunnAirePendingMailEstimateID").flatMap(UUID.init(uuidString:))
         let maintenanceContractID = UserDefaults.standard.string(forKey: "GunnAirePendingMailMaintenanceContractID").flatMap(UUID.init(uuidString:))
+        let sourceSnapshot = UserDefaults.standard.stringArray(forKey: "GunnAirePendingMailSourceSnapshot")
         let workflow = UserDefaults.standard.string(forKey: "GunnAirePendingMailWorkflow")
             .flatMap(GunnAireMailWorkflow.init(rawValue:)) ?? .general
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailTo")
@@ -579,7 +674,9 @@ enum GunnAireAppIntentRouter {
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailEstimateID")
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailMaintenanceContractID")
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailWorkflow")
-        return (to, subject, body, attachmentPaths, customerID, serviceCallID, invoiceID, estimateID, maintenanceContractID, workflow)
+        UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailSourceSnapshot")
+        UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailOrigin")
+        return (to, subject, body, attachmentPaths, customerID, serviceCallID, invoiceID, estimateID, maintenanceContractID, workflow, sourceSnapshot)
     }
 }
 
@@ -741,7 +838,7 @@ private enum GunnAireIntentStore {
                 let lhsDistance = abs(lhs.scheduledDate.timeIntervalSince(now))
                 let rhsDistance = abs(rhs.scheduledDate.timeIntervalSince(now))
                 if lhsDistance != rhsDistance { return lhsDistance < rhsDistance }
-                return lhs.customer.name.localizedCaseInsensitiveCompare(rhs.customer.name) == .orderedAscending
+                return lhs.customerDisplayName.localizedCaseInsensitiveCompare(rhs.customerDisplayName) == .orderedAscending
             }
             .first
     }
@@ -753,7 +850,7 @@ private enum GunnAireIntentStore {
             .filter { $0.status != .cancelled && $0.scheduledDate >= now }
             .sorted { lhs, rhs in
                 if lhs.scheduledDate != rhs.scheduledDate { return lhs.scheduledDate < rhs.scheduledDate }
-                return lhs.customer.name.localizedCaseInsensitiveCompare(rhs.customer.name) == .orderedAscending
+                return lhs.customerDisplayName.localizedCaseInsensitiveCompare(rhs.customerDisplayName) == .orderedAscending
             }
             .first
     }
@@ -878,7 +975,7 @@ struct GunnAireServiceCallQuery: EntityStringQuery {
     func entities(for identifiers: [UUID]) async throws -> [GunnAireServiceCallEntity] {
         let matches = try await GunnAireIntentStore.serviceCalls().filter { identifiers.contains($0.id) }
         return matches.map {
-            GunnAireServiceCallEntity(id: $0.id, customerName: $0.customer.name, scheduledDate: $0.scheduledDate, jobType: $0.type.rawValue)
+            GunnAireServiceCallEntity(id: $0.id, customerName: $0.customerDisplayName, scheduledDate: $0.scheduledDate, jobType: $0.type.rawValue)
         }
     }
 
@@ -886,13 +983,13 @@ struct GunnAireServiceCallQuery: EntityStringQuery {
         let normalized = string.trimmingCharacters(in: .whitespacesAndNewlines)
         let matches = try await GunnAireIntentStore.serviceCalls().filter {
             normalized.isEmpty ||
-            $0.customer.name.localizedCaseInsensitiveContains(normalized) ||
+            $0.customerDisplayName.localizedCaseInsensitiveContains(normalized) ||
             ($0.siteAddress?.localizedCaseInsensitiveContains(normalized) ?? false) ||
             ($0.notes?.localizedCaseInsensitiveContains(normalized) ?? false)
         }
         let ranked = rankServiceCalls(matches, search: normalized)
         return ranked.prefix(20).map {
-            GunnAireServiceCallEntity(id: $0.id, customerName: $0.customer.name, scheduledDate: $0.scheduledDate, jobType: $0.type.rawValue)
+            GunnAireServiceCallEntity(id: $0.id, customerName: $0.customerDisplayName, scheduledDate: $0.scheduledDate, jobType: $0.type.rawValue)
         }
     }
 
@@ -900,7 +997,7 @@ struct GunnAireServiceCallQuery: EntityStringQuery {
         let ranked = rankServiceCalls(try await GunnAireIntentStore.serviceCalls(), search: "")
         return ranked
             .prefix(20)
-            .map { GunnAireServiceCallEntity(id: $0.id, customerName: $0.customer.name, scheduledDate: $0.scheduledDate, jobType: $0.type.rawValue) }
+            .map { GunnAireServiceCallEntity(id: $0.id, customerName: $0.customerDisplayName, scheduledDate: $0.scheduledDate, jobType: $0.type.rawValue) }
     }
 
     private func rankServiceCalls(_ calls: [ServiceCall], search: String) -> [ServiceCall] {
@@ -915,15 +1012,15 @@ struct GunnAireServiceCallQuery: EntityStringQuery {
             if lhsActionable != rhsActionable { return lhsActionable }
 
             if !search.isEmpty {
-                let lhsExact = lhs.customer.name.caseInsensitiveCompare(search) == .orderedSame
-                let rhsExact = rhs.customer.name.caseInsensitiveCompare(search) == .orderedSame
+                let lhsExact = lhs.customerDisplayName.caseInsensitiveCompare(search) == .orderedSame
+                let rhsExact = rhs.customerDisplayName.caseInsensitiveCompare(search) == .orderedSame
                 if lhsExact != rhsExact { return lhsExact }
             }
 
             let lhsDistance = abs(lhs.scheduledDate.timeIntervalSince(now))
             let rhsDistance = abs(rhs.scheduledDate.timeIntervalSince(now))
             if lhsDistance != rhsDistance { return lhsDistance < rhsDistance }
-            return lhs.customer.name.localizedCaseInsensitiveCompare(rhs.customer.name) == .orderedAscending
+            return lhs.customerDisplayName.localizedCaseInsensitiveCompare(rhs.customerDisplayName) == .orderedAscending
         }
     }
 }
@@ -1266,7 +1363,7 @@ struct OpenNextScheduledJobIntent: AppIntent {
             return .result(dialog: "There are no upcoming scheduled jobs right now.")
         }
         GunnAireAppIntentRouter.storeScheduleCallRoute(call.id)
-        return .result(dialog: "Opening the next scheduled job for \(call.customer.name).")
+        return .result(dialog: "Opening the next scheduled job for \(call.customerDisplayName).")
     }
 }
 
@@ -1303,7 +1400,7 @@ struct OpenNextJobDocumentationIntent: AppIntent {
             return .result(dialog: "There are no actionable jobs right now.")
         }
         GunnAireAppIntentRouter.storeDocumentationRoute(call.id)
-        return .result(dialog: "Opening documentation for \(call.customer.name).")
+        return .result(dialog: "Opening documentation for \(call.customerDisplayName).")
     }
 }
 

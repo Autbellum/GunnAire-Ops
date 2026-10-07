@@ -13587,6 +13587,83 @@ struct GunnAire_OpsTests {
         #expect(attachment.canUploadToQuickBooksInvoice(invoice))
     }
 
+    @Test func regeneratedGeneratedDocumentRequeuesDriveWithoutLosingTheOldFileIdentity() throws {
+        let customer = Customer(name: "Regenerated Drive Customer")
+        let attachment = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            invoiceID: UUID(),
+            kind: .invoiceSupport,
+            displayName: "old-invoice.pdf",
+            localFilePath: "/tmp/old-invoice.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 128
+        )
+        let oldID = "old-drive-file"
+        attachment.markGoogleDriveArchived(GoogleDriveFile(
+            id: oldID, name: "old-invoice.pdf", mimeType: "application/pdf",
+            webViewLink: "https://drive.google.com/file/d/old-drive-file/view",
+            trashed: false, appProperties: nil
+        ), actorEmail: "admin@gunnaire.com")
+        #expect(!attachment.needsGoogleDriveArchive)
+        let uploadedSource = attachment.driveUploadSource(fileID: oldID)
+        #expect(attachment.matchesDriveUploadSource(uploadedSource))
+
+        attachment.replaceGeneratedFile(
+            displayName: "new-invoice.pdf",
+            localFilePath: "/tmp/new-invoice.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 256,
+            caption: "Revised invoice PDF"
+        )
+        #expect(attachment.needsGoogleDriveArchive)
+        #expect(attachment.googleDriveSyncState == GoogleDriveDocumentSyncState.needsAttention)
+        #expect(attachment.googleDriveFileID == nil)
+        #expect(attachment.googleDriveWebViewLink == nil)
+        #expect(attachment.googleDriveWebURL == nil)
+        #expect(attachment.googleDriveLastSyncedAt == nil)
+        #expect(attachment.googleDriveArchivedByEmail == nil)
+        #expect(attachment.googleDriveSyncDetail?.contains(oldID) == true)
+        #expect(!attachment.matchesDriveUploadSource(uploadedSource))
+
+        attachment.markGoogleDriveArchiveFailed(String(repeating: "x", count: 1_000))
+        #expect(attachment.googleDriveSyncDetail?.contains(oldID) == true)
+        attachment.markGoogleDrivePreparing(fileID: "new-drive-file", actorEmail: "admin@gunnaire.com")
+        attachment.markGoogleDriveUploading()
+        attachment.markGoogleDriveArchived(GoogleDriveFile(
+            id: "new-drive-file", name: "new-invoice.pdf", mimeType: "application/pdf",
+            webViewLink: "https://drive.google.com/file/d/new-drive-file/view",
+            trashed: false, appProperties: nil
+        ), actorEmail: "admin@gunnaire.com")
+        #expect(!attachment.needsGoogleDriveArchive)
+        #expect(attachment.googleDriveFileID == "new-drive-file")
+        #expect(attachment.googleDriveSyncDetail?.contains(oldID) == true)
+    }
+
+    @Test func neverArchivedGeneratedDocumentRemainsReadyForFirstDriveArchiveAfterRegeneration() throws {
+        let customer = Customer(name: "First Drive Archive Customer")
+        let attachment = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            kind: .invoiceSupport,
+            displayName: "initial.pdf",
+            localFilePath: "/tmp/initial.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 128
+        )
+        #expect(attachment.googleDriveSyncState == .notArchived)
+        attachment.replaceGeneratedFile(
+            displayName: "revised.pdf",
+            localFilePath: "/tmp/revised.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 256,
+            caption: nil
+        )
+        #expect(attachment.googleDriveSyncState == .notArchived)
+        #expect(attachment.googleDriveSyncDetail == nil)
+        #expect(attachment.needsGoogleDriveArchive)
+    }
+
     @MainActor
     @Test func quickBooksAttachmentSyncFindsPendingEstimateAttachments() async throws {
         let customer = Customer(name: "Estimate Attachment Customer")
@@ -17327,17 +17404,22 @@ struct GunnAire_OpsTests {
         #expect(assessment.detail.contains("cannot write"))
     }
 
-    @Test func technicianCalendarAssessmentUsesPrimaryAsWritableFallback() async throws {
+    @Test func technicianCalendarAssessmentDoesNotAssumePrimaryIsWritable() async throws {
         let assessment = TechnicianCalendarAccessAssessment.evaluate(
             calendarID: "primary",
             availableCalendars: []
         )
 
-        #expect(assessment.state == .writable)
+        #expect(assessment.state == .noCalendar)
         #expect(assessment.calendarLabel == "Primary Calendar")
+        var readOnly = GoogleCalendar(id: "owner@example.com", summary: "Owner", timeZone: nil, accessRole: "reader")
+        readOnly.primary = true
+        #expect(TechnicianCalendarAccessAssessment.evaluate(
+            calendarID: "primary", availableCalendars: [readOnly]
+        ).state == .readOnly)
     }
 
-    @Test func serviceCalendarRoutingOnlyOffersWritableCalendars() async throws {
+    @Test func serviceCalendarRoutingOnlyOffersVerifiedWritableCalendars() async throws {
         let calendars = [
             GoogleCalendar(id: "writer@example.com", summary: "Writer", timeZone: nil, accessRole: "writer"),
             GoogleCalendar(id: "reader@example.com", summary: "Reader", timeZone: nil, accessRole: "reader")
@@ -17345,12 +17427,15 @@ struct GunnAire_OpsTests {
 
         let options = ServiceCalendarRouting.routeOptions(from: calendars)
 
-        #expect(options.contains(ServiceCalendarRouteOption(id: "primary", label: "Primary Calendar")))
+        #expect(options.contains(where: { $0.id == "primary" }) == false)
         #expect(options.contains(where: { $0.id == "writer@example.com" }))
         #expect(options.contains(where: { $0.id == "reader@example.com" }) == false)
+        #expect(ServiceCalendarRouting.validSelection("primary", technician: nil, calendars: calendars) == nil)
+        #expect(ServiceCalendarRouting.routeIssue(selectedCalendarID: "primary", calendars: calendars, verified: true) != nil)
+        #expect(ServiceCalendarRouting.routeIssue(selectedCalendarID: "primary", calendars: calendars, verified: false) == nil)
     }
 
-    @Test func serviceCalendarRoutingSanitizesReadOnlySelection() async throws {
+    @Test func serviceCalendarRoutingRejectsReadOnlySelectionWithoutRetargeting() async throws {
         let technician = Technician(name: "Tech", contactInfo: "reader@example.com")
         let calendars = [
             GoogleCalendar(id: "reader@example.com", summary: "Reader", timeZone: nil, accessRole: "reader")
@@ -17362,7 +17447,22 @@ struct GunnAire_OpsTests {
             calendars: calendars
         )
 
-        #expect(selected == "primary")
+        #expect(selected == nil)
+        #expect(ServiceCalendarRouting.routeOptions(from: calendars).isEmpty)
+        #expect(ServiceCalendarRouting.routeIssue(
+            selectedCalendarID: "reader@example.com", calendars: calendars, verified: true
+        )?.contains("No writable calendar") == true)
+    }
+
+    @Test func serviceCalendarRoutingOffersPrimaryOnlyWithVerifiedWriteAccess() async throws {
+        var writablePrimary = GoogleCalendar(id: "owner@example.com", summary: "Owner", timeZone: nil, accessRole: "owner")
+        writablePrimary.primary = true
+        var readOnlyPrimary = GoogleCalendar(id: "owner@example.com", summary: "Owner", timeZone: nil, accessRole: "reader")
+        readOnlyPrimary.primary = true
+
+        #expect(ServiceCalendarRouting.routeOptions(from: [writablePrimary]).contains(where: { $0.id == "primary" }))
+        #expect(ServiceCalendarRouting.validSelection("primary", technician: nil, calendars: [writablePrimary]) == "primary")
+        #expect(ServiceCalendarRouting.routeOptions(from: [readOnlyPrimary]).isEmpty)
     }
 
     @Test func serviceCalendarRoutingUsesTechnicianAssignmentTarget() async throws {
@@ -24148,7 +24248,8 @@ struct GunnAire_OpsTests {
 
     @MainActor
     @Test func businessReportingHidesProfitWhenMaterialOrLaborCostCoverageIsIncomplete() {
-        let now = Date()
+        // Keep the one-hour-old fixtures inside the reporting month in every time zone.
+        let now = Date(timeIntervalSince1970: 1_787_745_600)
         let customer = Customer(name: "Incomplete Cost Customer")
         let technician = Technician(name: "Uncosted Technician", contactInfo: "uncosted@gunnaire.com")
         let call = ServiceCall(
@@ -24784,7 +24885,8 @@ struct GunnAire_OpsTests {
     }
 
     @Test func businessReportingAggregatesProjectContractProgressBacklogAndReadyWork() {
-        let now = Date()
+        // This month's project must not drift into the prior month at midnight.
+        let now = Date(timeIntervalSince1970: 1_787_745_600)
         let customer = Customer(name: "Project Reporting Customer")
         let call = ServiceCall(
             type: .install,

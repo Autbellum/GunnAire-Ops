@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import hmac
 import html
@@ -22,6 +23,8 @@ import urllib.parse
 import urllib.request
 import uuid
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -34,9 +37,11 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 
 try:
-    from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications, billing_native, qbo_link_adoption, field_payment_review
+    from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications, billing_estimate_jobs, billing_native, qbo_link_adoption, field_payment_review
+    from Backend import customer_accounts, transactional_email
+    from Backend.customer_account_portal import PORTAL_HTML as CUSTOMER_ACCOUNT_PORTAL_HTML
     from Backend.billing_provider import BillingQBOProvider
-    from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads
+    from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads, billing_pdf_archive_ledger, billing_pdf_archive_routes, billing_pdf_artifacts
     from Backend import document_storage
     from Backend import backup_backend
     from Backend import staff_owner_field_edits
@@ -53,8 +58,12 @@ except ModuleNotFoundError:
     import catalog_publications
     import customer_publications
     import billing_publications
+    import billing_estimate_jobs
     import billing_native
     import qbo_link_adoption
+    import customer_accounts
+    import transactional_email
+    from customer_account_portal import PORTAL_HTML as CUSTOMER_ACCOUNT_PORTAL_HTML
     from billing_provider import BillingQBOProvider
     import google_connections
     import document_storage
@@ -66,6 +75,9 @@ except ModuleNotFoundError:
     import google_mail
     import qbo_change_capture
     import qbo_document_uploads
+    import billing_pdf_archive_ledger
+    import billing_pdf_archive_routes
+    import billing_pdf_artifacts
     from qbo_document_provider import DocumentQBOProvider
     import time_worker_mappings
     import time_publications
@@ -83,7 +95,7 @@ except ModuleNotFoundError:
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.18.69"
+SERVICE_VERSION = "2026.10.02.1"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -124,8 +136,15 @@ APNS_AUTH_TOKEN_CACHE: dict[str, object] = {
     "token": "",
 }
 APNS_AUTH_TOKEN_LOCK = threading.Lock()
+APNS_AUTH_TOKEN_REFRESH_AGE_SECONDS = 50 * 60
+APNS_PROVIDER_TOKEN_REFRESH_REASONS = {
+    "ExpiredProviderToken",
+    "InvalidProviderToken",
+    "MissingProviderToken",
+}
 PUSH_DELIVERY_LOCK = threading.Lock()
 PUSH_DELIVERY_WAKE_EVENT = threading.Event()
+BILLING_ESTIMATE_WAKE_EVENT = threading.Event()
 DATA_ROOT_RAW = os.environ.get("GUNNAIRE_BACKEND_DATA_DIR", "").strip()
 DATA_ROOT = Path(DATA_ROOT_RAW).expanduser() if DATA_ROOT_RAW else None
 DB_PATH = Path(
@@ -368,6 +387,15 @@ CUSTOMER_FINANCING_CONTRACT_VERSION = 1
 CUSTOMER_FINANCING_ENABLED = os.environ.get("GUNNAIRE_CUSTOMER_FINANCING_ENABLED", "false").strip().lower() == "true"
 CUSTOMER_FINANCING_PROVIDER_NAME = os.environ.get("GUNNAIRE_CUSTOMER_FINANCING_PROVIDER_NAME", "").strip()
 CUSTOMER_FINANCING_APPLICATION_URL = os.environ.get("GUNNAIRE_CUSTOMER_FINANCING_APPLICATION_URL", "").strip()
+CUSTOMER_ACCOUNTS_ENABLED = os.environ.get("GUNNAIRE_CUSTOMER_ACCOUNTS_ENABLED", "false").strip().lower() == "true"
+CUSTOMER_ACCOUNTS_BASE_URL = os.environ.get("GUNNAIRE_CUSTOMER_ACCOUNTS_BASE_URL", "").strip().rstrip("/")
+CUSTOMER_ACCOUNTS_RATE_LIMIT = int(os.environ.get("GUNNAIRE_CUSTOMER_ACCOUNTS_RATE_LIMIT", "5"))
+CUSTOMER_ACCOUNTS_RATE_WINDOW_SECONDS = int(os.environ.get("GUNNAIRE_CUSTOMER_ACCOUNTS_RATE_WINDOW_SECONDS", "3600"))
+CUSTOMER_ACCOUNTS_ATTEMPTS: dict[str, list[float]] = {}
+CUSTOMER_ACCOUNTS_LOCK = threading.Lock()
+CUSTOMER_ACCOUNTS_MAX_CLIENT_BUCKETS = 4096
+EMAIL_PROVIDER_API_KEY = os.environ.get("GUNNAIRE_EMAIL_PROVIDER_API_KEY", "").strip()
+EMAIL_FROM_ADDRESS = os.environ.get("GUNNAIRE_EMAIL_FROM_ADDRESS", "").strip()
 CUSTOMER_FINANCING_MIN_AMOUNT = os.environ.get("GUNNAIRE_CUSTOMER_FINANCING_MIN_AMOUNT", "").strip()
 CUSTOMER_FINANCING_MAX_AMOUNT = os.environ.get("GUNNAIRE_CUSTOMER_FINANCING_MAX_AMOUNT", "").strip()
 MAX_DOCUMENT_BYTES = min(max(int(os.environ.get("GUNNAIRE_MAX_DOCUMENT_BYTES", str(12 * 1024 * 1024))), 1024), 25 * 1024 * 1024)
@@ -477,6 +505,8 @@ def apple_public_key(kid: str, *, force_refresh: bool = False) -> rsa.RSAPublicK
             with urllib.request.urlopen(request, timeout=5) as response:
                 raw = response.read(64 * 1024 + 1)
         except (urllib.error.URLError, TimeoutError, OSError) as error:
+            if isinstance(error, urllib.error.HTTPError):
+                error.close()
             raise ValueError("Apple signing keys are unavailable") from error
         if len(raw) > 64 * 1024:
             raise ValueError("Apple signing-key response is too large")
@@ -748,6 +778,38 @@ def portal_token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def customer_accounts_origin() -> str | None:
+    """Reuse the same fail-closed HTTPS-origin validation as the portal link feature."""
+    return customer_portal_origin(CUSTOMER_ACCOUNTS_BASE_URL)
+
+
+def notify_admins_of_customer_service_request(*, request_id: str, account_email: str) -> None:
+    with db() as connection:
+        admins = connection.execute("SELECT email FROM users WHERE role = 'Admin' AND is_active = 1").fetchall()
+    for row in admins:
+        try:
+            queue_staff_push_event(
+                event_key=f"customer-service-request:{request_id}",
+                recipient_email=row["email"],
+                category="customer-service-request",
+                route="serviceRequestsQueue",
+                record_id=request_id,
+            )
+        except ValueError:
+            continue
+        if EMAIL_PROVIDER_API_KEY and EMAIL_FROM_ADDRESS:
+            transactional_email.send_transactional_email(
+                api_key=EMAIL_PROVIDER_API_KEY,
+                from_address=EMAIL_FROM_ADDRESS,
+                to_address=row["email"],
+                subject="New customer schedule request",
+                text_body=(
+                    f"A customer ({account_email}) submitted a schedule request from their GunnAire "
+                    "account. Open GunnAire Ops to confirm a time or propose another."
+                ),
+            )
+
+
 def customer_portal_origin(value: str | None = None) -> str | None:
     """Return one normalized HTTPS origin or fail closed on ambiguous URLs."""
     raw_value = (CUSTOMER_PORTAL_BASE_URL if value is None else value).strip()
@@ -790,6 +852,7 @@ def redact_capability_tokens(value: str) -> str:
     """Keep bearer-style portal secrets out of ordinary HTTP access logs."""
     # OAuth codes, states and returned scope/account hints must not enter logs.
     value = re.sub(r"(?i)(/api/google/oauth/callback)\?[^\s\"]*", r"\1?[REDACTED]", value)
+    value = re.sub(r"(?i)(/account/verify)\?[^\s\"]*", r"\1?[REDACTED]", value)
     return re.sub(
         r"(?i)(/portal/)[A-Za-z0-9_-]{32,128}",
         r"\1[REDACTED]",
@@ -897,20 +960,36 @@ def apns_private_key() -> ec.EllipticCurvePrivateKey:
     return private_key
 
 
-def apns_authentication_token(now: datetime | None = None) -> str:
-    issued_at = int((now or datetime.now(timezone.utc)).timestamp())
-    configuration_fingerprint = hashlib.sha256(
+def apns_configuration_fingerprint() -> str:
+    return hashlib.sha256(
         f"{APNS_TEAM_ID}:{APNS_KEY_ID}:{APNS_TOPIC}:{APNS_PRIVATE_KEY_BASE64}".encode("utf-8")
     ).hexdigest()
+
+
+def clear_apns_authentication_token_cache() -> None:
+    with APNS_AUTH_TOKEN_LOCK:
+        APNS_AUTH_TOKEN_CACHE.update(
+            {
+                "configuration_fingerprint": "",
+                "issued_at": 0,
+                "token": "",
+            }
+        )
+
+
+def apns_authentication_token(now: datetime | None = None, *, force_refresh: bool = False) -> str:
+    issued_at = int((now or datetime.now(timezone.utc)).timestamp())
+    configuration_fingerprint = apns_configuration_fingerprint()
     with APNS_AUTH_TOKEN_LOCK:
         cached_token = APNS_AUTH_TOKEN_CACHE.get("token")
         cached_issued_at = APNS_AUTH_TOKEN_CACHE.get("issued_at")
         cached_fingerprint = APNS_AUTH_TOKEN_CACHE.get("configuration_fingerprint")
         if (
-            isinstance(cached_token, str)
+            not force_refresh
+            and isinstance(cached_token, str)
             and cached_token
             and isinstance(cached_issued_at, int)
-            and 0 <= issued_at - cached_issued_at < 50 * 60
+            and 0 <= issued_at - cached_issued_at < APNS_AUTH_TOKEN_REFRESH_AGE_SECONDS
             and cached_fingerprint == configuration_fingerprint
         ):
             return cached_token
@@ -966,36 +1045,48 @@ def send_apns_request(
     except ImportError:
         return HTTPStatus.SERVICE_UNAVAILABLE, "ProviderDependencyUnavailable", None
     host = "api.push.apple.com" if environment == "production" else "api.sandbox.push.apple.com"
-    headers = {
-        "authorization": f"bearer {apns_authentication_token()}",
-        "apns-topic": APNS_TOPIC,
-        "apns-push-type": "alert",
-        "apns-priority": "10",
-        "apns-expiration": str(int(time.time()) + 24 * 60 * 60),
-        "apns-collapse-id": collapse_id,
-    }
-    try:
+
+    def post(force_refresh: bool = False):
+        headers = {
+            "authorization": f"bearer {apns_authentication_token(force_refresh=force_refresh)}",
+            "apns-topic": APNS_TOPIC,
+            "apns-push-type": "alert",
+            "apns-priority": "10",
+            "apns-expiration": str(int(time.time()) + 24 * 60 * 60),
+            "apns-collapse-id": collapse_id,
+        }
         with httpx.Client(http2=True, timeout=10.0) as client:
-            response = client.post(
+            return client.post(
                 f"https://{host}/3/device/{device_token}",
                 headers=headers,
                 json=payload,
             )
+
+    def parse_response(response) -> tuple[int, str | None, str | None]:
+        reason: str | None = None
+        if response.content:
+            try:
+                response_payload = response.json()
+                candidate = response_payload.get("reason") if isinstance(response_payload, dict) else None
+                if isinstance(candidate, str) and re.fullmatch(r"[A-Za-z0-9]{1,80}", candidate):
+                    reason = candidate
+            except (ValueError, TypeError):
+                reason = "MalformedProviderResponse"
+        apns_id = response.headers.get("apns-id")
+        if apns_id is not None and not re.fullmatch(r"[0-9a-fA-F-]{36}", apns_id):
+            apns_id = None
+        return response.status_code, reason, apns_id
+
+    try:
+        response = post()
+        status_code, reason, apns_id = parse_response(response)
+        if int(status_code) == HTTPStatus.FORBIDDEN and reason in APNS_PROVIDER_TOKEN_REFRESH_REASONS:
+            clear_apns_authentication_token_cache()
+            response = post(force_refresh=True)
+            status_code, reason, apns_id = parse_response(response)
     except Exception:
         return HTTPStatus.SERVICE_UNAVAILABLE, "ProviderConnectionFailed", None
-    reason: str | None = None
-    if response.content:
-        try:
-            response_payload = response.json()
-            candidate = response_payload.get("reason") if isinstance(response_payload, dict) else None
-            if isinstance(candidate, str) and re.fullmatch(r"[A-Za-z0-9]{1,80}", candidate):
-                reason = candidate
-        except (ValueError, TypeError):
-            reason = "MalformedProviderResponse"
-    apns_id = response.headers.get("apns-id")
-    if apns_id is not None and not re.fullmatch(r"[0-9a-fA-F-]{36}", apns_id):
-        apns_id = None
-    return response.status_code, reason, apns_id
+    return status_code, reason, apns_id
 
 
 def qbo_request(form: dict[str, str], endpoint: str) -> tuple[int, dict[str, object]]:
@@ -1020,6 +1111,7 @@ def qbo_request(form: dict[str, str], endpoint: str) -> tuple[int, dict[str, obj
             return response.status, payload if isinstance(payload, dict) else {}
     except urllib.error.HTTPError as error:
         # Do not expose Intuit's raw OAuth diagnostics; they may include sensitive context.
+        error.close()
         return error.code, {"error": "QuickBooks rejected the OAuth request", "status": error.code}
     except (urllib.error.URLError, TimeoutError):
         return HTTPStatus.BAD_GATEWAY, {"error": "QuickBooks is unavailable"}
@@ -1050,7 +1142,9 @@ def qbo_payment_read_transport(request):
             if not isinstance(payload, dict):
                 raise ValueError("invalid provider response")
             return response.status, payload
-    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError):
+    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError) as error:
+        if isinstance(error, urllib.error.HTTPError):
+            error.close()
         raise payment_attempts.AttemptError(
             "provider_unavailable", "The provider record could not be verified. No new payment was sent.", 502,
         ) from None
@@ -1168,7 +1262,9 @@ def qbo_catalog_transport(request):
             if not isinstance(payload, dict) or not 200 <= response.status < 300:
                 raise ValueError("unconfirmed response")
             return payload
-    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError):
+    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError) as error:
+        if isinstance(error, urllib.error.HTTPError):
+            error.close()
         raise payment_attempts.AttemptError(
             "provider_unavailable", "QuickBooks could not confirm the catalog request. Review the original attempt before retrying.", 502,
         ) from None
@@ -1279,7 +1375,9 @@ def qbo_customer_transport(request):
             if not isinstance(payload, dict) or not 200 <= response.status < 300:
                 raise ValueError("unconfirmed response")
             return payload
-    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError):
+    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError) as error:
+        if isinstance(error, urllib.error.HTTPError):
+            error.close()
         raise payment_attempts.AttemptError("provider_unavailable",
             "QuickBooks could not confirm the customer request. Review the original attempt before retrying.", 502) from None
 
@@ -1850,11 +1948,17 @@ def validate_supplier_order_acceptance(
     }
 
 
-def db() -> sqlite3.Connection:
+@contextmanager
+def db() -> Iterator[sqlite3.Connection]:
+    """Commit or roll back each database scope, then release its connection."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DB_PATH)
-    connection.row_factory = sqlite3.Row
-    return connection
+    try:
+        connection.row_factory = sqlite3.Row
+        with connection:
+            yield connection
+    finally:
+        connection.close()
 
 
 def path_is_within(path: Path, root: Path) -> bool:
@@ -2642,9 +2746,12 @@ def initialize_database() -> None:
         payment_attempts.initialize_schema(connection)
         catalog_publications.initialize_schema(connection)
         customer_publications.initialize_schema(connection)
+        customer_accounts.initialize_schema(connection, ensure_column)
         billing_publications.initialize_schema(connection)
+        billing_estimate_jobs.initialize_schema(connection)
         qbo_link_adoption.initialize_schema(connection)
         google_connections.initialize_schema(connection)
+        billing_pdf_archive_ledger.initialize_schema(connection)
         google_mail.initialize_schema(connection)
         qbo_change_capture.initialize_schema(connection)
         qbo_document_uploads.initialize_schema(connection)
@@ -3144,8 +3251,8 @@ def queue_staff_push_event(
     if (
         not re.fullmatch(r"[A-Za-z0-9:_-]{1,160}", event_key)
         or not is_valid_email(email)
-        or category not in {"field-payment-assignment"}
-        or route not in {"paymentCollection"}
+        or category not in {"field-payment-assignment", "customer-service-request"}
+        or route not in {"paymentCollection", "serviceRequestsQueue"}
     ):
         raise ValueError("Invalid staff notification event")
     now = utc_now()
@@ -3186,12 +3293,19 @@ def queue_staff_push_event(
 
 def staff_push_payload(row: sqlite3.Row) -> dict[str, object]:
     """Build a generic preview; customer names, addresses, and balances are excluded."""
+    if row["category"] == "customer-service-request":
+        alert = {
+            "title": "New customer request",
+            "body": "A customer requested service. Open GunnAire Ops to confirm a time.",
+        }
+    else:
+        alert = {
+            "title": "New collection task",
+            "body": "Open GunnAire Ops to review an assigned invoice.",
+        }
     return {
         "aps": {
-            "alert": {
-                "title": "New collection task",
-                "body": "Open GunnAire Ops to review an assigned invoice.",
-            },
+            "alert": alert,
             "sound": "default",
         },
         "gunnaire": {
@@ -3357,6 +3471,40 @@ def push_delivery_worker() -> None:
 
 def start_push_delivery_worker() -> threading.Thread:
     worker = threading.Thread(target=push_delivery_worker, name="gunnaire-apns-worker", daemon=True)
+    worker.start()
+    return worker
+
+
+def billing_estimate_queue() -> billing_estimate_jobs.EstimateJobs:
+    # The mobile request only reserves an immutable proposal. This separate
+    # worker is allowed a bounded census before it can reach the existing
+    # billing publication's single-use provider-write fence.
+    publisher = billing_publications.BillingPublisher(
+        db, lambda context, authorize: BillingQBOProvider(
+            context, authorize, qbo_authorized_bearer, maximum_documents=500),
+        encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
+    )
+    return billing_estimate_jobs.EstimateJobs(db, publisher)
+
+
+def billing_estimate_worker() -> None:
+    while True:
+        BILLING_ESTIMATE_WAKE_EVENT.wait(timeout=60)
+        BILLING_ESTIMATE_WAKE_EVENT.clear()
+        try:
+            # Serial work stays bounded per wake. Further due rows wait for the
+            # next tick; unavailable rows keep a durable not-before timestamp.
+            for _ in range(10):
+                if not billing_estimate_queue().run_one():
+                    break
+        except Exception:
+            # The job/attempt fences remain durable. An unexpected failure is
+            # retried only after the worker's next bounded wake.
+            continue
+
+
+def start_billing_estimate_worker() -> threading.Thread:
+    worker = threading.Thread(target=billing_estimate_worker, name="gunnaire-qbo-estimate-worker", daemon=True)
     worker.start()
     return worker
 
@@ -3744,7 +3892,8 @@ def public_service_request_record(row: sqlite3.Row) -> dict[str, object]:
         "email": row["email"], "address": row["address"],
         "requestedServiceType": row["requested_service_type"], "urgency": row["urgency"],
         "summary": row["summary"], "preferredDate": row["preferred_date"],
-        "source": "website", "createdAt": row["created_at"],
+        "source": row["source"] or "website", "createdAt": row["created_at"],
+        "customerAccountID": row["customer_account_id"],
     }
 
 
@@ -3902,8 +4051,28 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/portal/"):
             self.render_customer_portal(unquote(parsed.path.removeprefix("/portal/")).strip())
             return
+        if parsed.path in ("/account", "/account/", "/account/verify"):
+            self.serve_customer_account_portal()
+            return
+        if parsed.path == "/api/customer/account":
+            self.serve_customer_account()
+            return
+        if parsed.path == "/api/customer/invoices":
+            self.serve_customer_invoices()
+            return
         if self.principal() is None:
             self.write_json({"error": "Unauthorized"}, status=HTTPStatus.UNAUTHORIZED, require_auth=False)
+            return
+        if parsed.path == "/api/customer-accounts":
+            if not self.require_dispatch_access():
+                return
+            self.list_customer_accounts()
+            return
+        if parsed.path.startswith("/api/customer-accounts/"):
+            if not self.require_admin():
+                return
+            account_id = unquote(parsed.path.removeprefix("/api/customer-accounts/")).strip("/")
+            self.get_customer_account(account_id)
             return
         if parsed.path == "/api/session":
             self.write_json({"user": self.principal()})
@@ -3913,6 +4082,11 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path.startswith("/api/google/mail/"):
             self.handle_google_mail(parsed, method="GET")
+            return
+        if parsed.path in ("/api/google/drive/billing-pdf-intents",
+                           "/api/google/drive/billing-pdf-intents/identity",
+                           "/api/google/drive/billing-pdf-intents/artifact"):
+            self.handle_billing_pdf_archive(parsed, method="GET")
             return
         if parsed.path == "/api/payment-attempts" or parsed.path.startswith("/api/payment-attempts/"):
             self.handle_payment_attempt(parsed, method="GET")
@@ -4144,6 +4318,15 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/public/service-requests":
             self.store_public_service_request()
             return
+        if parsed.path == "/api/customer/magic-link":
+            self.request_customer_magic_link()
+            return
+        if parsed.path == "/api/customer/magic-link/consume":
+            self.consume_customer_magic_link()
+            return
+        if parsed.path == "/api/customer/service-requests":
+            self.create_customer_service_request()
+            return
         if parsed.path == "/api/auth/apple":
             self.exchange_apple_identity()
             return
@@ -4161,6 +4344,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path.startswith("/api/google/mail/"):
             self.handle_google_mail(parsed, method="POST")
+            return
+        if parsed.path.startswith("/api/google/drive/billing-pdf-intents"):
+            self.handle_billing_pdf_archive(parsed, method="POST")
             return
         if parsed.path == "/api/payment-attempts" or parsed.path.startswith("/api/payment-attempts/"):
             self.handle_payment_attempt(parsed, method="POST")
@@ -4256,6 +4442,12 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 .removesuffix("/estimate-response-resolution")
             ).strip("/")
             self.resolve_customer_portal_estimate_response(link_id)
+            return
+        if parsed.path.startswith("/api/customer-accounts/") and parsed.path.endswith("/link"):
+            if not self.require_admin():
+                return
+            account_id = unquote(parsed.path.removeprefix("/api/customer-accounts/").removesuffix("/link")).strip("/")
+            self.link_customer_account(account_id)
             return
         if parsed.path.startswith("/api/service-requests/") and parsed.path.endswith("/claim"):
             if not self.require_dispatch_access():
@@ -5751,7 +5943,13 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         request_id, created_at = str(uuid.uuid4()), utc_now()
         with db() as connection:
             connection.execute(
-                "INSERT INTO public_service_requests VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)",
+                """
+                INSERT INTO public_service_requests(
+                    id, customer_name, phone, email, address, requested_service_type,
+                    urgency, summary, preferred_date, created_at, claimed_at, claimed_by,
+                    source, customer_account_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'website', NULL)
+                """,
                 (request_id, customer_name, phone or None, email or None, address or None, service_type, urgency, summary, preferred_date, created_at),
             )
         self.write_json({"accepted": True, "requestID": request_id}, status=HTTPStatus.ACCEPTED, require_auth=False)
@@ -5769,6 +5967,340 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if result.rowcount == 1:
             record_audit_event(principal.get("email") if isinstance(principal.get("email"), str) else None, "claim", "service-request", request_id)
         self.write_json({"claimed": result.rowcount == 1, "id": request_id})
+
+    # --- Customer self-service accounts --------------------------------
+    #
+    # A customer_session is a distinct token namespace from staff auth_sessions.
+    # customer_principal() is never consulted by principal(), and no customer
+    # route below ever calls principal(), require_admin(), or any other
+    # staff gate: a customer bearer token simply cannot satisfy them.
+
+    def serve_customer_account_portal(self) -> None:
+        if not CUSTOMER_ACCOUNTS_ENABLED:
+            self.write_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND, require_auth=False)
+            return
+        if customer_accounts_origin() is None or not EMAIL_PROVIDER_API_KEY or not EMAIL_FROM_ADDRESS:
+            self.write_json({"error": "Customer sign-in is unavailable"},
+                            status=HTTPStatus.SERVICE_UNAVAILABLE, require_auth=False)
+            return
+        body = CUSTOMER_ACCOUNT_PORTAL_HTML.encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_cors_headers()
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def customer_principal(self) -> sqlite3.Row | None:
+        authorization = self.headers.get("Authorization", "").strip()
+        if not authorization.startswith("Bearer "):
+            return None
+        token = authorization.removeprefix("Bearer ").strip()
+        with db() as connection:
+            return customer_accounts.session_account(connection, token=token)
+
+    def require_customer_session(self) -> sqlite3.Row | None:
+        if not CUSTOMER_ACCOUNTS_ENABLED:
+            self.write_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND, require_auth=False)
+            return None
+        account = self.customer_principal()
+        if account is None:
+            self.write_json({"error": "Sign in again"}, status=HTTPStatus.UNAUTHORIZED, require_auth=False)
+            return None
+        return account
+
+    def request_customer_magic_link(self) -> None:
+        if not CUSTOMER_ACCOUNTS_ENABLED:
+            self.write_json({"error": "Customer accounts are not enabled"}, status=HTTPStatus.NOT_FOUND, require_auth=False)
+            return
+        # X-Forwarded-For is caller-controlled unless a trusted edge explicitly
+        # rewrites it. The socket peer is the only address this server can trust.
+        client_ip = self.client_address[0]
+        now_timestamp = datetime.now(timezone.utc).timestamp()
+        with CUSTOMER_ACCOUNTS_LOCK:
+            for key, values in list(CUSTOMER_ACCOUNTS_ATTEMPTS.items()):
+                recent = [value for value in values if now_timestamp - value < CUSTOMER_ACCOUNTS_RATE_WINDOW_SECONDS]
+                if recent:
+                    CUSTOMER_ACCOUNTS_ATTEMPTS[key] = recent
+                else:
+                    del CUSTOMER_ACCOUNTS_ATTEMPTS[key]
+            attempts = [
+                value for value in CUSTOMER_ACCOUNTS_ATTEMPTS.get(client_ip, [])
+                if now_timestamp - value < CUSTOMER_ACCOUNTS_RATE_WINDOW_SECONDS
+            ]
+            if len(attempts) >= CUSTOMER_ACCOUNTS_RATE_LIMIT or (
+                client_ip not in CUSTOMER_ACCOUNTS_ATTEMPTS
+                and len(CUSTOMER_ACCOUNTS_ATTEMPTS) >= CUSTOMER_ACCOUNTS_MAX_CLIENT_BUCKETS
+            ):
+                self.write_json({"error": "Too many requests. Please try again later."}, status=HTTPStatus.TOO_MANY_REQUESTS, require_auth=False)
+                return
+            attempts.append(now_timestamp)
+            CUSTOMER_ACCOUNTS_ATTEMPTS[client_ip] = attempts
+        try:
+            payload = self.read_json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self.write_json({"error": "Invalid JSON"}, status=HTTPStatus.BAD_REQUEST, require_auth=False)
+            return
+        if str(payload.get("website", "")).strip():  # Honeypot; never reveal the rejection reason.
+            self.write_json({"accepted": True}, status=HTTPStatus.ACCEPTED, require_auth=False)
+            return
+        email = customer_accounts.normalized_email(payload.get("email") if isinstance(payload.get("email"), str) else None)
+        name = str(payload.get("name") or "").strip()
+        phone = str(payload.get("phone") or "").strip() or None
+        if not customer_accounts.is_valid_email(email) or not name:
+            self.write_json({"error": "A name and valid email are required"}, status=HTTPStatus.BAD_REQUEST, require_auth=False)
+            return
+        if len(name) > customer_accounts.MAX_NAME_LENGTH or (phone and len(phone) > customer_accounts.MAX_PHONE_LENGTH):
+            self.write_json({"error": "Request contains fields that are too long"}, status=HTTPStatus.BAD_REQUEST, require_auth=False)
+            return
+        origin = customer_accounts_origin()
+        if origin is None or not EMAIL_PROVIDER_API_KEY or not EMAIL_FROM_ADDRESS:
+            self.write_json({"error": "Sign-in email is unavailable. Please try again later."},
+                            status=HTTPStatus.SERVICE_UNAVAILABLE, require_auth=False)
+            return
+        with db() as connection:
+            account_id = customer_accounts.create_or_reuse_account(connection, email=email, name=name, phone=phone)
+            token = customer_accounts.issue_magic_link(connection, account_id=account_id)
+        try:
+            sent = transactional_email.send_transactional_email(
+                api_key=EMAIL_PROVIDER_API_KEY,
+                from_address=EMAIL_FROM_ADDRESS,
+                to_address=email,
+                subject="Sign in to your GunnAire account",
+                text_body=f"Use this link to sign in. It expires in {customer_accounts.MAGIC_LINK_TTL_MINUTES} minutes:\n\n{origin}/account/verify?token={token}",
+            )
+        except Exception:
+            sent = False
+        if not sent:
+            # A lost provider response cannot prove whether Postmark accepted
+            # the message. Keep the short-lived link usable if it arrives.
+            self.write_json({"error": "Sign-in email delivery could not be confirmed. If a link arrives, it will work; otherwise try again."},
+                            status=HTTPStatus.SERVICE_UNAVAILABLE, require_auth=False)
+            return
+        # Always the same generic response, regardless of whether the account
+        # already existed or the email actually sent, so this endpoint cannot
+        # be used to enumerate registered customers.
+        self.write_json({"accepted": True}, status=HTTPStatus.ACCEPTED, require_auth=False)
+
+    def consume_customer_magic_link(self) -> None:
+        if not CUSTOMER_ACCOUNTS_ENABLED:
+            self.write_json({"error": "Customer accounts are not enabled"}, status=HTTPStatus.NOT_FOUND, require_auth=False)
+            return
+        try:
+            payload = self.read_json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self.write_json({"error": "Invalid JSON"}, status=HTTPStatus.BAD_REQUEST, require_auth=False)
+            return
+        token = str(payload.get("token") or "").strip()
+        with db() as connection:
+            account_id = customer_accounts.consume_magic_link(connection, token=token)
+            if account_id is None:
+                self.write_json({"error": "This link is invalid or has expired"}, status=HTTPStatus.UNAUTHORIZED, require_auth=False)
+                return
+            session_token = customer_accounts.issue_session(connection, account_id=account_id)
+        self.write_json({"sessionToken": session_token}, status=HTTPStatus.OK, require_auth=False)
+
+    def serve_customer_account(self) -> None:
+        account = self.require_customer_session()
+        if account is None:
+            return
+        self.write_json({"account": customer_accounts.account_record(account)}, require_auth=False)
+
+    def serve_customer_invoices(self) -> None:
+        account = self.require_customer_session()
+        if account is None:
+            return
+        quickbooks_customer_id = account["linked_customer_quickbooks_id"]
+        if not quickbooks_customer_id:
+            self.write_json({"invoices": []}, require_auth=False)
+            return
+        with db() as connection:
+            grant = connection.execute("SELECT * FROM qbo_connections WHERE id=1").fetchone()
+        if grant is None or (
+            account["linked_customer_quickbooks_realm_id"] != grant["realm_id"]
+            or account["linked_customer_quickbooks_environment"] != grant["environment"]
+        ):
+            self.write_json({"error": "Invoices are unavailable. Please contact GunnAire."},
+                            status=HTTPStatus.SERVICE_UNAVAILABLE, require_auth=False)
+            return
+        try:
+            bearer = qbo_authorized_bearer(
+                {
+                    "realm_id": grant["realm_id"],
+                    "environment": grant["environment"],
+                    "grant_fingerprint": payment_attempts.grant_fingerprint(grant),
+                },
+                audit_actor="system:customer-portal",
+            )
+        except payment_attempts.AttemptError:
+            self.write_json({"error": "Invoices are unavailable. Please contact GunnAire."},
+                            status=HTTPStatus.SERVICE_UNAVAILABLE, require_auth=False)
+            return
+        try:
+            verified = customer_accounts.verify_customer_quickbooks_identity(
+                quickbooks_customer_id=quickbooks_customer_id, account_email=account["email"],
+                realm_id=grant["realm_id"], environment=grant["environment"], bearer=bearer,
+                transport=qbo_payment_read_transport, request_factory=urllib.request.Request,
+            )
+            if not verified:
+                self.write_json({"error": "Invoices need GunnAire account review."},
+                                status=HTTPStatus.CONFLICT, require_auth=False)
+                return
+            invoices = customer_accounts.fetch_customer_invoices(
+                quickbooks_customer_id=quickbooks_customer_id,
+                realm_id=grant["realm_id"], environment=grant["environment"], bearer=bearer,
+                transport=qbo_payment_read_transport, request_factory=urllib.request.Request,
+            )
+        except payment_attempts.AttemptError:
+            self.write_json({"error": "Invoices are unavailable. Please contact GunnAire."},
+                            status=HTTPStatus.SERVICE_UNAVAILABLE, require_auth=False)
+            return
+        with db() as connection:
+            current_grant = connection.execute("SELECT * FROM qbo_connections WHERE id=1").fetchone()
+            current_account = connection.execute("SELECT * FROM customer_accounts WHERE id = ?", (account["id"],)).fetchone()
+        if (
+            current_grant is None
+            or payment_attempts.grant_fingerprint(current_grant) != payment_attempts.grant_fingerprint(grant)
+            or current_account is None
+            or current_account["linked_customer_quickbooks_id"] != quickbooks_customer_id
+            or current_account["linked_customer_quickbooks_realm_id"] != grant["realm_id"]
+            or current_account["linked_customer_quickbooks_environment"] != grant["environment"]
+        ):
+            self.write_json({"error": "Invoices are unavailable. Please contact GunnAire."},
+                            status=HTTPStatus.SERVICE_UNAVAILABLE, require_auth=False)
+            return
+        self.write_json({"invoices": invoices}, require_auth=False)
+
+    def create_customer_service_request(self) -> None:
+        account = self.require_customer_session()
+        if account is None:
+            return
+        try:
+            payload = self.read_json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self.write_json({"error": "Invalid JSON"}, status=HTTPStatus.BAD_REQUEST, require_auth=False)
+            return
+        fields, error = customer_accounts.validate_service_request_fields(payload)
+        if error is not None:
+            self.write_json({"error": error}, status=HTTPStatus.BAD_REQUEST, require_auth=False)
+            return
+        with db() as connection:
+            request_id = customer_accounts.store_customer_service_request(
+                connection,
+                account=account,
+                summary=fields["summary"],
+                address=fields["address"],
+                requested_service_type=fields["requestedServiceType"],
+                urgency=fields["urgency"],
+                preferred_date=fields["preferredDate"],
+            )
+        notify_admins_of_customer_service_request(request_id=request_id, account_email=account["email"])
+        self.write_json({"accepted": True, "requestID": request_id}, status=HTTPStatus.CREATED, require_auth=False)
+
+    def list_customer_accounts(self) -> None:
+        with db() as connection:
+            accounts = customer_accounts.pending_accounts(connection)
+        self.write_json({"customerAccounts": accounts})
+
+    def get_customer_account(self, account_id: str) -> None:
+        try:
+            account_id = str(uuid.UUID(account_id))
+        except ValueError:
+            self.write_json({"error": "Invalid account ID"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        with db() as connection:
+            account = connection.execute("SELECT * FROM customer_accounts WHERE id = ?", (account_id,)).fetchone()
+        if account is None:
+            self.write_json({"error": "Customer account not found"}, status=HTTPStatus.NOT_FOUND)
+            return
+        self.write_json({"customerAccount": customer_accounts.account_record(account)})
+
+    def link_customer_account(self, account_id: str) -> None:
+        if not account_id or len(account_id) > 80:
+            self.write_json({"error": "Invalid account ID"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            payload = self.read_json()
+        except json.JSONDecodeError:
+            self.write_json({"error": "Invalid JSON"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        customer_id = str(payload.get("customerID") or "").strip()
+        quickbooks_id = str(payload.get("quickBooksID") or "").strip() or None
+        if not customer_id:
+            self.write_json({"error": "customerID is required"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        realm_id = None
+        environment = None
+        with db() as connection:
+            account = connection.execute("SELECT * FROM customer_accounts WHERE id = ?", (account_id,)).fetchone()
+        if account is None:
+            self.write_json({"error": "Customer account not found"}, status=HTTPStatus.NOT_FOUND)
+            return
+        if account["link_status"] != "pending":
+            if customer_accounts.link_matches(account, customer_id=customer_id, quickbooks_id=quickbooks_id):
+                self.write_json({"customerAccount": customer_accounts.account_record(account)})
+            else:
+                self.write_json({"error": "Customer account is already linked"}, status=HTTPStatus.CONFLICT)
+            return
+        if quickbooks_id:
+            if customer_accounts.QBO_INVOICE_ID_PATTERN.fullmatch(quickbooks_id) is None:
+                self.write_json({"error": "Invalid QuickBooks customer ID"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            with db() as connection:
+                grant = connection.execute("SELECT * FROM qbo_connections WHERE id=1").fetchone()
+            if grant is None:
+                self.write_json({"error": "QuickBooks customer verification is unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            try:
+                bearer = qbo_authorized_bearer({
+                    "realm_id": grant["realm_id"], "environment": grant["environment"],
+                    "grant_fingerprint": payment_attempts.grant_fingerprint(grant),
+                }, audit_actor="system:customer-account-link")
+                verified = customer_accounts.verify_customer_quickbooks_identity(
+                    quickbooks_customer_id=quickbooks_id, account_email=account["email"],
+                    realm_id=grant["realm_id"], environment=grant["environment"], bearer=bearer,
+                    transport=qbo_payment_read_transport, request_factory=urllib.request.Request,
+                )
+            except payment_attempts.AttemptError:
+                self.write_json({"error": "QuickBooks customer verification is unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            if not verified:
+                self.write_json({"error": "QuickBooks customer identity needs review"}, status=HTTPStatus.CONFLICT)
+                return
+            realm_id = grant["realm_id"]
+            environment = grant["environment"]
+        principal = self.principal() or {}
+        with db() as connection:
+            if quickbooks_id:
+                current_grant = connection.execute("SELECT * FROM qbo_connections WHERE id=1").fetchone()
+                if current_grant is None or payment_attempts.grant_fingerprint(current_grant) != payment_attempts.grant_fingerprint(grant):
+                    self.write_json({"error": "QuickBooks connection changed. Please retry."}, status=HTTPStatus.CONFLICT)
+                    return
+            updated = customer_accounts.link_account(
+                connection,
+                account_id=account_id,
+                customer_id=customer_id,
+                quickbooks_id=quickbooks_id,
+                quickbooks_realm_id=realm_id,
+                quickbooks_environment=environment,
+                actor_email=principal.get("email") if isinstance(principal.get("email"), str) else "unknown",
+            )
+            current = None if updated is not None else connection.execute(
+                "SELECT * FROM customer_accounts WHERE id = ?", (account_id,)
+            ).fetchone()
+        if updated is None:
+            if current is None:
+                self.write_json({"error": "Customer account not found"}, status=HTTPStatus.NOT_FOUND)
+            elif customer_accounts.link_matches(current, customer_id=customer_id, quickbooks_id=quickbooks_id):
+                self.write_json({"customerAccount": customer_accounts.account_record(current)})
+            else:
+                self.write_json({"error": "Customer account is already linked"}, status=HTTPStatus.CONFLICT)
+            return
+        record_audit_event(principal.get("email") if isinstance(principal.get("email"), str) else None, "link", "customer-account", account_id)
+        self.write_json({"customerAccount": updated})
 
     def upsert_user(self) -> None:
         try:
@@ -6724,6 +7256,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
         )
         native = billing_native.NativeBilling(publisher)
+        estimate_jobs = billing_estimate_queue()
         session_id = self._application_session_id
         assignments = parsed.path == "/api/job-billing-assignments"
         assignment_connection = parsed.path == "/api/job-billing-assignments/connection"
@@ -6745,6 +7278,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                     result = native.connection(session_id, query)
                 else:
                     result = publisher.list_for_document(session_id, query)
+            elif method == "GET" and len(parts) == 2 and parts[0] == "background-estimate" and not parsed.query:
+                result = estimate_jobs.status(session_id, parts[1])
             elif method == "GET" and len(parts) == 1 and not parsed.query:
                 result = native.proposal(session_id, parts[0])
             elif method == "POST" and not parsed.query:
@@ -6765,6 +7300,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                                      object_pairs_hook=unique_object, parse_constant=invalid_constant)
                 if assignments:
                     result = publisher.assignments.save(session_id, payload)
+                elif parts == ["background-estimate"]:
+                    result = estimate_jobs.enqueue(session_id, payload)
+                    BILLING_ESTIMATE_WAKE_EVENT.set()
                 elif not suffix:
                     result = publisher.publish(session_id, payload)
                 elif parts == ["approve"] and isinstance(payload, dict) and set(payload) == {"proposal", "technicianEmail"}:
@@ -6803,6 +7341,57 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
 
     def google_mail_service(self):
         return google_mail.GoogleMail(self.google_connection_service())
+
+    def handle_billing_pdf_archive(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        try:
+            is_artifact = parsed.path == "/api/google/drive/billing-pdf-intents/artifact"
+            if method == "GET":
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, max_num_fields=14)
+                if any(len(values) != 1 for values in query.values()):
+                    raise billing_pdf_archive_routes.RouteFailure("invalid_request", 400,
+                        "Review the PDF archive request.")
+                payload = {key: values[0] for key, values in query.items()}
+            else:
+                if parsed.query:
+                    raise billing_pdf_archive_routes.RouteFailure("invalid_request", 400,
+                        "Review the PDF archive request.")
+                maximum = ((billing_pdf_artifacts.MAX_PDF_BYTES * 4) // 3) + 8192 if is_artifact else 8192
+                payload = google_connections.strict_json(self.read_limited_body(maximum).decode("utf-8"))
+            service = billing_pdf_archive_routes.BillingPDFArchiveRoutes(
+                db, self.google_connection_service(), primary_admin_email=PRIMARY_ADMIN_EMAIL,
+                container_id=CLOUDKIT_CONTAINER_ID,
+                ledger=billing_pdf_archive_ledger.BillingPDFArchiveLedger(DB_PATH),
+                artifacts=billing_pdf_artifacts.BillingPDFArtifactStore(STORAGE_ROOT))
+            if is_artifact:
+                if method == "POST":
+                    encoded = payload.pop("dataBase64", None) if isinstance(payload, dict) else None
+                    if not isinstance(encoded, str):
+                        raise billing_pdf_archive_routes.RouteFailure("invalid_request", 400,
+                            "PDF bytes are required.")
+                    try:
+                        content = base64.b64decode(encoded, validate=True)
+                    except (ValueError, binascii.Error):
+                        raise billing_pdf_archive_routes.RouteFailure("invalid_request", 400,
+                            "PDF bytes are invalid.") from None
+                    result = service.artifact(method, payload, self._application_session_id, content)
+                    self.write_json(result)
+                else:
+                    result = service.artifact(method, payload, self._application_session_id)
+                    self.write_media_bytes(result, "application/pdf", "GunnAire-Billing-Document.pdf")
+                return
+            result = service.dispatch(method, parsed.path, payload, self._application_session_id)
+            self.write_json(result)
+        except billing_pdf_archive_routes.RouteFailure as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except google_connections.ConnectionError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError, KeyError, AttributeError, RecursionError):
+            self.write_json({"error": "Review the PDF archive request.", "code": "invalid_request"}, status=400)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "PDF archive storage is unavailable. Keep the original request for recovery.",
+                             "code": "storage_unavailable"}, status=503)
 
     def handle_google_mail(self, parsed, *, method):
         if not self.require_application_session():
@@ -7550,6 +8139,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         message = redact_capability_tokens(format % args)
         # Search terms and provider resource IDs can identify customer mail.
         message = re.sub(r"/api/google/mail/[^\s\"]*", "/api/google/mail/[redacted]", message)
+        message = re.sub(r"/api/google/drive/billing-pdf-intents(?:[^\s\"]*)?",
+                         "/api/google/drive/billing-pdf-intents/[redacted]", message)
         message = re.sub(r"/api/qbo/change-capture(?:\?[^\s\"]*)?", "/api/qbo/change-capture", message)
         message = re.sub(r"/api/qbo-document-uploads(?:[/?][^\s\"]*)?", "/api/qbo-document-uploads/[redacted]", message)
         message = re.sub(r"/api/field-payment-review(?:/context)?(?:\?[^\s\"]*)?", "/api/field-payment-review", message)
@@ -7589,6 +8180,7 @@ def main() -> None:
     initialize_database()
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
     start_push_delivery_worker()
+    start_billing_estimate_worker()
     start_backup_worker()
     server = ThreadingHTTPServer((HOST, PORT), GunnAireBackendHandler)
     print(f"GunnAire backend listening on http://{HOST}:{PORT}")

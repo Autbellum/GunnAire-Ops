@@ -15,8 +15,96 @@ private struct ScheduleDocumentationPresentation: Identifiable {
     var id: UUID { call.id }
 }
 
+private struct LegacyGooglePublicationConfirmation: ViewModifier {
+    @Binding var review: GoogleCalendarScheduleSync.UnlinkedPublishReview?
+    let onPublish: (GoogleCalendarScheduleSync.UnlinkedPublishReview) -> Void
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            "Publish a new Google event?",
+            isPresented: Binding(
+                get: { review != nil },
+                set: { if !$0 { review = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: review
+        ) { current in
+            Button("Publish New Google Event") {
+                review = nil
+                onPublish(current)
+            }
+            Button("Cancel", role: .cancel) { review = nil }
+        } message: { current in
+            Text("A read-only search of \(current.searchedCalendarCount) accessible calendars for \(current.accountEmail) found no matching event near this appointment. An event may still exist in another account or time slot. Check Google Calendar before confirming; creating a new event may notify assigned staff. The app will repeat the complete search before sending anything.")
+        }
+    }
+}
+
+enum ScheduleGoogleLinkStatus {
+    static func selectedPendingRouteLabel(_ call: ServiceCall) -> String? {
+        guard call.googleEventManagedByApp,
+              call.googleCalendarPendingAt != nil,
+              call.status == .scheduled || call.status == .inProgress,
+              call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false else {
+            return nil
+        }
+        let route = call.googleCalendarID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if route.isEmpty || route.caseInsensitiveCompare("primary") == .orderedSame {
+            return "Selected Google calendar: Primary (pending)"
+        }
+        return "Selected Google calendar: \(route) (pending)"
+    }
+
+    static func shouldWakePendingCalendar(canManageDispatch: Bool, sceneIsActive: Bool,
+                                          authorization: GoogleCalendarAuthorizationState) -> Bool {
+        canManageDispatch && sceneIsActive && authorization == .ready
+    }
+
+    static func needsUnlinkedReview(_ call: ServiceCall, now: Date = Date()) -> Bool {
+        guard call.status == .scheduled || call.status == .inProgress,
+              call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false else {
+            return false
+        }
+        return !GoogleCalendarScheduleSync.needsOutboundSync(call, now: now)
+    }
+
+    static func unlinkedReviewGuidance(_ call: ServiceCall, connectedGoogleEmail: String?) -> String? {
+        guard needsUnlinkedReview(call), !call.googleEventManagedByApp else { return nil }
+        let account = AppAccess.normalizedEmail(connectedGoogleEmail)
+        let accountDetail = account.isEmpty ? "" : " The app currently lists \(account) as its Google account."
+        return "This appointment has no Google event link or app-managed publication record. Sync Google and saving this job will not publish it. Check your intended Google account and calendar for a matching event.\(accountDetail) Review Google publication to inspect possible matches before choosing whether to create a new event. The review itself sends no event or invitation."
+    }
+
+    static func verificationCalls(selectedDay: [ServiceCall], upcoming: [ServiceCall]) -> [ServiceCall] {
+        var seen: Set<UUID> = []
+        return (selectedDay + upcoming).filter { seen.insert($0.id).inserted }
+    }
+
+    static func unlinkedReviewCount(selectedDay: [ServiceCall], upcoming: [ServiceCall]) -> Int {
+        verificationCalls(selectedDay: selectedDay, upcoming: upcoming).filter {
+            !$0.googleEventManagedByApp && needsUnlinkedReview($0)
+        }.count
+    }
+
+    static func reconciledMissingIDs(existing: [UUID: String], verifiedNotFoundIDs: [UUID: String],
+                                     visibleCalls: [ServiceCall]) -> [UUID: String] {
+        var result = existing
+        for call in visibleCalls {
+            if call.googleEventConfirmedAt != nil {
+                result.removeValue(forKey: call.id)
+            }
+        }
+        for (callID, eventID) in verifiedNotFoundIDs {
+            guard visibleCalls.contains(where: { $0.id == callID && $0.googleEventID == eventID }) else { continue }
+            result[callID] = eventID
+        }
+        return result
+    }
+}
+
 struct ScheduleView: View {
     @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.modelContext) private var modelContext
     @Environment(\.gunnaireReduceMotion) private var reduceMotion
     @Query(sort: [SortDescriptor(\ServiceCall.scheduledDate)]) private var serviceCalls: [ServiceCall]
@@ -56,6 +144,16 @@ struct ScheduleView: View {
     @State private var navigationPath = NavigationPath()
     @State private var isSyncingGoogleCalendar = false
     @State private var syncMessage: String?
+    @State private var checkingGoogleLinkID: UUID?
+    @State private var repairingGoogleLinkID: UUID?
+    @State private var publishingUnlinkedGoogleID: UUID?
+    @State private var googleLinkCheckMessages: [UUID: String] = [:]
+    @State private var verifiedGoogleEventLinks: [UUID: GoogleCalendarScheduleSync.VerifiedGoogleEventLink] = [:]
+    @State private var googleLinkCheckAlertMessage: String?
+    @State private var missingGoogleEventIDs: [UUID: String] = [:]
+    @State private var missingGoogleEventReview: GoogleCalendarScheduleSync.MissingEventReview?
+    @State private var unlinkedGoogleEventReview: GoogleCalendarScheduleSync.UnlinkedEventLinkReview?
+    @State private var unlinkedPublishReview: GoogleCalendarScheduleSync.UnlinkedPublishReview?
     @State private var deleteConfirmationCall: ScheduleDeletionConfirmation?
     @State private var jobSearchText = ""
     @State private var showingNewRequestSheet = false
@@ -66,6 +164,7 @@ struct ScheduleView: View {
     @State private var requestForQualification: ServiceRequest?
     @State private var requestForDecline: ServiceRequest?
     @State private var requestMessage: String?
+    @State private var highlightedBackendRequestID: String?
     @State private var maintenanceMessage: String?
     @State private var approvedWorkMessage: String?
     @State private var selectedEstimateForScheduling: Estimate?
@@ -83,6 +182,15 @@ struct ScheduleView: View {
         let sevenDaysAhead = calendar.date(byAdding: .day, value: 7, to: now) ?? now
         return callsForSignedInUser.filter { $0.scheduledDate >= now && $0.scheduledDate <= sevenDaysAhead }
             .sorted { $0.scheduledDate < $1.scheduledDate }
+    }
+
+    private var unlinkedGoogleReviewCount: Int {
+        ScheduleGoogleLinkStatus.unlinkedReviewCount(selectedDay: selectedDayCalls, upcoming: upcomingJobs)
+    }
+
+    private var unlinkedGoogleReviewTitle: String {
+        let count = unlinkedGoogleReviewCount
+        return "\(count) \(count == 1 ? "appointment needs" : "appointments need") Google publication review"
     }
 
     private var snapshotCalls: [ServiceCall] {
@@ -191,7 +299,12 @@ struct ScheduleView: View {
     }
 
     private var openServiceRequests: [ServiceRequest] {
-        ServiceRequestPipelinePolicy.sortedOpenRequests(serviceRequests)
+        let requests = ServiceRequestPipelinePolicy.sortedOpenRequests(serviceRequests)
+        guard let highlightedBackendRequestID,
+              let highlighted = requests.first(where: { $0.backendRequestID?.lowercased() == highlightedBackendRequestID }) else {
+            return requests
+        }
+        return [highlighted] + requests.filter { $0.id != highlighted.id }
     }
 
     private var quickBooksAttentionPayments: [Payment] {
@@ -294,6 +407,41 @@ struct ScheduleView: View {
                 List {
                     scheduleCardRow { snapshotSection }
 
+                    if canManageDispatch, unlinkedGoogleReviewCount > 0 {
+                        scheduleCardRow {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Label(unlinkedGoogleReviewTitle,
+                                      systemImage: "calendar.badge.exclamationmark")
+                                    .font(.subheadline.weight(.semibold))
+                                Text("Among the selected day and next seven days, these saved appointments have no confirmed Google event link. Sync Google will not create them. Open each appointment's Schedule card and choose Review Google publication. The review checks only calendars accessible to the connected Google account near the saved appointment time; an event may exist in another account or time slot.")
+                                    .font(.caption)
+                            }
+                            .accessibilityIdentifier("UnlinkedGoogleAppointmentsStatus")
+                        }
+                    }
+
+                    if let message = syncMessage ?? googleAuth.calendarSyncMessage {
+                        scheduleCardRow {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Label("Google Calendar status", systemImage: "calendar.badge.exclamationmark")
+                                    .font(.subheadline.weight(.semibold))
+                                Text(message)
+                                    .font(.caption)
+                                if syncMessage != nil,
+                                   let background = googleAuth.calendarSyncMessage,
+                                   background != message {
+                                    Text("Background Calendar status: \(background)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .accessibilityIdentifier("ScheduleSyncStatus")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12)
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                        }
+                    }
+
                     scheduleCardRow { jobSearchSection }
 
                     if canManageDispatch {
@@ -367,15 +515,6 @@ struct ScheduleView: View {
                         }
                     }
 
-                    if let message = googleAuth.calendarSyncMessage ?? syncMessage {
-                        scheduleCardRow {
-                            Text(message)
-                                .accessibilityIdentifier("ScheduleSyncStatus")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 2)
-                        }
-                    }
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
@@ -441,16 +580,19 @@ struct ScheduleView: View {
                 .onAppear {
                     AppAccess.ensureTechnicianRecords(for: users, technicians: technicians, modelContext: modelContext)
                     applyPendingScheduleIntentIfNeeded()
-                    if canManageDispatch {
-                        GoogleCalendarScheduleSync.retryPendingIfNeeded(
-                            auth: googleAuth,
-                            modelContext: modelContext,
-                            signedInEmail: AppIdentity.currentEmail
-                        )
-                    }
+                    applyPendingServiceRequestNotificationIfNeeded()
+                    wakePendingCalendarIfReady()
+                }
+                .onChange(of: scenePhase) { _, phase in
+                    if phase == .active { wakePendingCalendarIfReady() }
+                }
+                .onChange(of: googleAuth.googleCalendarAuthorizationState) { _, authorization in
+                    if authorization != .ready { verifiedGoogleEventLinks.removeAll() }
+                    if authorization == .ready { wakePendingCalendarIfReady() }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
                     applyPendingScheduleIntentIfNeeded()
+                    applyPendingServiceRequestNotificationIfNeeded()
                 }
                 .onChange(of: canManageDispatch) { _, isAllowed in
                     guard !isAllowed else { return }
@@ -463,6 +605,24 @@ struct ScheduleView: View {
                     showingAvailabilityBlocks = false
                     showingDispatchWeekBoard = false
                     selectedEstimateForScheduling = nil
+                    missingGoogleEventReview = nil
+                    unlinkedGoogleEventReview = nil
+                    unlinkedPublishReview = nil
+                    publishingUnlinkedGoogleID = nil
+                    missingGoogleEventIDs.removeAll()
+                    googleLinkCheckMessages.removeAll()
+                    verifiedGoogleEventLinks.removeAll()
+                    googleLinkCheckAlertMessage = nil
+                }
+                .onChange(of: googleAuth.signedInEmail) { _, _ in
+                    missingGoogleEventReview = nil
+                    unlinkedGoogleEventReview = nil
+                    unlinkedPublishReview = nil
+                    publishingUnlinkedGoogleID = nil
+                    missingGoogleEventIDs.removeAll()
+                    googleLinkCheckMessages.removeAll()
+                    verifiedGoogleEventLinks.removeAll()
+                    googleLinkCheckAlertMessage = nil
                 }
                 .sheet(isPresented: $showingAddCallSheet) {
                     if canManageDispatch {
@@ -631,7 +791,59 @@ struct ScheduleView: View {
                 } message: { confirmation in
                     Text("Delete \(confirmation.title)? App-managed Google events are checked first. Jobs with work or billing history must be cancelled instead.")
                 }
+                .confirmationDialog(
+                    "Recreate the missing Google event?",
+                    isPresented: Binding(
+                        get: { missingGoogleEventReview != nil },
+                        set: { if !$0 { missingGoogleEventReview = nil } }
+                    ),
+                    titleVisibility: .visible,
+                    presenting: missingGoogleEventReview
+                ) { review in
+                    Button("Recreate Missing Event") {
+                        missingGoogleEventReview = nil
+                        repairMissingGoogleEvent(review)
+                    }
+                    Button("Cancel", role: .cancel) {
+                        missingGoogleEventReview = nil
+                    }
+                } message: { review in
+                    Text("Connected Google account: \(review.accountEmail). The saved event ID was not found in this account's accessible calendars. Check the original Google Calendar for a moved or copied appointment before continuing. Recreating it may send staff invitations; the app will recheck the original ID before creating anything.")
+                }
+                .modifier(LegacyGooglePublicationConfirmation(review: $unlinkedPublishReview,
+                    onPublish: { publishUnlinkedGoogleJob($0) }))
+                .alert("Google Calendar link", isPresented: googleLinkAlertIsPresented) {
+                    googleLinkAlertActions()
+                } message: {
+                    Text(googleLinkCheckAlertMessage ?? "")
+                }
             }
+        }
+    }
+
+    private var googleLinkAlertIsPresented: Binding<Bool> {
+        Binding(get: { googleLinkCheckAlertMessage != nil }, set: { shown in
+            if !shown {
+                googleLinkCheckAlertMessage = nil
+                unlinkedGoogleEventReview = nil
+            }
+        })
+    }
+
+    @ViewBuilder
+    private func googleLinkAlertActions() -> some View {
+        if let review = unlinkedGoogleEventReview {
+            Button("Link Existing Event") {
+                googleLinkCheckAlertMessage = nil
+                unlinkedGoogleEventReview = nil
+                linkExistingGoogleEvent(review)
+            }
+            Button("Cancel", role: .cancel) {
+                googleLinkCheckAlertMessage = nil
+                unlinkedGoogleEventReview = nil
+            }
+        } else {
+            Button("OK", role: .cancel) { googleLinkCheckAlertMessage = nil }
         }
     }
 
@@ -645,6 +857,13 @@ struct ScheduleView: View {
             navigationPath = NavigationPath()
             navigationPath.append(call)
         }
+    }
+
+    private func applyPendingServiceRequestNotificationIfNeeded() {
+        guard canManageDispatch else { return }
+        guard let requestID = GunnAireAppIntentRouter.consumePendingServiceRequestID() else { return }
+        highlightedBackendRequestID = requestID.uuidString.lowercased()
+        importOnlineRequests()
     }
 
     @ViewBuilder
@@ -683,6 +902,11 @@ struct ScheduleView: View {
             } else {
                 ForEach(openServiceRequests.prefix(5)) { request in
                     VStack(alignment: .leading, spacing: 6) {
+                        if request.backendRequestID?.lowercased() == highlightedBackendRequestID {
+                            Label("From notification", systemImage: "bell.badge")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Color.brandGold)
+                        }
                         HStack(alignment: .firstTextBaseline) {
                             Text(request.customerName)
                                 .font(.headline)
@@ -864,6 +1088,8 @@ struct ScheduleView: View {
             intakeContext.append("Qualification: \(qualificationNotes)")
         }
         let call = ServiceCall(
+            googleCalendarPendingAt: Date(),
+            googleEventManagedByApp: true,
             eventTitle: "\(request.requestedServiceType.displayName) request",
             siteAddress: serviceLocation?.address ?? request.address,
             serviceLocationID: serviceLocation?.id,
@@ -884,6 +1110,7 @@ struct ScheduleView: View {
         )
         do {
             try modelContext.save()
+            AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: googleAuth)
             selectedDate = Calendar.current.startOfDay(for: scheduledDate)
             requestMessage = "Scheduled \(request.customerName). Assign a technician from the job card before dispatching."
             claimOnlineRequestIfNeeded(request)
@@ -917,13 +1144,12 @@ struct ScheduleView: View {
     }
 
     private func importOnlineRequests() {
-        guard canManageDispatch, GunnAireBackendService.isConfigured else { return }
+        guard canManageDispatch, GunnAireBackendService.isConfigured, !isImportingOnlineRequests else { return }
         isImportingOnlineRequests = true
         Task {
             do {
                 let count = try await GunnAireBackendService.importServiceRequests(
-                    into: modelContext,
-                    currentRequests: serviceRequests
+                    into: modelContext.container
                 )
                 requestMessage = count == 0 ? "No new online requests." : "Imported \(count) online request\(count == 1 ? "" : "s") for qualification."
             } catch {
@@ -1575,6 +1801,63 @@ struct ScheduleView: View {
             }
             .font(.caption.weight(.semibold))
             .tint(Color.brandGold)
+            if canManageDispatch, GoogleCalendarScheduleSync.hasUnconfirmedLegacyCreateReservation(call) {
+                Button(checkingGoogleLinkID == call.id ? "Checking reserved Google event…" :
+                       "Check Reserved Google Event") {
+                    checkReservedGooglePublication(for: call)
+                }
+                .buttonStyle(.bordered)
+                .disabled(checkingGoogleLinkID != nil || repairingGoogleLinkID != nil ||
+                    publishingUnlinkedGoogleID != nil)
+                .accessibilityIdentifier("CheckReservedGoogleEvent-\(call.id.uuidString)")
+                if let message = googleLinkCheckMessages[call.id] {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("GoogleLinkCheckResult-\(call.id.uuidString)")
+                }
+            } else if canManageDispatch, call.googleEventManagedByApp,
+               call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+               call.status == .scheduled || call.status == .inProgress {
+                Button(checkingGoogleLinkID == call.id ? "Checking Google Link…" : "Check Google Link") {
+                    checkGoogleLink(for: call)
+                }
+                .buttonStyle(.bordered)
+                .disabled(checkingGoogleLinkID != nil || repairingGoogleLinkID != nil)
+                .accessibilityIdentifier("CheckGoogleLink-\(call.id.uuidString)")
+                if let message = googleLinkCheckMessages[call.id] {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("GoogleLinkCheckResult-\(call.id.uuidString)")
+                }
+                verifiedGoogleEventButton(for: call)
+            } else if canManageDispatch, !call.googleEventManagedByApp,
+                      call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                Button(checkingGoogleLinkID == call.id ? "Checking Google Event…" : "Check Google Event & Alerts") {
+                    checkGoogleLink(for: call)
+                }
+                .buttonStyle(.bordered)
+                .disabled(checkingGoogleLinkID != nil || repairingGoogleLinkID != nil)
+                .accessibilityIdentifier("CheckImportedGoogleEvent-\(call.id.uuidString)")
+                if let message = googleLinkCheckMessages[call.id] {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("GoogleLinkCheckResult-\(call.id.uuidString)")
+                }
+                verifiedGoogleEventButton(for: call)
+            } else if canManageDispatch,
+                      let guidance = ScheduleGoogleLinkStatus.unlinkedReviewGuidance(
+                        call, connectedGoogleEmail: googleAuth.signedInEmail) {
+                Button(checkingGoogleLinkID == call.id ? "Checking Google calendars…" : "Review Google publication") {
+                    inspectUnlinkedGoogleJob(call, guidance: guidance)
+                }
+                .buttonStyle(.bordered)
+                .disabled(checkingGoogleLinkID != nil || repairingGoogleLinkID != nil ||
+                    publishingUnlinkedGoogleID != nil)
+                .accessibilityIdentifier("ReviewUnlinkedGoogleEvent-\(call.id.uuidString)")
+            }
         }
         .padding(14)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -1665,10 +1948,35 @@ struct ScheduleView: View {
                 if !call.additionalTechnicianIDs.isEmpty {
                     Label("+\(call.additionalTechnicianIDs.count) crew", systemImage: "person.2.fill")
                 }
-                if call.googleEventID != nil {
-                    // A retained link can also be an unconfirmed reservation.
-                    // Its existence is not fresh provider-sync evidence.
-                    Label("Google", systemImage: "calendar")
+                if GoogleCalendarScheduleSync.hasUnconfirmedLegacyCreateReservation(call) {
+                    Label(canManageDispatch ? "Google creation unconfirmed • check reserved event" :
+                          "Google creation unconfirmed", systemImage: "calendar.badge.exclamationmark")
+                } else if canManageDispatch, let missingID = missingGoogleEventIDs[call.id],
+                   missingID == call.googleEventID {
+                    Label("Google event missing", systemImage: "calendar.badge.exclamationmark")
+                } else if canManageDispatch, GoogleCalendarScheduleSync.staffInvitationsNeedAttention(for: call,
+                    connectedGoogleEmail: googleAuth.signedInEmail, workspaceEmail: AppIdentity.currentEmail) {
+                    Label("Google schedule saved • staff invitations pending", systemImage: "person.crop.circle.badge.exclamationmark")
+                } else if canManageDispatch, GoogleCalendarScheduleSync.needsOutboundSync(call) {
+                    Label(call.googleEventID == nil ? "Google schedule pending" :
+                          (call.googleCalendarPendingAt == nil ? "Google link unconfirmed — check link" :
+                           "Google update pending • Sync Google"),
+                          systemImage: "calendar.badge.exclamationmark")
+                } else if canManageDispatch, ScheduleGoogleLinkStatus.needsUnlinkedReview(call) {
+                    Label(call.googleEventManagedByApp
+                          ? "Google not linked • open and save to publish"
+                          : "Google not linked • review publication",
+                          systemImage: "calendar.badge.exclamationmark")
+                } else if call.googleEventID != nil {
+                    Label(canManageDispatch
+                          ? (verifiedGoogleEventLinks[call.id]?.matches(call: call,
+                                connectedEmail: googleAuth.signedInEmail,
+                                workspaceStamp: CompanyWorkspaceAccessController.shared.operationStamp) == true
+                              ? "Google link verified"
+                              : (call.googleEventConfirmedAt == nil ? "Google link saved • verify in Google Calendar" : "Google schedule last confirmed"))
+                          : "Google event linked",
+                          systemImage: canManageDispatch && call.googleEventConfirmedAt == nil
+                              ? "calendar.badge.exclamationmark" : "calendar")
                 }
                 if call.documentationStartedAt != nil {
                     Label("Started", systemImage: "doc.text")
@@ -1702,6 +2010,21 @@ struct ScheduleView: View {
             }
             .font(.caption2)
             .foregroundColor(.secondary)
+            if call.googleEventID != nil {
+                Text(GoogleCalendarScheduleSync.calendarRouteLabel(
+                    for: call, connectedEmail: googleAuth.signedInEmail
+                ))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .accessibilityIdentifier("ScheduleGoogleCalendarRoute-\(call.id.uuidString)")
+            } else if let pendingRoute = ScheduleGoogleLinkStatus.selectedPendingRouteLabel(call) {
+                Text(pendingRoute)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .accessibilityIdentifier("ScheduleGoogleCalendarRoute-\(call.id.uuidString)")
+            }
             if let closeoutAttention = closeoutAttentionText(for: call) {
                 Label(closeoutAttention, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption2.weight(.semibold))
@@ -1776,6 +2099,25 @@ struct ScheduleView: View {
             .first { !$0.isEmpty && !$0.localizedCaseInsensitiveContains("Calendar event:") }
     }
 
+    private func wakePendingCalendarIfReady() {
+        let currentWorkspace = CompanyWorkspaceAccessController.shared.operationStamp
+        verifiedGoogleEventLinks = verifiedGoogleEventLinks.filter { callID, link in
+            guard let call = serviceCalls.first(where: { $0.id == callID }) else { return false }
+            return link.matches(call: call, connectedEmail: googleAuth.signedInEmail,
+                workspaceStamp: currentWorkspace)
+        }
+        guard ScheduleGoogleLinkStatus.shouldWakePendingCalendar(
+            canManageDispatch: canManageDispatch,
+            sceneIsActive: scenePhase == .active,
+            authorization: googleAuth.googleCalendarAuthorizationState
+        ) else { return }
+        GoogleCalendarScheduleSync.retryPendingIfNeeded(
+            auth: googleAuth,
+            modelContext: modelContext,
+            signedInEmail: AppIdentity.currentEmail
+        )
+    }
+
     private func deleteCall(_ call: ServiceCall) {
         do {
             try GoogleCalendarWorkflow.requireDispatchAccess(context: modelContext, email: AppIdentity.currentEmail)
@@ -1839,6 +2181,262 @@ struct ScheduleView: View {
         }
     }
 
+    private func checkGoogleLink(for call: ServiceCall) {
+        guard canManageDispatch, checkingGoogleLinkID == nil, repairingGoogleLinkID == nil else { return }
+        googleLinkCheckMessages.removeValue(forKey: call.id)
+        verifiedGoogleEventLinks.removeValue(forKey: call.id)
+        guard googleAuth.googleCalendarAuthorizationState == .ready else {
+            reportGoogleLinkCheck(googleAuth.googleCalendarAuthorizationState.detail, for: call.id)
+            return
+        }
+        let workflow: GoogleCalendarWorkflow
+        do {
+            workflow = try GoogleCalendarWorkflow(auth: googleAuth, context: modelContext,
+                                                  signedInEmail: AppIdentity.currentEmail)
+        } catch {
+            reportGoogleLinkCheck("Google link check could not start: \(error.localizedDescription)", for: call.id)
+            return
+        }
+        checkingGoogleLinkID = call.id
+        missingGoogleEventReview = nil
+        unlinkedGoogleEventReview = nil
+        googleLinkCheckAlertMessage = nil
+        Task { @MainActor in
+            let result = await GoogleCalendarScheduleSync.checkGoogleLink(call: call, workflow: workflow)
+            guard checkingGoogleLinkID == call.id else { return }
+            checkingGoogleLinkID = nil
+            switch result {
+            case .success(let check):
+                if let review = check.missingEventReview {
+                    missingGoogleEventIDs[call.id] = review.eventID
+                    missingGoogleEventReview = review
+                    reportGoogleLinkCheck("The saved Google event ID was not found for \(review.accountEmail). Review that account's original calendar before choosing Recreate Missing Event.", for: call.id)
+                } else {
+                    missingGoogleEventIDs.removeValue(forKey: call.id)
+                    if let link = check.verifiedLink,
+                       link.matches(call: call, connectedEmail: googleAuth.signedInEmail,
+                           workspaceStamp: CompanyWorkspaceAccessController.shared.operationStamp) {
+                        verifiedGoogleEventLinks[call.id] = link
+                    }
+                    let account = googleAuth.signedInEmail ?? "the connected Google account"
+                    let route = GoogleCalendarScheduleSync.calendarRouteLabel(
+                        for: call, connectedEmail: googleAuth.signedInEmail)
+                    let linkDetail = verifiedGoogleEventLinks[call.id] == nil
+                        ? " Google did not provide a direct web link for this event."
+                        : " Use Open in Google Calendar to view it outside the app."
+                    let alertDetail = check.alertGuidance.map { " Alert check: \($0)" } ??
+                        " Google reminder settings may still need review; a linked event does not guarantee a device notification."
+                    reportGoogleLinkCheck("The original event is present for \(account). \(route).\(linkDetail) No new event was created.\(alertDetail)", for: call.id)
+                }
+            case .failure(let error):
+                reportGoogleLinkCheck("Google link check needs review: \(error.localizedDescription) No event was created.", for: call.id)
+            }
+        }
+    }
+
+    private func inspectUnlinkedGoogleJob(_ call: ServiceCall, guidance: String) {
+        guard canManageDispatch, checkingGoogleLinkID == nil, repairingGoogleLinkID == nil,
+              publishingUnlinkedGoogleID == nil,
+              ScheduleGoogleLinkStatus.unlinkedReviewGuidance(
+                call, connectedGoogleEmail: googleAuth.signedInEmail) != nil else { return }
+        missingGoogleEventReview = nil
+        unlinkedGoogleEventReview = nil
+        unlinkedPublishReview = nil
+        googleLinkCheckAlertMessage = nil
+        guard googleAuth.googleCalendarAuthorizationState == .ready else {
+            reportGoogleLinkCheck("\(guidance) \(googleAuth.googleCalendarAuthorizationState.detail)", for: call.id)
+            return
+        }
+        let workflow: GoogleCalendarWorkflow
+        do {
+            workflow = try GoogleCalendarWorkflow(auth: googleAuth, context: modelContext,
+                signedInEmail: AppIdentity.currentEmail, scope: [call])
+        } catch {
+            reportGoogleLinkCheck("Google inspection could not start: \(error.localizedDescription) No event was created or linked.", for: call.id)
+            return
+        }
+        checkingGoogleLinkID = call.id
+        Task { @MainActor in
+            let result = await GoogleCalendarScheduleSync.inspectUnlinkedCalendarJob(call: call, workflow: workflow)
+            guard checkingGoogleLinkID == call.id else { return }
+            checkingGoogleLinkID = nil
+            switch result {
+            case .success(let inspection):
+                let scope = "\(inspection.searchedCalendarIDs.count) accessible Google calendar(s) for \(inspection.accountEmail)"
+                if inspection.noMatchWithinScope {
+                    do {
+                        let review = try GoogleCalendarScheduleSync.prepareUnlinkedPublishReview(
+                            call: call, inspection: inspection, workflow: workflow)
+                        let message = "Read-only search of \(scope), including the saved calendar \(inspection.originalCalendarID), found no matching GunnAire ID, job marker, or same-time event near this appointment. An event could still exist in another account or time slot. Confirm only after checking Google Calendar."
+                        syncMessage = message
+                        googleLinkCheckMessages[call.id] = message
+                        unlinkedPublishReview = review
+                    } catch {
+                        reportGoogleLinkCheck("Google publication review expired: \(error.localizedDescription) No event was created or linked.", for: call.id)
+                    }
+                } else {
+                    unlinkedGoogleEventReview = GoogleCalendarScheduleSync.linkReview(
+                        call: call, workflow: workflow, inspection: inspection)
+                    let examples = inspection.candidates.prefix(3).map {
+                        let title = $0.summary?.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let displayTitle = title?.isEmpty == false ? (title ?? "Untitled event") : "Untitled event"
+                        return "\(displayTitle) — \($0.calendarID) [\($0.reason.displayName)]"
+                    }.joined(separator: "; ")
+                    let action = unlinkedGoogleEventReview == nil
+                        ? "Only a uniquely identified, writable GunnAire event can be linked. Same-time matches require manual review."
+                        : "Link Existing Event will save only this event's route and ID after another full check. It will not create an event or send an invitation."
+                    reportGoogleLinkCheck("Read-only search of \(scope) found \(inspection.candidates.count) possible event(s): \(examples). \(action) No event was created or linked.", for: call.id)
+                }
+            case .failure(let error):
+                reportGoogleLinkCheck("Google inspection is incomplete: \(error.localizedDescription) No absence was confirmed, and no event was created or linked.", for: call.id)
+            }
+        }
+    }
+
+    private func linkExistingGoogleEvent(_ review: GoogleCalendarScheduleSync.UnlinkedEventLinkReview) {
+        let call = review.call
+        guard canManageDispatch, checkingGoogleLinkID == nil, repairingGoogleLinkID == nil,
+              googleAuth.googleCalendarAuthorizationState == .ready else { return }
+        checkingGoogleLinkID = call.id
+        verifiedGoogleEventLinks.removeValue(forKey: call.id)
+        Task { @MainActor in
+            let result = await GoogleCalendarScheduleSync.linkExistingEvent(review)
+            guard checkingGoogleLinkID == call.id else { return }
+            checkingGoogleLinkID = nil
+            switch result {
+            case .success(let outcome):
+                if let remote = outcome.verifiedEvent,
+                   let link = GoogleCalendarScheduleSync.VerifiedGoogleEventLink(
+                    remote: remote, call: call, connectedEmail: googleAuth.signedInEmail,
+                    workspaceStamp: CompanyWorkspaceAccessController.shared.operationStamp),
+                   link.matches(call: call, connectedEmail: googleAuth.signedInEmail,
+                       workspaceStamp: CompanyWorkspaceAccessController.shared.operationStamp) {
+                    verifiedGoogleEventLinks[call.id] = link
+                }
+                reportGoogleLinkCheck(outcome.message, for: call.id)
+            case .failure(let error):
+                reportGoogleLinkCheck("Google event linking needs review: \(error.localizedDescription) No event or invitation was sent.", for: call.id)
+            }
+        }
+    }
+
+    private func checkReservedGooglePublication(for call: ServiceCall) {
+        guard canManageDispatch, checkingGoogleLinkID == nil,
+              repairingGoogleLinkID == nil, publishingUnlinkedGoogleID == nil,
+              GoogleCalendarScheduleSync.hasUnconfirmedLegacyCreateReservation(call) else { return }
+        guard googleAuth.googleCalendarAuthorizationState == .ready else {
+            reportGoogleLinkCheck(googleAuth.googleCalendarAuthorizationState.detail, for: call.id)
+            return
+        }
+        let workflow: GoogleCalendarWorkflow
+        do {
+            workflow = try GoogleCalendarWorkflow(auth: googleAuth, context: modelContext,
+                signedInEmail: AppIdentity.currentEmail, scope: [call])
+        } catch {
+            reportGoogleLinkCheck("Reserved Google event check could not start: \(error.localizedDescription)",
+                for: call.id)
+            return
+        }
+        checkingGoogleLinkID = call.id
+        googleLinkCheckAlertMessage = nil
+        Task { @MainActor in
+            let result = await GoogleCalendarScheduleSync.checkReservedLegacyPublication(
+                call: call, workflow: workflow)
+            guard checkingGoogleLinkID == call.id else { return }
+            checkingGoogleLinkID = nil
+            switch result {
+            case .success(let message):
+                reportGoogleLinkCheck(message, for: call.id)
+            case .failure(let error):
+                reportGoogleLinkCheck("Reserved Google event remains unconfirmed: \(error.localizedDescription) No new event was created; the reserved ID was retained for review.",
+                    for: call.id)
+            }
+        }
+    }
+
+    private func publishUnlinkedGoogleJob(_ review: GoogleCalendarScheduleSync.UnlinkedPublishReview) {
+        guard canManageDispatch, publishingUnlinkedGoogleID == nil,
+              checkingGoogleLinkID == nil, repairingGoogleLinkID == nil,
+              googleAuth.googleCalendarAuthorizationState == .ready else {
+            reportGoogleLinkCheck("Reconnect Google and review this appointment again before publishing.",
+                for: review.call.id)
+            return
+        }
+        publishingUnlinkedGoogleID = review.call.id
+        syncMessage = "Rechecking Google calendars before publishing…"
+        Task { @MainActor in
+            let result = await GoogleCalendarScheduleSync.publishUnlinkedCalendarJob(review)
+            guard publishingUnlinkedGoogleID == review.call.id else { return }
+            publishingUnlinkedGoogleID = nil
+            switch result {
+            case .success(let message):
+                reportGoogleLinkCheck(message, for: review.call.id)
+            case .failure(let error):
+                reportGoogleLinkCheck("Google publication was not confirmed: \(error.localizedDescription) Review the connected Google Calendar before trying again; an uncertain request will retain its reserved event ID.",
+                    for: review.call.id)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func verifiedGoogleEventButton(for call: ServiceCall) -> some View {
+        if let link = verifiedGoogleEventLinks[call.id],
+           link.matches(call: call, connectedEmail: googleAuth.signedInEmail,
+               workspaceStamp: CompanyWorkspaceAccessController.shared.operationStamp) {
+            Button("Open in Google Calendar") { openVerifiedGoogleEvent(for: call, displayedLink: link) }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("OpenVerifiedGoogleEvent-\(call.id.uuidString)")
+        }
+    }
+
+    private func openVerifiedGoogleEvent(for call: ServiceCall,
+                                         displayedLink: GoogleCalendarScheduleSync.VerifiedGoogleEventLink) {
+        guard canManageDispatch,
+              googleAuth.googleCalendarAuthorizationState == .ready,
+              let current = verifiedGoogleEventLinks[call.id],
+              current.url == displayedLink.url,
+              current.matches(call: call, connectedEmail: googleAuth.signedInEmail,
+                  workspaceStamp: CompanyWorkspaceAccessController.shared.operationStamp) else {
+            verifiedGoogleEventLinks.removeValue(forKey: call.id)
+            syncMessage = "The Google account, workspace or appointment changed. Check Google Link again before opening it."
+            return
+        }
+        openURL(current.url)
+    }
+
+    private func reportGoogleLinkCheck(_ message: String, for callID: UUID) {
+        syncMessage = message
+        googleLinkCheckMessages[callID] = message
+        if missingGoogleEventReview == nil {
+            googleLinkCheckAlertMessage = message
+        }
+    }
+
+    private func repairMissingGoogleEvent(_ review: GoogleCalendarScheduleSync.MissingEventReview) {
+        guard canManageDispatch, repairingGoogleLinkID == nil,
+              missingGoogleEventIDs[review.callID] == review.eventID else {
+            syncMessage = "The saved appointment changed. Check its Google link again before repair."
+            return
+        }
+        repairingGoogleLinkID = review.callID
+        syncMessage = "Rechecking the original Google event before repair…"
+        Task { @MainActor in
+            let result = await GoogleCalendarScheduleSync.repairMissingEvent(review)
+            guard repairingGoogleLinkID == review.callID else { return }
+            repairingGoogleLinkID = nil
+            switch result {
+            case .success(let message):
+                missingGoogleEventIDs.removeValue(forKey: review.callID)
+                syncMessage = message
+            case .failure(let error):
+                // A failed reply may follow an accepted POST. The earlier 404
+                // no longer proves the event is missing; require a new check.
+                missingGoogleEventIDs.removeValue(forKey: review.callID)
+                syncMessage = "Google event repair was not confirmed: \(error.localizedDescription) The saved event ID was retained. Check the original calendar before trying again."
+            }
+        }
+    }
+
     private func syncGoogleCalendar() {
         guard AppAccess.canPerformScheduleMutation(
             .syncGoogleCalendar,
@@ -1848,25 +2446,30 @@ struct ScheduleView: View {
             syncMessage = "Dispatcher or administrator access is required to sync Google Calendar appointments."
             return
         }
-        guard googleAuth.isAuthenticated else {
-            syncMessage = "Google Calendar requires a Google sign-in. Your Apple sign-in still protects the rest of GunnAire Ops."
+        guard googleAuth.googleCalendarAuthorizationState == .ready else {
+            syncMessage = googleAuth.googleCalendarAuthorizationState.detail
             return
         }
         isSyncingGoogleCalendar = true
         syncMessage = "Syncing Google Calendar..."
         let signedInEmail = AppIdentity.currentEmail
+        let visibleCalls = ScheduleGoogleLinkStatus.verificationCalls(
+            selectedDay: selectedDayCalls, upcoming: upcomingJobs)
         GoogleCalendarScheduleSync.sync(
             auth: googleAuth,
             modelContext: modelContext,
-            signedInEmail: signedInEmail
-            ,
-            isAdminUser: isAdminUser
+            signedInEmail: signedInEmail,
+            isAdminUser: isAdminUser,
+            verifyConfirmedCalls: visibleCalls
         ) { result in
             DispatchQueue.main.async {
                 isSyncingGoogleCalendar = false
                 switch result {
-                case .success(let message):
-                    syncMessage = message
+                case .success(let outcome):
+                    missingGoogleEventIDs = ScheduleGoogleLinkStatus.reconciledMissingIDs(
+                        existing: missingGoogleEventIDs, verifiedNotFoundIDs: outcome.verifiedNotFoundIDs,
+                        visibleCalls: visibleCalls)
+                    syncMessage = outcome.message
                 case .failure(let error):
                     let detail = error.localizedDescription
                     if detail.localizedCaseInsensitiveContains("insufficient") ||
@@ -2214,7 +2817,7 @@ GunnAire
         }
         modelContext.insert(call)
         do {
-            try modelContext.save()
+            try ServiceCallCalendarOutbox.save(call) { try modelContext.save() }
         } catch {
             modelContext.delete(call)
             maintenanceMessage = "Could not save the maintenance visit. The agreement due date was not advanced."
@@ -2247,23 +2850,40 @@ GunnAire
             syncMessage = CustomerOperationalAlertPolicy.bookingRestrictionMessage(for: blocker)
             return
         }
+        let previousFollowUpID = sourceCall.scheduledFollowUpServiceCallID
+        let previousFollowUpRequired = sourceCall.followUpRequired
+        let previousFollowUpAction = sourceCall.followUpAction
+        let previousFollowUpDueDate = sourceCall.followUpDueDate
         let followUpCall = sourceCall.makeFollowUpVisit()
         modelContext.insert(followUpCall)
         let actorEmail = AppIdentity.currentEmail
-        ServiceCallActivity.record(
+        let sourceActivity = ServiceCallActivity.record(
             for: sourceCall,
             action: sourceCall.isCorrectiveWorkClassification ? "Corrective visit scheduled" : "Follow-up visit scheduled",
             detail: "Linked follow-up for \(followUpCall.scheduledDate.formatted(date: .abbreviated, time: .shortened)).",
             actorEmail: actorEmail,
             in: modelContext
         )
-        ServiceCallActivity.record(
+        let followUpActivity = ServiceCallActivity.record(
             for: followUpCall,
             action: "Created from prior job",
             detail: "Linked to source job \(String(sourceCall.id.uuidString.prefix(8)).uppercased()).",
             actorEmail: actorEmail,
             in: modelContext
         )
+        do {
+            try ServiceCallCalendarOutbox.save(followUpCall) { try modelContext.save() }
+        } catch {
+            modelContext.delete(sourceActivity)
+            modelContext.delete(followUpActivity)
+            modelContext.delete(followUpCall)
+            sourceCall.scheduledFollowUpServiceCallID = previousFollowUpID
+            sourceCall.followUpRequired = previousFollowUpRequired
+            sourceCall.followUpAction = previousFollowUpAction
+            sourceCall.followUpDueDate = previousFollowUpDueDate
+            syncMessage = "Could not save the follow-up visit: \(error.localizedDescription)"
+            return
+        }
         publishToGoogleCalendar(followUpCall)
         selectedDate = Calendar.current.startOfDay(for: followUpCall.scheduledDate)
         navigationPath.append(followUpCall)
@@ -2352,7 +2972,7 @@ GunnAire
                     in: modelContext
                 )
             }
-            try modelContext.save()
+            try ServiceCallCalendarOutbox.save(approvedWorkCall) { try modelContext.save() }
             selectedEstimateForScheduling = nil
             approvedWorkMessage = nil
             publishToGoogleCalendar(approvedWorkCall)
@@ -2465,7 +3085,7 @@ GunnAire
         modelContext.insert(activity)
 
         do {
-            try modelContext.save()
+            try ServiceCallCalendarOutbox.save(call) { try modelContext.save() }
         } catch {
             call.scheduledDate = originalStart
             modelContext.delete(activity)
@@ -2521,7 +3141,9 @@ GunnAire
         // than guessing write access to the newly assigned person's calendar.
         if let newStart { call.scheduledDate = newStart }
         do {
-            try JobBillingDispatch.shared.save(call, original: originalBilling, context: modelContext)
+            try ServiceCallCalendarOutbox.save(call) {
+                try JobBillingDispatch.shared.save(call, original: originalBilling, context: modelContext)
+            }
         } catch {
             call.assignedTechnician = originalTechnician
             call.additionalTechnicianIDs = originalCrew
@@ -3183,7 +3805,8 @@ private struct DispatchWeekBoardView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(call.eventTitle?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? call.eventTitle! : call.customerDisplayName)
+                    let eventTitle = call.eventTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    Text(eventTitle.isEmpty ? call.customerDisplayName : eventTitle)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(2)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import closing
 import base64
 import json
 import sqlite3
@@ -51,7 +52,7 @@ class DocumentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             database = root / "gunnaire_backend.sqlite3"
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection, connection:
                 connection.execute(
                     """
                     CREATE TABLE documents (
@@ -152,6 +153,7 @@ class DocumentTests(unittest.TestCase):
                 try:
                     with self.assertRaises(urllib.error.HTTPError) as rejected:
                         urllib.request.urlopen(request, timeout=5)
+                    self.addCleanup(rejected.exception.close)
                     self.assertEqual(rejected.exception.code, 400)
                     self.assertFalse(any((root / "storage").rglob("*")))
                 finally:
@@ -188,6 +190,7 @@ class DocumentTests(unittest.TestCase):
                 try:
                     with self.assertRaises(urllib.error.HTTPError) as rejected:
                         urllib.request.urlopen(request, timeout=5)
+                    self.addCleanup(rejected.exception.close)
                     self.assertEqual(rejected.exception.code, 403)
                 finally:
                     server.shutdown()
@@ -238,6 +241,7 @@ class DocumentTests(unittest.TestCase):
                             request("invoice", invoiceID=str(uuid.uuid4())),
                             timeout=5,
                         )
+                    self.addCleanup(rejected.exception.close)
                     self.assertEqual(rejected.exception.code, 403)
 
                     with urllib.request.urlopen(url, timeout=5) as response:

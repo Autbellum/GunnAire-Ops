@@ -120,6 +120,23 @@ struct CatalogServerPublicationTests {
         #expect(item.unitPrice == 210)
     }
 
+    @Test func duplicateLocalCatalogIdentityStopsBeforeProviderPublication() throws {
+        let item = Item(name: "Diagnostic", unitPrice: 190)
+        let context = try context(item)
+        context.insert(Item(id: item.id, name: "Conflicting diagnostic", unitPrice: 200))
+        try context.save()
+        let api = api { _ in
+            Issue.record("Duplicate local identity reached the provider")
+            throw CatalogPublicationError.unavailable
+        }
+        do {
+            _ = try flow(item, context: context, api: api)
+            Issue.record("Duplicate local identity passed validation")
+        } catch {
+            #expect(error as? QuickBooksCatalogWorkflowError == .itemChanged)
+        }
+    }
+
     @Test func cancelledWorkflowRejectsLateServerConfirmation() async throws {
         let item = Item(name: "Diagnostic", unitPrice: 190)
         let context = try context(item)

@@ -3,6 +3,107 @@ import SwiftData
 
 @MainActor
 enum QuickBooksInvoiceAttachmentSync {
+    struct PendingLinkedUpload {
+        let attachment: ServiceDocumentAttachment
+        let references: [QuickBooksAttachableReference]
+        let documents: [QuickBooksBillingDocument]
+    }
+
+    static func pendingLinkedUploadPage(context: ModelContext, offset: inout Int) throws -> [PendingLinkedUpload] {
+        let descriptor = FetchDescriptor<ServiceDocumentAttachment>(predicate: #Predicate {
+            $0.invoiceID != nil || $0.estimateID != nil || $0.serviceCallID != nil
+        }, sortBy: [SortDescriptor(\.createdAt, order: .reverse), SortDescriptor(\.id)])
+        let page = try AutomaticOutboundSync.nextPage(descriptor, context: context, offset: &offset, pageSize: 25)
+        let attachments = page.filter {
+            $0.quickBooksAttachableID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
+                FileManager.default.fileExists(atPath: $0.localFilePath)
+        }
+        try linkExplicitJobDocuments(attachments, context: context)
+        var invoices: [Invoice] = []
+        var estimates: [Estimate] = []
+        var seenInvoices = Set<UUID>()
+        var seenEstimates = Set<UUID>()
+        for attachment in attachments {
+            if let id = attachment.invoiceID, seenInvoices.insert(id).inserted {
+                invoices += try context.fetch(FetchDescriptor<Invoice>(predicate: #Predicate { $0.id == id }))
+            }
+            if let id = attachment.estimateID, seenEstimates.insert(id).inserted {
+                estimates += try context.fetch(FetchDescriptor<Estimate>(predicate: #Predicate { $0.id == id }))
+            }
+        }
+        return pendingQuickBooksAttachmentUploads(estimates: estimates, invoices: invoices, attachments: attachments)
+            .compactMap { attachment in
+                let references = missingQuickBooksAttachableReferences(for: attachment, estimates: estimates, invoices: invoices)
+                guard !references.isEmpty else { return nil }
+                var documents: [QuickBooksBillingDocument] = []
+                if references.contains(where: { $0.EntityRef.type == QuickBooksAttachableEntityType.invoice.rawValue }),
+                   let id = attachment.invoiceID, let invoice = JobBillingDocumentLinks.invoice(id: id, in: invoices) {
+                    documents.append(.invoice(invoice))
+                }
+                if references.contains(where: { $0.EntityRef.type == QuickBooksAttachableEntityType.estimate.rawValue }),
+                   let id = attachment.estimateID, let estimate = JobBillingDocumentLinks.estimate(id: id, in: estimates) {
+                    documents.append(.estimate(estimate))
+                }
+                guard documents.count == references.count else { return nil }
+                return PendingLinkedUpload(attachment: attachment, references: references, documents: documents)
+            }
+    }
+
+    private static func linkExplicitJobDocuments(_ attachments: [ServiceDocumentAttachment],
+                                                 context: ModelContext) throws {
+        var changed: [(ServiceDocumentAttachment, UUID?, UUID?, String?, String?, String?)] = []
+        for attachment in attachments where attachment.canLinkToQuickBooksInvoiceAttachment &&
+            (attachment.invoiceID == nil || attachment.estimateID == nil) {
+            guard let jobID = attachment.serviceCallID,
+                  let customer = attachment.customer else { continue }
+            let calls = try context.fetch(FetchDescriptor<ServiceCall>(predicate: #Predicate { $0.id == jobID }))
+            guard let call = JobBillingDocumentLinks.unique(calls), call.customer === customer else { continue }
+            let oldInvoice = attachment.invoiceID, oldEstimate = attachment.estimateID
+            let oldProvider = attachment.quickBooksAttachableID
+            let oldKeys = attachment.quickBooksAttachedEntityKeysRaw
+            let oldError = attachment.quickBooksSyncError
+            if attachment.invoiceID == nil, attachment.canLinkToQuickBooksInvoiceDocument,
+               let id = call.linkedInvoiceID {
+                let matches = try context.fetch(FetchDescriptor<Invoice>(predicate: #Predicate { $0.id == id }))
+                if let invoice = JobBillingDocumentLinks.unique(matches),
+                   invoice.customer === customer,
+                   invoice.quickBooksIdentityReviewMessage == nil,
+                   invoice.serviceCallID == nil || invoice.serviceCallID == jobID,
+                   attachment.canBePendingQuickBooksInvoiceAttachment(for: invoice),
+                   attachment.quickBooksAttachableID == nil {
+                    attachment.linkToInvoiceIfNeeded(invoice)
+                }
+            }
+            if attachment.estimateID == nil, attachment.canLinkToQuickBooksEstimateDocument,
+               let id = call.linkedEstimateID {
+                let matches = try context.fetch(FetchDescriptor<Estimate>(predicate: #Predicate { $0.id == id }))
+                if let estimate = JobBillingDocumentLinks.unique(matches),
+                   estimate.customer === customer,
+                   EstimateJobLineage.matches(jobID: jobID, diagnosticJobID: estimate.serviceCallID,
+                                              scheduledJobID: estimate.scheduledServiceCallID),
+                   QuickBooksBillingIdentity.identifier(estimate.quickBooksID) != nil,
+                   attachment.quickBooksAttachableID == nil {
+                    attachment.linkToEstimateIfNeeded(estimate)
+                }
+            }
+            if oldInvoice != attachment.invoiceID || oldEstimate != attachment.estimateID {
+                changed.append((attachment, oldInvoice, oldEstimate, oldProvider, oldKeys, oldError))
+            }
+        }
+        guard !changed.isEmpty else { return }
+        do { try context.save() }
+        catch {
+            for (attachment, invoiceID, estimateID, provider, keys, syncError) in changed {
+                attachment.invoiceID = invoiceID
+                attachment.estimateID = estimateID
+                attachment.quickBooksAttachableID = provider
+                attachment.quickBooksAttachedEntityKeysRaw = keys
+                attachment.quickBooksSyncError = syncError
+            }
+            throw QBODocumentError.storage
+        }
+    }
+
     static func pendingInvoiceAttachments(
         invoices: [Invoice],
         attachments: [ServiceDocumentAttachment]

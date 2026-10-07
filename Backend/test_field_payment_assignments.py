@@ -96,6 +96,7 @@ class FieldPaymentAssignmentTests(unittest.TestCase):
                             self.request(f"{base_url}/api/field-payment-assignments", method="POST", payload=conflicting),
                             timeout=5,
                         )
+                    self.addCleanup(duplicate.exception.close)
                     self.assertEqual(duplicate.exception.code, 409)
 
                     first_payment_id = str(uuid.uuid4())
@@ -167,6 +168,7 @@ class FieldPaymentAssignmentTests(unittest.TestCase):
                             ),
                             timeout=5,
                         )
+                    self.addCleanup(immutable.exception.close)
                     self.assertEqual(immutable.exception.code, 409)
                 finally:
                     server.shutdown()

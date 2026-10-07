@@ -269,7 +269,8 @@ struct FieldCollectionNavigationTests {
             serviceCallID: serviceCallID,
             invoiceID: invoiceID,
             maintenanceContractID: maintenanceContractID,
-            workflow: .maintenanceRenewal
+            workflow: .maintenanceRenewal,
+            sourceSnapshot: ["fixture-origin", "original-source-digest"]
         )
         // Consume navigation as the real handoff does, not just its draft.
         // Leaving Mail pending causes the next Accounting launch to correctly
@@ -281,11 +282,38 @@ struct FieldCollectionNavigationTests {
         #expect(draft?.subject == "Service Report")
         #expect(draft?.body == "Attached.")
         #expect(draft?.attachmentPaths == ["/tmp/report.pdf"])
+        #expect(draft?.sourceSnapshot == ["fixture-origin", "original-source-digest"])
         #expect(draft?.customerID == customerID)
         #expect(draft?.serviceCallID == serviceCallID)
         #expect(draft?.invoiceID == invoiceID)
         #expect(draft?.maintenanceContractID == maintenanceContractID)
         #expect(draft?.workflow == .maintenanceRenewal)
         #expect(GunnAireAppIntentRouter.consumePendingRoute() == nil)
+    }
+
+    @Test func estimateMailRouteRejectsChangedOrMalformedOriginBeforeConsumption() throws {
+        GunnAireAppIntentRouter.discardAllPendingPayloads()
+        defer { GunnAireAppIntentRouter.discardAllPendingPayloads() }
+        let original = GunnAireMailDraftRouteOrigin(companyID: UUID(), backendOrigin: "https://fixture.example.invalid",
+            actorEmail: "office@gunnaire.com", workspaceGeneration: UUID(),
+            sessionDigest: "original-session", connectedGoogleEmail: "office@gunnaire.com")
+        GunnAireAppIntentRouter.storeMailDraftRoute(to: "customer@example.invalid", subject: "Estimate",
+            body: "Attached.", attachmentPaths: ["/private/fixture-estimate.pdf"],
+            customerID: UUID(), estimateID: UUID(), workflow: .customerDocument,
+            sourceSnapshot: ["original-estimate"], origin: original)
+        #expect(GunnAireAppIntentRouter.pendingMailDraftRequiresOrigin())
+        #expect(GunnAireAppIntentRouter.pendingMailDraftOriginMatches(original))
+        let switched = GunnAireMailDraftRouteOrigin(companyID: original.companyID,
+            backendOrigin: original.backendOrigin, actorEmail: original.actorEmail,
+            workspaceGeneration: UUID(), sessionDigest: "replacement-session",
+            connectedGoogleEmail: "other@gunnaire.com")
+        #expect(!GunnAireAppIntentRouter.pendingMailDraftOriginMatches(switched))
+        #expect(GunnAireAppIntentRouter.hasPendingMailDraft(), "The route must still be unconsumed at the identity check.")
+        UserDefaults.standard.set(Data("malformed-origin".utf8), forKey: "GunnAirePendingMailOrigin")
+        #expect(!GunnAireAppIntentRouter.pendingMailDraftOriginMatches(original))
+        GunnAireAppIntentRouter.discardPendingPayload(for: .mail)
+        #expect(!GunnAireAppIntentRouter.hasPendingMailDraft())
+        #expect(UserDefaults.standard.string(forKey: "GunnAirePendingMailTo") == nil)
+        #expect(UserDefaults.standard.stringArray(forKey: "GunnAirePendingMailAttachmentPaths") == nil)
     }
 }

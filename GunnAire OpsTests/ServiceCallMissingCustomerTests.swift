@@ -23,26 +23,95 @@ struct ServiceCallMissingCustomerTests {
     }
 
     @Test func displayNameReportsSyncingInsteadOfTrapping() throws {
-        let (call, _) = try job(customerSynced: false)
+        let (call, context) = try job(customerSynced: false)
+        defer { withExtendedLifetime(context) {} }
         #expect(call.customer == nil)
         #expect(call.customerDisplayName == "Customer syncing")
     }
 
     @Test func displayNameIsTheCustomerNameOnceSynced() throws {
-        let (call, _) = try job(customerSynced: true)
+        let (call, context) = try job(customerSynced: true)
+        defer { withExtendedLifetime(context) {} }
         #expect(call.customerDisplayName == "Taylor Customer")
     }
 
     @Test func missingCustomerIsNotTheSystemCalendarPlaceholder() throws {
-        let (call, _) = try job(customerSynced: false)
+        let (call, context) = try job(customerSynced: false)
+        defer { withExtendedLifetime(context) {} }
         #expect(CustomerDataMaintenance.isSystemCalendarCustomer(call.customer) == false)
     }
 
     @Test func placeholderCustomerIsStillRecognizedThroughTheOptionalOverload() throws {
-        let (call, _) = try job(customerSynced: true)
-        call.customer.name = CustomerDataMaintenance.unassignedCalendarCustomerName
+        let (call, context) = try job(customerSynced: true)
+        defer { withExtendedLifetime(context) {} }
+        call.customer?.name = CustomerDataMaintenance.unassignedCalendarCustomerName
         let optional: Customer? = call.customer
         #expect(CustomerDataMaintenance.isSystemCalendarCustomer(optional))
         #expect(CustomerDataMaintenance.isSystemCalendarCustomer(call.customer))
+    }
+
+    @Test func displayNameRecoversWhenTheCustomerArrives() throws {
+        let (call, context) = try job(customerSynced: false)
+        defer { withExtendedLifetime(context) {} }
+        let customer = Customer(name: "Arrived customer")
+        context.insert(customer)
+        call.customer = customer
+        try context.save()
+        #expect(call.customerDisplayName == "Arrived customer")
+    }
+
+    @Test func calendarPayloadUsesTheJobTypeWhileCustomerIsMissing() throws {
+        let (call, context) = try job(customerSynced: false)
+        defer { withExtendedLifetime(context) {} }
+        call.eventTitle = nil
+        call.notes = nil
+        call.siteAddress = nil
+        let event = GoogleCalendarScheduleSync.makeCalendarCreateEvent(for: call)
+        #expect(event.summary == call.type.displayName)
+        #expect(event.location == nil)
+
+        call.siteAddress = "42 Fixture Street"
+        let addressedEvent = GoogleCalendarScheduleSync.makeCalendarCreateEvent(for: call)
+        #expect(addressedEvent.location == "42 Fixture Street")
+    }
+
+    @Test func warrantyMatchingNeverJoinsUnresolvedCustomers() throws {
+        let (call, context) = try job(customerSynced: false)
+        defer { withExtendedLifetime(context) {} }
+        #expect(EquipmentWarrantyClaimPolicy.relatedServiceCallIDs(customerID: nil, serviceCalls: [call]).isEmpty)
+        #expect(EquipmentWarrantyClaimPolicy.relatedServiceCallIDs(customerID: UUID(), serviceCalls: [call]).isEmpty)
+        let customer = Customer(name: "Warranty customer")
+        context.insert(customer)
+        call.customer = customer
+        #expect(EquipmentWarrantyClaimPolicy.relatedServiceCallIDs(customerID: customer.id, serviceCalls: [call]) == [call.id])
+        #expect(EquipmentWarrantyClaimPolicy.relatedServiceCallIDs(customerID: UUID(), serviceCalls: [call]).isEmpty)
+    }
+
+    private func expense(for call: ServiceCall?) throws -> FieldExpenseClaim {
+        try FieldExpenseClaimPolicy.makeClaim(serviceCall: call, claimantEmail: "worker@example.com",
+            claimantName: "Fixture worker", claimType: .expense, category: .other,
+            expenseDate: Date(), merchant: "Fixture supplier", businessPurpose: "Job supplies",
+            amount: 12, mileageMiles: nil, mileageRatePerMile: nil,
+            mileageOrigin: nil, mileageDestination: nil, reimbursable: true)
+    }
+
+    @Test func expenseWaitsForCustomerAndThenKeepsTheOriginalJob() throws {
+        let (call, context) = try job(customerSynced: false)
+        defer { withExtendedLifetime(context) {} }
+        #expect(throws: FieldExpenseClaimError.jobCustomerSyncing) { try expense(for: call) }
+        let customer = Customer(name: "Expense customer")
+        context.insert(customer)
+        call.customer = customer
+        let claim = try expense(for: call)
+        #expect(claim.serviceCallID == call.id)
+        #expect(claim.customerID == customer.id)
+        #expect(claim.customerName == customer.name)
+    }
+
+    @Test func generalBusinessExpenseDoesNotRequireAJobCustomer() throws {
+        let claim = try expense(for: nil)
+        #expect(claim.serviceCallID == nil)
+        #expect(claim.customerID == nil)
+        #expect(claim.customerName == nil)
     }
 }

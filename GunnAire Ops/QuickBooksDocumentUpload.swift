@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-enum QBODocumentError: LocalizedError, Equatable {
+nonisolated enum QBODocumentError: LocalizedError, Equatable {
     case access, invalid, unavailable, review, storage, changed, file, limit, jobDestination, photoRequired, syncPending
     var errorDescription: String? {
         switch self {
@@ -20,7 +20,7 @@ enum QBODocumentError: LocalizedError, Equatable {
     }
 }
 
-struct QBODocumentScope: Codable, Equatable {
+nonisolated struct QBODocumentScope: Codable, Equatable, Sendable {
     let companyID: UUID
     let realmID: String
     let environment: String
@@ -36,7 +36,7 @@ struct QBODocumentScope: Codable, Equatable {
     }
 }
 
-struct QBODocumentTarget: Codable, Equatable, Hashable {
+nonisolated struct QBODocumentTarget: Codable, Equatable, Hashable, Sendable {
     let type: String
     let id: String
     static let types = ["Invoice", "Estimate", "Bill", "Payment", "SalesReceipt", "Purchase"]
@@ -47,8 +47,8 @@ struct QBODocumentTarget: Codable, Equatable, Hashable {
     }
 }
 
-struct QBODocumentJob: Codable, Equatable {
-    struct Document: Codable, Equatable {
+nonisolated struct QBODocumentJob: Codable, Equatable, Sendable {
+    struct Document: Codable, Equatable, Sendable {
         let type: String
         let localID: UUID
         let id: String
@@ -74,12 +74,12 @@ struct QBODocumentJob: Codable, Equatable {
     }
 }
 
-struct QBODocumentFileInfo: Codable, Equatable {
+nonisolated struct QBODocumentFileInfo: Codable, Equatable, Sendable {
     let filename: String
     let contentType: String
     let size: Int
     let sha256: String
-    static let maximum = 25 * 1024 * 1024
+    nonisolated static let maximum = 25 * 1024 * 1024
     static let mime: [String: Set<String>] = [
         "pdf": ["application/pdf"], "txt": ["text/plain"], "rtf": ["text/rtf", "application/rtf"],
         "jpg": ["image/jpeg", "image/jpg"], "jpeg": ["image/jpeg", "image/jpg"], "png": ["image/png"],
@@ -106,9 +106,9 @@ struct QBODocumentFileInfo: Codable, Equatable {
     }
 }
 
-enum QBODocumentState: String, Codable { case reserved, sending, uncertain, confirmed, cancelled }
+nonisolated enum QBODocumentState: String, Codable, Sendable { case reserved, sending, uncertain, confirmed, cancelled }
 
-struct QBODocumentUploadRecord: Codable, Equatable, Identifiable {
+nonisolated struct QBODocumentUploadRecord: Codable, Equatable, Identifiable, Sendable {
     let protocolVersion: Int
     let id: UUID
     let companyID: UUID
@@ -158,7 +158,7 @@ struct QBODocumentUploadRecord: Codable, Equatable, Identifiable {
     }
 }
 
-struct QBODocumentUploadPage: Decodable {
+nonisolated struct QBODocumentUploadPage: Decodable, Sendable {
     let protocolVersion: Int
     let maxFileBytes: Int
     let companyID: UUID
@@ -169,8 +169,8 @@ struct QBODocumentUploadPage: Decodable {
     let nextCursor: UUID?
 }
 
-struct QBODocumentUploadRequest: Encodable {
-    struct File: Encodable { let filename: String; let contentType: String; let data: Data }
+nonisolated struct QBODocumentUploadRequest: Encodable, Sendable {
+    struct File: Encodable, Sendable { let filename: String; let contentType: String; let data: Data }
     let companyID: UUID
     let realmID: String
     let environment: String
@@ -190,22 +190,39 @@ struct QBODocumentUploadRequest: Encodable {
     }
 }
 
+/// A downloaded original plus its server record, decoded off the main actor.
+nonisolated struct QBODocumentFileResponse: Decodable, Sendable {
+    let record: QBODocumentUploadRecord
+    let data: Data
+    init(from decoder: Decoder) throws {
+        record = try QBODocumentUploadRecord(from: decoder)
+        data = try decoder.container(keyedBy: CodingKeys.self).decode(Data.self, forKey: .data)
+    }
+    enum CodingKeys: String, CodingKey { case data }
+}
+
 @MainActor struct QBODocumentUploadClient {
     typealias Transport = (String, String, Data?) async throws -> Data
     let transport: Transport
-    let check: () throws -> Void
+    /// The caller's workspace + exact local identity fence, re-run before and
+    /// after every request (and after decoding) so nothing proceeds past a
+    /// suspension under changed authority or a changed original.
+    let check: () async throws -> Void
     static let maximumResponseBytes = ((QBODocumentFileInfo.maximum + 2) / 3) * 4 + 65_536
     private let base = "/api/qbo-document-uploads"
 
-    private func perform<T: Decodable>(_ type: T.Type, path: String, body: Data? = nil) async throws -> T {
-        try check(); try Task.checkCancellation()
+    private func perform<T: Decodable & Sendable>(_ type: T.Type, path: String, body: Data? = nil) async throws -> T {
+        try await check(); try Task.checkCancellation()
         do {
             let data = try await transport(path, body == nil ? "GET" : "POST", body)
-            try check(); try Task.checkCancellation()
+            try await check(); try Task.checkCancellation()
             guard data.count <= Self.maximumResponseBytes else { throw QBODocumentError.invalid }
-            return try JSONDecoder().decode(type, from: data)
+            // A file response can carry a 25 MB base64 body: decode off the main actor.
+            let value = try await Task.detached(priority: .userInitiated) { try JSONDecoder().decode(T.self, from: data) }.value
+            try await check(); try Task.checkCancellation()
+            return value
         } catch {
-            try check()
+            try await check()
             if let error = error as? QBODocumentError { throw error }
             if error is DecodingError { throw QBODocumentError.invalid }
             if case GunnAireBackendError.server(let status, _) = error {
@@ -237,8 +254,11 @@ struct QBODocumentUploadRequest: Encodable {
     }
 
     func reserve(_ request: QBODocumentUploadRequest) async throws -> QBODocumentUploadRecord {
-        let file = try request.validate()
-        let result = try await perform(QBODocumentUploadRecord.self, path: base, body: JSONEncoder().encode(request))
+        // Hashing and base64-encoding the original happen off the main actor.
+        let (file, body) = try await Task.detached(priority: .userInitiated) {
+            (try request.validate(), try JSONEncoder().encode(request))
+        }.value
+        let result = try await perform(QBODocumentUploadRecord.self, path: base, body: body)
         try result.validate(request.scope)
         // Deduplication may return an earlier original operation. Its original
         // file/destination/job must still match; never invent a new operation.
@@ -270,20 +290,13 @@ struct QBODocumentUploadRequest: Encodable {
     }
 
     func file(_ original: QBODocumentUploadRecord) async throws -> Data {
-        struct Response: Decodable {
-            let record: QBODocumentUploadRecord
-            let data: Data
-            init(from decoder: Decoder) throws {
-                record = try QBODocumentUploadRecord(from: decoder)
-                data = try decoder.container(keyedBy: CodingKeys.self).decode(Data.self, forKey: .data)
-            }
-            enum CodingKeys: String, CodingKey { case data }
-        }
         try original.validate(original.scope)
-        let value = try await perform(Response.self, path: base + "/" + original.id.uuidString.lowercased() + "/file")
+        let value = try await perform(QBODocumentFileResponse.self, path: base + "/" + original.id.uuidString.lowercased() + "/file")
         try value.record.validate(original.scope)
         guard value.record.matchesOriginal(original) else { throw QBODocumentError.invalid }
-        try original.file.verify(value.data)
-        return value.data
+        let data = value.data
+        try await Task.detached(priority: .userInitiated) { try original.file.verify(data) }.value
+        try await check()
+        return data
     }
 }

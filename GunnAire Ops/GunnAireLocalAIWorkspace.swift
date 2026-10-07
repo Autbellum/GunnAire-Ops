@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 nonisolated enum GunnAireLocalAITask: String, CaseIterable, Identifiable, Sendable {
     case operationsNarrative = "operations_narrative"
@@ -89,41 +90,139 @@ nonisolated enum GunnAireLocalAITask: String, CaseIterable, Identifiable, Sendab
     }
 }
 
+@MainActor
+final class GunnAireLocalAIGenerationController: ObservableObject {
+    @Published var selectedTask: GunnAireLocalAITask {
+        didSet {
+            guard selectedTask != oldValue else { return }
+            verifiedInput = ""
+            invalidate()
+        }
+    }
+    @Published var verifiedInput = "" {
+        didSet { if verifiedInput != oldValue { invalidate() } }
+    }
+    @Published private(set) var response: GunnAireLocalAIAssistResponse?
+    @Published private(set) var message: String?
+    @Published private(set) var isGenerating = false
+
+    private let role: AppUserRole?
+    private let openingSession: CompanyWorkspaceOperationStamp?
+    private let currentSession: @MainActor () -> CompanyWorkspaceOperationStamp?
+    private let assist: @MainActor (GunnAireLocalAIAssistRequest) async throws -> GunnAireLocalAIAssistResponse
+    private var requestGeneration = UUID()
+    private var requestTask: Task<Void, Never>?
+    private var accessInvalidated = false
+
+    init(role: AppUserRole?,
+         currentSession: @escaping @MainActor () -> CompanyWorkspaceOperationStamp? = { CompanyWorkspaceAccessController.shared.operationStamp },
+         assist: @escaping @MainActor (GunnAireLocalAIAssistRequest) async throws -> GunnAireLocalAIAssistResponse = { try await GunnAireLocalAIService.assist($0) }) {
+        self.role = role
+        self.currentSession = currentSession
+        self.assist = assist
+        openingSession = currentSession()
+        selectedTask = GunnAireLocalAITask.available(for: role).first ?? .customerTextDraft
+    }
+
+    var requestInput: String {
+        let input = verifiedInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        return input.isEmpty && selectedTask == .operationsNarrative ? selectedTask.inputPrompt : input
+    }
+
+    private var sessionIsCurrent: Bool {
+        guard !accessInvalidated, let openingSession else { return false }
+        return currentSession() == openingSession
+    }
+
+    var canGenerate: Bool {
+        !isGenerating && sessionIsCurrent && selectedTask.isAllowed(for: role) && !requestInput.isEmpty
+    }
+
+    func invalidate() {
+        requestGeneration = UUID()
+        requestTask?.cancel()
+        requestTask = nil
+        isGenerating = false
+        response = nil
+        message = nil
+    }
+
+    func checkSession() {
+        guard !sessionIsCurrent else { return }
+        invalidateAccess()
+    }
+
+    func invalidateAccess() {
+        invalidate()
+        accessInvalidated = true
+        message = "Business access changed. Reopen the Local AI Assistant before generating another draft."
+    }
+
+    @discardableResult
+    func generate(_ request: GunnAireLocalAIAssistRequest) -> Task<Void, Never>? {
+        checkSession()
+        guard canGenerate, request.task == selectedTask.rawValue, request.input == requestInput else { return nil }
+        let generation = UUID()
+        requestGeneration = generation
+        isGenerating = true
+        response = nil
+        message = nil
+        let task = Task { @MainActor [self] in
+            defer {
+                if requestGeneration == generation {
+                    isGenerating = false
+                    requestTask = nil
+                }
+            }
+            do {
+                checkSession()
+                guard requestGeneration == generation, sessionIsCurrent, !Task.isCancelled else { return }
+                let result = try await assist(request)
+                guard requestGeneration == generation, !Task.isCancelled else { return }
+                checkSession()
+                guard requestGeneration == generation else { return }
+                guard result.task == request.task else { throw GunnAireLocalAIServiceError.invalidResponse }
+                response = result
+            } catch {
+                guard requestGeneration == generation, !Task.isCancelled else { return }
+                checkSession()
+                guard requestGeneration == generation else { return }
+                message = error.localizedDescription
+            }
+        }
+        requestTask = task
+        return task
+    }
+}
+
 struct GunnAireLocalAIWorkspace: View {
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var access = CompanyWorkspaceAccessController.shared
+    @ObservedObject private var appleAuth = AppleAuthManager.shared
+    @ObservedObject private var googleAuth = GoogleAuthManager.shared
 
     let snapshot: BusinessSuiteSnapshot
     let role: AppUserRole?
     let canViewFinancials: Bool
 
-    @State private var selectedTask: GunnAireLocalAITask
-    @State private var verifiedInput = ""
+    @StateObject private var generation: GunnAireLocalAIGenerationController
     @State private var status: GunnAireLocalAIStatus?
-    @State private var response: GunnAireLocalAIAssistResponse?
     @State private var statusMessage: String?
     @State private var isRefreshingStatus = false
-    @State private var isGenerating = false
 
     init(snapshot: BusinessSuiteSnapshot, role: AppUserRole?, canViewFinancials: Bool) {
         self.snapshot = snapshot
         self.role = role
         self.canViewFinancials = canViewFinancials
-        _selectedTask = State(initialValue: GunnAireLocalAITask.available(for: role).first ?? .customerTextDraft)
+        _generation = StateObject(wrappedValue: GunnAireLocalAIGenerationController(role: role))
     }
 
     private var availableTasks: [GunnAireLocalAITask] {
         GunnAireLocalAITask.available(for: role)
     }
 
-    private var requestInput: String {
-        let input = verifiedInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        return input.isEmpty && selectedTask == .operationsNarrative
-            ? selectedTask.inputPrompt
-            : input
-    }
-
     private var canGenerate: Bool {
-        !isGenerating && status?.available == true && !requestInput.isEmpty
+        generation.canGenerate && generation.selectedTask.isAllowed(for: role) && status?.available == true
     }
 
     var body: some View {
@@ -143,9 +242,9 @@ struct GunnAireLocalAIWorkspace: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button {
-                        Task { await generate() }
+                        generate()
                     } label: {
-                        if isGenerating {
+                        if generation.isGenerating {
                             ProgressView()
                         } else {
                             Label("Generate", systemImage: "sparkles")
@@ -158,11 +257,14 @@ struct GunnAireLocalAIWorkspace: View {
             .task {
                 await refreshStatus()
             }
-            .onChange(of: selectedTask) { _, _ in
-                response = nil
+            .onChange(of: generation.selectedTask) { _, _ in
                 statusMessage = nil
-                verifiedInput = ""
             }
+            .onChange(of: access.operationStamp) { _, _ in generation.checkSession() }
+            .onChange(of: CompanyWorkspaceSession.current) { _, _ in generation.checkSession() }
+            .onChange(of: role) { _, _ in generation.invalidateAccess() }
+            .onChange(of: canViewFinancials) { _, _ in generation.invalidateAccess() }
+            .onDisappear { generation.invalidate() }
         }
         .tint(Color.brandGold)
     }
@@ -195,7 +297,7 @@ struct GunnAireLocalAIWorkspace: View {
             }
             .disabled(isRefreshingStatus)
 
-            if let statusMessage {
+            if let statusMessage = generation.message ?? statusMessage {
                 Text(statusMessage)
                     .font(.caption)
                     .foregroundStyle(.orange)
@@ -209,12 +311,12 @@ struct GunnAireLocalAIWorkspace: View {
                 Label("No local-AI task is available for the current unresolved role.", systemImage: "person.crop.circle.badge.questionmark")
                     .foregroundStyle(.secondary)
             } else {
-                Picker("Local AI task", selection: $selectedTask) {
+                Picker("Local AI task", selection: $generation.selectedTask) {
                     ForEach(availableTasks) { task in
                         Label(task.title, systemImage: task.systemImage).tag(task)
                     }
                 }
-                Text(selectedTask.inputPrompt)
+                Text(generation.selectedTask.inputPrompt)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -222,14 +324,14 @@ struct GunnAireLocalAIWorkspace: View {
     }
 
     private var inputSection: some View {
-        Section(selectedTask.inputTitle) {
-            if selectedTask == .operationsNarrative {
+        Section(generation.selectedTask.inputTitle) {
+            if generation.selectedTask == .operationsNarrative {
                 Text("The model receives a role-filtered copy of the deterministic Command Center snapshot. The app's calculations remain authoritative.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            TextEditor(text: $verifiedInput)
-                .frame(minHeight: selectedTask == .operationsNarrative ? 90 : 180)
+            TextEditor(text: $generation.verifiedInput)
+                .frame(minHeight: generation.selectedTask == .operationsNarrative ? 90 : 180)
                 .accessibilityIdentifier("LocalAIVerifiedInput")
         }
     }
@@ -237,8 +339,8 @@ struct GunnAireLocalAIWorkspace: View {
     @ViewBuilder
     private var resultSection: some View {
         Section("Staff-Reviewed Result") {
-            if let response {
-                let output = response.result.displayText(for: selectedTask)
+            if let response = generation.response {
+                let output = response.result.displayText(for: generation.selectedTask)
                 Text(output.isEmpty ? "The local model returned no usable draft text." : output)
                     .textSelection(.enabled)
                 Divider()
@@ -286,27 +388,20 @@ struct GunnAireLocalAIWorkspace: View {
     }
 
     @MainActor
-    private func generate() async {
+    private func generate() {
         guard canGenerate else { return }
-        isGenerating = true
-        response = nil
         statusMessage = nil
-        defer { isGenerating = false }
-        do {
-            let request = GunnAireLocalAIAssistRequest(
-                task: selectedTask.rawValue,
-                input: requestInput,
-                context: selectedTask == .operationsNarrative
-                    ? snapshot.localAIContext(includeFinancials: canViewFinancials)
-                    : [:],
-                baseline: selectedTask == .operationsNarrative
-                    ? snapshot.localAIBaseline(includeFinancials: canViewFinancials)
-                    : [:]
-            )
-            response = try await GunnAireLocalAIService.assist(request)
-        } catch {
-            statusMessage = error.localizedDescription
-        }
+        let request = GunnAireLocalAIAssistRequest(
+            task: generation.selectedTask.rawValue,
+            input: generation.requestInput,
+            context: generation.selectedTask == .operationsNarrative
+                ? snapshot.localAIContext(includeFinancials: canViewFinancials)
+                : [:],
+            baseline: generation.selectedTask == .operationsNarrative
+                ? snapshot.localAIBaseline(includeFinancials: canViewFinancials)
+                : [:]
+        )
+        generation.generate(request)
     }
 }
 

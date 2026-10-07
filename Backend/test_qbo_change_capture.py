@@ -684,6 +684,7 @@ class ChangeCaptureServiceTests(unittest.TestCase):
             try:
                 with self.assertRaises(urllib.error.HTTPError) as caught:
                     urllib.request.urlopen(url, timeout=5)
+                self.addCleanup(caught.exception.close)
                 self.assertEqual(caught.exception.code, 401)
                 headers = {"Authorization": "Bearer " + self.tokens["Admin"], "Content-Type": "application/json"}
                 request = urllib.request.Request(url, data=json.dumps(self.payload()).encode(), headers=headers)
@@ -701,10 +702,12 @@ class ChangeCaptureServiceTests(unittest.TestCase):
                 for key, value in (("captureRevision", -1), ("captureRevision", "01"), ("connectionRevision", "private")):
                     with self.assertRaises(urllib.error.HTTPError) as caught:
                         urllib.request.urlopen(urllib.request.Request(url + "?" + urllib.parse.urlencode({**query, key: value}), headers=headers), timeout=5)
+                    self.addCleanup(caught.exception.close)
                     self.assertEqual(caught.exception.code, 400)
                 for body in (b'{"companyID":"one","companyID":"two"}', b'{}', json.dumps({**self.payload(), "url": "https://example.invalid"}).encode()):
                     with self.assertRaises(urllib.error.HTTPError) as caught:
                         urllib.request.urlopen(urllib.request.Request(url, data=body, headers=headers), timeout=5)
+                    self.addCleanup(caught.exception.close)
                     self.assertEqual(caught.exception.code, 400)
             finally:
                 server.shutdown()

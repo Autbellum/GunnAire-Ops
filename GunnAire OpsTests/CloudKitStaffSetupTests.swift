@@ -4,6 +4,24 @@ import Testing
 @testable import GunnAire_Ops
 
 @MainActor struct CloudKitStaffSetupTests {
+    @Test func accountChangeNotificationLatchesRelaunchAndWorkspaceGateCannotBeBypassed() async {
+        let notifications = NotificationCenter()
+        let fence = CloudKitStaffAccountFence(center: notifications)
+        let originalGeneration = fence.generation
+        #expect(!fence.mustRestart)
+
+        notifications.post(name: .CKAccountChanged, object: nil)
+        await Task.yield()
+
+        #expect(fence.mustRestart)
+        #expect(fence.generation != originalGeneration)
+        #expect(CloudKitStaffRelaunchPolicy.requiresRestart(staffAccountChanged: fence.mustRestart, workspacePhase: .ready))
+        #expect(CloudKitStaffRelaunchPolicy.requiresRestart(staffAccountChanged: false, workspacePhase: .blocked(.restartRequired)))
+        #expect(!CloudKitStaffRelaunchPolicy.requiresRestart(staffAccountChanged: false, workspacePhase: .blocked(.configuration)))
+        #expect(CloudKitStaffRelaunchPolicy.message.contains("Close and reopen"))
+        #expect(CloudKitStaffRelaunchPolicy.message.contains("saved work is retained"))
+    }
+
     @MainActor final class Fixture {
         let base = CloudKitStaffSharingTests()
         var stamp: CloudKitStaffSetupStamp?
@@ -207,6 +225,68 @@ import Testing
         next.beforeApple = { next.accountSuffix = "-changed" }
         await nextModel.invite(next.base.shareID, confirmed: true)
         #expect(next.appleInvitations.isEmpty); #expect(next.mutations.isEmpty); #expect(nextModel.needsRecovery)
+    }
+
+    @Test func supersededAccountReadRetriesOnceOnlyForTheOriginalSession() async throws {
+        let fixture = try Fixture()
+        let original = fixture.dependencies
+        var reads = 0
+        let dependencies = CloudKitStaffSetupDependencies(
+            stamp: original.stamp,
+            account: {
+                reads += 1
+                if reads == 1 { throw CompanyCloudKitAccountVerificationSuperseded() }
+                return fixture.account
+            },
+            request: original.request, store: original.store, remote: original.remote, now: original.now)
+        let model = CloudKitStaffSetupController(dependencies: dependencies)
+
+        await model.refresh()
+
+        #expect(reads == 2)
+        #expect(model.error == nil)
+        #expect(model.context != nil)
+        #expect(model.canEnroll)
+        #expect(fixture.mutations.isEmpty)
+    }
+
+    @Test func supersededAccountReadCannotRetryAfterSessionChangeOrRepeatedFailure() async throws {
+        let changed = try Fixture()
+        let changedOriginal = changed.dependencies
+        var changedReads = 0
+        let changedDependencies = CloudKitStaffSetupDependencies(
+            stamp: changedOriginal.stamp,
+            account: {
+                changedReads += 1
+                changed.stamp = nil
+                throw CompanyCloudKitAccountVerificationSuperseded()
+            },
+            request: changedOriginal.request, store: changedOriginal.store,
+            remote: changedOriginal.remote, now: changedOriginal.now)
+        let changedModel = CloudKitStaffSetupController(dependencies: changedDependencies)
+        await changedModel.refresh()
+        #expect(changedReads == 1)
+        #expect(changedModel.error == .changed)
+        #expect(changedModel.context == nil)
+        #expect(changed.mutations.isEmpty)
+
+        let repeated = try Fixture()
+        let repeatedOriginal = repeated.dependencies
+        var repeatedReads = 0
+        let repeatedDependencies = CloudKitStaffSetupDependencies(
+            stamp: repeatedOriginal.stamp,
+            account: {
+                repeatedReads += 1
+                throw CompanyCloudKitAccountVerificationSuperseded()
+            },
+            request: repeatedOriginal.request, store: repeatedOriginal.store,
+            remote: repeatedOriginal.remote, now: repeatedOriginal.now)
+        let repeatedModel = CloudKitStaffSetupController(dependencies: repeatedDependencies)
+        await repeatedModel.refresh()
+        #expect(repeatedReads == 2)
+        #expect(repeatedModel.error == .unavailable)
+        #expect(repeatedModel.context == nil)
+        #expect(repeated.mutations.isEmpty)
     }
 
     @Test func privateInvitationRecordsOriginalURLAndRecoversLostAppleReply() async throws {

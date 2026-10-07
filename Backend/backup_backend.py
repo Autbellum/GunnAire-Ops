@@ -7,9 +7,11 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import sqlite3
 import uuid
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -76,7 +78,9 @@ def is_transient_storage_entry(path: Path) -> bool:
     They are not documents and can vanish between listing and copy, so backups
     neither copy nor count them.
     """
-    return path.name.startswith(".gunnaire-readiness-")
+    return (path.name.startswith(".gunnaire-readiness-") or
+            ("billing-pdf-artifacts" in path.parts and
+             re.fullmatch(r"\.[0-9a-f-]{36}-[0-9a-f]{32}\.part", path.name) is not None))
 
 
 def create_backup(
@@ -106,22 +110,18 @@ def create_backup(
         # Read-only source; the copy proceeds in bounded steps so the live
         # service's writers wait at most one step instead of the whole copy.
         # SQLite restarts the copy if a writer lands between steps.
-        source_connection = sqlite3.connect(f"{source_database.as_uri()}?mode=ro", uri=True)
-        destination_connection = sqlite3.connect(database_copy)
-        try:
-            source_connection.backup(destination_connection, pages=256, sleep=0.05)
-        finally:
-            destination_connection.close()
-            source_connection.close()
+        with closing(sqlite3.connect(f"{source_database.as_uri()}?mode=ro", uri=True)) as source_connection:
+            with closing(sqlite3.connect(database_copy)) as destination_connection:
+                source_connection.backup(destination_connection, pages=256, sleep=0.05)
         sqlite_integrity(database_copy)
 
         storage_copy = artifact / "storage"
         storage_copy.mkdir()
         for source in sorted(source_storage.rglob("*")):
-            if is_transient_storage_entry(source):
-                continue
             if source.is_symlink():
                 raise BackupVerificationError("Shared document storage contains a symbolic link; backup stopped.")
+            if is_transient_storage_entry(source):
+                continue
             relative = source.relative_to(source_storage)
             target = storage_copy / relative
             if source.is_dir():
@@ -202,10 +202,12 @@ def verify_backup(destination: Path) -> dict[str, object]:
             raise BackupVerificationError("Backup document manifest contains an invalid or duplicate path.")
         expected_document_paths.add(relative)
         document_bytes += size
+    if any(path.is_symlink() for path in (artifact / "storage").rglob("*")):
+        raise BackupVerificationError("Backup document storage contains a symbolic link.")
     actual_document_paths = {
         path.relative_to(artifact).as_posix()
         for path in (artifact / "storage").rglob("*")
-        if path.is_file()
+        if path.is_file() and not is_transient_storage_entry(path)
     }
     if actual_document_paths != expected_document_paths:
         raise BackupVerificationError("Backup document set differs from the manifest.")

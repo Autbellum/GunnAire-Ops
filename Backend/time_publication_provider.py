@@ -84,7 +84,9 @@ def transport(request):
             if not isinstance(result, dict) or "Fault" in result:
                 raise ValueError()
             return result
-    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError):
+    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError) as error:
+        if isinstance(error, urllib.error.HTTPError):
+            error.close()
         raise failure("time_provider_unavailable", "QuickBooks could not confirm this request. Keep the original time proposal for recovery.", 502) from None
 
 

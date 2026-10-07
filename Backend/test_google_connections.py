@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import closing, contextmanager
 import base64
 import copy
 import hashlib
@@ -342,12 +343,13 @@ class GoogleConnectionTests(unittest.TestCase):
     def test_backup_restore_preserves_bindings_and_encrypted_credentials(self):
         grant_id = self.connect()
         backup_path = Path(self.directory.name) / "restored.sqlite3"
-        with backend.db() as source, sqlite3.connect(backup_path) as destination:
+        with backend.db() as source, closing(sqlite3.connect(backup_path)) as destination, destination:
             source.backup(destination)
+        @contextmanager
         def database():
-            connection = sqlite3.connect(backup_path)
-            connection.row_factory = sqlite3.Row
-            return connection
+            with closing(sqlite3.connect(backup_path)) as connection, connection:
+                connection.row_factory = sqlite3.Row
+                yield connection
         restored = self.make_service(database)
         self.assertEqual(restored.status(self.admin, self.company)["id"], grant_id)
         self.assertEqual(restored.access(self.admin, self.company, grant_id, google.FEATURE_SCOPES["mail"]), "fixture-access")

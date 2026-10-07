@@ -27,7 +27,8 @@ struct QuickBooksBillingWorkflowTests {
         lazy var api = QuickBooksDataAPI(testTokens: .init(accessToken: "billing-fixture", expiration: .distantFuture),
             realmID: "billing-realm", environment: Config.QuickBooks.environment,
             catalogCompanyID: UUID(uuidString: "10000000-0000-4000-8000-000000000001"),
-            customerPublisher: customerPublisher, billingPublisher: billingPublisher) { [unowned self] request in
+            customerPublisher: customerPublisher, billingPublisher: billingPublisher,
+            estimateQueueVersion: 1) { [unowned self] request in
                 self.requests.append(request)
                 try self.beforeResponse?(request)
                 return try self.reply(request)
@@ -201,6 +202,17 @@ struct QuickBooksBillingWorkflowTests {
         #expect(throws: (any Error).self) { _ = try f.flow() }
         #expect(f.requests.isEmpty)
         #expect(f.customer.quickBooksID == nil)
+    }
+
+    @Test func backgroundDraftRevisionMatchesSavedDraftAndRejectsUnsavedEdit() async throws {
+        let f = try Fixture()
+        let flow = try f.flow()
+        #expect(try await flow.billingDraftRevisionAsync() == flow.billingDraftRevision())
+        f.invoice.notes = "Changed while the billing draft remains open"
+        await #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try await flow.billingDraftRevisionAsync()
+        }
+        f.owner.finish(flow.run)
     }
 
     @Test func invoiceUsesServerConfirmedCustomerAndRetainsSoldLines() async throws {
@@ -637,6 +649,190 @@ struct QuickBooksBillingWorkflowTests {
             isInvoice: true, assignedToJob: true))
         #expect(!QuickBooksBillingAccessPolicy.allows(email: AppAccess.primaryAdminEmail, users: [], verifiedRole: .admin,
             isInvoice: true, assignedToJob: true))
+        let canonical = AppUser(email: "admin@example.invalid", role: .admin)
+        let legacy = AppUser(email: "admin@example.invalid", role: .standard, isActive: false)
+        legacy.email = " Admin@Example.Invalid "
+        #expect(!QuickBooksBillingAccessPolicy.allows(email: canonical.email, users: [canonical, legacy],
+            verifiedRole: .admin, isInvoice: false, assignedToJob: false))
+    }
+
+    @Test func officeDocumentRolesDoNotUseCrewAssignmentButFieldRoleStillDoes() {
+        let email = "office@fixture.invalid"
+        for (role, invoice, estimate) in [
+            (AppUserRole.admin, true, true),
+            (.accounting, true, false),
+            (.dispatcher, false, true),
+            (.fieldTechnician, false, false)
+        ] {
+            let user = AppUser(email: email, role: role)
+            #expect(QuickBooksBillingAccessPolicy.allows(email: email, users: [user],
+                verifiedRole: role, isInvoice: true, assignedToJob: false) == invoice)
+            #expect(QuickBooksBillingAccessPolicy.allows(email: email, users: [user],
+                verifiedRole: role, isInvoice: false, assignedToJob: false) == estimate)
+        }
+        let field = AppUser(email: email, role: .fieldTechnician)
+        #expect(QuickBooksBillingAccessPolicy.allows(email: email, users: [field],
+            verifiedRole: .fieldTechnician, isInvoice: true, assignedToJob: true))
+        let conflicting = AppUser(email: " OTHER@fixture.invalid ", role: .standard, isActive: false)
+        conflicting.email = " Office@Fixture.Invalid "
+        #expect(!QuickBooksBillingAccessPolicy.allows(email: email, users: [field, conflicting],
+            verifiedRole: .fieldTechnician, isInvoice: true, assignedToJob: true))
+    }
+
+    @Test func reusedUserCensusRejectsAnotherModelContext() throws {
+        let first = try Fixture()
+        let second = try Fixture()
+        first.context.insert(AppUser(email: "admin@fixture.invalid", role: .admin))
+        try first.context.save()
+        let census = try QuickBooksBillingAccessPolicy.userCensus(context: first.context)
+        #expect(census.users.count == 1)
+        #expect(throws: QuickBooksBillingWorkflowError.accessDenied) {
+            try QuickBooksBillingAccessPolicy.validate(context: second.context,
+                document: .invoice(second.invoice), census: census)
+        }
+    }
+
+    @Test func detachedMirrorPreservesInvoiceAndEstimateRoleBoundaries() {
+        let accounting = QuickBooksBillingAccessPolicy.Mirror(roles: [.accounting], allActive: true, assigned: false)
+        #expect(QuickBooksBillingAccessPolicy.allows(mirror: accounting, verifiedRole: .accounting, isInvoice: true))
+        #expect(!QuickBooksBillingAccessPolicy.allows(mirror: accounting, verifiedRole: .accounting, isInvoice: false))
+        #expect(!QuickBooksBillingAccessPolicy.allows(mirror: accounting, verifiedRole: .admin, isInvoice: true))
+        let administrator = QuickBooksBillingAccessPolicy.Mirror(roles: [.admin], allActive: true, assigned: false)
+        #expect(QuickBooksBillingAccessPolicy.allows(mirror: administrator, verifiedRole: .admin, isInvoice: true))
+        #expect(QuickBooksBillingAccessPolicy.allows(mirror: administrator, verifiedRole: .admin, isInvoice: false))
+        let dispatcher = QuickBooksBillingAccessPolicy.Mirror(roles: [.dispatcher], allActive: true, assigned: false)
+        #expect(!QuickBooksBillingAccessPolicy.allows(mirror: dispatcher, verifiedRole: .dispatcher, isInvoice: true))
+        #expect(QuickBooksBillingAccessPolicy.allows(mirror: dispatcher, verifiedRole: .dispatcher, isInvoice: false))
+        #expect(QuickBooksBillingAccessPolicy.allows(mirror: dispatcher, verifiedRole: .dispatcher,
+            isInvoice: false, requiresMailAccess: true))
+        #expect(QuickBooksBillingAccessPolicy.allows(mirror: administrator, verifiedRole: .admin,
+            isInvoice: true, requiresMailAccess: true))
+        #expect(!QuickBooksBillingAccessPolicy.allows(mirror: accounting, verifiedRole: .accounting,
+            isInvoice: true, requiresMailAccess: true))
+        let crew = QuickBooksBillingAccessPolicy.Mirror(roles: [.fieldTechnician], allActive: true, assigned: true)
+        #expect(QuickBooksBillingAccessPolicy.allows(mirror: crew, verifiedRole: .fieldTechnician, isInvoice: true))
+        #expect(!QuickBooksBillingAccessPolicy.allows(mirror: .init(roles: crew.roles, allActive: true, assigned: false),
+            verifiedRole: .fieldTechnician, isInvoice: true))
+        let conflicting = QuickBooksBillingAccessPolicy.Mirror(roles: [.admin, .standard], allActive: true, assigned: false)
+        #expect(!QuickBooksBillingAccessPolicy.allows(mirror: conflicting, verifiedRole: .admin, isInvoice: true))
+        #expect(!QuickBooksBillingAccessPolicy.allows(mirror: .init(roles: [.admin, .admin], allActive: false, assigned: false),
+            verifiedRole: .admin, isInvoice: true))
+        #expect(!QuickBooksBillingAccessPolicy.allows(mirror: .init(roles: [], allActive: true, assigned: false),
+            verifiedRole: .admin, isInvoice: true))
+    }
+
+    @Test func detachedBillingMirrorIncludesNoncanonicalConflictsAndCrewAssignment() async throws {
+        let f = try Fixture()
+        let canonical = AppUser(email: "tech@fixture.invalid", role: .fieldTechnician)
+        let conflicting = AppUser(email: "other@fixture.invalid", role: .standard, isActive: false)
+        conflicting.email = " Tech@Fixture.Invalid "
+        let technician = Technician(name: "Assigned crew", contactInfo: " TECH@fixture.invalid ")
+        let call = ServiceCall(type: .service, scheduledDate: .now,
+            additionalTechnicianIDs: [technician.id], customer: f.customer)
+        f.context.insert(canonical); f.context.insert(conflicting)
+        f.context.insert(technician); f.context.insert(call)
+        try f.context.save()
+        let container = f.context.container
+        let customerID = f.customer.persistentModelID
+        let callID = call.id
+        let denied = try await Task.detached {
+            try QuickBooksBillingAccessPolicy.readMirror(container: container, email: "tech@fixture.invalid",
+                jobID: callID, customerID: customerID)
+        }.value
+        #expect(denied.roles.count == 2)
+        #expect(!denied.allActive)
+        #expect(denied.assigned)
+        conflicting.isActive = true
+        conflicting.role = .fieldTechnician
+        try f.context.save()
+        let allowed = try await Task.detached {
+            try QuickBooksBillingAccessPolicy.readMirror(container: container, email: "tech@fixture.invalid",
+                jobID: callID, customerID: customerID)
+        }.value
+        #expect(allowed.roles == [AppUserRole.fieldTechnician, .fieldTechnician])
+        #expect(allowed.allActive && allowed.assigned)
+    }
+
+    @Test func selectedEstimateItemChangeStopsBeforeAnyProviderCall() async throws {
+        let f = try Fixture()
+        let flow = try f.flow(estimate: true)
+        f.item.unitPrice = 205
+        try f.context.save()
+        await fails { _ = try await flow.execute() }
+        #expect(f.requests.isEmpty)
+        #expect(f.estimate.quickBooksID == nil)
+    }
+
+    @Test func detachedSelectedItemRevisionRejectsChangeAndDuplicateIdentity() async throws {
+        let f = try Fixture()
+        let container = f.context.container
+        let ids: Set<UUID> = [f.item.id]
+        let original = try await Task.detached {
+            try QuickBooksBillingReads.selectedRevisions(container: container, ids: ids)
+        }.value
+        f.item.unitPrice = 205
+        try f.context.save()
+        let changed = try await Task.detached {
+            try QuickBooksBillingReads.selectedRevisions(container: container, ids: ids)
+        }.value
+        #expect(changed != original)
+        f.context.insert(Item(id: f.item.id, quickBooksID: "I2", name: "Duplicate", unitPrice: 205))
+        try f.context.save()
+        await #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try await Task.detached {
+                try QuickBooksBillingReads.selectedRevisions(container: container, ids: ids)
+            }.value
+        }
+    }
+
+    @Test func selectedItemBatchKeepsExactTwentyIdentitiesAndRejectsMissingOrDuplicate() async throws {
+        let f = try Fixture()
+        var ids: Set<UUID> = [f.item.id]
+        for index in 1..<20 {
+            let item = Item(quickBooksID: "I\(index + 1)", name: "Selected \(index)", unitPrice: Double(index))
+            f.context.insert(item)
+            ids.insert(item.id)
+        }
+        let unrelated = Item(quickBooksID: "UNRELATED", name: "Unrelated", unitPrice: 1)
+        f.context.insert(unrelated)
+        try f.context.save()
+        let selected = try QuickBooksBillingReads.items(ids, context: f.context)
+        #expect(selected.count == 20)
+        #expect(Set(selected.map(\.id)) == ids)
+        #expect(!selected.contains { $0.id == unrelated.id })
+        let container = f.context.container
+        let original = try await Task.detached {
+            try QuickBooksBillingReads.selectedRevisions(container: container, ids: ids)
+        }.value
+        #expect(original.count == 20)
+        selected[0].unitPrice += 1
+        try f.context.save()
+        let changed = try await Task.detached {
+            try QuickBooksBillingReads.selectedRevisions(container: container, ids: ids)
+        }.value
+        #expect(changed != original)
+        let removedID = selected[1].id
+        f.context.delete(selected[1])
+        try f.context.save()
+        #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try QuickBooksBillingReads.items(ids, context: f.context)
+        }
+        await #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try await Task.detached {
+                try QuickBooksBillingReads.selectedRevisions(container: container, ids: ids)
+            }.value
+        }
+        f.context.insert(Item(id: removedID, quickBooksID: "DUPLICATE", name: "Replacement", unitPrice: 1))
+        f.context.insert(Item(id: removedID, quickBooksID: "DUPLICATE2", name: "Duplicate", unitPrice: 1))
+        try f.context.save()
+        #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try QuickBooksBillingReads.items(ids, context: f.context)
+        }
+        await #expect(throws: QuickBooksBillingWorkflowError.changed) {
+            try await Task.detached {
+                try QuickBooksBillingReads.selectedRevisions(container: container, ids: ids)
+            }.value
+        }
     }
 
     @Test func overlappingDocumentRunDoesNotReplaceTheOriginal() throws {
@@ -658,7 +854,7 @@ struct QuickBooksBillingWorkflowTests {
         #expect(attachment.quickBooksAttachableID == "A1")
         #expect(attachment.quickBooksAttachedEntityKeysRaw?.contains("D1") == true)
         #expect(files.requests.last?.path.hasSuffix("/send") == true)
-        #expect(try files.store.list(files.owner).first?.file.filename == "Fixture report.txt")
+        #expect(try await files.store.list(files.owner).first?.file.filename == "Fixture report.txt")
         #expect(f.requests.allSatisfy { !$0.url!.path.hasSuffix("/upload") })
         try await flow.uploadLinkedAttachments()
         #expect(files.sends == 1); #expect(files.reservations == 1)
@@ -681,6 +877,155 @@ struct QuickBooksBillingWorkflowTests {
         #expect(f.invoice.quickBooksID == "D1")
         #expect(f.invoice.quickBooksSyncStatus == "synced")
         #expect(files.sends == 1)
-        #expect(try files.store.list(files.owner).first?.dispatchStarted == true)
+        #expect(try await files.store.list(files.owner).first?.dispatchStarted == true)
+    }
+
+    // MARK: - Original company proof for saved-document files
+
+    /// The production decision function over an in-memory stand-in for the
+    /// device Keychain proof store. Bind is explicit review; require never binds.
+    @MainActor final class RealmProofMemory {
+        var stored: [String: AutomaticOutboundSync.RealmRecord] = [:]
+        func bind(_ record: AutomaticOutboundSync.RealmRecord) throws {
+            switch AutomaticOutboundSync.realmDecision(stored: stored[record.account], expected: record, explicitReview: true) {
+            case .proceed: return
+            case .bind: stored[record.account] = record
+            case .reviewRequired: throw AutomaticOutboundSync.RealmError.reviewRequired
+            case .wrongRealm: throw AutomaticOutboundSync.RealmError.wrongRealm
+            }
+        }
+        func requireProceed(_ records: [AutomaticOutboundSync.RealmRecord]) throws {
+            guard !records.isEmpty else { throw AutomaticOutboundSync.RealmError.reviewRequired }
+            for record in records {
+                switch AutomaticOutboundSync.realmDecision(stored: stored[record.account], expected: record, explicitReview: false) {
+                case .proceed: continue
+                case .wrongRealm: throw AutomaticOutboundSync.RealmError.wrongRealm
+                case .bind, .reviewRequired: throw AutomaticOutboundSync.RealmError.reviewRequired
+                }
+            }
+        }
+    }
+
+    private func proof(_ f: Fixture, _ files: QuickBooksDocumentWorkflowFixture,
+                       realmID: String = "billing-realm") -> AutomaticOutboundSync.RealmRecord {
+        .init(companyID: files.owner.companyID, documentType: "invoice", documentID: f.invoice.id,
+              customerID: f.customer.id, createdAt: f.invoice.createdAt,
+              realmID: realmID, environment: Config.QuickBooks.environment)
+    }
+
+    @Test func savedDocumentFileUploadsOnlyWithMatchingOriginalCompanyProof() async throws {
+        let f = try Fixture()
+        let files = try QuickBooksDocumentWorkflowFixture(); defer { files.cleanup() }
+        f.documentFixture = files
+        let memory = RealmProofMemory()
+        files.realmProofDecision = { try memory.requireProceed($0) }
+        let attachment = try f.addAttachment()
+        defer { try? FileManager.default.removeItem(at: attachment.localFileURL) }
+        let flow = try f.flow()
+        _ = try await flow.execute()
+        memory.stored[proof(f, files).account] = proof(f, files)
+        try await flow.uploadLinkedAttachments()
+        #expect(attachment.quickBooksAttachableID == "A1")
+        #expect(files.reservations == 1 && files.sends == 1)
+        #expect(files.realmProofRequests == [[proof(f, files)]],
+                "The gate must ask for this exact company, realm, environment and original document.")
+    }
+
+    @Test func savedDocumentFileWithoutOriginalCompanyProofSendsNothing() async throws {
+        let f = try Fixture()
+        let files = try QuickBooksDocumentWorkflowFixture(); defer { files.cleanup() }
+        f.documentFixture = files
+        let memory = RealmProofMemory()
+        files.realmProofDecision = { try memory.requireProceed($0) }
+        let attachment = try f.addAttachment()
+        defer { try? FileManager.default.removeItem(at: attachment.localFileURL) }
+        let flow = try f.flow()
+        _ = try await flow.execute()
+        // A proof saved before the company was known never authorizes a file.
+        memory.stored[proof(f, files).account] = .init(companyID: files.owner.companyID, documentType: "invoice",
+            documentID: f.invoice.id, customerID: f.customer.id, createdAt: f.invoice.createdAt,
+            realmID: nil, environment: nil)
+        await fails { try await flow.uploadLinkedAttachments() }
+        #expect(files.requests.isEmpty, "No upload service read, reservation or send without proof.")
+        #expect(try await files.store.list(files.owner).isEmpty, "No original-file journal row is created.")
+        #expect(attachment.quickBooksAttachableID == nil)
+        #expect(attachment.quickBooksSyncError == AutomaticOutboundSync.RealmError.reviewRequired.localizedDescription)
+        #expect(f.invoice.quickBooksSyncStatus == "synced")
+    }
+
+    @Test func savedDocumentFileProvenForAnotherCompanySendsNothing() async throws {
+        let f = try Fixture()
+        let files = try QuickBooksDocumentWorkflowFixture(); defer { files.cleanup() }
+        f.documentFixture = files
+        let memory = RealmProofMemory()
+        files.realmProofDecision = { try memory.requireProceed($0) }
+        let attachment = try f.addAttachment()
+        defer { try? FileManager.default.removeItem(at: attachment.localFileURL) }
+        let flow = try f.flow()
+        _ = try await flow.execute()
+        let other = proof(f, files, realmID: "other-realm")
+        memory.stored[other.account] = other
+        await fails { try await flow.uploadLinkedAttachments() }
+        #expect(files.requests.isEmpty)
+        #expect(attachment.quickBooksAttachableID == nil)
+        #expect(attachment.quickBooksSyncError == AutomaticOutboundSync.RealmError.wrongRealm.localizedDescription)
+    }
+
+    @Test func alreadyDispatchedOriginalStillRecoversWithoutAnotherProofOrSend() async throws {
+        let f = try Fixture()
+        let files = try QuickBooksDocumentWorkflowFixture(); defer { files.cleanup() }
+        f.documentFixture = files
+        let memory = RealmProofMemory()
+        files.realmProofDecision = { try memory.requireProceed($0) }
+        memory.stored[proof(f, files).account] = proof(f, files)
+        let attachment = try f.addAttachment()
+        defer { try? FileManager.default.removeItem(at: attachment.localFileURL) }
+        let flow = try f.flow()
+        _ = try await flow.execute()
+        // The provider accepted the send but its reply was lost.
+        files.beforeResponse = { path in if path.hasSuffix("/send") { throw URLError(.networkConnectionLost) } }
+        await fails { try await flow.uploadLinkedAttachments() }
+        #expect(files.sends == 1)
+        #expect(try await files.store.list(files.owner).first?.dispatchStarted == true)
+        // Proof is no longer available, yet reconciling the dispatched original
+        // is not a new write and must still apply the provider's receipt.
+        memory.stored.removeAll()
+        files.beforeResponse = nil
+        try await flow.uploadLinkedAttachments()
+        #expect(attachment.quickBooksAttachableID == "A1")
+        #expect(files.sends == 1 && files.reservations == 1)
+        #expect(files.realmProofRequests.count == 1)
+    }
+
+    @Test func manualPublishBindsOriginalCompanyBeforeWritingAndUploadsItsFile() async throws {
+        let f = try Fixture()
+        let files = try QuickBooksDocumentWorkflowFixture(); defer { files.cleanup() }
+        f.documentFixture = files
+        let memory = RealmProofMemory()
+        files.realmProofDecision = { try memory.requireProceed($0) }
+        let attachment = try f.addAttachment()
+        defer { try? FileManager.default.removeItem(at: attachment.localFileURL) }
+        let flow = try f.flow()
+        try await AutomaticOutboundSync.bindExplicitlyReviewed(flow, bind: { try memory.bind($0) })
+        #expect(f.requests.isEmpty, "Binding happens before any QuickBooks request.")
+        #expect(memory.stored[proof(f, files).account] == proof(f, files))
+        _ = try await flow.execute()
+        try await flow.uploadLinkedAttachments()
+        #expect(f.invoice.quickBooksID == "D1")
+        #expect(attachment.quickBooksAttachableID == "A1")
+        #expect(files.sends == 1)
+    }
+
+    @Test func manualPublishForDocumentProvenInAnotherCompanyStopsBeforeAnyWrite() async throws {
+        let f = try Fixture()
+        let memory = RealmProofMemory()
+        let files = try QuickBooksDocumentWorkflowFixture(); defer { files.cleanup() }
+        let other = proof(f, files, realmID: "other-realm")
+        memory.stored[other.account] = other
+        let flow = try f.flow()
+        await fails { try await AutomaticOutboundSync.bindExplicitlyReviewed(flow, bind: { try memory.bind($0) }) }
+        #expect(f.requests.isEmpty)
+        #expect(!flow.attemptedWrite)
+        #expect(memory.stored[other.account] == other, "A wrong-company proof is never overwritten.")
     }
 }

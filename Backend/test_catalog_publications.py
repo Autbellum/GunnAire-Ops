@@ -541,7 +541,8 @@ class CatalogPublicationTests(unittest.TestCase):
                 with urllib.request.urlopen(req, timeout=5) as response:
                     return response.status, json.load(response)
             except urllib.error.HTTPError as error:
-                return error.code, json.load(error)
+                with error:
+                    return error.code, json.load(error)
         try:
             route = "/api/catalog-publications"
             self.assertEqual(request(route, self.inventory_payload(), "Field Technician")[0], 403)
@@ -810,7 +811,8 @@ class CatalogPublicationTests(unittest.TestCase):
                 with urllib.request.urlopen(req, timeout=5) as response:
                     return response.status, json.load(response)
             except urllib.error.HTTPError as error:
-                return error.code, json.load(error)
+                with error:
+                    return error.code, json.load(error)
         try:
             context_path = "/api/catalog-publications/context?companyID=" + self.company + "&localItemID=" + self.local_id
             status, context = request(context_path)

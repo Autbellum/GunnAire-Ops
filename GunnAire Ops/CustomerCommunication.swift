@@ -102,6 +102,33 @@ final class CustomerCommunication {
         deliveryStatus.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
+    /// A saved QuickBooks email intent can outlive the app process without a
+    /// provider callback. An explicit unconfirmed result needs attention at once.
+    /// The durable provider journal, not this local row, decides whether another
+    /// POST is safe.
+    func needsQuickBooksEmailReview(now: Date = Date()) -> Bool {
+        let isQuickBooksDocumentEmail = subject == "QuickBooks estimate" || subject == "QuickBooks invoice"
+        guard channel == "email", direction == "outbound",
+              workflow == .customerDocument, isQuickBooksDocumentEmail else { return false }
+        return normalizedDeliveryStatus == "unconfirmed" ||
+            (normalizedDeliveryStatus == "pending" && now.timeIntervalSince(createdAt) >= 120)
+    }
+
+    /// Records a human review of an ambiguous email attempt. This changes only
+    /// the local attention marker; it never claims QuickBooks acceptance.
+    @discardableResult
+    func markQuickBooksEmailReviewed(by email: String, now: Date = Date()) -> Bool {
+        let reviewer = AppAccess.normalizedEmail(email)
+        guard !reviewer.isEmpty, needsQuickBooksEmailReview(now: now) else { return false }
+        let previousDetail = Self.safeProviderStatusDetail(providerStatusDetail)
+        let note = "Reviewed locally by \(reviewer) on \(now.formatted(date: .abbreviated, time: .shortened)). QuickBooks email acceptance remains unconfirmed."
+        providerStatusDetail = Self.safeProviderStatusDetail(
+            previousDetail.map { "\(note) Prior note: \($0)" } ?? note)
+        deliveryStatus = "reviewed_unconfirmed"
+        deliveredAt = nil
+        return true
+    }
+
     func markSharedCompanySynced(id: String) {
         backendCommunicationID = id
         backendSyncError = nil

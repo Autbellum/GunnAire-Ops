@@ -13,7 +13,10 @@ import Testing
         backendOrigin: "https://files.example.invalid", actorEmail: "office@example.invalid")
     var scope: QBODocumentScope { .init(companyID: owner.companyID, realmID: "billing-realm", environment: Config.QuickBooks.environment) }
     let secret = SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }
-    var store: QBODocumentCaptureStore { .encrypted(directory: root.appendingPathComponent("journal"), key: { _ in self.secret }) }
+    var store: QBODocumentCaptureStore {
+        let key = self.secret
+        return .encrypted(directory: root.appendingPathComponent("journal"), key: { _ in key })
+    }
     var authorized = true
     var requests: [(path: String, method: String, body: Data?)] = []
     var remote: [String: Any]?
@@ -36,7 +39,19 @@ import Testing
         .init(owner: { _ in try check(); try self.check(); return self.owner }, access: { _, _ in
             try check(); try self.check()
             return .init(owner: self.owner, scope: self.scope, check: { try check(); try self.check() })
-        }, store: store, transport: request)
+        }, store: store, transport: request, realmProof: { try self.proveRealm($0) })
+    }
+    /// Every realm-proof request the upload gate made, in order.
+    var realmProofRequests: [[AutomaticOutboundSync.RealmRecord]] = []
+    /// When set, decides proof exactly (e.g. an in-memory stored proof).
+    /// Otherwise only this fixture's own company/realm/environment proves.
+    var realmProofDecision: (([AutomaticOutboundSync.RealmRecord]) throws -> Void)?
+    func proveRealm(_ records: [AutomaticOutboundSync.RealmRecord]) throws {
+        realmProofRequests.append(records)
+        if let realmProofDecision { try realmProofDecision(records); return }
+        guard !records.isEmpty, records.allSatisfy({
+            $0.companyID == scope.companyID && $0.realmID == scope.realmID && $0.environment == scope.environment
+        }) else { throw AutomaticOutboundSync.RealmError.reviewRequired }
     }
     func file(_ name: String = "Service findings.txt", data: Data = Data("Original job findings".utf8)) throws -> URL {
         let url = root.appendingPathComponent(name)

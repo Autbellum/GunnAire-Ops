@@ -1,7 +1,7 @@
 import Foundation
 import SwiftData
 
-struct BackendAppUserRecord: Codable, Identifiable {
+nonisolated struct BackendAppUserRecord: Codable, Identifiable, Sendable {
     let email: String
     let role: String
     let isActive: Bool
@@ -23,7 +23,7 @@ struct BackendApplicationSessionResponse: Codable {
 
 typealias BackendAppleSessionResponse = BackendApplicationSessionResponse
 
-struct BackendDocumentUploadResponse: Codable {
+nonisolated struct BackendDocumentUploadResponse: Codable, Sendable {
     let id: String
     let filename: String
     let storedPath: String?
@@ -248,7 +248,7 @@ enum FieldCollectionInvoiceRouteResolver {
     }
 }
 
-struct BackendCustomerCommunicationRecord: Codable, Identifiable {
+nonisolated struct BackendCustomerCommunicationRecord: Codable, Identifiable, Sendable {
     let id: String
     let customerName: String
     let customerEmail: String?
@@ -273,7 +273,7 @@ struct BackendCustomerCommunicationRecord: Codable, Identifiable {
     let createdAt: String?
 }
 
-struct BackendServiceRequestRecord: Codable, Identifiable {
+nonisolated struct BackendServiceRequestRecord: Codable, Identifiable, Sendable {
     let id: String
     let customerName: String
     let phone: String?
@@ -285,6 +285,22 @@ struct BackendServiceRequestRecord: Codable, Identifiable {
     let source: String?
     let preferredDate: String?
     let createdAt: String
+    let customerAccountID: String?
+}
+
+/// Non-authoritative metadata about a customer's self-service account signup.
+/// A pending account is never treated as a real business Customer until a
+/// staff member links it to one from `CustomerAccountSignupsView`.
+struct BackendCustomerAccountRecord: Codable, Identifiable {
+    let id: String
+    let email: String
+    let name: String
+    let phone: String?
+    let linkStatus: String
+    let linkedCustomerID: String?
+    let linkedCustomerQuickBooksID: String?
+    let createdAt: String
+    let linkedAt: String?
 }
 
 struct BackendAuditEventRecord: Codable, Identifiable {
@@ -575,7 +591,7 @@ enum GunnAireBackendService {
         let acceptance: SupplierOrderAcceptanceWire
     }
 
-    private struct ServerErrorResponse: Codable {
+    nonisolated private struct ServerErrorResponse: Codable, Sendable {
         let error: String
     }
 
@@ -585,6 +601,19 @@ enum GunnAireBackendService {
 
     private struct CustomerPortalLinksResponse: Codable {
         let links: [BackendCustomerPortalLinkRecord]
+    }
+
+    private struct CustomerAccountsResponse: Codable {
+        let customerAccounts: [BackendCustomerAccountRecord]
+    }
+
+    private struct CustomerAccountLinkResponse: Codable {
+        let customerAccount: BackendCustomerAccountRecord
+    }
+
+    private struct CustomerAccountLinkPayload: Codable {
+        let customerID: String
+        let quickBooksID: String?
     }
 
     /// Everything the server needs about one communication, read from the
@@ -619,7 +648,7 @@ enum GunnAireBackendService {
         let isActive: Bool
     }
 
-    private struct DocumentUploadPayload: Codable {
+    nonisolated private struct DocumentUploadPayload: Codable, Sendable {
         let filename: String
         let contentType: String
         let kind: String
@@ -1742,6 +1771,25 @@ enum GunnAireBackendService {
         _ = try await send(path: "/api/service-requests/\(encodedID)/claim", method: "POST")
     }
 
+    static func fetchCustomerAccounts() async throws -> [BackendCustomerAccountRecord] {
+        let data = try await send(path: "/api/customer-accounts", method: "GET")
+        return try JSONDecoder().decode(CustomerAccountsResponse.self, from: data).customerAccounts
+    }
+
+    static func fetchCustomerAccount(id: String) async throws -> BackendCustomerAccountRecord {
+        let encodedID = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        let data = try await send(path: "/api/customer-accounts/\(encodedID)", method: "GET")
+        return try JSONDecoder().decode(CustomerAccountLinkResponse.self, from: data).customerAccount
+    }
+
+    static func linkCustomerAccount(id: String, customerID: UUID, quickBooksID: String?) async throws -> BackendCustomerAccountRecord {
+        let encodedID = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        let payload = CustomerAccountLinkPayload(customerID: customerID.uuidString, quickBooksID: quickBooksID)
+        let data = try JSONEncoder().encode(payload)
+        let responseData = try await send(path: "/api/customer-accounts/\(encodedID)/link", method: "POST", body: data)
+        return try JSONDecoder().decode(CustomerAccountLinkResponse.self, from: responseData).customerAccount
+    }
+
     static func createCustomerPortalLink(
         customer: Customer,
         serviceCall: ServiceCall,
@@ -1807,38 +1855,9 @@ enum GunnAireBackendService {
         return try JSONDecoder().decode(BackendCustomerPortalLinkRecord.self, from: responseData)
     }
 
-    @MainActor
-    static func importServiceRequests(
-        into modelContext: ModelContext,
-        currentRequests: [ServiceRequest]
-    ) async throws -> Int {
+    static func importServiceRequests(into container: ModelContainer) async throws -> Int {
         let remoteRequests = try await fetchServiceRequests()
-        let knownIDs = Set(currentRequests.compactMap(\.backendRequestID))
-        let formatter = ISO8601DateFormatter()
-        var imported = 0
-        for remote in remoteRequests where !knownIDs.contains(remote.id) {
-            let type = ServiceCallType(rawValue: remote.requestedServiceType) ?? .service
-            let urgency = ServiceRequestUrgency(rawValue: remote.urgency) ?? .normal
-            let source = remote.source.flatMap(ServiceRequestSource.init(rawValue:)) ?? .website
-            let request = ServiceRequest(
-                backendRequestID: remote.id,
-                customerName: remote.customerName,
-                phone: remote.phone,
-                email: remote.email,
-                address: remote.address,
-                requestedServiceType: type,
-                urgency: urgency,
-                summary: remote.summary,
-                preferredDate: remote.preferredDate.flatMap(formatter.date(from:)),
-                source: source,
-                createdByEmail: "online-booking",
-                createdAt: formatter.date(from: remote.createdAt) ?? Date()
-            )
-            modelContext.insert(request)
-            imported += 1
-        }
-        if imported > 0 { try? modelContext.save() }
-        return imported
+        return try await ServiceRequestImportStore(container: container).persist(remoteRequests)
     }
 
     @discardableResult
@@ -1849,10 +1868,19 @@ enum GunnAireBackendService {
     /// Sends an already-built payload. Callers on a background model actor
     /// build the payload on their own context, then await this.
     @discardableResult
-    static func uploadCustomerCommunication(payload: CustomerCommunicationPayload) async throws -> BackendCustomerCommunicationRecord {
-        let data = try JSONEncoder().encode(payload)
-        let responseData = try await send(path: "/api/communications", method: "POST", body: data)
-        return try JSONDecoder().decode(BackendCustomerCommunicationRecord.self, from: responseData)
+    static func uploadCustomerCommunication(payload: CustomerCommunicationPayload,
+                                            originatingOperation: WorkspaceProviderOperation? = nil) async throws -> BackendCustomerCommunicationRecord {
+        let operation = try retainingUploadOperation(originatingOperation)
+        let responseData = try await operation.prepareAndPerformExternalMutation(prepare: {
+            try await Task.detached(priority: .utility) { try JSONEncoder().encode(payload) }.value
+        }, perform: { data in
+            try await send(path: "/api/communications", method: "POST", body: data)
+        })
+        let decoded = try await Task.detached(priority: .utility) {
+            try JSONDecoder().decode(BackendCustomerCommunicationRecord.self, from: responseData)
+        }.value
+        try operation.check()
+        return decoded
     }
 
     /// Reads the model synchronously, so it must be called on the context
@@ -1987,24 +2015,36 @@ enum GunnAireBackendService {
         maintenanceContractID: UUID? = nil,
         customerEquipmentID: UUID? = nil,
         equipmentName: String? = nil,
-        customerName: String?
+        customerName: String?,
+        originatingOperation: WorkspaceProviderOperation? = nil
     ) async throws -> BackendDocumentUploadResponse {
-        let payload = DocumentUploadPayload(
-            filename: filename,
-            contentType: contentType,
-            kind: kind,
-            serviceCallID: serviceCallID?.uuidString,
-            invoiceID: invoiceID?.uuidString,
-            estimateID: estimateID?.uuidString,
-            maintenanceContractID: maintenanceContractID?.uuidString,
-            customerEquipmentID: customerEquipmentID?.uuidString,
-            equipmentName: equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank,
-            customerName: customerName,
-            dataBase64: data.base64EncodedString()
-        )
-        let body = try JSONEncoder().encode(payload)
-        let responseData = try await send(path: "/api/documents", method: "POST", body: body)
-        return try JSONDecoder().decode(BackendDocumentUploadResponse.self, from: responseData)
+        let operation = try retainingUploadOperation(originatingOperation)
+        let responseData = try await operation.prepareAndPerformExternalMutation(prepare: {
+            try await Task.detached(priority: .utility) {
+                let trimmedEquipmentName = equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let payload = DocumentUploadPayload(
+                    filename: filename,
+                    contentType: contentType,
+                    kind: kind,
+                    serviceCallID: serviceCallID?.uuidString,
+                    invoiceID: invoiceID?.uuidString,
+                    estimateID: estimateID?.uuidString,
+                    maintenanceContractID: maintenanceContractID?.uuidString,
+                    customerEquipmentID: customerEquipmentID?.uuidString,
+                    equipmentName: trimmedEquipmentName?.isEmpty == false ? trimmedEquipmentName : nil,
+                    customerName: customerName,
+                    dataBase64: data.base64EncodedString()
+                )
+                return try JSONEncoder().encode(payload)
+            }.value
+        }, perform: { body in
+            try await send(path: "/api/documents", method: "POST", body: body)
+        })
+        let decoded = try await Task.detached(priority: .utility) {
+            try JSONDecoder().decode(BackendDocumentUploadResponse.self, from: responseData)
+        }.value
+        try operation.check()
+        return decoded
     }
 
     @discardableResult
@@ -2070,8 +2110,10 @@ enum GunnAireBackendService {
     }
 
     @discardableResult
-    static func retrySharedCompanyDocumentUpload(request: SharedCompanyDocumentUploadRequest) async throws -> BackendDocumentUploadResponse {
-        try await uploadDocument(
+    static func retrySharedCompanyDocumentUpload(request: SharedCompanyDocumentUploadRequest,
+                                                 originatingOperation: WorkspaceProviderOperation? = nil) async throws -> BackendDocumentUploadResponse {
+        let operation = try retainingUploadOperation(originatingOperation)
+        return try await uploadDocument(
             data: request.data,
             filename: request.filename,
             contentType: request.contentType,
@@ -2081,8 +2123,19 @@ enum GunnAireBackendService {
             estimateID: request.estimateID,
             maintenanceContractID: request.maintenanceContractID,
             customerEquipmentID: request.customerEquipmentID,
-            customerName: request.customerName
+            customerName: request.customerName,
+            originatingOperation: operation
         )
+    }
+
+    /// Validate a background caller's original authority before capturing any replacement login.
+    static func retainingUploadOperation(
+        _ originatingOperation: WorkspaceProviderOperation?,
+        capture: @MainActor () throws -> WorkspaceProviderOperation = { try WorkspaceProviderOperation.capture { true } }
+    ) throws -> WorkspaceProviderOperation {
+        let operation = try originatingOperation ?? capture()
+        try operation.check()
+        return operation
     }
 
     static func googleConnectionRequest(path: String, method: String, body: Data?) async throws -> Data {
@@ -2128,6 +2181,48 @@ enum GunnAireBackendService {
                 throw GunnAireBackendError.server(statusCode: code, message: "Mail request was not confirmed.")
             }
             if error is GmailServerHTTPError { throw GmailServerMailError.invalid }
+            throw error
+        }
+    }
+
+    static func billingPDFArchiveRequest(path: String, method: String, body: Data?) async throws -> Data {
+        let base = "/api/google/drive/billing-pdf-intents"
+        let posts: Set<String> = Set(["reserve", "content", "file", "confirm", "deliver"].map { base + "/" + $0 })
+        let artifact = base + "/artifact"
+        guard let endpoint = URLComponents(string: path), endpoint.scheme == nil,
+              endpoint.host == nil, endpoint.fragment == nil,
+              (method == "GET" && [base, base + "/identity", artifact].contains(endpoint.path) &&
+                body == nil && endpoint.query != nil) ||
+                (method == "POST" && (posts.contains(endpoint.path) || endpoint.path == artifact) &&
+                 endpoint.query == nil && body != nil),
+              (body?.count ?? 0) <= (endpoint.path == artifact ? 35_000_000 : 8_192),
+              let identity = CompanyWorkspaceSession.current else {
+            throw GunnAireBackendError.missingBusinessIdentity
+        }
+        var request = try makeRequest(path: path, method: method, body: body)
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        guard bearer.hasPrefix("Bearer "),
+              CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == identity.tokenFingerprint,
+              request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil else {
+            throw GunnAireBackendError.missingBusinessIdentity
+        }
+        request.timeoutInterval = 100
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        let controller = CompanyWorkspaceAccessController.shared
+        let generation = controller.generation
+        do {
+            let (data, _) = try await GmailServerHTTPTransfer.data(for: request,
+                maximum: endpoint.path == artifact && method == "GET" ? 25 * 1024 * 1024 : 32_768)
+            guard CompanyWorkspaceSession.current == identity, controller.generation == generation,
+                  controller.authorizedContainer != nil else { throw GunnAireBackendError.missingBusinessIdentity }
+            return data
+        } catch {
+            guard CompanyWorkspaceSession.current == identity, controller.generation == generation,
+                  controller.authorizedContainer != nil else { throw GunnAireBackendError.missingBusinessIdentity }
+            if case GmailServerHTTPError.status(let code) = error {
+                throw GunnAireBackendError.server(statusCode: code,
+                    message: "Billing PDF archive request was not confirmed.")
+            }
             throw error
         }
     }
@@ -2255,9 +2350,12 @@ enum GunnAireBackendService {
         }
         Task { @MainActor in ServerClockSync.shared.record(from: httpResponse) }
         guard (200..<300).contains(httpResponse.statusCode) else {
-            let message = (try? JSONDecoder().decode(ServerErrorResponse.self, from: data).error)
-                ?? String(data: data, encoding: .utf8)
-                ?? HTTPURLResponse.localizedString(forStatusCode: httpResponse.statusCode)
+            let statusCode = httpResponse.statusCode
+            let message = await Task.detached(priority: .utility) {
+                (try? JSONDecoder().decode(ServerErrorResponse.self, from: data).error)
+                    ?? String(data: data, encoding: .utf8)
+                    ?? HTTPURLResponse.localizedString(forStatusCode: statusCode)
+            }.value
             throw GunnAireBackendError.server(statusCode: httpResponse.statusCode, message: message)
         }
         return data
@@ -2276,18 +2374,15 @@ enum GunnAireBackendService {
         }
         var request = try baseRequest(path: path, method: method, body: body)
         if Config.Backend.usesBusinessIdentity {
-            if let sessionToken = AppleAuthManager.shared.sessionToken,
-               !sessionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
-            } else if let sessionToken = GoogleAuthManager.shared.applicationSessionToken,
-                      !sessionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
-            } else if let idToken = GoogleAuthManager.shared.idToken,
-                      !idToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                request.setValue(idToken, forHTTPHeaderField: "X-GunnAire-Google-ID-Token")
-            } else {
+            guard let header = BusinessLoginSelection.authorizationHeader(
+                selected: BusinessLoginSelection.selected,
+                appleSessionToken: AppleAuthManager.shared.sessionToken,
+                googleSessionToken: GoogleAuthManager.shared.applicationSessionToken,
+                googleIdentityToken: GoogleAuthManager.shared.idToken
+            ) else {
                 throw GunnAireBackendError.missingBusinessIdentity
             }
+            request.setValue(header.value, forHTTPHeaderField: header.name)
         } else {
             request.setValue("Bearer \(Config.Backend.apiToken)", forHTTPHeaderField: "Authorization")
         }

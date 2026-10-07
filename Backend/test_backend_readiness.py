@@ -209,6 +209,7 @@ class BackendReadinessTests(unittest.TestCase):
                 try:
                     with self.assertRaises(urllib.error.HTTPError) as unauthorized:
                         urllib.request.urlopen(url, timeout=5)
+                    self.addCleanup(unauthorized.exception.close)
                     self.assertEqual(unauthorized.exception.code, 401)
 
                     request = urllib.request.Request(

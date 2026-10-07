@@ -3,12 +3,11 @@ import SwiftData
 import UniformTypeIdentifiers
 import UIKit
 
-@MainActor
-enum CustomerDataMaintenance {
+nonisolated enum CustomerDataMaintenance {
     nonisolated static let unassignedCalendarCustomerName = "Unassigned Calendar Event"
     nonisolated static let unassignedCalendarCustomerMarker = "local-calendar-unassigned"
 
-    struct DeletionSummary {
+    struct DeletionSummary: Sendable {
         var customers = 0
         var serviceCalls = 0
         var estimates = 0
@@ -50,7 +49,7 @@ enum CustomerDataMaintenance {
 
     /// Pure checks over one customer's fields. Nonisolated so the startup
     /// maintenance actor can decide off the main thread whether a cleanup
-    /// pass is needed at all; the cleanup itself stays on the main actor.
+    /// pass is needed at all.
     nonisolated static func isGenericCalendarCustomer(_ customer: Customer) -> Bool {
         let name = customer.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let hasQuickBooksLink = customer.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
@@ -70,24 +69,25 @@ enum CustomerDataMaintenance {
                 .caseInsensitiveCompare(unassignedCalendarCustomerName) == .orderedSame
     }
 
-    static func cleanupCalendarNamedCustomers(modelContext: ModelContext) -> DeletionSummary {
-        let customers = (try? modelContext.fetch(FetchDescriptor<Customer>())) ?? []
+    static func stageCalendarNamedCustomers(modelContext: ModelContext) throws -> CustomerCalendarCleanupPlan {
+        let customers = try modelContext.fetch(FetchDescriptor<Customer>())
         let genericCustomers = customers.filter { isGenericCalendarCustomer($0) && !isSystemCalendarCustomer($0) }
-        guard !genericCustomers.isEmpty else { return DeletionSummary() }
+        guard !genericCustomers.isEmpty else { return .init(candidates: [], summary: .init()) }
+        let candidates = genericCustomers.map(CustomerCalendarCleanupPlan.Candidate.init)
 
-        let serviceCalls = (try? modelContext.fetch(FetchDescriptor<ServiceCall>())) ?? []
-        let estimates = (try? modelContext.fetch(FetchDescriptor<Estimate>())) ?? []
-        let invoices = (try? modelContext.fetch(FetchDescriptor<Invoice>())) ?? []
-        let payments = (try? modelContext.fetch(FetchDescriptor<Payment>())) ?? []
-        let contracts = (try? modelContext.fetch(FetchDescriptor<RecurringMaintenanceContract>())) ?? []
-        let timeEntries = (try? modelContext.fetch(FetchDescriptor<TimeEntry>())) ?? []
-        let documentAttachments = (try? modelContext.fetch(FetchDescriptor<ServiceDocumentAttachment>())) ?? []
-        let equipmentProfiles = (try? modelContext.fetch(FetchDescriptor<CustomerEquipment>())) ?? []
-        let serviceLocations = (try? modelContext.fetch(FetchDescriptor<CustomerServiceLocation>())) ?? []
-        let customerCommunications = (try? modelContext.fetch(FetchDescriptor<CustomerCommunication>())) ?? []
-        let operationalAlerts = (try? modelContext.fetch(FetchDescriptor<CustomerOperationalAlert>())) ?? []
-        let businessTasks = (try? modelContext.fetch(FetchDescriptor<BusinessTask>())) ?? []
-        let businessTaskEvents = (try? modelContext.fetch(FetchDescriptor<BusinessTaskEvent>())) ?? []
+        let serviceCalls = try modelContext.fetch(FetchDescriptor<ServiceCall>())
+        let estimates = try modelContext.fetch(FetchDescriptor<Estimate>())
+        let invoices = try modelContext.fetch(FetchDescriptor<Invoice>())
+        let payments = try modelContext.fetch(FetchDescriptor<Payment>())
+        let contracts = try modelContext.fetch(FetchDescriptor<RecurringMaintenanceContract>())
+        let timeEntries = try modelContext.fetch(FetchDescriptor<TimeEntry>())
+        let documentAttachments = try modelContext.fetch(FetchDescriptor<ServiceDocumentAttachment>())
+        let equipmentProfiles = try modelContext.fetch(FetchDescriptor<CustomerEquipment>())
+        let serviceLocations = try modelContext.fetch(FetchDescriptor<CustomerServiceLocation>())
+        let customerCommunications = try modelContext.fetch(FetchDescriptor<CustomerCommunication>())
+        let operationalAlerts = try modelContext.fetch(FetchDescriptor<CustomerOperationalAlert>())
+        let businessTasks = try modelContext.fetch(FetchDescriptor<BusinessTask>())
+        let businessTaskEvents = try modelContext.fetch(FetchDescriptor<BusinessTaskEvent>())
 
         var summary = DeletionSummary()
         for customer in genericCustomers {
@@ -109,8 +109,7 @@ enum CustomerDataMaintenance {
                 businessTaskEvents: businessTaskEvents
             ))
         }
-        try? modelContext.save()
-        return summary
+        return .init(candidates: candidates, summary: summary)
     }
 
     static func deleteCustomer(
@@ -200,7 +199,7 @@ enum CustomerDataMaintenance {
 }
 
 private extension CustomerDataMaintenance.DeletionSummary {
-    mutating func merge(_ other: CustomerDataMaintenance.DeletionSummary) {
+    nonisolated mutating func merge(_ other: CustomerDataMaintenance.DeletionSummary) {
         customers += other.customers
         serviceCalls += other.serviceCalls
         estimates += other.estimates
@@ -250,6 +249,7 @@ struct CustomersView: View {
     @State private var customerSearchText = ""
     @State private var customerSyncMessage: String?
     @State private var isSyncingCustomers = false
+    @State private var isCleaningCalendarCustomers = false
 
     private var currentEmail: String? {
         AppIdentity.currentEmail
@@ -339,14 +339,25 @@ struct CustomersView: View {
                             address: newCustomerAddress.nilIfBlank
                         )
                         modelContext.insert(customer)
+                        var location: CustomerServiceLocation?
                         if let address = customer.address {
-                            modelContext.insert(CustomerServiceLocation(
+                            location = CustomerServiceLocation(
                                 customer: customer,
                                 name: "Primary Service Location",
                                 address: address,
                                 isPrimary: true
-                            ))
+                            )
+                            if let location { modelContext.insert(location) }
                         }
+                        do {
+                            try modelContext.save()
+                        } catch {
+                            if let location { modelContext.delete(location) }
+                            modelContext.delete(customer)
+                            customerSyncMessage = "Could not save the customer: \(error.localizedDescription)"
+                            return
+                        }
+                        AutomaticOutboundSync.shared.recoverPending(context: modelContext, force: true)
                         newCustomerName = ""
                         newCustomerEmail = ""
                         newCustomerPhone = ""
@@ -470,8 +481,9 @@ struct CustomersView: View {
                         Button {
                             cleanupCalendarCreatedCustomers()
                         } label: {
-                            Label("Clean Calendar Imports", systemImage: "wand.and.stars")
+                            Label(isCleaningCalendarCustomers ? "Cleaning Calendar Imports" : "Clean Calendar Imports", systemImage: "wand.and.stars")
                         }
+                        .disabled(isCleaningCalendarCustomers)
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {
@@ -627,12 +639,37 @@ struct CustomersView: View {
     }
 
     private func cleanupCalendarCreatedCustomers() {
+        guard !isCleaningCalendarCustomers else { return }
         guard canDeleteCustomerRecords else {
             customerSyncMessage = "Only an administrator can remove imported customer records."
             return
         }
-        let summary = CustomerDataMaintenance.cleanupCalendarNamedCustomers(modelContext: modelContext)
-        customerSyncMessage = summary.customerScreenMessage
+        isCleaningCalendarCustomers = true
+        customerSyncMessage = "Cleaning calendar imports..."
+        let container = modelContext.container
+        let generation = CompanyWorkspaceAccessController.shared.generation
+        Task { @MainActor in
+            guard !Task.isCancelled,
+                  CompanyWorkspaceAccessController.shared.generation == generation,
+                  canDeleteCustomerRecords else {
+                isCleaningCalendarCustomers = false
+                customerSyncMessage = "Calendar cleanup stopped because administrator access changed."
+                return
+            }
+            defer { isCleaningCalendarCustomers = false }
+            do {
+                let summary = try await ContentStartupColdMaintenance(modelContainer: container)
+                    .cleanupCalendarNamedCustomers {
+                        guard canDeleteCustomerRecords else { throw CustomerCalendarCleanupError.accessChanged }
+                        return try CompanyWorkspaceAccessController.shared.customerCleanupPermit(
+                            generation: generation, container: container)
+                    }
+                guard CompanyWorkspaceAccessController.shared.generation == generation else { return }
+                customerSyncMessage = summary.customerScreenMessage
+            } catch {
+                customerSyncMessage = error.localizedDescription
+            }
+        }
     }
 
     private func syncCustomersToQuickBooks() {
@@ -785,10 +822,19 @@ struct TechnicianCalendarAccessAssessment {
         }
 
         if normalizedCalendarID == "primary" {
+            guard let primary = availableCalendars.first(where: { $0.primary == true || $0.id == "primary" }) else {
+                return TechnicianCalendarAccessAssessment(
+                    state: .noCalendar,
+                    calendarLabel: "Primary Calendar",
+                    detail: "Primary Calendar write access has not been verified for the connected Google account."
+                )
+            }
             return TechnicianCalendarAccessAssessment(
-                state: .writable,
+                state: primary.isWritable ? .writable : .readOnly,
                 calendarLabel: "Primary Calendar",
-                detail: "Jobs can be exported to the signed-in user's primary calendar."
+                detail: primary.isWritable
+                    ? "Jobs can be exported to the signed-in user's primary calendar."
+                    : "The connected Google account cannot write events on its primary calendar."
             )
         }
 
@@ -818,6 +864,46 @@ private enum GoogleDriveArchivePreparationError: Error, LocalizedError {
             "The file is not on this device or in shared company storage. Restore the company copy, then retry."
         case .unresolvedCustomer:
             "CloudKit is still resolving this file's customer link. Wait for sync to finish, then retry."
+        }
+    }
+}
+
+@MainActor
+enum TechnicianCalendarInvitationRecovery {
+    static func save(
+        email: String?,
+        for technician: Technician,
+        calls: [ServiceCall],
+        context: ModelContext
+    ) throws -> Int {
+        let previousEmail = technician.contactInfo
+        let normalized = AppAccess.normalizedEmail(email).nilIfBlank
+        let changed = AppAccess.normalizedEmail(previousEmail) != AppAccess.normalizedEmail(normalized)
+        let affected = changed ? calls.filter {
+            $0.googleEventManagedByApp &&
+                ($0.status == .scheduled || $0.status == .inProgress) &&
+                ($0.assignedTechnician?.id == technician.id || $0.additionalTechnicianIDs.contains(technician.id))
+        } : []
+        let previousProofs = affected.map { ($0, $0.googleEventConfirmedAt, $0.googleCalendarPendingAt) }
+        technician.contactInfo = normalized
+        for call in affected { GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(call) }
+        do { try context.save() }
+        catch {
+            technician.contactInfo = previousEmail
+            for (call, confirmedAt, pendingAt) in previousProofs {
+                call.googleEventConfirmedAt = confirmedAt
+                call.googleCalendarPendingAt = pendingAt
+            }
+            throw error
+        }
+        return affected.count
+    }
+}
+
+enum GoogleDriveArchiveQueue {
+    static func pending(from attachments: [ServiceDocumentAttachment]) -> [ServiceDocumentAttachment] {
+        attachments.filter {
+            ($0.customer != nil || $0.fleetVehicleID != nil) && $0.needsGoogleDriveArchive
         }
     }
 }
@@ -886,8 +972,7 @@ struct SyncIntegrationsView: View {
     }
 
     private var googleDriveQueue: [ServiceDocumentAttachment] {
-        documentAttachments
-            .filter { $0.customer != nil && $0.needsGoogleDriveArchive }
+        GoogleDriveArchiveQueue.pending(from: documentAttachments)
             .sorted { lhs, rhs in
                 if lhs.googleDriveSyncState == .needsAttention && rhs.googleDriveSyncState != .needsAttention {
                     return true
@@ -1360,7 +1445,8 @@ struct SyncIntegrationsView: View {
             .sheet(item: $selectedTechnician) { technician in
                 TechnicianEditorView(
                     technician: technician,
-                    reviewerEmail: AppIdentity.currentEmail ?? ""
+                    reviewerEmail: AppIdentity.currentEmail ?? "",
+                    serviceCalls: serviceCalls
                 )
             }
         }
@@ -1456,7 +1542,7 @@ struct SyncIntegrationsView: View {
         if syncAttentionSummary.communicationCount > 0 {
             syncRecoveryRow(
                 title: "Customer communications",
-                detail: "Open Mail while the server is available to retry durable delivery history.",
+                detail: "Review unconfirmed QuickBooks email acceptance and any company delivery history awaiting sync.",
                 count: syncAttentionSummary.communicationCount,
                 systemImage: "envelope.badge",
                 identifier: "SyncRecoveryCommunications",
@@ -1602,28 +1688,78 @@ struct SyncIntegrationsView: View {
     }
 
     private func archiveInGoogleDrive(_ attachment: ServiceDocumentAttachment) async -> Bool {
+        guard AutomaticGoogleDriveArchive.shared.claim(attachment.id) else { return false }
+        defer { AutomaticGoogleDriveArchive.shared.release(attachment.id) }
+        var source: ServiceDocumentAttachment.DriveUploadSource?
+        var retainedProviderOperation: WorkspaceProviderOperation?
+        let workspace = CompanyWorkspaceAccessController.shared
+        let originalStamp = workspace.operationStamp
+        let originalAttachmentID = attachment.id
         do {
             guard canManageGoogleDriveArchive else {
                 throw GoogleDriveAPIError.authorizationChanged
             }
+            guard workspace.authorizedContainer === modelContext.container,
+                  originalStamp != nil,
+                  googleDriveAuthorizationState == .ready else {
+                throw GoogleDriveAPIError.authorizationChanged
+            }
+            let providerOperation = try GoogleAuthManager.shared.captureProviderOperation()
+            retainedProviderOperation = providerOperation
             guard attachment.customer != nil || attachment.fleetVehicleID != nil else {
                 throw GoogleDriveArchivePreparationError.unresolvedCustomer
+            }
+
+            func checkCurrent(_ captured: ServiceDocumentAttachment.DriveUploadSource) throws {
+                guard canManageGoogleDriveArchive,
+                      googleDriveAuthorizationState == .ready,
+                      workspace.authorizedContainer === modelContext.container,
+                      workspace.operationStamp == originalStamp,
+                      attachment.modelContext?.container === modelContext.container,
+                      attachment.matchesDriveUploadSource(captured) else {
+                    throw GoogleDriveAPIError.authorizationChanged
+                }
+                try providerOperation.check()
+                var fetch = FetchDescriptor<ServiceDocumentAttachment>(
+                    predicate: #Predicate { $0.id == originalAttachmentID })
+                fetch.fetchLimit = 2
+                let matches = try modelContext.fetch(fetch)
+                guard matches.count == 1, matches[0] === attachment else {
+                    throw GoogleDriveAPIError.authorizationChanged
+                }
             }
 
             let actorEmail = AppIdentity.currentEmail
             let existingID = attachment.googleDriveFileID?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            let preReservationSource = attachment.driveUploadSource(fileID: existingID ?? "")
             let fileID: String
             if let existingID, !existingID.isEmpty {
                 fileID = existingID
             } else {
                 fileID = try await GoogleDriveAPI.shared.generateFileID()
+                guard workspace.authorizedContainer === modelContext.container,
+                      workspace.operationStamp == originalStamp,
+                      attachment.modelContext?.container === modelContext.container,
+                      attachment.driveUploadSource(fileID: "") == preReservationSource,
+                      attachment.googleDriveFileID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
+                      googleDriveAuthorizationState == .ready,
+                      canManageGoogleDriveArchive,
+                      (try? providerOperation.check()) != nil else { return false }
+                var reservationMembership = FetchDescriptor<ServiceDocumentAttachment>(
+                    predicate: #Predicate { $0.id == originalAttachmentID })
+                reservationMembership.fetchLimit = 2
+                guard let matches = try? modelContext.fetch(reservationMembership),
+                      matches.count == 1, matches[0] === attachment else { return false }
                 attachment.markGoogleDrivePreparing(fileID: fileID, actorEmail: actorEmail)
                 try modelContext.save()
             }
+            let capturedSource = attachment.driveUploadSource(fileID: fileID)
+            source = capturedSource
 
             let data = try await googleDriveData(for: attachment)
             guard !Task.isCancelled else { throw CancellationError() }
+            try checkCurrent(capturedSource)
             attachment.markGoogleDriveUploading()
             try modelContext.save()
 
@@ -1636,10 +1772,25 @@ struct SyncIntegrationsView: View {
                 data: data
             )
             guard !Task.isCancelled else { throw CancellationError() }
+            // An older upload response cannot mark regenerated local bytes as
+            // archived. The replacement stays queued with its new file ID.
+            try checkCurrent(capturedSource)
             attachment.markGoogleDriveArchived(file, actorEmail: actorEmail)
             try modelContext.save()
             return true
         } catch {
+            if let source, !attachment.matchesDriveUploadSource(source) { return false }
+            guard workspace.authorizedContainer === modelContext.container,
+                  workspace.operationStamp == originalStamp,
+                  attachment.modelContext?.container === modelContext.container,
+                  googleDriveAuthorizationState == .ready,
+                  canManageGoogleDriveArchive,
+                  (try? retainedProviderOperation?.check()) != nil else { return false }
+            var membership = FetchDescriptor<ServiceDocumentAttachment>(
+                predicate: #Predicate { $0.id == originalAttachmentID })
+            membership.fetchLimit = 2
+            guard let matches = try? modelContext.fetch(membership),
+                  matches.count == 1, matches[0] === attachment else { return false }
             let detail = Task.isCancelled
                 ? "Archive stopped before completion. Retry uses the same reserved Drive file."
                 : error.localizedDescription
@@ -1672,7 +1823,7 @@ struct SyncIntegrationsView: View {
             }
         }
 
-        if let (_, retained) = try? QBODocumentNativeWorkflow.retainedData(for: attachment, context: modelContext) {
+        if let (_, retained) = try? await QBODocumentNativeWorkflow.retainedData(for: attachment, context: modelContext) {
             return retained
         }
 
@@ -1818,8 +1969,18 @@ struct SyncIntegrationsView: View {
                 return value.isEmpty ? "" : value
             },
             set: { newValue in
-                technician.contactInfo = newValue.isEmpty ? nil : newValue
-                technicianMessage = newValue.isEmpty ? "Calendar assignment removed for \(technician.name)." : "Calendar assignment updated for \(technician.name)."
+                do {
+                    let affected = try TechnicianCalendarInvitationRecovery.save(
+                        email: newValue, for: technician, calls: serviceCalls, context: modelContext)
+                    technicianMessage = newValue.isEmpty
+                        ? "Calendar assignment removed for \(technician.name)."
+                        : "Calendar assignment updated for \(technician.name)."
+                    if affected > 0 {
+                        AutomaticOutboundSync.shared.recoverCalendar(context: modelContext, auth: googleAuth)
+                    }
+                } catch {
+                    technicianMessage = "Calendar assignment could not be saved. Try again."
+                }
             }
         )
     }
@@ -1853,6 +2014,83 @@ struct SyncIntegrationsView: View {
     }
 }
 
+@MainActor
+final class OnsiteDocumentExportLifetime {
+    private var isVisible = false
+    private var activeRequest: UUID?
+
+    func appear() { isVisible = true }
+    func disappear() { isVisible = false; activeRequest = nil }
+    func invalidateRequest() { activeRequest = nil }
+
+    func begin() -> UUID? {
+        guard isVisible, activeRequest == nil else { return nil }
+        let request = UUID()
+        activeRequest = request
+        return request
+    }
+
+    func finish(_ request: UUID) {
+        if activeRequest == request { activeRequest = nil }
+    }
+
+    func check(_ request: UUID) throws {
+        try Task.checkCancellation()
+        guard isVisible, activeRequest == request else { throw CancellationError() }
+    }
+
+    struct Result {
+        let url: URL
+        let validation: @MainActor () throws -> Void
+
+        func validateCurrent() throws {
+            do { try validation() }
+            catch {
+                // The exporter gives each request a new immutable URL. Only
+                // this rejected output is removed; prior attachments survive.
+                try? FileManager.default.removeItem(at: url)
+                throw error
+            }
+        }
+
+        func readData(load: (@MainActor (URL) async throws -> Data)? = nil) async throws -> Data {
+            try validateCurrent()
+            let data: Data
+            do {
+                if let load { data = try await load(url) }
+                else {
+                    let source = url
+                    data = try await Task.detached(priority: .utility) {
+                        try Data(contentsOf: source)
+                    }.value
+                }
+            } catch {
+                try validateCurrent()
+                try? FileManager.default.removeItem(at: url)
+                throw error
+            }
+            try validateCurrent()
+            return data
+        }
+    }
+
+    func export(
+        request: UUID,
+        validateCurrent: @escaping @MainActor () throws -> Void,
+        render: (@escaping @MainActor () throws -> Void) async throws -> URL
+    ) async throws -> Result {
+        let validate = { @MainActor in
+            try self.check(request)
+            try validateCurrent()
+        }
+        try validate()
+        let url = try await render(validate)
+        let result = Result(url: url, validation: validate)
+        try result.validateCurrent()
+        return result
+    }
+}
+
 struct OnsiteDocumentationView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \ServiceCall.scheduledDate, order: .forward) private var serviceCalls: [ServiceCall]
@@ -1874,6 +2112,7 @@ struct OnsiteDocumentationView: View {
     @State private var selectedServiceCallID: UUID?
     @State private var didLoadPendingRoute = false
     @State private var generatedCustomerDocumentURL: URL?
+    @State private var documentExportLifetime = OnsiteDocumentExportLifetime()
     @State private var documentExportMessage = ""
 
     private var quickBooksConnected: Bool {
@@ -2152,7 +2391,7 @@ struct OnsiteDocumentationView: View {
 
                                             Menu {
                                                 Button("Generate Invoice PDF") {
-                                                    generateInvoiceDocument(invoice)
+                                                    Task { await generateInvoiceDocument(invoice) }
                                                 }
                                             } label: {
                                                 Label("Documents", systemImage: "doc.on.doc")
@@ -2195,7 +2434,14 @@ struct OnsiteDocumentationView: View {
                     .tint(Color.brandGold)
                 }
             }
-            .onAppear(perform: applyPendingDocumentationRouteIfNeeded)
+            .onAppear {
+                documentExportLifetime.appear()
+                applyPendingDocumentationRouteIfNeeded()
+            }
+            .onDisappear { documentExportLifetime.disappear() }
+            .onChange(of: selectedServiceCallID) { _, _ in
+                documentExportLifetime.invalidateRequest()
+            }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
                 applyPendingDocumentationRouteIfNeeded()
             }
@@ -2263,18 +2509,18 @@ struct OnsiteDocumentationView: View {
 
                             Menu {
                                 Button("Generate Onsite Report") {
-                                    generateOnsiteReport(for: call)
+                                    Task { await generateOnsiteReport(for: call) }
                                 }
 
                                 if estimate(for: call) != nil {
                                     Button("Generate Estimate PDF") {
-                                        generateEstimateDocument(for: call)
+                                        Task { await generateEstimateDocument(for: call) }
                                     }
                                 }
 
                                 if let invoice = invoice(for: call) {
                                     Button("Generate Invoice PDF") {
-                                        generateInvoiceDocument(invoice)
+                                        Task { await generateInvoiceDocument(invoice) }
                                     }
                                 }
                             } label: {
@@ -2332,52 +2578,147 @@ struct OnsiteDocumentationView: View {
         selectedServiceCallID = pendingID
     }
 
-    private func generateOnsiteReport(for call: ServiceCall) {
-        let linkedInvoice = invoice(for: call)
+    @discardableResult
+    private func validateDocumentWorkspace(request: UUID) throws -> QuickBooksBillingAccessPolicy.UserCensus {
+        try documentExportLifetime.check(request)
+        guard GunnAireCloudKit.usesTestDatabase ||
+                CompanyWorkspaceAccessController.shared.authorizedContainer === modelContext.container else {
+            throw WorkspaceProviderAccessError.unavailable
+        }
+        let census = try QuickBooksBillingAccessPolicy.userCensus(context: modelContext)
+        let currentUsers = census.users
+        guard AppAccess.canAccessSidebarItem(.onsiteDocumentation,
+            email: currentUserEmail, users: currentUsers) else { throw GmailComposeError.access }
+        return census
+    }
+
+    private func validateDocumentAccess(
+        call: ServiceCall?, document: QuickBooksBillingDocument?, includesFinancials: Bool,
+        priorCensus: QuickBooksBillingAccessPolicy.UserCensus? = nil
+    ) throws {
+        let census: QuickBooksBillingAccessPolicy.UserCensus
+        if let priorCensus { census = priorCensus }
+        else { census = try QuickBooksBillingAccessPolicy.userCensus(context: modelContext) }
+        let currentUsers = census.users
+        guard !includesFinancials ||
+            AppAccess.canViewBillingFinancialDetails(email: currentUserEmail, users: currentUsers) ||
+            AppAccess.canCollectFieldPayments(email: currentUserEmail, users: currentUsers) else {
+            throw GmailComposeError.access
+        }
+        if let document {
+            try QuickBooksBillingAccessPolicy.validate(context: modelContext, document: document, census: census)
+        }
+        if let call {
+            guard isCurrentRecord(call), isCurrentRecord(call.customer) else { throw GmailDraftError.businessChanged }
+            try CustomerDocumentServiceCallAccess.require(call: call, context: modelContext,
+                email: currentUserEmail, users: currentUsers)
+        }
+    }
+
+    /// The original source and request remain bound through rendering and the
+    /// caller's final continuation, before it reads models or persists a link.
+    private func exportingCustomerDocument(
+        request: UUID,
+        customerID: UUID,
+        serviceCallID: UUID?,
+        invoiceID: UUID?,
+        estimateID: UUID?,
+        membershipIsIntact: @escaping @MainActor () -> Bool,
+        validateAccess: @escaping @MainActor (QuickBooksBillingAccessPolicy.UserCensus) throws -> Void,
+        export: (@escaping @MainActor () throws -> Void) async throws -> URL
+    ) async throws -> OnsiteDocumentExportLifetime.Result {
+        let initialCensus = try validateDocumentWorkspace(request: request)
+        let context = modelContext
+        let email = AppAccess.normalizedEmail(currentUserEmail)
+        let selection = selectedServiceCallID
+        let operation = try WorkspaceProviderOperation.capture { true }
+        guard membershipIsIntact() else { throw GmailDraftError.businessChanged }
+        try validateAccess(initialCensus)
+        let business = GmailBusinessContext(customerID: customerID, serviceCallID: serviceCallID,
+            invoiceID: invoiceID, estimateID: estimateID, workflow: .customerDocument)
+        let origin = try GmailDraftBusinessSnapshot.capture(business, context: context)
+        return try await documentExportLifetime.export(request: request, validateCurrent: {
+            try operation.check()
+            let census = try validateDocumentWorkspace(request: request)
+            guard modelContext === context, selectedServiceCallID == selection,
+                  AppAccess.normalizedEmail(currentUserEmail) == email,
+                  membershipIsIntact() else { throw GmailDraftError.businessChanged }
+            try validateAccess(census)
+            try GmailDraftBusinessSnapshot.validate(origin, business: business, context: context)
+        }, render: export)
+    }
+
+    private func isCurrentRecord<T: PersistentModel>(_ model: T?) -> Bool {
+        guard let model, model.modelContext === modelContext, !model.isDeleted,
+              let registered: T = modelContext.registeredModel(for: model.persistentModelID)
+        else { return false }
+        return registered === model
+    }
+
+    private func generateOnsiteReport(for call: ServiceCall) async {
+        guard let request = documentExportLifetime.begin() else { return }
+        defer { documentExportLifetime.finish(request) }
         do {
-            let url = try CustomerDocumentExporter.exportOnsiteReport(
-                serviceCall: call,
-                estimate: estimate(for: call),
-                invoice: linkedInvoice,
-                payments: payments(for: linkedInvoice),
-                attachments: reportEvidenceAttachments(for: call),
-                equipmentProfiles: equipmentProfiles,
-                serviceCalls: serviceCalls,
-                fieldFormTemplates: fieldFormTemplates,
-                fieldFormResponses: fieldFormResponses.filter { $0.serviceCallID == call.id },
-                timeEntries: timeEntries,
-                materialReadiness: JobMaterialCloseoutPolicy.summary(
-                    for: call,
-                    invoice: linkedInvoice,
-                    estimates: estimates,
-                    projectMilestones: projectMilestones,
-                    items: items,
-                    movements: inventoryMovements
-                ),
-                serviceCallActivities: serviceCallActivities,
-                requireWorkPerformedLog: requireWorkPerformedLogForCloseout,
-                includeFinancials: canIncludeFinancialsInOnsiteReports
-            )
-            generatedCustomerDocumentURL = url
-            if !call.markDocumentationCompleteIfReady() {
-                call.documentationChecklist = false
+            try validateDocumentWorkspace(request: request)
+            guard isCurrentRecord(call), let customer = call.customer, isCurrentRecord(customer) else {
+                throw GmailDraftError.businessChanged
             }
-            persistGeneratedOnsiteReport(url, for: call, invoice: linkedInvoice, estimate: estimate(for: call))
+            let linkedInvoice = invoice(for: call)
+            let linkedEstimate = estimate(for: call)
+            let originalInvoiceLink = call.linkedInvoiceID
+            let originalEstimateLink = call.linkedEstimateID
+            let includesFinancials = canIncludeFinancialsInOnsiteReports
+            let result = try await exportingCustomerDocument(
+                request: request, customerID: customer.id, serviceCallID: call.id,
+                invoiceID: linkedInvoice?.id ?? call.linkedInvoiceID,
+                estimateID: linkedEstimate?.id ?? call.linkedEstimateID,
+                membershipIsIntact: {
+                    isCurrentRecord(call) && isCurrentRecord(customer) &&
+                    call.linkedInvoiceID == originalInvoiceLink && call.linkedEstimateID == originalEstimateLink &&
+                    (linkedInvoice.map { isCurrentRecord($0) } ?? true) &&
+                    (linkedEstimate.map { isCurrentRecord($0) } ?? true)
+                },
+                validateAccess: { census in
+                    try validateDocumentAccess(call: call, document: nil, includesFinancials: includesFinancials,
+                        priorCensus: census)
+                }
+            ) { authorize in
+                try await CustomerDocumentExporter.exportOnsiteReportOffMainActor(
+                    serviceCall: call, estimate: linkedEstimate, invoice: linkedInvoice,
+                    payments: payments(for: linkedInvoice), attachments: reportEvidenceAttachments(for: call),
+                    equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls,
+                    fieldFormTemplates: fieldFormTemplates,
+                    fieldFormResponses: fieldFormResponses.filter { $0.serviceCallID == call.id },
+                    timeEntries: timeEntries,
+                    materialReadiness: JobMaterialCloseoutPolicy.summary(
+                        for: call, invoice: linkedInvoice, estimates: estimates,
+                        projectMilestones: projectMilestones, items: items, movements: inventoryMovements),
+                    serviceCallActivities: serviceCallActivities,
+                    requireWorkPerformedLog: requireWorkPerformedLogForCloseout,
+                    includeFinancials: includesFinancials, authorize: authorize)
+            }
+            try result.validateCurrent()
+            let data = try await result.readData()
+            try result.validateCurrent()
+            generatedCustomerDocumentURL = result.url
+            if !call.markDocumentationCompleteIfReady() { call.documentationChecklist = false }
+            persistGeneratedOnsiteReport(result.url, data: data, for: call, invoice: linkedInvoice,
+                estimate: linkedEstimate, includesFinancials: includesFinancials)
         } catch {
+            guard (try? documentExportLifetime.check(request)) != nil else { return }
             documentExportMessage = "Could not generate onsite report: \(error.localizedDescription)"
         }
     }
 
-    private func persistGeneratedOnsiteReport(_ url: URL, for call: ServiceCall, invoice: Invoice?, estimate: Estimate?) {
+    private func persistGeneratedOnsiteReport(_ url: URL, data: Data, for call: ServiceCall, invoice: Invoice?, estimate: Estimate?, includesFinancials: Bool) {
         do {
-            let data = try Data(contentsOf: url)
             let invoiceID = invoice?.id ?? call.linkedInvoiceID
             let estimateID = estimate?.id ?? call.linkedEstimateID
             let caption = CustomerDocumentExporter.onsiteReportAttachmentCaption(
                 serviceCall: call,
                 estimate: estimate,
                 invoice: invoice,
-                includeFinancials: canIncludeFinancialsInOnsiteReports
+                includeFinancials: includesFinancials
             )
             let attachment: ServiceDocumentAttachment
             if let reusable = ServiceDocumentAttachment.reusableGeneratedServiceReport(
@@ -2414,7 +2755,10 @@ struct OnsiteDocumentationView: View {
             }
 
             try modelContext.save()
-            syncGeneratedOnsiteReportToCompanyStorage(attachment, data: data)
+            AutomaticGoogleDriveArchive.shared.wakeAfterSave(attachment, context: modelContext)
+            syncGeneratedOnsiteReportToCompanyStorage(attachment, data: data) {
+                try validateDocumentAccess(call: call, document: nil, includesFinancials: includesFinancials)
+            }
             try QuickBooksInvoiceAttachmentSync.syncPendingServiceReports(
                 estimates: estimates,
                 invoices: invoices,
@@ -2436,30 +2780,12 @@ struct OnsiteDocumentationView: View {
         }
     }
 
-    private func syncGeneratedOnsiteReportToCompanyStorage(_ attachment: ServiceDocumentAttachment, data: Data) {
-        guard GunnAireBackendService.isConfigured else { return }
-        Task {
-            do {
-                let response = try await GunnAireBackendService.uploadDocument(
-                    data: data,
-                    filename: attachment.displayName,
-                    contentType: attachment.contentType,
-                    kind: attachment.kindRaw,
-                    serviceCallID: attachment.serviceCallID,
-                    invoiceID: attachment.invoiceID,
-                    estimateID: attachment.estimateID,
-                    customerEquipmentID: attachment.customerEquipmentID,
-                    equipmentName: attachment.linkedEquipment(in: equipmentProfiles, serviceCalls: serviceCalls)?.displayName,
-                    customerName: attachment.customer?.name
-                )
-                attachment.markSharedCompanyStored(id: response.id)
-                try? modelContext.save()
-            } catch {
-                attachment.markSharedCompanyUploadFailed(error.localizedDescription)
-                try? modelContext.save()
-                documentExportMessage = "Onsite report saved locally, but company storage upload failed: \(error.localizedDescription)"
-            }
-        }
+    private func syncGeneratedOnsiteReportToCompanyStorage(
+        _ attachment: ServiceDocumentAttachment, data: Data,
+        validateAccess: @escaping @MainActor () throws -> Void
+    ) {
+        syncGeneratedDocumentToCompanyStorage(attachment, data: data,
+            failurePrefix: "Onsite report saved locally, but company storage upload failed", validateAccess: validateAccess)
     }
 
     private func attachments(for call: ServiceCall) -> [ServiceDocumentAttachment] {
@@ -2470,76 +2796,108 @@ struct OnsiteDocumentationView: View {
         CustomerDocumentExporter.reportEvidenceAttachments(for: documentAttachments, serviceCall: call)
     }
 
-    private func generateEstimateDocument(for call: ServiceCall) {
-        guard let estimate = estimate(for: call) else {
-            documentExportMessage = "No estimate is linked to this job yet."
-            return
-        }
+    private func generateEstimateDocument(for call: ServiceCall) async {
+        guard let request = documentExportLifetime.begin() else { return }
+        defer { documentExportLifetime.finish(request) }
         do {
-            let url = try CustomerDocumentExporter.exportEstimate(
-                estimate,
-                serviceCall: call,
-                attachments: documentAttachments,
-                equipmentProfiles: equipmentProfiles,
-                serviceCalls: serviceCalls
-            )
-            generatedCustomerDocumentURL = url
+            try validateDocumentWorkspace(request: request)
+            guard isCurrentRecord(call), let customer = call.customer, isCurrentRecord(customer),
+                  let estimate = estimate(for: call), isCurrentRecord(estimate), estimate.customer === customer else {
+                throw GmailDraftError.businessChanged
+            }
+            let originalEstimateLink = call.linkedEstimateID
+            let result = try await exportingCustomerDocument(
+                request: request, customerID: customer.id, serviceCallID: call.id,
+                invoiceID: nil, estimateID: estimate.id,
+                membershipIsIntact: {
+                    isCurrentRecord(call) && isCurrentRecord(estimate) && isCurrentRecord(customer) &&
+                    call.linkedEstimateID == originalEstimateLink
+                },
+                validateAccess: { census in
+                    try validateDocumentAccess(call: call, document: .estimate(estimate), includesFinancials: false,
+                        priorCensus: census)
+                }
+            ) { authorize in
+                try await CustomerDocumentExporter.exportEstimateOffMainActor(
+                    estimate, serviceCall: call, attachments: documentAttachments,
+                    equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls, authorize: authorize)
+            }
+            try result.validateCurrent()
+            let data = try await result.readData()
+            try result.validateCurrent()
+            generatedCustomerDocumentURL = result.url
             persistGeneratedBillingDocument(
-                url,
-                customer: estimate.customer,
-                serviceCallID: call.id,
-                invoiceID: nil,
-                estimateID: estimate.id,
-                kind: .estimateSupport,
-                caption: "Generated estimate PDF",
-                successMessage: "Estimate PDF generated and saved to this job."
-            )
+                result.url, data: data, customer: customer, serviceCallID: call.id, invoiceID: nil,
+                estimateID: estimate.id, kind: .estimateSupport, caption: "Generated estimate PDF",
+                successMessage: "Estimate PDF generated and saved to this job.",
+                validateUploadAccess: {
+                    try validateDocumentAccess(call: call, document: .estimate(estimate), includesFinancials: false)
+                })
         } catch {
+            guard (try? documentExportLifetime.check(request)) != nil else { return }
             documentExportMessage = "Could not generate estimate PDF: \(error.localizedDescription)"
         }
     }
 
-    private func generateInvoiceDocument(_ invoice: Invoice) {
+    private func generateInvoiceDocument(_ invoice: Invoice) async {
+        guard let request = documentExportLifetime.begin() else { return }
+        defer { documentExportLifetime.finish(request) }
         do {
+            try validateDocumentWorkspace(request: request)
+            guard isCurrentRecord(invoice), let customer = invoice.customer, isCurrentRecord(customer) else {
+                throw GmailDraftError.businessChanged
+            }
             let linkedCall = serviceCall(for: invoice)
             let invoicePayments = payments(for: invoice)
-            let url = try CustomerDocumentExporter.exportInvoice(
-                invoice,
-                serviceCall: linkedCall,
-                payments: invoicePayments,
-                attachments: documentAttachments,
-                equipmentProfiles: equipmentProfiles,
-                serviceCalls: serviceCalls
-            )
-            generatedCustomerDocumentURL = url
             let documentLabel = CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments)
+            let documentCaption = CustomerDocumentExporter.invoiceDocumentCaption(for: invoice, payments: invoicePayments)
+            let result = try await exportingCustomerDocument(
+                request: request, customerID: customer.id, serviceCallID: linkedCall?.id,
+                invoiceID: invoice.id, estimateID: nil,
+                membershipIsIntact: {
+                    isCurrentRecord(invoice) && isCurrentRecord(customer) &&
+                    (linkedCall.map { isCurrentRecord($0) } ?? true)
+                },
+                validateAccess: { census in
+                    try validateDocumentAccess(call: linkedCall, document: .invoice(invoice), includesFinancials: true,
+                        priorCensus: census)
+                }
+            ) { authorize in
+                try await CustomerDocumentExporter.exportInvoiceOffMainActor(
+                    invoice, serviceCall: linkedCall, payments: invoicePayments, attachments: documentAttachments,
+                    equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls, authorize: authorize)
+            }
+            try result.validateCurrent()
+            let data = try await result.readData()
+            try result.validateCurrent()
+            generatedCustomerDocumentURL = result.url
             persistGeneratedBillingDocument(
-                url,
-                customer: invoice.customer,
-                serviceCallID: linkedCall?.id,
-                invoiceID: invoice.id,
-                estimateID: nil,
-                kind: .invoiceSupport,
-                caption: CustomerDocumentExporter.invoiceDocumentCaption(for: invoice, payments: invoicePayments),
-                successMessage: "\(documentLabel) PDF generated and saved to this job."
-            )
+                result.url, data: data, customer: customer, serviceCallID: linkedCall?.id, invoiceID: invoice.id,
+                estimateID: nil, kind: .invoiceSupport,
+                caption: documentCaption,
+                successMessage: "\(documentLabel) PDF generated and saved to this job.",
+                validateUploadAccess: {
+                    try validateDocumentAccess(call: linkedCall, document: .invoice(invoice), includesFinancials: true)
+                })
         } catch {
+            guard (try? documentExportLifetime.check(request)) != nil else { return }
             documentExportMessage = "Could not generate invoice PDF: \(error.localizedDescription)"
         }
     }
 
     private func persistGeneratedBillingDocument(
         _ url: URL,
+        data: Data,
         customer: Customer,
         serviceCallID: UUID?,
         invoiceID: UUID?,
         estimateID: UUID?,
         kind: ServiceDocumentAttachmentKind,
         caption: String,
-        successMessage: String
+        successMessage: String,
+        validateUploadAccess: @escaping @MainActor () throws -> Void
     ) {
         do {
-            let data = try Data(contentsOf: url)
             let equipmentID = serviceCallID.flatMap { id in serviceCalls.first { $0.id == id }?.customerEquipmentID }
             let attachment: ServiceDocumentAttachment
             if let reusable = ServiceDocumentAttachment.reusableGeneratedBillingDocument(
@@ -2576,7 +2934,8 @@ struct OnsiteDocumentationView: View {
                 attachment = generated
             }
             try modelContext.save()
-            syncGeneratedBillingDocumentToCompanyStorage(attachment, data: data)
+            AutomaticGoogleDriveArchive.shared.wakeAfterSave(attachment, context: modelContext)
+            syncGeneratedBillingDocumentToCompanyStorage(attachment, data: data, validateAccess: validateUploadAccess)
             try QuickBooksInvoiceAttachmentSync.syncPendingServiceReports(
                 estimates: estimates,
                 invoices: invoices,
@@ -2591,28 +2950,85 @@ struct OnsiteDocumentationView: View {
         }
     }
 
-    private func syncGeneratedBillingDocumentToCompanyStorage(_ attachment: ServiceDocumentAttachment, data: Data) {
-        guard GunnAireBackendService.isConfigured else { return }
-        Task {
+    private func syncGeneratedBillingDocumentToCompanyStorage(
+        _ attachment: ServiceDocumentAttachment, data: Data,
+        validateAccess: @escaping @MainActor () throws -> Void
+    ) {
+        syncGeneratedDocumentToCompanyStorage(attachment, data: data,
+            failurePrefix: "Billing PDF saved locally, but company storage upload failed", validateAccess: validateAccess)
+    }
+
+    /// Own document/history saves have finished. This upload binds only their
+    /// resulting attachment and current authority, never the pre-save source
+    /// fingerprint or a provider session captured later inside the Task.
+    private func syncGeneratedDocumentToCompanyStorage(
+        _ attachment: ServiceDocumentAttachment, data: Data, failurePrefix: String,
+        validateAccess: @escaping @MainActor () throws -> Void
+    ) {
+        guard GunnAireBackendService.isConfigured,
+              GunnAireCloudKit.usesTestDatabase ||
+                CompanyWorkspaceAccessController.shared.authorizedContainer === modelContext.container,
+              isCurrentRecord(attachment), let customer = attachment.customer,
+              isCurrentRecord(customer) else { return }
+        let context = modelContext
+        let email = AppAccess.normalizedEmail(currentUserEmail)
+        let identifier = attachment.id, persistentID = attachment.persistentModelID
+        let filename = attachment.displayName, path = attachment.localFilePath
+        let contentType = attachment.contentType, kind = attachment.kindRaw
+        let caption = attachment.caption, byteCount = attachment.fileSizeBytes
+        let createdAt = attachment.createdAt
+        let serviceCallID = attachment.serviceCallID, invoiceID = attachment.invoiceID
+        let estimateID = attachment.estimateID, maintenanceContractID = attachment.maintenanceContractID
+        let equipmentID = attachment.customerEquipmentID
+        let equipmentName = attachment.linkedEquipment(in: equipmentProfiles, serviceCalls: serviceCalls)?.displayName
+        let customerName = customer.name
+        let check = { @MainActor in
+            try Task.checkCancellation()
+            guard modelContext === context,
+                  GunnAireCloudKit.usesTestDatabase ||
+                    CompanyWorkspaceAccessController.shared.authorizedContainer === context.container,
+                  AppAccess.normalizedEmail(currentUserEmail) == email,
+                  isCurrentRecord(attachment), isCurrentRecord(customer), attachment.customer === customer,
+                  attachment.persistentModelID == persistentID, attachment.id == identifier,
+                  attachment.displayName == filename, attachment.localFilePath == path,
+                  attachment.contentType == contentType, attachment.kindRaw == kind,
+                  attachment.caption == caption, attachment.fileSizeBytes == byteCount,
+                  attachment.createdAt == createdAt, attachment.serviceCallID == serviceCallID,
+                  attachment.invoiceID == invoiceID, attachment.estimateID == estimateID,
+                  attachment.maintenanceContractID == maintenanceContractID,
+                  attachment.customerEquipmentID == equipmentID, customer.name == customerName else {
+                throw GmailDraftError.businessChanged
+            }
+            let currentUsers = try context.fetch(FetchDescriptor<AppUser>())
+            guard AppAccess.canAccessSidebarItem(.onsiteDocumentation, email: currentUserEmail, users: currentUsers) else {
+                throw GmailComposeError.access
+            }
+            try validateAccess()
+        }
+        let operation: WorkspaceProviderOperation
+        do {
+            try check()
+            operation = try WorkspaceProviderOperation.capture {
+                do { try check(); return true } catch { return false }
+            }
+        } catch { return }
+        Task { @MainActor in
             do {
+                try operation.check()
                 let response = try await GunnAireBackendService.uploadDocument(
-                    data: data,
-                    filename: attachment.displayName,
-                    contentType: attachment.contentType,
-                    kind: attachment.kindRaw,
-                    serviceCallID: attachment.serviceCallID,
-                    invoiceID: attachment.invoiceID,
-                    estimateID: attachment.estimateID,
-                    customerEquipmentID: attachment.customerEquipmentID,
-                    equipmentName: attachment.linkedEquipment(in: equipmentProfiles, serviceCalls: serviceCalls)?.displayName,
-                    customerName: attachment.customer?.name
-                )
+                    data: data, filename: filename, contentType: contentType, kind: kind,
+                    serviceCallID: serviceCallID, invoiceID: invoiceID, estimateID: estimateID,
+                    maintenanceContractID: maintenanceContractID, customerEquipmentID: equipmentID,
+                    equipmentName: equipmentName, customerName: customerName, originatingOperation: operation)
+                try operation.check()
+                try check()
                 attachment.markSharedCompanyStored(id: response.id)
-                try? modelContext.save()
+                try context.save()
             } catch {
+                guard (try? operation.check()) != nil, (try? check()) != nil else { return }
                 attachment.markSharedCompanyUploadFailed(error.localizedDescription)
-                try? modelContext.save()
-                documentExportMessage = "Billing PDF saved locally, but company storage upload failed: \(error.localizedDescription)"
+                try? context.save()
+                documentExportMessage = "\(failurePrefix): \(error.localizedDescription)"
             }
         }
     }
@@ -2622,6 +3038,154 @@ private extension String {
     var nilIfBlank: String? {
         let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+/// One upload retains the authority and exact saved output that initiated it.
+/// Construct this before scheduling a Task; later work never captures a new login.
+@MainActor
+final class CustomerDocumentUpload {
+    nonisolated struct Payload: Sendable {
+        let data: Data
+        let filename: String
+        let contentType: String
+        let kind: String
+        let serviceCallID: UUID?
+        let invoiceID: UUID?
+        let estimateID: UUID?
+        let maintenanceContractID: UUID?
+        let customerEquipmentID: UUID?
+        let equipmentName: String?
+        let customerName: String
+    }
+
+    nonisolated private struct Metadata: Equatable, Sendable {
+        let id: UUID
+        let filename: String
+        let path: String
+        let contentType: String
+        let kind: String
+        let caption: String?
+        let byteCount: Int
+        let createdAt: Date
+        let serviceCallID: UUID?
+        let invoiceID: UUID?
+        let estimateID: UUID?
+        let maintenanceContractID: UUID?
+        let equipmentID: UUID?
+        let backendID: String?
+        let syncStatus: String?
+        let syncDetail: String?
+
+        @MainActor init(_ attachment: ServiceDocumentAttachment) {
+            id = attachment.id
+            filename = attachment.displayName
+            path = attachment.localFilePath
+            contentType = attachment.contentType
+            kind = attachment.kindRaw
+            caption = attachment.caption
+            byteCount = attachment.fileSizeBytes
+            createdAt = attachment.createdAt
+            serviceCallID = attachment.serviceCallID
+            invoiceID = attachment.invoiceID
+            estimateID = attachment.estimateID
+            maintenanceContractID = attachment.maintenanceContractID
+            equipmentID = attachment.customerEquipmentID
+            backendID = attachment.backendDocumentID
+            syncStatus = attachment.sharedCompanySyncStatus
+            syncDetail = attachment.sharedCompanySyncDetail
+        }
+    }
+
+    typealias Upload = @MainActor (Payload, WorkspaceProviderOperation) async throws -> String
+    private let payload: Payload
+    private let attachment: ServiceDocumentAttachment
+    private let context: ModelContext
+    private let operation: WorkspaceProviderOperation
+    private let validateCurrent: @MainActor () throws -> Void
+    private let validateAuthority: @MainActor () throws -> Void
+
+    init(attachment: ServiceDocumentAttachment, customer: Customer, context: ModelContext,
+         data: Data, equipmentName: String? = nil, operation originalOperation: WorkspaceProviderOperation? = nil,
+         validateAccess: @escaping @MainActor () throws -> Void) throws {
+        try Task.checkCancellation()
+        try validateAccess()
+        let original = try originalOperation ?? WorkspaceProviderOperation.capture { true }
+        try original.check()
+        guard Self.isCurrentRecord(attachment, in: context), Self.isCurrentRecord(customer, in: context),
+              attachment.customer === customer else { throw GmailDraftError.businessChanged }
+        let metadata = Metadata(attachment)
+        let attachmentID = attachment.persistentModelID
+        let customerID = customer.id, customerPersistentID = customer.persistentModelID
+        let customerName = customer.name
+        guard metadata.byteCount == data.count else { throw GmailDraftError.businessChanged }
+        let check = { @MainActor in
+            try Task.checkCancellation()
+            try original.check()
+            try validateAccess()
+            guard Self.isCurrentRecord(attachment, in: context), Self.isCurrentRecord(customer, in: context),
+                  attachment.persistentModelID == attachmentID,
+                  customer.persistentModelID == customerPersistentID, customer.id == customerID,
+                  attachment.customer === customer, customer.name == customerName,
+                  Metadata(attachment) == metadata else { throw GmailDraftError.businessChanged }
+        }
+        try check()
+        self.attachment = attachment
+        self.context = context
+        payload = Payload(data: data, filename: metadata.filename, contentType: metadata.contentType,
+            kind: metadata.kind, serviceCallID: metadata.serviceCallID, invoiceID: metadata.invoiceID,
+            estimateID: metadata.estimateID, maintenanceContractID: metadata.maintenanceContractID,
+            customerEquipmentID: metadata.equipmentID, equipmentName: equipmentName, customerName: customerName)
+        validateCurrent = check
+        validateAuthority = {
+            try Task.checkCancellation()
+            try original.check()
+            try validateAccess()
+        }
+        operation = WorkspaceProviderOperation(parent: original) {
+            do { try check(); return true } catch { return false }
+        }
+    }
+
+    static func isCurrentRecord<T: PersistentModel>(_ model: T?, in context: ModelContext) -> Bool {
+        guard let model, model.modelContext === context, !model.isDeleted,
+              let registered: T = context.registeredModel(for: model.persistentModelID) else { return false }
+        return registered === model
+    }
+
+    func perform(upload: Upload? = nil, onFailure: @escaping @MainActor (String) -> Void) async {
+        let identifier: String
+        do {
+            try validateCurrent()
+            try operation.check()
+            identifier = try await (upload ?? Self.upload)(payload, operation)
+            try validateCurrent()
+            try operation.check()
+        } catch {
+            guard (try? validateCurrent()) != nil, (try? operation.check()) != nil else { return }
+            attachment.markSharedCompanyUploadFailed(error.localizedDescription)
+            try? context.save()
+            guard (try? validateAuthority()) != nil else { return }
+            onFailure("Upload failed: \(error.localizedDescription)")
+            return
+        }
+        // Do not recheck the old metadata after this intentional state change or
+        // turn a failed local save into a false claim that the upload failed.
+        attachment.markSharedCompanyStored(id: identifier)
+        do { try context.save() }
+        catch {
+            guard (try? validateAuthority()) != nil else { return }
+            onFailure("Upload completed, but its local confirmation could not be saved: \(error.localizedDescription)")
+        }
+    }
+
+    private static func upload(_ payload: Payload, operation: WorkspaceProviderOperation) async throws -> String {
+        let response = try await GunnAireBackendService.uploadDocument(
+            data: payload.data, filename: payload.filename, contentType: payload.contentType, kind: payload.kind,
+            serviceCallID: payload.serviceCallID, invoiceID: payload.invoiceID, estimateID: payload.estimateID,
+            maintenanceContractID: payload.maintenanceContractID, customerEquipmentID: payload.customerEquipmentID,
+            equipmentName: payload.equipmentName, customerName: payload.customerName, originatingOperation: operation)
+        return response.id
     }
 }
 
@@ -2712,6 +3276,8 @@ private struct CustomerEditorView: View {
     @State private var customerAttachmentCaption = ""
     @State private var selectedCustomerAttachmentEquipmentID: UUID?
     @State private var customerAttachmentMessage: String?
+    @State private var customerCommunicationReviewMessage: String?
+    @State private var showsAllCustomerCommunications = false
     @State private var customerAttachmentSearchText = ""
     @State private var customerAttachmentPreviewURL: URL?
     @State private var sharedCustomerDocuments: [BackendDocumentRecord] = []
@@ -3698,9 +4264,21 @@ private struct CustomerEditorView: View {
                         Text("A delivery record is kept for customer-facing email. Full message content remains in the connected Gmail mailbox.")
                             .font(.caption)
                             .foregroundColor(.secondary)
+                        if let customerCommunicationReviewMessage {
+                            Text(customerCommunicationReviewMessage)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
 
-                        ForEach(customerCommunicationsForCustomer.prefix(12)) { communication in
+                        ForEach(showsAllCustomerCommunications ?
+                            customerCommunicationsForCustomer : Array(customerCommunicationsForCustomer.prefix(12))) { communication in
                             customerCommunicationRow(communication)
+                        }
+                        if customerCommunicationsForCustomer.count > 12 {
+                            Button(showsAllCustomerCommunications ? "Show Recent" : "Show All Email History") {
+                                showsAllCustomerCommunications.toggle()
+                            }
+                            .buttonStyle(.bordered)
                         }
                     }
                 }
@@ -4781,6 +5359,7 @@ private struct CustomerEditorView: View {
             modelContext.insert(attachment)
             agreement.linkGeneratedDocument(attachment.id)
             try modelContext.save()
+            AutomaticGoogleDriveArchive.shared.wakeAfterSave(attachment, context: modelContext)
             syncMaintenanceAgreementDocumentIfPossible(attachment, data: data)
         } catch {
             customerActionMessage = "Agreement saved, but its PDF could not be generated: \(error.localizedDescription)"
@@ -4792,26 +5371,26 @@ private struct CustomerEditorView: View {
         data: Data
     ) {
         guard GunnAireBackendService.isConfigured else { return }
-        Task {
-            do {
-                let response = try await GunnAireBackendService.uploadDocument(
-                    data: data,
-                    filename: attachment.displayName,
-                    contentType: attachment.contentType,
-                    kind: attachment.kindRaw,
-                    serviceCallID: attachment.serviceCallID,
-                    maintenanceContractID: attachment.maintenanceContractID,
-                    customerEquipmentID: nil,
-                    customerName: customer.name
-                )
-                attachment.markSharedCompanyStored(id: response.id)
-                try? modelContext.save()
-            } catch {
-                attachment.markSharedCompanyUploadFailed(error.localizedDescription)
-                try? modelContext.save()
-                customerActionMessage = "Agreement saved locally. Company storage upload failed: \(error.localizedDescription)"
+        let context = modelContext
+        let email = AppAccess.normalizedEmail(currentEmail)
+        do {
+            let upload = try CustomerDocumentUpload(attachment: attachment, customer: customer,
+                context: context, data: data) {
+                guard modelContext === context,
+                      GunnAireCloudKit.usesTestDatabase ||
+                        CompanyWorkspaceAccessController.shared.authorizedContainer === context.container,
+                      AppAccess.normalizedEmail(currentEmail) == email else { throw GmailDraftError.businessChanged }
+                let currentUsers = try context.fetch(FetchDescriptor<AppUser>())
+                guard AppAccess.canManageCustomerRecords(email: currentEmail, users: currentUsers) else {
+                    throw GmailComposeError.access
+                }
             }
-        }
+            Task { @MainActor in
+                await upload.perform { detail in
+                    customerActionMessage = "Agreement saved locally. Company storage: \(detail)"
+                }
+            }
+        } catch { return }
     }
 
     private func recentCustomerJobRow(for call: ServiceCall) -> some View {
@@ -4894,10 +5473,14 @@ private struct CustomerEditorView: View {
         let linkedEstimate = communication.estimateID.flatMap { id in estimates.first { $0.id == id } }
         let linkedCall = communication.serviceCallID.flatMap { id in customerServiceCalls.first { $0.id == id } }
         let wasSent = communication.normalizedDeliveryStatus == "sent"
+        let needsQuickBooksReview = communication.needsQuickBooksEmailReview()
 
         return VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline) {
-                Label(communication.deliveryStatus.capitalized, systemImage: wasSent ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                Label(needsQuickBooksReview ? "Needs attention" :
+                    (communication.normalizedDeliveryStatus == "reviewed_unconfirmed" ?
+                        "Reviewed • unconfirmed" : communication.deliveryStatus.capitalized),
+                      systemImage: wasSent ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                     .font(.caption.weight(.semibold))
                     .foregroundColor(wasSent ? .green : .orange)
                 Text(communication.workflow.displayName)
@@ -4919,7 +5502,18 @@ private struct CustomerEditorView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
-            if let providerStatusDetail = communication.providerStatusDetail, !wasSent {
+            if needsQuickBooksReview {
+                Text("QuickBooks email acceptance is unconfirmed. Review the original document and its QuickBooks email history before attempting another send.")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                if canReviewQuickBooksEmailHistory {
+                    Button("I Checked QBO History • Dismiss Alert") {
+                        reviewQuickBooksEmailHistory(communication)
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.caption)
+                }
+            } else if let providerStatusDetail = communication.providerStatusDetail, !wasSent {
                 Text(providerStatusDetail)
                     .font(.caption2)
                     .foregroundStyle(.orange)
@@ -4967,6 +5561,57 @@ private struct CustomerEditorView: View {
             }
         }
         .padding(.vertical, 2)
+    }
+
+    private var canReviewQuickBooksEmailHistory: Bool {
+        let workspace = CompanyWorkspaceAccessController.shared
+        let email = AppAccess.normalizedEmail(currentEmail)
+        return !email.isEmpty && workspace.authorizedContainer === modelContext.container &&
+            workspace.operationStamp != nil && workspace.verifiedCompanyID != nil &&
+            workspace.verifiedRole == .admin &&
+            AppAccess.normalizedEmail(workspace.verifiedUser?.email) == email &&
+            AppAccess.canAccessSidebarItem(.quickBooksManagement, email: email, users: users)
+    }
+
+    private func reviewQuickBooksEmailHistory(_ communication: CustomerCommunication) {
+        let workspace = CompanyWorkspaceAccessController.shared
+        guard canReviewQuickBooksEmailHistory, let stamp = workspace.operationStamp,
+              CustomerDocumentUpload.isCurrentRecord(communication, in: modelContext),
+              CustomerDocumentUpload.isCurrentRecord(customer, in: modelContext),
+              communication.customer === customer else {
+            customerCommunicationReviewMessage = "QuickBooks email review requires the current company administrator session."
+            return
+        }
+        let id = communication.id
+        let customerID = customer.id
+        let originalStatus = communication.deliveryStatus
+        let originalDetail = communication.providerStatusDetail
+        let originalDeliveredAt = communication.deliveredAt
+        do {
+            let rows = try modelContext.fetch(FetchDescriptor<CustomerCommunication>(predicate: #Predicate { $0.id == id }))
+            let customers = try modelContext.fetch(FetchDescriptor<Customer>(predicate: #Predicate { $0.id == customerID }))
+            guard rows.count == 1, rows.first === communication,
+                  customers.count == 1, customers.first === customer,
+                  workspace.operationStamp == stamp,
+                  canReviewQuickBooksEmailHistory,
+                  communication.customer === customer,
+                  communication.needsQuickBooksEmailReview(),
+                  communication.markQuickBooksEmailReviewed(by: AppAccess.normalizedEmail(currentEmail)) else {
+                customerCommunicationReviewMessage = "QuickBooks email history changed. Reopen the customer and review the original attempt."
+                return
+            }
+            do {
+                try modelContext.save()
+                customerCommunicationReviewMessage = "Review recorded locally. QuickBooks email acceptance remains unconfirmed."
+            } catch {
+                communication.deliveryStatus = originalStatus
+                communication.providerStatusDetail = originalDetail
+                communication.deliveredAt = originalDeliveredAt
+                customerCommunicationReviewMessage = "QuickBooks email review could not be saved: \(error.localizedDescription)"
+            }
+        } catch {
+            customerCommunicationReviewMessage = "QuickBooks email review could not be loaded: \(error.localizedDescription)"
+        }
     }
 
     private func handleCapturedCustomerImage(_ image: UIImage) {
@@ -5045,6 +5690,7 @@ private struct CustomerEditorView: View {
             )
             modelContext.insert(attachment)
             try modelContext.save()
+            AutomaticGoogleDriveArchive.shared.wakeAfterSave(attachment, context: modelContext)
             customerAttachmentCaption = ""
             if isProfilePhoto {
                 selectedCustomerAttachmentEquipmentID = nil
@@ -5066,7 +5712,8 @@ private struct CustomerEditorView: View {
         }
 
         do {
-            let statement = customerAccountStatementSnapshot
+            let origin = try GmailDraftBusinessSnapshot.prepareAccountStatement(customer: customer, context: modelContext)
+            let statement = origin.statement
             let url = try CustomerDocumentExporter.exportAccountStatement(
                 customer: customer,
                 snapshot: statement
@@ -5089,7 +5736,8 @@ private struct CustomerEditorView: View {
             )
             modelContext.insert(attachment)
             try modelContext.save()
-            syncCustomerAttachmentIfPossible(attachment, data: data)
+            AutomaticGoogleDriveArchive.shared.wakeAfterSave(attachment, context: modelContext)
+            syncCustomerAttachmentIfPossible(attachment, data: data, isAccountStatement: true)
 
             if emailAfterGeneration {
                 guard let recipient = customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -5103,6 +5751,8 @@ private struct CustomerEditorView: View {
                     customerAttachmentPreviewURL = url
                     return
                 }
+                let business = GmailBusinessContext(customerID: customer.id, workflow: .accountStatement)
+                try GmailDraftBusinessSnapshot.validate(origin.sourceSnapshot, business: business, context: modelContext)
                 let balance = statement.totalBalance.formatted(.currency(code: "USD"))
                 GunnAireAppIntentRouter.storeMailDraftRoute(
                     to: recipient,
@@ -5121,7 +5771,8 @@ private struct CustomerEditorView: View {
                     """,
                     attachmentPaths: [url.path],
                     customerID: customer.id,
-                    workflow: .accountStatement
+                    workflow: .accountStatement,
+                    sourceSnapshot: origin.sourceSnapshot
                 )
                 dismiss()
             } else {
@@ -5166,30 +5817,72 @@ private struct CustomerEditorView: View {
         return value.isEmpty ? "customer-attachment" : value
     }
 
-    private func syncCustomerAttachmentIfPossible(_ attachment: ServiceDocumentAttachment, data: Data) {
-        guard GunnAireBackendService.isConfigured else { return }
-        Task {
-            do {
-                let response = try await GunnAireBackendService.uploadDocument(
-                    data: data,
-                    filename: attachment.displayName,
-                    contentType: attachment.contentType,
-                    kind: attachment.kindRaw,
-                    serviceCallID: nil,
-                    invoiceID: nil,
-                    estimateID: nil,
-                    customerEquipmentID: attachment.customerEquipmentID,
-                    equipmentName: attachment.linkedEquipment(in: equipmentProfiles, serviceCalls: serviceCalls)?.displayName,
-                    customerName: customer.name
-                )
-                attachment.markSharedCompanyStored(id: response.id)
-                try? modelContext.save()
-            } catch {
-                attachment.markSharedCompanyUploadFailed(error.localizedDescription)
-                try? modelContext.save()
-                customerAttachmentMessage = "Attachment saved locally. Company storage upload failed: \(error.localizedDescription)"
+    private func syncCustomerAttachmentIfPossible(
+        _ attachment: ServiceDocumentAttachment, data: Data, isAccountStatement: Bool = false
+    ) {
+        let context = modelContext
+        guard GunnAireBackendService.isConfigured,
+              GunnAireCloudKit.usesTestDatabase ||
+                CompanyWorkspaceAccessController.shared.authorizedContainer === context.container,
+              CustomerDocumentUpload.isCurrentRecord(attachment, in: context),
+              CustomerDocumentUpload.isCurrentRecord(customer, in: context) else { return }
+        let email = AppAccess.normalizedEmail(currentEmail)
+        let requiresFinancialAccess = isAccountStatement || attachment.kind.isFinancialCustomerProfileAttachment
+        do {
+            let validateAccess = { @MainActor in
+                guard modelContext === context,
+                      GunnAireCloudKit.usesTestDatabase ||
+                        CompanyWorkspaceAccessController.shared.authorizedContainer === context.container,
+                      AppAccess.normalizedEmail(currentEmail) == email else { throw GmailDraftError.businessChanged }
+                let currentUsers = try context.fetch(FetchDescriptor<AppUser>())
+                guard (isAccountStatement || AppAccess.canManageCustomerRecords(email: currentEmail, users: currentUsers)),
+                      (!requiresFinancialAccess || AppAccess.canViewBillingFinancialDetails(email: currentEmail, users: currentUsers)) else {
+                    throw GmailComposeError.access
+                }
             }
-        }
+            try validateAccess()
+            let linkedCallID = attachment.serviceCallID
+            let matchingCalls = linkedCallID.map { id in
+                serviceCalls.filter { CustomerDocumentUpload.isCurrentRecord($0, in: context) && $0.id == id }
+            } ?? []
+            guard linkedCallID == nil || matchingCalls.count == 1 else { return }
+            let linkedCall = matchingCalls.first
+            guard linkedCall == nil || linkedCall?.customer === customer else { return }
+            let linkedCallPersistentID = linkedCall?.persistentModelID
+            let linkedCallEquipmentID = linkedCall?.customerEquipmentID
+            let equipmentID = attachment.customerEquipmentID ?? linkedCallEquipmentID
+            let matchingEquipment = equipmentID.map { id in
+                equipmentProfiles.filter { CustomerDocumentUpload.isCurrentRecord($0, in: context) && $0.id == id }
+            } ?? []
+            guard equipmentID == nil || matchingEquipment.count == 1 else { return }
+            let equipment = matchingEquipment.first
+            guard equipment == nil || equipment?.customer === customer else { return }
+            let equipmentPersistentID = equipment?.persistentModelID
+            let equipmentName = equipment?.displayName
+            let upload = try CustomerDocumentUpload(attachment: attachment, customer: customer,
+                context: context, data: data, equipmentName: equipmentName) {
+                try validateAccess()
+                if let linkedCall {
+                    guard CustomerDocumentUpload.isCurrentRecord(linkedCall, in: context),
+                          linkedCall.persistentModelID == linkedCallPersistentID, linkedCall.id == linkedCallID,
+                          linkedCall.customer === customer, linkedCall.customerEquipmentID == linkedCallEquipmentID else {
+                        throw GmailDraftError.businessChanged
+                    }
+                }
+                if let equipment {
+                    guard CustomerDocumentUpload.isCurrentRecord(equipment, in: context),
+                          equipment.persistentModelID == equipmentPersistentID, equipment.id == equipmentID,
+                          equipment.customer === customer, equipment.displayName == equipmentName else {
+                        throw GmailDraftError.businessChanged
+                    }
+                }
+            }
+            Task { @MainActor in
+                await upload.perform { detail in
+                    customerAttachmentMessage = "Attachment saved locally. Company storage: \(detail)"
+                }
+            }
+        } catch { return }
     }
 
     private func refreshSharedCustomerDocuments() async {
@@ -5464,10 +6157,13 @@ private struct CustomerEditorView: View {
     }
 
     private func previewCustomerAttachment(_ attachment: ServiceDocumentAttachment) {
-        do {
-            customerAttachmentPreviewURL = try QBODocumentNativeWorkflow.previewURL(for: attachment, context: modelContext)
-            customerAttachmentMessage = nil
-        } catch { customerAttachmentMessage = QBODocumentNativeWorkflow.message(error) }
+        // A retained original is read, verified and staged off the main actor.
+        Task { @MainActor in
+            do {
+                customerAttachmentPreviewURL = try await QBODocumentNativeWorkflow.previewURL(for: attachment, context: modelContext)
+                customerAttachmentMessage = nil
+            } catch { customerAttachmentMessage = QBODocumentNativeWorkflow.message(error) }
+        }
     }
 
     @ViewBuilder
@@ -5819,8 +6515,10 @@ private struct CustomerAttachmentCameraPicker: UIViewControllerRepresentable {
 
 private struct TechnicianEditorView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
 
     let technician: Technician
+    let serviceCalls: [ServiceCall]
 
     @State private var name: String
     @State private var calendarEmail: String
@@ -5832,13 +6530,15 @@ private struct TechnicianEditorView: View {
     @State private var qualificationReviewedByEmail: String
     @State private var serviceAreas: String
     @State private var laborCostPerHour: String
+    @State private var saveError: String?
 
     private let reviewerEmail: String
 
-    init(technician: Technician, reviewerEmail: String) {
+    init(technician: Technician, reviewerEmail: String, serviceCalls: [ServiceCall]) {
         let review = technician.qualificationReview
         let today = Calendar.current.startOfDay(for: Date())
         self.technician = technician
+        self.serviceCalls = serviceCalls
         self.reviewerEmail = AppAccess.normalizedEmail(reviewerEmail)
         _name = State(initialValue: technician.name)
         _calendarEmail = State(initialValue: technician.contactInfo ?? "")
@@ -5852,6 +6552,7 @@ private struct TechnicianEditorView: View {
         _qualificationReviewedByEmail = State(initialValue: review.reviewedByEmail ?? AppAccess.normalizedEmail(reviewerEmail))
         _serviceAreas = State(initialValue: technician.serviceAreas.joined(separator: ", "))
         _laborCostPerHour = State(initialValue: technician.laborCostPerHour.map { String(format: "%.2f", $0) } ?? "")
+        _saveError = State(initialValue: nil)
     }
 
     var body: some View {
@@ -5952,6 +6653,13 @@ private struct TechnicianEditorView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                if let saveError {
+                    Section {
+                        Text(saveError)
+                            .foregroundStyle(.orange)
+                            .accessibilityIdentifier("TechnicianSaveError")
+                    }
+                }
             }
             .navigationTitle("Edit Technician")
             .toolbar {
@@ -5960,8 +6668,13 @@ private struct TechnicianEditorView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
+                        let previousName = technician.name
+                        let previousEquipmentTypes = technician.supportedEquipmentTypes
+                        let previousReview = technician.qualificationReview
+                        let previousNotes = technician.qualificationNotes
+                        let previousServiceAreas = technician.serviceAreas
+                        let previousLaborCost = technician.laborCostPerHour
                         technician.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-                        technician.contactInfo = AppAccess.normalizedEmail(calendarEmail).nilIfBlank
                         technician.updateEquipmentQualifications(
                             supportedEquipmentTypes,
                             reviewedAt: tracksQualificationReview ? qualificationReviewedAt : nil,
@@ -5971,7 +6684,32 @@ private struct TechnicianEditorView: View {
                         technician.qualificationNotes = qualificationNotes.nilIfBlank
                         technician.serviceAreas = Technician.serviceAreas(from: serviceAreas)
                         technician.laborCostPerHour = Double(laborCostPerHour.trimmingCharacters(in: .whitespacesAndNewlines))
-                        dismiss()
+                        do {
+                            let affected = try TechnicianCalendarInvitationRecovery.save(
+                                email: calendarEmail,
+                                for: technician,
+                                calls: serviceCalls,
+                                context: modelContext
+                            )
+                            saveError = nil
+                            if affected > 0 {
+                                AutomaticOutboundSync.shared.recoverCalendar(
+                                    context: modelContext, auth: GoogleAuthManager.shared)
+                            }
+                            dismiss()
+                        } catch {
+                            technician.name = previousName
+                            technician.updateEquipmentQualifications(
+                                previousEquipmentTypes,
+                                reviewedAt: previousReview.reviewedAt,
+                                reviewDueAt: previousReview.reviewDueAt,
+                                reviewedByEmail: previousReview.reviewedByEmail
+                            )
+                            technician.qualificationNotes = previousNotes
+                            technician.serviceAreas = previousServiceAreas
+                            technician.laborCostPerHour = previousLaborCost
+                            saveError = "Technician changes could not be saved. Try again."
+                        }
                     }
                     .disabled(
                         name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||

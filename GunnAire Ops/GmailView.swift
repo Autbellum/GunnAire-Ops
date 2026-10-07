@@ -3,6 +3,42 @@ import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 
+enum GmailAutomaticRefreshPolicy {
+    static let interval: TimeInterval = 120
+
+    static func isDue(lastAttempt: Date?, now: Date) -> Bool {
+        guard let lastAttempt else { return true }
+        return now < lastAttempt || now.timeIntervalSince(lastAttempt) >= interval
+    }
+
+    /// A synthetic UI-test mailbox has no server behind it, so reloading it
+    /// cannot bring anything new; it only replaces the loaded messages under an
+    /// open message, which tears that message's attachments down with it. Entry
+    /// and explicit refresh still seed such a mailbox - this governs only the
+    /// unattended wakes. The server-mail fixture does model a server and keeps
+    /// its bounded recovery, and a release build has no fixture at all, so this
+    /// never changes what a real mailbox does.
+    static func refreshesUnattended(usesMailUITestFixture: Bool,
+                                    usesServerMailFixture: Bool) -> Bool {
+        !usesMailUITestFixture || usesServerMailFixture
+    }
+
+    /// Every condition for an unattended wake, in one pure decision, so the
+    /// view keeps no second copy of it and a new trigger cannot acquire its own
+    /// rules by accident.
+    static func wakes(usesMailUITestFixture: Bool, usesServerMailFixture: Bool,
+                      isSceneActive: Bool, showingDrafts: Bool, hasComposeDraft: Bool,
+                      canUseGoogleIntegration: Bool, connectingMail: Bool,
+                      isLoading: Bool, hasBusyMessages: Bool,
+                      lastAttempt: Date?, now: Date) -> Bool {
+        refreshesUnattended(usesMailUITestFixture: usesMailUITestFixture,
+                            usesServerMailFixture: usesServerMailFixture)
+            && isSceneActive && !showingDrafts && !hasComposeDraft
+            && canUseGoogleIntegration && !connectingMail && !isLoading && !hasBusyMessages
+            && isDue(lastAttempt: lastAttempt, now: now)
+    }
+}
+
 enum GmailMessagePresentation {
     static func inboxQuery(searchText: String) -> String {
         let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -109,6 +145,7 @@ enum GmailMessagePresentation {
 
 struct GmailView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @ObservedObject private var workspace = CompanyWorkspaceAccessController.shared
 
@@ -116,6 +153,7 @@ struct GmailView: View {
     @State private var searchQuery = ""
     @State private var activeMailSend: GmailSendWorkflow?
     @State private var composeDraft: GmailDraft?
+    @State private var draftRouteIssue: String?
     @State private var didConsumePendingDraft = false
     @State private var showingDrafts = false
     @State private var savedDrafts: [GmailDraftSummary] = []
@@ -123,6 +161,8 @@ struct GmailView: View {
     @State private var needsMailApproval = false
     @State private var mailConnectionRun = UUID()
     @State private var mailConnectionTask: Task<Void, Never>?
+    @State private var lastAutomaticRefreshAt: Date?
+    @State private var automaticRecoveryOffset = 0
 
     private var messages: [GmailMessageDetail] { mailbox.messages }
     private var isLoading: Bool { mailbox.isLoading }
@@ -308,13 +348,13 @@ struct GmailView: View {
                         Button("Drafts on This Device", systemImage: "doc") { loadDrafts() }
                             .disabled(!canUseGoogleIntegration || !mailbox.busyIDs.isEmpty)
                             .accessibilityIdentifier("MailDraftsButton")
-                        if let provider = mailbox.provider, provider.serverMail != nil {
+                        if let provider = mailbox.provider, let serverMail = provider.serverMail {
                             NavigationLink("Outbox", destination: GmailServerOutboxView(provider: provider))
                                 .accessibilityIdentifier("MailOutboxButton")
                             Button("Check Mail Changes", systemImage: "arrow.clockwise") {
                                 Task { @MainActor in
                                     do {
-                                        let remaining = try await provider.serverMail!.recoverActions(operation: provider)
+                                        let remaining = try await serverMail.recoverActions(operation: provider)
                                         statusMessage = remaining == 0 ? "Mail changes checked." : "Some changes still need confirmation. The original requests have been kept."
                                         loadMessages(preservingStatus: true)
                                     } catch { statusMessage = GmailServerMailError.safe(error).localizedDescription }
@@ -344,10 +384,28 @@ struct GmailView: View {
                 }
             }
             .onAppear {
-                if canUseGoogleIntegration && messages.isEmpty {
+                #if DEBUG
+                if usesMailUITestFixture && !usesServerMailFixture && !mailbox.hasLoaded && !isLoading
+                    && !showingDrafts && composeDraft == nil {
                     loadMessages()
                 }
+                #endif
+                automaticRefreshIfDue()
                 applyPendingDraftIfNeeded()
+            }
+            .task {
+                while !Task.isCancelled {
+                    do { try await Task.sleep(for: .seconds(GmailAutomaticRefreshPolicy.interval)) }
+                    catch { return }
+                    automaticRefreshIfDue()
+                }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { automaticRefreshIfDue() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .gunnaireConnectivityRestored)) { _ in
+                lastAutomaticRefreshAt = nil
+                automaticRefreshIfDue()
             }
             .onSubmit(of: .search) {
                 if showingDrafts { loadDrafts() } else { loadMessages() }
@@ -357,6 +415,9 @@ struct GmailView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
                 applyPendingDraftIfNeeded(force: true)
+            }
+            .onChange(of: workspace.verifiedCompanyID) { _, _ in
+                if composeDraft == nil { applyPendingDraftIfNeeded(force: true) }
             }
             .sheet(item: $composeDraft) { draft in
                 GmailComposeView(
@@ -389,15 +450,58 @@ struct GmailView: View {
                     applyPendingDraftIfNeeded(force: true)
                 }
             }
-            .onChange(of: googleAuth.signedInEmail) { _, _ in if mailbox.provider?.serverMail == nil { clearMailbox() } }
-            .onChange(of: googleAuth.isAuthenticated) { _, _ in if mailbox.provider?.serverMail == nil { clearMailbox() } }
+            .onChange(of: googleAuth.signedInEmail) { _, _ in
+                if (!usesMailUITestFixture || usesServerMailFixture) && mailbox.provider?.serverMail == nil {
+                    clearMailbox()
+                }
+                if googleAuth.isAuthenticated {
+                    lastAutomaticRefreshAt = nil
+                    automaticRefreshIfDue()
+                }
+            }
+            .onChange(of: googleAuth.isAuthenticated) { _, connected in
+                if (!usesMailUITestFixture || usesServerMailFixture) && mailbox.provider?.serverMail == nil {
+                    clearMailbox()
+                }
+                if connected {
+                    lastAutomaticRefreshAt = nil
+                    automaticRefreshIfDue()
+                }
+            }
             .onChange(of: workspace.operationStamp) { _, _ in
                 if !usesMailUITestFixture { clearMailbox() }
+                automaticRefreshIfDue()
+            }
+            .alert("Estimate Email Needs Attention", isPresented: Binding(
+                get: { draftRouteIssue != nil },
+                set: { if !$0 { draftRouteIssue = nil } }
+            )) {
+                Button("OK", role: .cancel) { draftRouteIssue = nil }
+            } message: {
+                Text(draftRouteIssue ?? "Review the original estimate email before sending another copy.")
             }
         }
     }
 
-    private func loadMessages(folder: GmailMailboxFolder? = nil, preservingStatus: Bool = false) {
+    private func automaticRefreshIfDue(now: Date = Date()) {
+        guard GmailAutomaticRefreshPolicy.wakes(
+                  usesMailUITestFixture: usesMailUITestFixture,
+                  usesServerMailFixture: usesServerMailFixture,
+                  isSceneActive: scenePhase == .active,
+                  showingDrafts: showingDrafts,
+                  hasComposeDraft: composeDraft != nil,
+                  canUseGoogleIntegration: canUseGoogleIntegration,
+                  connectingMail: connectingMail,
+                  isLoading: isLoading,
+                  hasBusyMessages: !mailbox.busyIDs.isEmpty,
+                  lastAttempt: lastAutomaticRefreshAt,
+                  now: now) else { return }
+        lastAutomaticRefreshAt = now
+        loadMessages(preservingStatus: false, recoverPendingActions: true)
+    }
+
+    private func loadMessages(folder: GmailMailboxFolder? = nil, preservingStatus: Bool = false,
+                              recoverPendingActions: Bool = false) {
         guard mailbox.busyIDs.isEmpty else {
             statusMessage = "Wait for the message change to finish, then try again."
             return
@@ -416,7 +520,28 @@ struct GmailView: View {
                     guard mailConnectionRun == run else { return }
                     try provider.check()
                     needsMailApproval = false; showingDrafts = false
-                    mailbox.refresh(folder: folder ?? mailbox.folder, query: searchQuery, provider: provider, preservingStatus: preservingStatus)
+                    var keepStatus = preservingStatus
+                    if recoverPendingActions, let serverMail = provider.serverMail {
+                        do {
+                            let remaining = try await serverMail.recoverActions(
+                                operation: provider, maximum: 8, offset: automaticRecoveryOffset)
+                            guard mailConnectionRun == run, !Task.isCancelled else { return }
+                            automaticRecoveryOffset = (automaticRecoveryOffset + 8) % 128
+                            if remaining > 0 {
+                                statusMessage = "Some mail changes still need confirmation. The original requests have been kept."
+                                keepStatus = true
+                            }
+                        } catch {
+                            guard mailConnectionRun == run, !Task.isCancelled else { return }
+                            try provider.check()
+                            statusMessage = GmailServerMailError.safe(error).localizedDescription
+                            keepStatus = true
+                        }
+                    }
+                    guard mailConnectionRun == run, !Task.isCancelled else { return }
+                    try provider.check()
+                    mailbox.refresh(folder: folder ?? mailbox.folder, query: searchQuery,
+                                    provider: provider, preservingStatus: keepStatus)
                 } catch {
                     guard mailConnectionRun == run, !(error is CancellationError) else { return }
                     mailbox.clear()
@@ -473,7 +598,7 @@ struct GmailView: View {
                 #else
                 let fixtureAccess: (() throws -> Void)? = nil
                 #endif
-                activeMailSend = try GmailSendWorkflow(auth: googleAuth, context: modelContext,
+                activeMailSend = try await GmailSendWorkflow.prepare(auth: googleAuth, context: modelContext,
                     message: message, business: draft.businessContext, provider: provider, validateAccess: fixtureAccess, journal: journal)
             }
             guard let workflow = activeMailSend else { throw GmailComposeError.changed }
@@ -489,6 +614,7 @@ struct GmailView: View {
 
     private func clearMailbox() {
         mailConnectionRun = UUID(); mailConnectionTask?.cancel(); mailConnectionTask = nil; connectingMail = false
+        lastAutomaticRefreshAt = nil; automaticRecoveryOffset = 0
         mailbox.clear()
         savedDrafts = []; showingDrafts = false
         composeDraft = nil
@@ -497,7 +623,10 @@ struct GmailView: View {
     private func draftScope() throws -> GmailDraftScope {
         #if DEBUG
         if usesMailUITestFixture {
-            return .init(companyID: UUID(uuidString: "3BF63F8D-C536-4BC2-826B-EF5CA1B1C9DA")!, backendOrigin: "https://fixture.example.invalid",
+            guard let companyID = UUID(uuidString: "3BF63F8D-C536-4BC2-826B-EF5CA1B1C9DA") else {
+                throw GmailDraftError.access
+            }
+            return .init(companyID: companyID, backendOrigin: "https://fixture.example.invalid",
                 actorEmail: "mail-fixture@gunnaire.com", googleEmail: "mail-fixture@gunnaire.com")
         }
         #endif
@@ -526,9 +655,14 @@ struct GmailView: View {
 
     private func makeDraftSession(_ draft: GmailDraft, content: GmailDraftContent) throws -> GmailDraftSession {
         let scope = try draftScope()
+        try validateDraftAccess(scope, business: content.business)
         var content = content
         if draft.savedRecord == nil {
-            content.businessSnapshot = try GmailDraftBusinessSnapshot.capture(content.business, context: modelContext)
+            if let original = content.businessSnapshot {
+                try GmailDraftBusinessSnapshot.validate(original, business: content.business, context: modelContext)
+            } else {
+                content.businessSnapshot = try GmailDraftBusinessSnapshot.capture(content.business, context: modelContext)
+            }
         }
         let record = draft.savedRecord ?? GmailDraftRecord(id: draft.id, scope: scope, content: content)
         guard record.scope == scope else { throw GmailDraftError.access }
@@ -565,8 +699,47 @@ struct GmailView: View {
 
     private func applyPendingDraftIfNeeded(force: Bool = false) {
         guard composeDraft == nil, force || !didConsumePendingDraft else { return }
-        didConsumePendingDraft = true
+        guard GunnAireAppIntentRouter.hasPendingMailDraft() else {
+            didConsumePendingDraft = true
+            return
+        }
+        let scope: GmailDraftScope
+        do { scope = try draftScope() }
+        catch {
+            draftRouteIssue = "Verify the original company workspace before opening this email. The requested draft is retained."
+            return
+        }
+        if GunnAireAppIntentRouter.pendingMailDraftRequiresOrigin() ||
+           GunnAireAppIntentRouter.hasPendingMailDraftOrigin() {
+            guard let currentOrigin = GunnAireMailDraftRouteOrigin.current(),
+                  currentOrigin.matches(scope),
+                  GunnAireAppIntentRouter.pendingMailDraftOriginMatches(currentOrigin) else {
+                GunnAireAppIntentRouter.discardPendingPayload(for: .mail)
+                didConsumePendingDraft = true
+                draftRouteIssue = "The company or signed-in account changed before this estimate email opened. Reopen the original estimate to prepare a new PDF. Nothing was sent."
+                return
+            }
+        }
         guard let draft = GunnAireAppIntentRouter.consumePendingMailDraft() else { return }
+        didConsumePendingDraft = true
+        if let customerID = draft.customerID, let estimateID = draft.estimateID,
+           draft.workflow == .customerDocument {
+            do {
+                if let prior = try draftStore.activeEstimateDraft(scope: scope,
+                    customerID: customerID, estimateID: estimateID) {
+                    try validateDraftAccess(scope, business: prior.content.business)
+                    if prior.state == .editing && prior.content.businessSnapshot != draft.sourceSnapshot {
+                        draftRouteIssue = "This estimate changed after an earlier email draft was saved. Open Drafts on This Device to review or discard that draft, then prepare a new PDF. Nothing was sent."
+                        return
+                    }
+                    composeDraft = GmailDraft(record: prior)
+                    return
+                }
+            } catch {
+                draftRouteIssue = "The earlier estimate email could not be verified. Open Drafts on This Device and review it before preparing another copy. Nothing was sent."
+                return
+            }
+        }
         let attachmentResult = Result { try GmailOutgoingMessage.attachments(paths: draft.attachmentPaths) }
         composeDraft = GmailDraft(
             to: draft.to,
@@ -580,7 +753,8 @@ struct GmailView: View {
             invoiceID: draft.invoiceID,
             estimateID: draft.estimateID,
             maintenanceContractID: draft.maintenanceContractID,
-            workflow: draft.workflow
+            workflow: draft.workflow,
+            sourceSnapshot: draft.sourceSnapshot
         )
     }
 
@@ -1164,6 +1338,10 @@ private struct GmailComposeView: View {
     @State private var subject: String
     @State private var messageBody: String
 
+    private var isEstimateDocument: Bool {
+        template.business?.workflow == .customerDocument && template.business?.estimateID != nil
+    }
+
     init(
         initialTo: String = "",
         initialSubject: String = "",
@@ -1232,6 +1410,12 @@ private struct GmailComposeView: View {
     var body: some View {
         NavigationStack {
             Form {
+                if isEstimateDocument {
+                    Text("Review the customer address, message, and attached estimate PDF. Tap Send Estimate only when ready.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("EstimateMailReviewNote")
+                }
                 TextField("To", text: $to)
                     .keyboardType(.emailAddress)
                     .textInputAutocapitalization(.never)
@@ -1296,7 +1480,7 @@ private struct GmailComposeView: View {
                         .accessibilityIdentifier("MailDraftSaveStatus")
                 }
             }
-            .navigationTitle("Compose")
+            .navigationTitle(isEstimateDocument ? "Send Estimate" : "Compose")
             .interactiveDismissDisabled(true)
             .onAppear { persist() }
             .onChange(of: content) { _, _ in saveRevision += 1 }
@@ -1325,7 +1509,7 @@ private struct GmailComposeView: View {
                         .disabled(isSending || isImportingFiles)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(isSending ? "Sending..." : "Send") {
+                    Button(isSending ? "Sending..." : isEstimateDocument ? "Send Estimate" : "Send") {
                         guard !isSending, persist(), let journal, journal.record.editable else { return }
                         isSending = true
                         Task { @MainActor in
@@ -1387,6 +1571,7 @@ private struct GmailDraft: Identifiable {
     let estimateID: UUID?
     let maintenanceContractID: UUID?
     let workflow: GunnAireMailWorkflow
+    let sourceSnapshot: [String]?
 
     var requiresBusinessContext: Bool {
         customerID != nil || workflow != .general || serviceCallID != nil || invoiceID != nil ||
@@ -1399,7 +1584,7 @@ private struct GmailDraft: Identifiable {
     var content: GmailDraftContent {
         .init(to: to, subject: subject, body: body, files: attachments.map { GmailDraftFile($0) },
             reply: reply, business: businessContext, requiresBusinessContext: savedRecord?.content.requiresBusinessContext ?? requiresBusinessContext,
-            attachmentError: attachmentError, businessSnapshot: savedRecord?.content.businessSnapshot)
+            attachmentError: attachmentError, businessSnapshot: savedRecord == nil ? sourceSnapshot : savedRecord?.content.businessSnapshot)
     }
 
     init(record: GmailDraftRecord) {
@@ -1408,7 +1593,8 @@ private struct GmailDraft: Identifiable {
             attachments: value.files.map(\.attachment), attachmentError: value.attachmentError,
             reply: value.reply, customerID: value.business?.customerID, serviceCallID: value.business?.serviceCallID,
             invoiceID: value.business?.invoiceID, estimateID: value.business?.estimateID,
-            maintenanceContractID: value.business?.maintenanceContractID, workflow: value.business?.workflow ?? .general)
+            maintenanceContractID: value.business?.maintenanceContractID, workflow: value.business?.workflow ?? .general,
+            sourceSnapshot: value.businessSnapshot)
         savedRecord = record
     }
 
@@ -1427,7 +1613,8 @@ private struct GmailDraft: Identifiable {
         invoiceID: UUID? = nil,
         estimateID: UUID? = nil,
         maintenanceContractID: UUID? = nil,
-        workflow: GunnAireMailWorkflow = .general
+        workflow: GunnAireMailWorkflow = .general,
+        sourceSnapshot: [String]? = nil
     ) {
         self.id = id
         self.to = to
@@ -1444,6 +1631,7 @@ private struct GmailDraft: Identifiable {
         self.estimateID = estimateID
         self.maintenanceContractID = maintenanceContractID
         self.workflow = workflow
+        self.sourceSnapshot = sourceSnapshot
     }
 }
 

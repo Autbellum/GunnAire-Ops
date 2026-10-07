@@ -1077,7 +1077,7 @@ struct InvoiceDocumentationStatus: Equatable {
             failedQuickBooksAttachmentCount == 0
     }
 
-    var statusLabel: String {
+    nonisolated var statusLabel: String {
         if failedQuickBooksAttachmentCount > 0 {
             return "QuickBooks attachment sync failed"
         }
@@ -1115,7 +1115,7 @@ struct InvoiceDocumentationStatus: Equatable {
         return "Ready to send with documentation"
     }
 
-    var actionSummary: String {
+    nonisolated var actionSummary: String {
         if failedQuickBooksAttachmentCount > 0 {
             return "Retry \(failedQuickBooksAttachmentCount) failed QuickBooks attachment upload\(failedQuickBooksAttachmentCount == 1 ? "" : "s") before emailing."
         }
@@ -1137,7 +1137,7 @@ struct InvoiceDocumentationStatus: Equatable {
         return "Ready to email with onsite report and linked job photos."
     }
 
-    var summary: String {
+    nonisolated var summary: String {
         var parts = [
             "\(linkedReportCount) onsite report\(linkedReportCount == 1 ? "" : "s")"
         ]
@@ -1176,7 +1176,7 @@ struct EstimateDocumentationStatus: Equatable {
             failedQuickBooksAttachmentCount == 0
     }
 
-    var statusLabel: String {
+    nonisolated var statusLabel: String {
         if linkedReportCount == 0 {
             return "Onsite report missing"
         }
@@ -1208,7 +1208,7 @@ struct EstimateDocumentationStatus: Equatable {
         return "Ready to send with documentation"
     }
 
-    var actionSummary: String {
+    nonisolated var actionSummary: String {
         if linkedReportCount == 0 {
             return "Create or attach the onsite service report for this estimate."
         }
@@ -1227,7 +1227,7 @@ struct EstimateDocumentationStatus: Equatable {
         return "Ready to email with onsite report and linked job photos."
     }
 
-    var summary: String {
+    nonisolated var summary: String {
         var parts = [
             "\(linkedReportCount) onsite report\(linkedReportCount == 1 ? "" : "s")"
         ]
@@ -1277,6 +1277,12 @@ final class ServiceCall {
     @Attribute(.preserveValueOnDeletion) var id: UUID = UUID()
     var googleCalendarID: String?
     var googleEventID: String?
+    /// An event ID is reserved before Google's create request. This remains nil
+    /// until the original event and its staff delivery are confirmed.
+    var googleEventConfirmedAt: Date?
+    /// Owner-only outbox state for edits and invitations. A confirmed older
+    /// appointment can still need delivery after device-local defaults vanish.
+    var googleCalendarPendingAt: Date?
     var googleEventManagedByApp: Bool = false
     var eventTitle: String?
     var siteAddress: String?
@@ -1368,6 +1374,8 @@ final class ServiceCall {
         id: UUID = UUID(),
         googleCalendarID: String? = nil,
         googleEventID: String? = nil,
+        googleEventConfirmedAt: Date? = nil,
+        googleCalendarPendingAt: Date? = nil,
         googleEventManagedByApp: Bool = false,
         eventTitle: String? = nil,
         siteAddress: String? = nil,
@@ -1439,6 +1447,8 @@ final class ServiceCall {
         self.id = id
         self.googleCalendarID = googleCalendarID
         self.googleEventID = googleEventID
+        self.googleEventConfirmedAt = googleEventConfirmedAt
+        self.googleCalendarPendingAt = googleCalendarPendingAt
         self.googleEventManagedByApp = googleEventManagedByApp
         self.eventTitle = eventTitle
         self.siteAddress = siteAddress

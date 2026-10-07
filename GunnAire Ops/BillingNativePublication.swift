@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import SwiftData
 
 struct BillingNativeContext: Decodable {
     let companyID: UUID
@@ -146,7 +147,7 @@ enum BillingNativeError: LocalizedError, Equatable {
     }
 }
 
-struct BillingNativeJournalScope: Codable, Equatable {
+nonisolated struct BillingNativeJournalScope: Codable, Equatable, Sendable {
     let document: BillingDocumentScope
     let actorEmail: String
     var key: String {
@@ -161,15 +162,105 @@ struct BillingNativeJournalScope: Codable, Equatable {
     }
 }
 
-struct BillingNativePending: Codable {
+nonisolated struct BillingNativePending: Codable {
     let request: BillingPublicationRequest
     var draftRevision: String
     var submitted = false
     var publicationID: UUID?
     var settled = false
+    var backgroundState: BillingNativeBackgroundState?
+    var queueProof: BillingNativeQueueProof? = nil
 }
 
-struct BillingNativeJournal: Codable {
+/// Captured only after customer and catalog preparation. The encrypted journal
+/// keeps these digests so a later process cannot silently adopt edited local
+/// records while replaying an immutable server request.
+nonisolated struct BillingNativeQueueProof: Codable, Equatable, Sendable {
+    let customerID: UUID
+    let customerRevision: String
+    let itemRevisions: [UUID: String]
+    let actorRole: AppUserRole?
+
+    static func capture(customer: QuickBooksCustomerCreateDraft,
+                        items: [UUID: QuickBooksCatalogItemRevision],
+                        actorRole: AppUserRole? = nil) throws -> Self {
+        guard !items.isEmpty, items.count <= 20 else { throw QuickBooksBillingWorkflowError.changed }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        func digest<T: Encodable>(_ value: T) throws -> String {
+            SHA256.hash(data: try encoder.encode(value)).map { String(format: "%02x", $0) }.joined()
+        }
+        var revisions: [UUID: String] = [:]
+        for (id, value) in items {
+            guard id == value.id else { throw QuickBooksBillingWorkflowError.changed }
+            revisions[id] = try digest(value)
+        }
+        return .init(customerID: customer.localCustomerID,
+            customerRevision: try digest(customer), itemRevisions: revisions, actorRole: actorRole)
+    }
+
+    /// A private-context, double-read fence for a persisted queue attempt.
+    /// A changed selected record, removed mapping, conflicting provider owner
+    /// or changed customer blocks replay before the backend can reserve work.
+    func checkPersisted(container: ModelContainer, request: BillingPublicationRequest) async throws {
+        guard customerID == request.localCustomerID, itemRevisions.count <= 20,
+              !itemRevisions.isEmpty, let draftRevision = request.draftRevision else {
+            throw QuickBooksBillingWorkflowError.changed
+        }
+        let expected = self
+        let providerCustomerID = request.document.CustomerRef.value
+        let documentID = request.localDocumentID
+        try await Task.detached(priority: .utility) {
+            func read() throws -> BillingNativeQueueProof {
+                let context = ModelContext(container)
+                context.autosaveEnabled = false
+                var customerQuery = FetchDescriptor<Customer>(predicate: #Predicate { $0.id == expected.customerID })
+                customerQuery.fetchLimit = 2
+                let customers = try context.fetch(customerQuery)
+                guard customers.count == 1, let customer = customers.first,
+                      customer.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines) == providerCustomerID else {
+                    throw QuickBooksBillingWorkflowError.changed
+                }
+                var estimateQuery = FetchDescriptor<Estimate>(predicate: #Predicate { $0.id == documentID })
+                estimateQuery.fetchLimit = 2
+                let estimates = try context.fetch(estimateQuery)
+                guard estimates.count == 1, let estimate = estimates.first,
+                      estimate.customer?.persistentModelID == customer.persistentModelID,
+                      estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
+                      try QuickBooksBillingWorkflow.digestDraftRevision(
+                        QuickBooksBillingWorkflow.estimateDraftRevisionValues(
+                            estimate: estimate, customer: customer, context: context)) == draftRevision else {
+                    throw QuickBooksBillingWorkflowError.changed
+                }
+                var selected: [UUID: QuickBooksCatalogItemRevision] = [:]
+                for id in expected.itemRevisions.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+                    var itemQuery = FetchDescriptor<Item>(predicate: #Predicate { $0.id == id })
+                    itemQuery.fetchLimit = 2
+                    let items = try context.fetch(itemQuery)
+                    guard items.count == 1, let item = items.first,
+                          selected.updateValue(QuickBooksCatalogItemRevision(item), forKey: id) == nil else {
+                        throw QuickBooksBillingWorkflowError.changed
+                    }
+                }
+                let mapping = try QuickBooksBillingWorkflow.readEstimateQueueMappings(
+                    container: container, selectedIDs: Set(selected.keys), customerID: expected.customerID)
+                guard mapping.first == providerCustomerID else {
+                    throw QuickBooksBillingWorkflowError.changed
+                }
+                return try Self.capture(customer: QuickBooksCustomerCreateOperation.draft(for: customer), items: selected)
+            }
+            let first = try read()
+            let second = try read()
+            guard first == second, second == expected else { throw QuickBooksBillingWorkflowError.changed }
+        }.value
+    }
+}
+
+enum BillingNativeBackgroundState: String, Codable, Sendable {
+    case queueRequested, queued
+}
+
+nonisolated struct BillingNativeJournal: Codable {
     var version = 1
     let scope: BillingNativeJournalScope
     var pending: BillingNativePending?
@@ -180,16 +271,29 @@ struct BillingNativeJournal: Codable {
             try pending.request.validate()
             guard pending.request.scope == scope.document,
                   JobBillingAssignmentSnapshot.validConnectionRevision(pending.draftRevision),
-                  !pending.settled || (pending.submitted && pending.publicationID != nil) else { throw BillingNativeError.storage }
+                  !pending.settled || (pending.submitted && pending.publicationID != nil),
+                  pending.backgroundState == nil ||
+                    (pending.request.documentType == .estimate && pending.request.operation == .create &&
+                     pending.submitted && !pending.settled &&
+                     (pending.backgroundState != .queued || pending.publicationID != nil)),
+                  pending.queueProof == nil ||
+                    (pending.request.documentType == .estimate && pending.request.operation == .create &&
+                     pending.queueProof?.customerID == pending.request.localCustomerID &&
+                     pending.queueProof?.customerRevision.count == 64 &&
+                     pending.queueProof?.itemRevisions.isEmpty == false &&
+                     (pending.queueProof?.itemRevisions.count ?? 0) <= 20 &&
+                     pending.queueProof?.itemRevisions.values.allSatisfy({ $0.count == 64 }) == true) else {
+                throw BillingNativeError.storage
+            }
         }
     }
 }
 
-struct BillingNativeJournalStore {
+nonisolated struct BillingNativeJournalStore {
     let read: (BillingNativeJournalScope) throws -> BillingNativeJournal
     let write: (BillingNativeJournal) throws -> Void
 
-    static func encrypted(directory: URL, key: @escaping (Bool) throws -> Data) -> Self {
+    nonisolated static func encrypted(directory: URL, key: @escaping (Bool) throws -> Data) -> Self {
         func file(_ scope: BillingNativeJournalScope) -> URL { directory.appendingPathComponent(scope.key + ".sealed") }
         return .init(read: { scope in
             do {
@@ -220,7 +324,7 @@ struct BillingNativeJournalStore {
         })
     }
 
-    static var device: Self {
+    nonisolated static var device: Self {
         guard let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
             return .init(read: { _ in throw BillingNativeError.storage }, write: { _ in throw BillingNativeError.storage })
         }
@@ -295,10 +399,11 @@ final class BillingNativePublication {
         return nil
     }
 
-    func prepare(_ request: BillingPublicationRequest, revision: String) throws {
+    func prepare(_ request: BillingPublicationRequest, revision: String,
+                 queueProof: BillingNativeQueueProof? = nil) throws {
         guard journal.pending == nil || journal.pending?.settled == true else { throw BillingNativeError.pending }
         var value = journal
-        value.pending = .init(request: request, draftRevision: revision)
+        value.pending = .init(request: request, draftRevision: revision, queueProof: queueProof)
         try save(value)
     }
 
@@ -314,7 +419,7 @@ final class BillingNativePublication {
     }
 
     func submitOriginal() async throws -> BillingPublicationResponse {
-        guard let pending = journal.pending, !pending.settled else { throw BillingNativeError.pending }
+        guard let pending = journal.pending, !pending.settled, pending.backgroundState == nil else { throw BillingNativeError.pending }
         if pending.submitted {
             if let original = try await original(customerID: pending.request.localCustomerID) {
                 guard original.connectionChanged != true, original.publication.state == .reserved, try original.proposal.matches(pending.request) else {
@@ -329,6 +434,85 @@ final class BillingNativePublication {
         var confirmed = journal; confirmed.pending?.publicationID = result.publication.id
         try save(confirmed)
         return result
+    }
+
+    /// A queue request is journaled before transport. A lost response can
+    /// repeat only this exact immutable proposal, never a replacement draft.
+    func enqueueOriginal(revision: String, checkRevision: () throws -> String,
+                         checkProof: () async throws -> Void,
+                         retryReview: Bool = false) async throws -> BillingEstimateJobResponse {
+        guard let pending = journal.pending, !pending.settled,
+              pending.request.documentType == .estimate, pending.request.operation == .create,
+              pending.draftRevision == revision, try checkRevision() == revision else {
+            throw BillingNativeError.originalDraft
+        }
+        if let capturedRole = pending.queueProof?.actorRole,
+           CompanyWorkspaceAccessController.shared.verifiedRole != capturedRole {
+            throw BillingPublicationError.accessRequired
+        }
+        if pending.backgroundState == .queued, let id = pending.publicationID {
+            let status = try await client.estimateJob(id, request: pending.request, workflow: workflow)
+            guard try checkRevision() == revision else { throw BillingNativeError.originalDraft }
+            if retryReview, status.background.state == .review {
+                try await checkProof()
+                let retried = try await client.enqueueEstimate(pending.request, workflow: workflow)
+                try check()
+                guard try checkRevision() == revision, retried.publication.id == id else {
+                    throw BillingPublicationError.invalidResponse
+                }
+                try await checkProof()
+                return retried
+            }
+            return status
+        }
+        guard pending.backgroundState == nil || pending.backgroundState == .queueRequested else {
+            throw BillingNativeError.pending
+        }
+        if pending.backgroundState == nil {
+            var requested = journal
+            requested.pending?.submitted = true
+            requested.pending?.backgroundState = .queueRequested
+            try save(requested)
+        } else if let original = try await original(customerID: pending.request.localCustomerID) {
+            guard try original.proposal.matches(pending.request) else { throw BillingNativeError.pending }
+            let status: BillingEstimateJobResponse
+            do {
+                status = try await client.estimateJob(original.publication.id,
+                    request: pending.request, workflow: workflow)
+            } catch BillingPublicationError.unavailable where original.publication.state == .reserved {
+                // An older exact reservation may have no background job yet.
+                // The server atomically attaches one to this same immutable
+                // publication; a missing status is never permission to create
+                // a different proposal or bypass the original send fence.
+                try check()
+                guard try checkRevision() == revision else { throw BillingNativeError.originalDraft }
+                try await checkProof()
+                status = try await client.enqueueEstimate(pending.request, workflow: workflow)
+                guard status.publication.id == original.publication.id else {
+                    throw BillingPublicationError.invalidResponse
+                }
+            }
+            try check()
+            guard try checkRevision() == revision else { throw BillingNativeError.originalDraft }
+            try await checkProof()
+            var queued = journal
+            queued.pending?.publicationID = original.publication.id
+            queued.pending?.backgroundState = .queued
+            try save(queued)
+            return status
+        }
+        try check()
+        guard try checkRevision() == revision else { throw BillingNativeError.originalDraft }
+        try await checkProof()
+        let status = try await client.enqueueEstimate(pending.request, workflow: workflow)
+        try check()
+        guard try checkRevision() == revision else { throw BillingNativeError.originalDraft }
+        try await checkProof()
+        var queued = journal
+        queued.pending?.publicationID = status.publication.id
+        queued.pending?.backgroundState = .queued
+        try save(queued)
+        return status
     }
 
     func recover(revision: String) async throws -> BillingPublicationResponse {
@@ -358,11 +542,12 @@ final class BillingNativePublication {
     func settle(revision: String) throws {
         guard journal.pending?.publicationID != nil else { throw BillingNativeError.pending }
         var value = journal; value.pending?.settled = true; value.pending?.draftRevision = revision
+        value.pending?.backgroundState = nil
         try save(value)
     }
 
     func cancelUnsent() async throws {
-        guard let pending = journal.pending, !pending.settled else { throw BillingNativeError.pending }
+        guard let pending = journal.pending, !pending.settled, pending.backgroundState == nil else { throw BillingNativeError.pending }
         if pending.submitted {
             guard let original = try await original(customerID: pending.request.localCustomerID),
                   [.reserved, .cancelled].contains(original.publication.state), try original.proposal.matches(pending.request) else { throw BillingNativeError.pending }
