@@ -271,3 +271,9 @@ at the start of every turn; append to it rather than rewriting it.
   (`ScopedRevision` uses `customer.map`), and `rejectedMove` keeps both #43's syncing-customer
   guard and #28's removal of the Google read-only rejection. Build stays 2026100501 (main is
   still 2026091617).
+- 2026-10-11 Claude (cloud): bumped to build 2026101101 (six occurrences) and added
+  `generated/release-2026101101.sh`. A new number because this session cannot query App Store
+  Connect to tell whether 2026100501 was ever uploaded; a higher number is valid either way. Main
+  6e27407 CI failed two iPad UI tests (inventory offline setup — the known hang PR #96 contains —
+  and invoice composer bundle editing), but its tree is identical to PR #28 head 63ec8a4, which
+  passed all three native jobs (run 37391841664). Eric runs the script on the Mac after merging.
