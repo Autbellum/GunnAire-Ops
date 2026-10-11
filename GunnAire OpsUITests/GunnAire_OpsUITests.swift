@@ -5167,7 +5167,16 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(composerNavigation.buttons["SaveBillingDocument"].waitForExistence(timeout: 4),
                       "Create must stay in the sheet toolbar, not below the visible form.")
         XCTAssertEqual(app.buttons.matching(identifier: "SaveBillingDocument").count, 1)
-        XCTAssertTrue(waitForHittable(save, timeout: 4))
+        // The last pinned override in this file, and CI proved it wrong: main's
+        // own run failed this exact assertion in the sibling composer variant.
+        // The 4 s was being consumed by the wait's OWN evaluation cost, not by an
+        // unready control - the captured log shows `Checking existence of
+        // Keyboard` plus two retries inside the bound. The hardware variant also
+        // still has the keyboard up here, so the keyboard-overlap branch runs.
+        // Use the 10 s default the helper already carries for this reason; it
+        // returns the moment the control is hittable, so a passing run is
+        // unaffected.
+        XCTAssertTrue(waitForHittable(save))
         XCTAssertTrue(composerNavigation.frame.contains(save.frame), "The full primary action must be visible.")
         XCTAssertTrue(save.isEnabled); save.tap()
         let savedCustomer = app.staticTexts["ManagementBillingSavedCustomer"]
@@ -5677,7 +5686,13 @@ final class GunnAire_OpsUITests: XCTestCase {
             // Hosted accessibility snapshots can consume several seconds before
             // the first predicate result. Keep a bounded wait and the exact
             // value/trait/action assertions; never tap again to mask a lost tap.
-            let result = XCTWaiter.wait(for: [changed], timeout: 8)
+            // Measured poll cost here is about 2 s per evaluation, so 8 s bought
+            // only about four samples; this passed on main with roughly a second
+            // and a half of margin and tipped over on a slower runner. Ten seconds
+            // matches the bound this file already adopted twice on CI evidence.
+            // The assertion is unchanged, so a selection that never registers
+            // still fails rather than passing slowly.
+            let result = XCTWaiter.wait(for: [changed], timeout: 10)
             if result != .completed {
                 retainNavigationFailure(app, name: "Existing link selection state did not settle")
             }

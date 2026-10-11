@@ -318,3 +318,43 @@ at the start of every turn; append to it rather than rewriting it.
   explain why propagation sometimes exceeds a second on a loaded runner — the same unexplained
   slowness behind the animation-quiescence waits open since 2026-09-22. The other failure in that
   main run, the inventory offline-setup hang, is NOT addressed here and is a separate problem.
+
+- 2026-10-11 Claude, PR #101 first CI result and the two follow-up fixes. Mac, Python 3.13 and
+  Python 3.14 passed; both iPad shards failed once each. **The settle fix did what it was for:**
+  `testEstimateBundleComposerSavesEditsWithKeyboardActive` passed,
+  `testInvoiceComposerBrowsesCategoriesEditsRepeatedBundleMembersAndSavesOriginal` passed, and
+  `testAdministratorCreatesInventoryOfflineAndReopensExactSetup` passed — the last two are exactly
+  the pair main's own `6e27407` run failed. Direct measurement of the mechanism, from the shard 1
+  log: after `Type '3'` at t=94.37 s the settle polled until t=98.93 s, so that field genuinely
+  took about 4.5 s to propagate and the old single read would have failed immediately.
+  **Failure 1, shard 1 — `testBundleComposerSavesAfterHardwareKeyboardSelectAll` at
+  `waitForHittable(save, timeout: 4)`. Proven pre-existing, not caused by this branch.** Main's
+  `6e27407` shard 1 failed the *identical assertion* at its line 5144, which is this line minus the
+  26 lines the settle helper added above it; it failed there in the sibling composer variant. So the
+  defect belongs to the shared line, not to a variant, and it rotates between the three
+  `exerciseBundleComposer` journeys with load. The log shows the 4 s being eaten by the wait's own
+  evaluation cost rather than an unready control — `Checking existence of Keyboard` at t=113.09 s
+  then two retries at t=115.42 s, bound expired about t=116. The hardware variant also still has the
+  keyboard up at this point, so `waitForHittable`'s keyboard-overlap branch runs here; the
+  2026-09-25 entry kept this site at 4 s on the reasoning that it has "no keyboard transition before
+  it", and that reasoning is now refuted by evidence for at least the hardware variant. Removed the
+  override, so it uses the 10 s default the helper already carries for precisely this reason. This
+  was the last pinned `waitForHittable` override in the file; the remaining two are a deliberate 1 s
+  fast probe and an existing 10 s.
+  **Failure 2, shard 0 — `testExistingQuickBooksLinkReviewCancelsAndReturnsToManagement` at
+  `requireSelection`'s 8 s wait.** Attribution checked rather than assumed: the enclosing
+  `exerciseExistingQuickBooksLinks` contains ZERO calls to `replaceText`, `enterQuantity`,
+  `settledValue`, `typeText` or `typeKey`, so no code this branch changed runs in that test. It
+  passed on main at 36.438 s and failed here at 37.85 s, so it sits on the margin. Measured poll
+  cost is about 2 s per evaluation, so 8 s bought roughly four samples. Raised to 10 s, the bound
+  this file has already adopted twice on CI evidence. This is ONE occurrence, weaker evidence than
+  failure 1, and it is recorded as such; the assertion is untouched, so a selection that never
+  registers still fails rather than passing slowly.
+  DELIBERATELY NOT SWEPT: the file holds 33 `XCTWaiter.wait` bounds between 2 and 12 seconds.
+  Raising them wholesale is the unbounded, unverifiable churn the 2026-09-25 entry warned about and
+  a real risk to the shard budget, since every wait that would have failed fast then fails slowly.
+  Only the two sites CI actually failed were changed.
+  NOTHING WEAKENED: `XCTAssert` 2755 and `XCTFail` 0 before and after, 186 test methods before and
+  after. Both changed lines keep their assertion; only the bound moved. No app source touched.
+  Verified: `swiftc -frontend -parse` exit 0; `git diff --check` clean. CoreSimulator is still
+  unreachable from this sandbox, so CI on PR #101 remains the gate.
