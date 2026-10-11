@@ -277,3 +277,44 @@ at the start of every turn; append to it rather than rewriting it.
   6e27407 CI failed two iPad UI tests (inventory offline setup — the known hang PR #96 contains —
   and invoice composer bundle editing), but its tree is identical to PR #28 head 63ec8a4, which
   passed all three native jobs (run 37391841664). Eric runs the script on the Mac after merging.
+
+- 2026-10-10 Claude, branch `fix/settled-field-value-after-typing-20261010` off main `22a78b4`:
+  ported ONLY the post-typing field-settle fix out of PR #27, at Eric's instruction, because the
+  defect is on main as well and PR #27 may be abandoned.
+  **Why this belongs on main, not just on that branch.** The 2026-10-11 entry above records that
+  main `6e27407` CI failed two iPad UI tests, one of them the invoice-composer bundle-editing
+  journey. That is the `submitKeyboard: true` sibling of the test PR #27's shard 0 failed, and
+  main's `enterQuantity` is byte-identical to the version that failed there — verified by
+  comparison, not assumed. So the sampling defect is main's too.
+  **What the failure is.** `CatalogBundleQuantityEditor` seeds its `@State` from
+  `String(snapshot.quantity)` with `quantity` a `Double`, so the field opens holding `"1.0"`.
+  `enterQuantity` sends one `typeText` carrying three deletes plus `"2"`, then reads the value
+  once. The observed `"1"` is `"1.0"` with two of those four keystrokes applied: the sequence read
+  mid-flight. Timing confirms it — the failing read came 0.3 s after the synthesize event, the
+  passing read on the same shard came 1.26 s after it.
+  **Fix:** a bounded `settledValue(of:equals:)` modelled on `waitForHittable`. It returns the
+  moment the field settles and then reads the value again, so a field that reaches the expected
+  text and then changes still fails the caller's own unchanged assertion. Applied to all eight of
+  main's post-typing reads in one pass — both `enterQuantity` paths, `replaceText`'s decision read
+  (at 3 s, since there it only chooses whether the existing fallback is needed and a mid-flight
+  read would also size its delete count against a partial value), the Mail subject, the
+  shared-time worker reference, the inventory hardware draft before and after keyboard teardown,
+  and the inventory per-key entry after Command-A. One pass rather than one per CI failure, for
+  the reason the 2026-09-25 and 2026-09-30 entries record.
+  Main's set is a subset of PR #27's thirteen: main has no `replaceInventoryQuantityText` and no
+  per-key assertion loops, so `settledClearedValue` was deliberately NOT ported — it would have
+  been dead code here.
+  NOTHING WEAKENED: `XCTAssert` 2755 and `XCTFail` 0 before and after, 186 test methods before and
+  after, and every removed line is a value *read* feeding an unchanged comparison. No assertion,
+  message, test, exclusion or expected failure was touched, and no app source was touched.
+  Verified: `swiftc -frontend -parse` exit 0 (iOS simulator target); `git diff --check` clean;
+  15/15 workflow-shard and native-execution contract tests pass. All five affected tests are
+  already explicit CI selectors on main's workflow and span both shards (indices 55, 56, 57, 62,
+  63), so CI exercises this directly.
+  NOT RUN HERE: CoreSimulator is unreachable from this session's sandbox ("Unable to discover any
+  Simulator runtimes", "Operation not permitted"), the same wall recorded on 2026-09-22, so no UI
+  test was executed. CI on this branch is the gate. The sandbox was not bypassed.
+  LIMIT: this makes the tests sample a settled field instead of a mid-flight one. It does not
+  explain why propagation sometimes exceeds a second on a loaded runner — the same unexplained
+  slowness behind the animation-quiescence waits open since 2026-09-22. The other failure in that
+  main run, the inventory offline-setup hang, is NOT addressed here and is a separate problem.
