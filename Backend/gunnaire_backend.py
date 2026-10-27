@@ -37,6 +37,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 
 try:
+    from Backend.bounded_http_server import BoundedBusinessServer
     from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications, billing_estimate_jobs, billing_native, qbo_link_adoption, field_payment_review
     from Backend import customer_accounts, transactional_email
     from Backend.customer_account_portal import PORTAL_HTML as CUSTOMER_ACCOUNT_PORTAL_HTML
@@ -53,6 +54,7 @@ try:
     from Backend.time_worker_provider import TimeWorkerQBOProvider
     from Backend.time_publication_provider import TimeQBOProvider
 except ModuleNotFoundError:
+    from bounded_http_server import BoundedBusinessServer
     import payment_attempts  # Direct launch from the Backend directory.
     import field_payment_review
     import catalog_publications
@@ -95,7 +97,7 @@ except ModuleNotFoundError:
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.10.27.1"
+SERVICE_VERSION = "2026.10.27.2"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -400,8 +402,8 @@ CUSTOMER_FINANCING_MIN_AMOUNT = os.environ.get("GUNNAIRE_CUSTOMER_FINANCING_MIN_
 CUSTOMER_FINANCING_MAX_AMOUNT = os.environ.get("GUNNAIRE_CUSTOMER_FINANCING_MAX_AMOUNT", "").strip()
 MAX_DOCUMENT_BYTES = min(max(int(os.environ.get("GUNNAIRE_MAX_DOCUMENT_BYTES", str(12 * 1024 * 1024))), 1024), 25 * 1024 * 1024)
 # Decoding uploads retains JSON, base64 and decoded bytes simultaneously.
-DOCUMENT_UPLOAD_SLOTS = threading.BoundedSemaphore(2)
-DOCUMENT_DOWNLOAD_SLOTS = threading.BoundedSemaphore(2)
+DOCUMENT_UPLOAD_SLOTS = threading.BoundedSemaphore(1)
+DOCUMENT_DOWNLOAD_SLOTS = threading.BoundedSemaphore(1)
 ALLOWED_CORS_ORIGINS = {
     origin.strip().rstrip("/")
     for origin in os.environ.get("GUNNAIRE_ALLOWED_CORS_ORIGINS", "").split(",")
@@ -8235,7 +8237,7 @@ def main() -> None:
     start_push_delivery_worker()
     start_billing_estimate_worker()
     start_backup_worker()
-    server = ThreadingHTTPServer((HOST, PORT), GunnAireBackendHandler)
+    server = BoundedBusinessServer((HOST, PORT), GunnAireBackendHandler)
     print(f"GunnAire backend listening on http://{HOST}:{PORT}")
     print(f"Service version: {SERVICE_VERSION}")
     print(f"Database: {DB_PATH}")

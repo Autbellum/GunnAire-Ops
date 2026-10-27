@@ -373,7 +373,7 @@ remain HTTP 400. Document uploads retain their configured decoded-file limit
 (default 12 MiB) and their separate base64 envelope limit; oversized documents
 remain HTTP 413.
 
-At most two `/api/documents` uploads may decode/store/respond at once per process.
+At most one `/api/documents` upload may decode/store/respond at once per process.
 Excess requests are rejected before reading or storing their body with HTTP 503.
 An HTTP client still sending a body can instead observe a connection closure;
 it must retain the original file and present/retry the failed upload. Native
@@ -381,9 +381,9 @@ attachment flows retain local files and record upload failure. This is not an
 idempotency guarantee for arbitrary lost replies after a successful upload.
 Slots release after both successful and failed storage attempts.
 
-The root `gunnaire_backend.py` launcher uses `BoundedBusinessServer` (64 connection
-handlers, 10-second socket timeout); the separate canonical module entrypoint
-still uses ThreadingHTTPServer. Use the documented root launcher. The upload
+Both the root launcher and Render's canonical `cd Backend; python3 gunnaire_backend.py`
+entrypoint use the shared `BoundedBusinessServer` (64 connection handlers,
+10-second socket timeout). Excess connections close before a handler is created. The upload
 limit does not bound every replica/download/provider allocation or establish an
 RSS budget. Synthetic local macOS profiling of eight concurrent 12 MiB uploads,
 small role-filtered replica reads and a 24 MiB backup reduced observed server
@@ -396,7 +396,7 @@ Regression coverage: `python -m unittest Backend.test_request_body_limits` uses
 isolated storage and real authenticated HTTP to verify >1 MiB and exact-limit
 upload/readback, limit+1 rejection, capacity rejection and slot cleanup.
 
-Isolated successor `2026.10.15.2` additionally admits at most two document-byte
+Current candidate `2026.10.27.2` admits at most one document-byte
 downloads per process across general document and staff workspace media routes.
 The shared slot spans verified filesystem read, post-read authority/binding checks,
 and socket write; it releases on success, rejection, timeout or disconnect. Busy
@@ -409,7 +409,8 @@ NAS relocation alone would retain the same allocation. Clients must retain local
 state and retry failed GETs; automatic native retry is not asserted. Other replica
 and provider/PDF allocation paths remain outside this cap.
 
-A synthetic eight-client64MiB download probe (separate client process, paused
+Historical two-slot evidence (superseded by the current one-slot limit):
+a synthetic eight-client64MiB download probe (separate client process, paused
 responses) measured server RSS about1200MiB before and383MiB after this cap.
 Two responses were admitted; six received503 and subsequently retried with exact
 size/hash readback. RSS remained near peak afterward; allocator retention and
@@ -430,3 +431,28 @@ a quota guarantee, maximum-replica stress test, long soak or incident diagnosis.
 ### October 2026 certificate trust advisory
 
 The canonical requirements require `certifi>=2026.10.19` for the CA bundle used by Requests and HTTPX. Install from the repository-root requirements file and verify the resolved Certifi version in the actual deployment. Native Render system trust stores also require a new build; custom CA bundles and Docker images require separate verification. A healthy endpoint does not establish patched outbound TLS trust. See https://render.com/docs/advisory-emudhra. Deployment requires the normal backup, compatibility, and approval gates; no deployment is performed by changing this file.
+
+### Exact Render entrypoint quota check (2026-10-27)
+
+The direct-entrypoint regression fills all 64 connection slots, verifies refusal
+of a 65th request, then verifies socket expiry and health recovery. Default-capacity
+coverage also holds one download and verifies that the other route rejects before
+reading bytes, then succeeds after release. Both document caps are now one per
+process; file-size and integrity limits are unchanged.
+
+A mixed synthetic run using the exact Render entrypoint exceeded a conservative
+512,000,000-byte sampled RSS guard with the previous two-upload/two-download
+limits (514,359,296 bytes). The guard terminated that fixture process. Retest
+evidence for the reduced limits is recorded outside the source checkout. This
+macOS experiment cannot establish Linux cgroup/0.5 CPU or production-data headroom.
+Keep live quota, populated replica, provider/PDF, and sustained-load verification
+as release gates. Do not automatically replay uploads after uncertain transports.
+
+The corrected fifteen-wave mixed run (360 initial requests; 92.891 seconds)
+peaked at 418,611,200 bytes across 1,557 RSS samples. All 60 replica pages and
+document readbacks passed hash checks, all monitored health responses stayed
+below five seconds, and the fixture backup verified. It survived the
+512,000,000-byte guard but FAILED the retained 409,600,000-byte (20% headroom)
+target. This remains a release gate, not an accepted production memory margin.
+105 rejected downloads subsequently succeeded; 75 uncertain upload transports
+were not replayed. Admission limits sacrifice throughput during large transfers.

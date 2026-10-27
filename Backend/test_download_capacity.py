@@ -72,6 +72,28 @@ class DownloadCapacityTests(unittest.TestCase):
         self.assertEqual(self.get(self.general, self.f.tokens["Admin"])[0], 200)
         self.assertEqual(self.get(self.staff, self.f.tokens["Field Technician"])[0], 200)
 
+    def test_default_capacity_refuses_second_route_without_reading_bytes(self):
+        entered = threading.Event()
+        release = threading.Event()
+        original = backend.GunnAireBackendHandler.write_media_bytes
+        def slow_write(handler, *args):
+            entered.set()
+            if not release.wait(5):
+                raise TimeoutError("fixture response never released")
+            return original(handler, *args)
+        with mock.patch.object(backend.GunnAireBackendHandler, "write_media_bytes", slow_write), \
+             mock.patch.object(backend.document_storage, "read_document", wraps=backend.document_storage.read_document) as reader, \
+             concurrent.futures.ThreadPoolExecutor(max_workers=1) as worker:
+            first = worker.submit(self.get, self.general, self.f.tokens["Admin"])
+            try:
+                self.assertTrue(entered.wait(5))
+                self.assertEqual(self.get(self.staff, self.f.tokens["Field Technician"])[0], 503)
+                self.assertEqual(reader.call_count, 1)
+            finally:
+                release.set()
+            self.assertEqual(first.result(5)[0], 200)
+        self.assertEqual(self.get(self.staff, self.f.tokens["Field Technician"])[0], 200)
+
     def test_read_error_releases_capacity_and_preserves_error(self):
         slots = threading.BoundedSemaphore(1)
         with mock.patch.object(backend, "DOCUMENT_DOWNLOAD_SLOTS", slots):
