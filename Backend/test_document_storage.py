@@ -1,6 +1,9 @@
 from pathlib import Path
 import os
 import hashlib
+import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -23,6 +26,34 @@ class DocumentStorageTests(unittest.TestCase):
         with self.assertRaises(storage.DocumentReadError) as caught:
             action()
         self.assertEqual(caught.exception.status, status)
+
+    def test_maximum_verified_document_avoids_a_second_full_size_buffer(self):
+        # Isolate allocator telemetry from other tests and fixture server threads.
+        block = b"x" * (1024 * 1024)
+        digest = hashlib.sha256()
+        with self.path.open("wb") as output:
+            for _ in range(64):
+                output.write(block)
+                digest.update(block)
+        code = """
+from pathlib import Path
+import hashlib,json,sys,tracemalloc
+from Backend import document_storage
+tracemalloc.start()
+data=document_storage.read_document(Path(sys.argv[1]),sys.argv[2],
+    expected_bytes=64*1024*1024,expected_sha256=sys.argv[3])
+current,peak=tracemalloc.get_traced_memory()
+print(json.dumps(dict(size=len(data),digest=hashlib.sha256(data).hexdigest(),peak=peak)))
+"""
+        result = subprocess.run([sys.executable, "-c", code, str(self.root),
+                                 str(self.path), digest.hexdigest()],
+                                cwd=Path(__file__).resolve().parents[1],
+                                capture_output=True, text=True, check=True, timeout=30)
+        measured = json.loads(result.stdout)
+        self.assertEqual(measured["size"], 64 * 1024 * 1024)
+        self.assertEqual(measured["digest"], digest.hexdigest())
+        self.assertLess(measured["peak"], 96 * 1024 * 1024,
+                        "Verified reads must not hold two full document buffers")
 
     def test_exact_bytes_and_short_reads(self):
         original_read = os.read

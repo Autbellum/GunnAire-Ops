@@ -8,6 +8,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import hmac
+import io
 import os
 from pathlib import Path
 import re
@@ -85,20 +86,31 @@ def read_document(storage_root: Path, stored_path, *, expected_bytes=None, expec
             raise DocumentReadError(403, "Only regular document files can be downloaded.")
         if before.st_size < 0 or before.st_size > maximum or expected_bytes is not None and before.st_size != expected_bytes:
             raise DocumentReadError(409, "Document size no longer matches the prepared content.")
-        chunks, total = [], 0
+        # Pre-size once to the validated length: repeated BytesIO growth can
+        # retain old large allocations in the host allocator. getvalue() returns
+        # immutable bytes without a second full-size chunk-list copy.
+        # Never send bytes before complete file and digest verification.
+        buffer, total = io.BytesIO(), 0
+        if before.st_size:
+            buffer.seek(before.st_size - 1)
+            buffer.write(b"\0")
+            buffer.seek(0)
         # Read at most the verified length plus one byte; handle short reads
         # without truncating output and reject a concurrent grow/shrink/write.
         while total <= before.st_size:
             block = os.read(fd, min(64 * 1024, before.st_size + 1 - total))
             if not block:
                 break
-            chunks.append(block)
             total += len(block)
+            if total > before.st_size:
+                raise DocumentReadError(409, "Document changed during the download. Refresh and retry.")
+            buffer.write(block)
         after = os.fstat(fd)
         fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
         if total != before.st_size or any(getattr(before, name) != getattr(after, name) for name in fields):
             raise DocumentReadError(409, "Document changed during the download. Refresh and retry.")
-        data = b"".join(chunks)
+        data = buffer.getvalue()
+        buffer.close()
         if expected_sha256 is not None and not hmac.compare_digest(hashlib.sha256(data).hexdigest(), expected_sha256):
             raise DocumentReadError(409, "Document bytes do not match the original upload. Keep the original for review.")
         return data

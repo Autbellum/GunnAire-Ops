@@ -456,3 +456,40 @@ below five seconds, and the fixture backup verified. It survived the
 target. This remains a release gate, not an accepted production memory margin.
 105 rejected downloads subsequently succeeded; 75 uncertain upload transports
 were not replayed. Admission limits sacrifice throughput during large transfers.
+
+### Verified document-buffer repair (2026-10-27)
+
+Allocation profiling of the same fifteen-wave workload identified document chunks
+and their joined copy as the largest traced buffers (about 79.7 MB each when a
+download overlapped upload verification). Between waves live traced allocations
+returned to about 42.6 MB while RSS stayed elevated. This supports temporary
+duplication plus allocator retention in the fixture; it does not exclude a
+production leak or other native allocations. Profiler overhead is excluded from
+the release workload measurement.
+
+The reader now pre-sizes BytesIO once to the validated file length rather than
+retaining a chunk list plus a joined full-size copy. An initial growing-BytesIO
+experiment worsened RSS and was rejected after the guard stopped it at
+599,769,088 bytes; its failed evidence is retained. It still returns immutable bytes only after
+size, descriptor identity/timestamps and SHA-256 verification; no unverified
+streaming was introduced. A maximum-size 64 MiB read measured peak traced
+allocation 134,346,173 bytes before and 67,243,408 bytes after on CPython 3.14.7.
+A subprocess regression enforces less than 96 MiB peak for that verified read
+and exact output length/hash. This allocation gate is distinct from the unchanged
+512,000,000-byte RSS limit and 409,600,000-byte headroom target.
+
+With pre-sizing, the unchanged fifteen-wave workload passed all original gates:
+peak RSS 246,710,272 bytes (previous chunk-list baseline 418,611,200), duration
+93.284 seconds and 1,529 samples. Health, document hashes, replica hashes and
+automatic backup verification passed. The final-wave RSS plateau was about
+245.6 MB and final idle RSS about 216.1 MB. These are local CPython/macOS results;
+Linux 512 MB / 0.5 CPU, production-populated replica and provider/PDF workloads
+remain deployment verification gates. Earlier failed runs remain evidence.
+
+The same workload extended to 45 waves also passed: 249,806,848-byte peak across
+4,547 samples / 272.609 seconds. RSS plateaued near 249 MB and ended at
+185,647,104 bytes. All 180 replica reads, 315 safe download retries, 127 upload
+readbacks and fixture backup verification passed; maximum health latency 30 ms.
+233 uncertain upload transports were not replayed. No unbounded growth was
+observed over this interval; native allocations and longer production runs remain
+outside that conclusion. This extension stresses memory, not Render's disk quota.
