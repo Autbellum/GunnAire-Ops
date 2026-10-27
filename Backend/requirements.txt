@@ -3,3 +3,5 @@ requests>=2.31,<3.0
 cryptography>=42.0,<46.0
 httpx[http2]>=0.27,<1.0
 tzdata>=2026.3
+# Render eMudhra advisory: Requests and HTTPX use this CA bundle.
+certifi>=2026.10.19

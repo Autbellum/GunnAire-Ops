@@ -362,3 +362,71 @@ leftovers of an interrupted copy, backs off after repeated failures, and
 records the outcome of its last attempt in the readiness detail. A
 `backup_status.json` record proves local verification only; retain the
 artifact outside Render and its persistent disk.
+
+
+## Candidate request-memory bounds (2026-10-15)
+
+Common metadata JSON requests are limited to 1 MiB before reading. The reader
+requires ASCII decimal Content-Length, rejects duplicate lengths and unsupported
+Transfer-Encoding, and rejects truncated bodies. Existing route error contracts
+remain HTTP 400. Document uploads retain their configured decoded-file limit
+(default 12 MiB) and their separate base64 envelope limit; oversized documents
+remain HTTP 413.
+
+At most two `/api/documents` uploads may decode/store/respond at once per process.
+Excess requests are rejected before reading or storing their body with HTTP 503.
+An HTTP client still sending a body can instead observe a connection closure;
+it must retain the original file and present/retry the failed upload. Native
+attachment flows retain local files and record upload failure. This is not an
+idempotency guarantee for arbitrary lost replies after a successful upload.
+Slots release after both successful and failed storage attempts.
+
+The root `gunnaire_backend.py` launcher uses `BoundedBusinessServer` (64 connection
+handlers, 10-second socket timeout); the separate canonical module entrypoint
+still uses ThreadingHTTPServer. Use the documented root launcher. The upload
+limit does not bound every replica/download/provider allocation or establish an
+RSS budget. Synthetic local macOS profiling of eight concurrent 12 MiB uploads,
+small role-filtered replica reads and a 24 MiB backup reduced observed server
+peak RSS from about 443 MiB to 180 MiB, with excess uploads rejected and then
+successfully retried sequentially. Client buffers were in a separate process.
+This does not identify the cause of the October Render restarts or prove safety
+at the server's maximum connection count / maximum replica payload.
+
+Regression coverage: `python -m unittest Backend.test_request_body_limits` uses
+isolated storage and real authenticated HTTP to verify >1 MiB and exact-limit
+upload/readback, limit+1 rejection, capacity rejection and slot cleanup.
+
+Isolated successor `2026.10.15.2` additionally admits at most two document-byte
+downloads per process across general document and staff workspace media routes.
+The shared slot spans verified filesystem read, post-read authority/binding checks,
+and socket write; it releases on success, rejection, timeout or disconnect. Busy
+requests return HTTP503 without reading the file. Manifests/authorization metadata
+remain available. Existing hash/size proof, no-symlink reads, attachment headers and
+post-read revocation checks remain intact. Files are still buffered (up to64MiB);
+this bounds simultaneous download allocations, not individual or global RSS.
+Direct streaming was rejected because it would send bytes before verification;
+NAS relocation alone would retain the same allocation. Clients must retain local
+state and retry failed GETs; automatic native retry is not asserted. Other replica
+and provider/PDF allocation paths remain outside this cap.
+
+A synthetic eight-client64MiB download probe (separate client process, paused
+responses) measured server RSS about1200MiB before and383MiB after this cap.
+Two responses were admitted; six received503 and subsequently retried with exact
+size/hash readback. RSS remained near peak afterward; allocator retention and
+other work still require host-quota/mixed-load/soak verification. This is not a
+production memory budget or evidence identifying the Render restart cause.
+
+Real TCP reset and non-reading-client timeout regressions exercise both download
+routes, then require a successful byte-identical download using the released slot.
+The timeout fixture uses the same BoundedBusinessServer mechanism with0.3seconds
+instead of production10seconds; it does not disable diagnostics or alter product
+timeouts. A mixed local process probe observed two12MiB uploads plus general/staff
+64MiB downloads during verified backup, with12 representative47,433-byte replica
+responses. Sampled peakRSS427MiB; workload2.893seconds/52.53MiB/s including a
+two-second receive pause. All uploads/readbacks/downloads/replica/backup checks
+passed. Sampling can miss short peaks; post-GCRSS stayed near427MiB. This is not
+a quota guarantee, maximum-replica stress test, long soak or incident diagnosis.
+
+### October 2026 certificate trust advisory
+
+The canonical requirements require `certifi>=2026.10.19` for the CA bundle used by Requests and HTTPX. Install from the repository-root requirements file and verify the resolved Certifi version in the actual deployment. Native Render system trust stores also require a new build; custom CA bundles and Docker images require separate verification. A healthy endpoint does not establish patched outbound TLS trust. See https://render.com/docs/advisory-emudhra. Deployment requires the normal backup, compatibility, and approval gates; no deployment is performed by changing this file.
