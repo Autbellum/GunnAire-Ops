@@ -1,0 +1,52 @@
+name: Isolated Linux quota validation
+
+# Called only by the existing manual backend workflow on an approved validation branch.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  quota:
+    if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/validation/linux-quota-') && github.repository == 'Autbellum/GunnAire-Ops'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out the exact dispatched commit without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install production-compatible Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.14.3'
+      - name: Install canonical dependencies in the ephemeral runner
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Record source and runtime evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir quota-evidence
+          git rev-parse HEAD > quota-evidence/source-sha.txt
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python -m pip check > quota-evidence/pip-check.txt
+          python -m pip list --format=json > quota-evidence/dependencies.json
+          uname -a > quota-evidence/kernel.txt
+          systemd --version > quota-evidence/systemd.txt
+          test -r /sys/fs/cgroup/cgroup.controllers
+          sudo -n true
+      - name: Verify harness failure gates
+        run: python -m unittest Tools.test_linux_quota -v
+      - name: Run unchanged fifteen-wave workload
+        run: python Tools/validate_linux_quota.py --waves 15 --output quota-evidence/waves-15
+      - name: Run forty-five-wave plateau check
+        run: python Tools/validate_linux_quota.py --waves 45 --output quota-evidence/waves-45
+      - name: Retain synthetic evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-quota-${{ github.sha }}-${{ github.run_attempt }}
+          path: quota-evidence/
+          if-no-files-found: error
+          retention-days: 14
