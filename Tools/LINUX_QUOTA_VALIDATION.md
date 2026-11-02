@@ -102,3 +102,13 @@ References:
 - https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch
 - https://www.freedesktop.org/software/systemd/man/latest/systemd-run.html
 - https://docs.github.com/en/billing/concepts/product-billing/github-actions
+
+## November 2 identity-verification correction
+
+The same uploaded fixture bytes previously allowed duplicate creation IDs or
+readbacks assigned to the wrong document to pass byte-only verification. Three
+new regressions reproduced those false passes. Successful uploads now require
+distinct canonical UUIDs before any readback URL is constructed; each recorded
+readback must match the corresponding created document ID as well as size/hash.
+Uncertain uploads are still never replayed. Resource, workload and signing gates
+are unchanged. These are harness checks, not evidence of a production defect.

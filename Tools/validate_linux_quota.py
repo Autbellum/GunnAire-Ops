@@ -6,7 +6,7 @@ from cryptography.fernet import Fernet
 TREE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TREE))
 from Tools.quota_runtime import Runtime, MEMORY_MAX, HEADROOM_MAX
-from Tools.quota_checks import verdict
+from Tools.quota_checks import verdict, upload_readback_targets
 import argparse, importlib.metadata, platform, ssl
 from Backend import gunnaire_backend as b, backup_backend
 from Backend.test_staff_workspace_media import StaffWorkspaceMediaHTTPTests, content_http
@@ -172,13 +172,12 @@ def run(output, waves=15, local=False):
         retries = []
         upload_ids = []
         if process.poll() is None:
-            for r in rows:
-                if r['kind'] == 'upload' and r.get('status') == 201:
-                    upload_ids.append(r['json']['id'])
+            upload_ids = upload_readback_targets(rows)
             for r in rows:
                 if r['kind'] == 'download' and r.get('status') == 503:
                     retries.append(request('GET', *paths[r['routeIndex']]))
-            readbacks = [request('GET', '/api/documents/' + i + '/download', f.tokens['Admin']) for i in upload_ids]
+            readbacks = [dict(request('GET', '/api/documents/' + i + '/download', f.tokens['Admin']),
+                              documentID=i) for i in upload_ids]
             time.sleep(3)
         else:
             readbacks = []

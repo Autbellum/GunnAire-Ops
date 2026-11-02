@@ -4,8 +4,9 @@ import hashlib
 from pathlib import Path
 import tempfile
 import unittest
+import uuid
 
-from Tools.quota_checks import verdict
+from Tools.quota_checks import verdict, upload_readback_targets
 from Tools.quota_runtime import read_cgroup, validate_ci_environment, launch_command
 
 
@@ -68,11 +69,12 @@ class QuotaVerdictTests(unittest.TestCase):
         self.replica = hashlib.sha256(raw).hexdigest()
         good_download = dict(kind='download',status=200,bytes=64*1024**2,sha256=self.download)
         self.rows = [good_download.copy() for _ in range(120)]
-        self.rows += [dict(kind='upload',status=201) for _ in range(120)]
+        self.upload_ids = [str(uuid.UUID(int=i+1)) for i in range(120)]
+        self.rows += [dict(kind='upload',status=201,json={'id':identifier}) for identifier in self.upload_ids]
         self.rows += [dict(kind='metadata',status=400) for _ in range(60)]
         self.rows += [dict(kind='replica',status=200,json={'payloadBase64':base64.b64encode(raw).decode(),
                                                         'chunkSHA256':self.replica}) for _ in range(60)]
-        self.readbacks = [dict(status=200,bytes=12*1024**2,sha256=self.upload) for _ in range(120)]
+        self.readbacks = [dict(documentID=identifier,status=200,bytes=12*1024**2,sha256=self.upload) for identifier in self.upload_ids]
         self.health = [dict(status=200,seconds=.01)]
         self.samples = [dict(peak=200000000,events={'oom':0,'oom_kill':0})]
 
@@ -122,3 +124,29 @@ class QuotaVerdictTests(unittest.TestCase):
         self.assertTrue(self.check(rows=rows,readbacks=self.readbacks[1:])['uploadsVerified'])
         rows[120] = dict(kind='upload',error='UnexpectedError')
         self.assertFalse(self.check(rows=rows,readbacks=self.readbacks[1:])['uploadsVerified'])
+
+    def test_duplicate_successful_upload_ids_cannot_pass_identical_byte_checks(self):
+        rows = copy.deepcopy(self.rows)
+        rows[121]['json']['id'] = rows[120]['json']['id']
+        readbacks = copy.deepcopy(self.readbacks)
+        readbacks[1]['documentID'] = readbacks[0]['documentID']
+        self.assertFalse(self.check(rows=rows,readbacks=readbacks)['uploadsVerified'])
+
+    def test_wrong_document_readback_cannot_pass_identical_byte_checks(self):
+        readbacks = copy.deepcopy(self.readbacks)
+        readbacks[0]['documentID'] = str(uuid.UUID(int=9999))
+        self.assertFalse(self.check(readbacks=readbacks)['uploadsVerified'])
+
+    def test_missing_or_malformed_upload_identity_fails_closed(self):
+        for identifier in [None,123,'','../other','not-a-uuid']:
+            rows = copy.deepcopy(self.rows)
+            rows[120]['json']['id'] = identifier
+            self.assertFalse(self.check(rows=rows)['uploadsVerified'])
+
+    def test_readback_plan_rejects_all_bad_ids_before_network_requests(self):
+        self.assertEqual(upload_readback_targets(self.rows), self.upload_ids)
+        for identifier in [None,123,'','../other','not-a-uuid',self.upload_ids[0]]:
+            rows = copy.deepcopy(self.rows)
+            rows[121]['json']['id'] = identifier
+            with self.subTest(identifier=identifier):
+                with self.assertRaises(ValueError): upload_readback_targets(rows)

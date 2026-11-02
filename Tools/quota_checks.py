@@ -1,7 +1,28 @@
 """Fail-closed verdicts for synthetic entrypoint validation."""
 import base64
 import hashlib
+import uuid
 from Tools.quota_runtime import MEMORY_MAX, HEADROOM_MAX
+
+
+def upload_readback_targets(rows):
+    """Validate every successful creation before building any readback URL."""
+    identifiers = []
+    for row in rows:
+        if row['kind'] != 'upload' or row.get('status') != 201:
+            continue
+        body = row.get('json')
+        value = body.get('id') if isinstance(body, dict) else None
+        if not isinstance(value, str):
+            raise ValueError('Successful upload has no valid document identity')
+        try:
+            canonical = str(uuid.UUID(value))
+        except ValueError:
+            raise ValueError('Successful upload has no valid document identity') from None
+        if canonical != value or value in identifiers:
+            raise ValueError('Successful uploads must have distinct canonical document identities')
+        identifiers.append(value)
+    return identifiers
 
 
 def verdict(rows, retries, readbacks, health, samples, backups, waves,
@@ -11,6 +32,11 @@ def verdict(rows, retries, readbacks, health, samples, backups, waves,
     replicas = [r for r in rows if r['kind'] == 'replica']
     metadata = [r for r in rows if r['kind'] == 'metadata']
     successful_uploads = [r for r in uploads if r.get('status') == 201]
+    try:
+        upload_ids = upload_readback_targets(rows)
+        identities_match = [r.get('documentID') for r in readbacks] == upload_ids
+    except ValueError:
+        identities_match = False
     rejected_downloads = [r for r in downloads if r.get('status') == 503]
     def exact(r, size, digest):
         return r.get('status') == 200 and r.get('bytes') == size and r.get('sha256') == digest
@@ -39,7 +65,7 @@ def verdict(rows, retries, readbacks, health, samples, backups, waves,
             and all(exact(r, 64 * 1024**2, download_digest) for r in downloads if r.get('status') == 200)
             and len(retries) == len(rejected_downloads)
             and all(exact(r, 64 * 1024**2, download_digest) for r in retries)),
-        'uploadsVerified': (bool(successful_uploads) and len(readbacks) == len(successful_uploads)
+        'uploadsVerified': (bool(successful_uploads) and identities_match and len(readbacks) == len(successful_uploads)
             and all(exact(r, 12 * 1024**2, upload_digest) for r in readbacks)
             and all(r.get('status') in (201, 503) or r.get('error') in
                     ('BrokenPipeError', 'ConnectionResetError', 'RemoteDisconnected') for r in uploads)),
