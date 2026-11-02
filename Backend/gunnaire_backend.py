@@ -6966,7 +6966,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         destination_dir.mkdir(parents=True, exist_ok=True)
         destination = destination_dir / f"{document_id}-{filename}"
         try:
-            destination.write_bytes(data)
+            document_storage.write_document_bytes(destination, data)
             document_storage.read_document(STORAGE_ROOT, destination, expected_bytes=len(data),
                                            expected_sha256=hashlib.sha256(data).hexdigest())
         except (OSError, document_storage.DocumentReadError):

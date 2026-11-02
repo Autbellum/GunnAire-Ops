@@ -1747,3 +1747,9 @@ at the start of every turn; append to it rather than rewriting it.
 - 2026-11-02 Codex claims quota runtime memory.stat diagnostic sampling and focused tests only after real Linux peak 512692224 failed unchanged budget/headroom gates. Preserve all thresholds, workload, product code and prior failed evidence.
 
 - 2026-11-02 Codex completed quota diagnostic claim: memory.stat anon/file/kernel accounting is retained per sample; missing/negative breakdown fails closed. All 14 focused quota tests pass after correcting a test fixture variable typo (initial failure log retained). No workload, budget, headroom, backend/native code or workflow changes. Original Linux failure evidence preserved.
+
+- 2026-11-02 Codex claims Backend/document_storage.py, Backend/gunnaire_backend.py upload write, and document storage regressions for measured Linux per-file cache retention. Preserve integrity/auth and workload/resource thresholds. No production changes.
+
+- Extend current claim to Backend/test_document_content_proof.py: adapt existing corrupt-write injection to durable writer and add HTTP sync-failure rejection/no-row regression; retain all original assertions.
+
+- 2026-11-02 Codex completes cache-retention correction claims. Real Linux diagnostic recorded anon253521920/file248803328 near the cap and retained file347811840 after load. Uploads now flush/fsync before proof readback; fully verified reads issue optional descriptor-scoped DONTNEED advice. No global cache flushing, deletion, authorization/proof or quota changes. Two pre-change regression failures retained; final43 focused document/proof/staff-media tests pass with loopback permission. Initial sandbox bind errors and obsolete corruption-hook failure preserved; hook now injects the same corruption through durable writer. Full hosted suites and unchanged15/45wave gates pending. Native source unchanged.

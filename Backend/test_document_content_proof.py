@@ -139,13 +139,20 @@ class DocumentContentProofHTTPTests(unittest.TestCase):
             self.assertEqual(self.upload(contentType=content_type)[0], 400)
 
     def test_failed_upload_readback_never_commits_a_false_proof(self):
-        original = Path.write_bytes
+        original = backend.document_storage.write_document_bytes
         def replaced(path, value):
             return original(path, b"X" * len(value))
-        with mock.patch.object(Path, "write_bytes", replaced):
+        with mock.patch.object(backend.document_storage, "write_document_bytes", replaced):
             self.assertEqual(self.upload()[0], 503)
         with backend.db() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0], 0)
+
+    def test_failed_upload_sync_never_acknowledges_or_commits_metadata(self):
+        with mock.patch.object(backend.document_storage.os, "fsync", side_effect=OSError("synthetic sync failure")):
+            self.assertEqual(self.upload()[0], 503)
+        with backend.db() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0], 0)
+        self.assertTrue(any(backend.STORAGE_ROOT.rglob("*.pdf")))
 
     def test_revocation_during_upload_readback_cannot_commit_document_metadata(self):
         original = backend.document_storage.read_document
