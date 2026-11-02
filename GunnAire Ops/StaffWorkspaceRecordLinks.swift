@@ -60,7 +60,7 @@ nonisolated enum StaffWorkspaceRecordLinks {
                 "withdrawalOperationID": operation, "cancellationOperationID": operation],
             "availabilityEvent": ["operationID": operation, "requestID": link("timeOff", .technician),
                 "availabilityBlockID": link("availability", .technician), "technicianID": link("technician", .technician)],
-            "attachment": ["serviceCallID": link("job", .customer), "customerEquipmentID": link("equipment", .customer),
+            "attachment": ["sharedCompanyUploadOperationID": operation, "serviceCallID": link("job", .customer), "customerEquipmentID": link("equipment", .customer),
                 "invoiceID": link("invoice", .customer), "estimateID": link("estimate", .customer),
                 "maintenanceContractID": link("agreement", .customer), "fleetVehicleID": link("vehicle", .vehicle),
                 "fleetVehicleEventID": link("vehicleEvent", .vehicle), "expenseClaimID": link("expense", .customer)],

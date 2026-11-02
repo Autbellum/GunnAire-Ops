@@ -195,9 +195,16 @@ import Testing
         let attachment = try #require(models.compactMap { $0 as? ServiceDocumentAttachment }.first)
         let record = try C.attachment.encode(attachment)
         #expect(record.fields["localFilePath"] == nil)
+        #expect(record.fields["sharedCompanyUploadOperationID"] == nil)
+        var injectedFields = record.fields
+        injectedFields["sharedCompanyUploadOperationID"] = .identifier(attachment.id)
+        #expect(throws: (any Error).self) {
+            try C.attachment.validate(.init(version: record.version, kind: record.kind, id: record.id, fields: injectedFields))
+        }
         #expect(!String(decoding: try JSONEncoder().encode(record), as: UTF8.self).contains("DO-NOT-TRANSFER"))
         let copies = try StaffWorkspaceModelCatalog.decodeDetached(encodedFixtures())
         #expect(try #require(copies.compactMap { $0 as? ServiceDocumentAttachment }.first).localFilePath.isEmpty)
+        #expect(try #require(copies.compactMap { $0 as? ServiceDocumentAttachment }.first).sharedCompanyUploadOperationID == nil)
         let user = AppUser(email: "owner@example.invalid", role: .admin)
         var resolver = StaffWorkspaceModelResolver()
         let imported = try C.user.decodeDetached(C.user.encode(user), resolver: &resolver)

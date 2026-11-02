@@ -3016,6 +3016,7 @@ struct OnsiteDocumentationView: View {
             do {
                 try operation.check()
                 let response = try await GunnAireBackendService.uploadDocument(
+                    operationID: try attachment.retainedCompanyUploadOperationID(),
                     data: data, filename: filename, contentType: contentType, kind: kind,
                     serviceCallID: serviceCallID, invoiceID: invoiceID, estimateID: estimateID,
                     maintenanceContractID: maintenanceContractID, customerEquipmentID: equipmentID,
@@ -3046,6 +3047,7 @@ private extension String {
 @MainActor
 final class CustomerDocumentUpload {
     nonisolated struct Payload: Sendable {
+        let operationID: UUID
         let data: Data
         let filename: String
         let contentType: String
@@ -3132,7 +3134,7 @@ final class CustomerDocumentUpload {
         try check()
         self.attachment = attachment
         self.context = context
-        payload = Payload(data: data, filename: metadata.filename, contentType: metadata.contentType,
+        payload = Payload(operationID: try attachment.retainedCompanyUploadOperationID(), data: data, filename: metadata.filename, contentType: metadata.contentType,
             kind: metadata.kind, serviceCallID: metadata.serviceCallID, invoiceID: metadata.invoiceID,
             estimateID: metadata.estimateID, maintenanceContractID: metadata.maintenanceContractID,
             customerEquipmentID: metadata.equipmentID, equipmentName: equipmentName, customerName: customerName)
@@ -3181,6 +3183,7 @@ final class CustomerDocumentUpload {
 
     private static func upload(_ payload: Payload, operation: WorkspaceProviderOperation) async throws -> String {
         let response = try await GunnAireBackendService.uploadDocument(
+            operationID: payload.operationID,
             data: payload.data, filename: payload.filename, contentType: payload.contentType, kind: payload.kind,
             serviceCallID: payload.serviceCallID, invoiceID: payload.invoiceID, estimateID: payload.estimateID,
             maintenanceContractID: payload.maintenanceContractID, customerEquipmentID: payload.customerEquipmentID,

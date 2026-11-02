@@ -211,6 +211,7 @@ final class ServiceDocumentAttachment {
     var contentType: String = "application/octet-stream"
     var fileSizeBytes: Int = 0
     var backendDocumentID: String?
+    var sharedCompanyUploadOperationID: UUID?
     var sharedCompanySyncStatus: String?
     var sharedCompanySyncDetail: String?
     var quickBooksAttachableID: String?
@@ -223,6 +224,15 @@ final class ServiceDocumentAttachment {
     var googleDriveLastSyncedAt: Date?
     var googleDriveArchivedByEmail: String?
     var createdAt: Date = Date()
+
+    nonisolated func retainedCompanyUploadOperationID() throws -> UUID {
+        guard let operation = sharedCompanyUploadOperationID, operation == id else {
+            // Migrated uncertain uploads may already exist on an older server.
+            // Never mint a new operation during recovery of those records.
+            throw CompanyDocumentContentError.unverified
+        }
+        return operation
+    }
 
     init(
         id: UUID = UUID(),
@@ -256,6 +266,7 @@ final class ServiceDocumentAttachment {
         createdAt: Date = Date()
     ) {
         self.id = id
+        self.sharedCompanyUploadOperationID = id
         self.customer = customer
         self.serviceCallID = serviceCallID
         self.customerEquipmentID = customerEquipmentID

@@ -69,6 +69,14 @@ nonisolated struct StaffWorkspaceRelationshipGraph {
             let record = records[key]!
             let dispositions = StaffWorkspaceRecordLinks.scalar[key.kind]!.merging(StaffWorkspaceRecordLinks.owning[key.kind, default: [:]]) { first, _ in first }
             for field in dispositions.keys.sorted() {
+                if codecs[key.kind]!.excludedAttributes[field] != nil {
+                    // Excluded actor-bound evidence is classified for complete
+                    // model coverage, but must never arrive as transferable data.
+                    guard case .evidence = dispositions[field]!, record.fields[field] == nil else {
+                        throw StaffWorkspaceModelError.invalid
+                    }
+                    continue
+                }
                 guard let value = record.fields[field] else { throw StaffWorkspaceModelError.incomplete }
                 if value == .null { continue }
                 let id = try UUID.fromStaffValue(value)

@@ -1757,3 +1757,21 @@ at the start of every turn; append to it rather than rewriting it.
 - 2026-11-02 Codex claims Backend/backup_backend.py and Backend/test_backup_backend.py for residual measured backup file-cache retention (105947136-byte fixture backup,107249664-byte ending cache). Preserve snapshot/hash/restore verification and all resource gates.
 
 - 2026-11-02 Codex completes backup-cache claim: bounded1MiB copy+destination flush/fsync, per-descriptor optional cache advice after copy/hash, copystat preserved. Two red regressions reproduced missing behavior;40 focused backup/automation/storage tests pass. Initial test command named nonexistent scheduler module; corrected to existing automation module and retained error log. Existing backup/restore/hash verification and cleanup policy unchanged; no production backup rerun. Hosted full suites and same15/45wave workload pending.
+
+- 2026-11-02 Codex claims backend document upload idempotency/schema/proof tests and native shared-document upload/retry call sites/tests for parent-confirmed lost201 duplicate risk. Preserve auth, integrity, quota gates, private migration evidence and existing work. No production deployment.
+
+- Extend upload claim to ServiceDocumentAttachment persisted operation identity and CloudKit v29 release-tooling definitions/tests. New attachments retain their operation before upload; legacy uncertain attachments must not receive a new key during retry. No live schema promotion.
+
+- Extend upload claim narrowly to StaffWorkspaceFieldCodecs attachment exclusion: actor-bound upload operation is not transferable staff authority; imported shells retain nil rather than minting a recovery key. Full native run exposed this required explicit model-field classification; no projection gate weakened.
+
+- Extend explicit classification to StaffWorkspaceRecordLinks: retained upload UUID is operation evidence, not a model relationship. Preserve complete UUID coverage checks and transfer exclusion.
+
+- Extend explicit exclusion handling to StaffWorkspaceRelationshipGraph: an excluded scalar UUID must be classified evidence and absent from wire fields; never skip a relationship or transferred field. Add injection rejection regression.
+
+- Extend upload regression claim to StaffWorkspaceRelationshipGraphTests: transferable operation evidence remains accepted without foreign-key interpretation; explicitly excluded actor-bound evidence must be rejected if injected.
+
+- Extend upload release alignment claim to GunnAireCloudKit.swift and its existing bootstrap tests: advance isolated Development bootstrap identity from v27 to v29 and assert seeded upload identity. No CloudKit invocation or promotion.
+
+- Extend upload claim to Backend/README.md and candidate service version: document backend-first recovery compatibility and unchanged overload semantics.
+
+- 2026-11-02 Codex completes local upload recovery correction: lost201 duplication reproduced; actor-bound immutable operation and versioned read-only reconciliation preserve original ID/content, reject collisions and legacy uncertain retries. Backend1474 and Tools109 pass; full iPad3068 and Mac3068 pass; iPad bootstrap2 pass after zero-test selector result was rejected and preserved. Populated isolated migration/old-source readback preserved original rows/documents; no production changes. CloudKit bootstrap alignedv29; staff transfer excludes actor-bound operation without relaxing graph coverage. Native Metal search-path warnings retained. Hosted unchanged quota/full regression validation pending; claims released for review.

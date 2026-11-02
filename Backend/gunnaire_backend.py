@@ -97,7 +97,7 @@ except ModuleNotFoundError:
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.10.27.2"
+SERVICE_VERSION = "2026.11.02.1"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -2698,6 +2698,14 @@ def initialize_database() -> None:
         # to invent historical upload evidence during a migration or download.
         ensure_column(connection, "documents", "file_size_bytes", "INTEGER")
         ensure_column(connection, "documents", "file_sha256", "TEXT")
+        ensure_column(connection, "documents", "upload_operation_id", "TEXT")
+        ensure_column(connection, "documents", "upload_actor_email", "TEXT")
+        ensure_column(connection, "documents", "upload_request_sha256", "TEXT")
+        connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS documents_upload_operation_unique ON documents(upload_operation_id) WHERE upload_operation_id IS NOT NULL")
+        connection.execute("""CREATE TRIGGER IF NOT EXISTS documents_upload_operation_immutable_v1
+            BEFORE UPDATE OF upload_operation_id,upload_actor_email,upload_request_sha256 ON documents
+            WHEN NEW.upload_operation_id IS NOT OLD.upload_operation_id OR NEW.upload_actor_email IS NOT OLD.upload_actor_email OR NEW.upload_request_sha256 IS NOT OLD.upload_request_sha256
+            BEGIN SELECT RAISE(ABORT, 'Document upload operation is immutable'); END""")
         connection.execute("""CREATE TRIGGER IF NOT EXISTS documents_upload_proof_immutable_v1
             BEFORE UPDATE OF file_size_bytes,file_sha256 ON documents
             WHEN NEW.file_size_bytes IS NOT OLD.file_size_bytes OR NEW.file_sha256 IS NOT OLD.file_sha256
@@ -4262,6 +4270,13 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                         "SELECT * FROM field_payment_assignments ORDER BY created_at DESC LIMIT 500"
                     ).fetchall()
             self.write_json({"assignments": [field_payment_assignment_record(row) for row in rows]})
+            return
+        if parsed.path.startswith("/api/document-uploads/"):
+            operation_id = parsed.path.removeprefix("/api/document-uploads/")
+            if parsed.query or re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", operation_id) is None:
+                self.write_json({"error": "Use an exact upload recovery endpoint"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            self.recover_document_upload(operation_id)
             return
         if parsed.path == "/api/documents":
             with db() as connection:
@@ -6861,6 +6876,70 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             )
         self.write_json({"revoked": True})
 
+    def recover_document_upload(self, operation_id) -> None:
+        # A versioned found=false response proves idempotency support. Older
+        # servers return404, which new clients must never treat as safe to POST.
+        original = self.principal()
+        if not original:
+            self.write_json({"error": "Document authorization is unavailable"}, status=HTTPStatus.FORBIDDEN)
+            return
+        with db() as connection:
+            row = connection.execute("SELECT * FROM documents WHERE upload_operation_id=?", (operation_id,)).fetchone()
+        envelope = {"schema": "document-upload-recovery-v1", "operationID": operation_id, "document": None}
+        if row is None:
+            self.write_json(envelope)
+            return
+        if row["upload_actor_email"] != original.get("email"):
+            self.write_json({"error": "Upload operation belongs to another actor"}, status=HTTPStatus.CONFLICT)
+            return
+        if document_contains_financial_data(row) and not (self.has_maintenance_agreement_document_access() if document_is_maintenance_agreement(row) else self.has_billing_document_access()):
+            self.write_json({"error": "Document access is required"}, status=HTTPStatus.FORBIDDEN)
+            return
+        if not DOCUMENT_DOWNLOAD_SLOTS.acquire(blocking=False):
+            self.write_json({"error": "Document recovery capacity is busy; retry later"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        try:
+            try:
+                document_storage.content_proof(row)
+                document_storage.read_document(STORAGE_ROOT, row["stored_path"], expected_bytes=row["file_size_bytes"], expected_sha256=row["file_sha256"])
+            except document_storage.DocumentReadError as error:
+                self.write_json({"error": str(error)}, status=error.status)
+                return
+            self._principal = None
+            self._principal_checked = False
+            if self.principal() != original:
+                self.write_json({"error": "Document access changed during recovery"}, status=HTTPStatus.FORBIDDEN)
+                return
+            envelope["document"] = document_record(row)
+            self.write_json(envelope)
+        finally:
+            DOCUMENT_DOWNLOAD_SLOTS.release()
+
+    def _replay_document_upload(self, operation_id, request_digest, original_principal) -> bool:
+        if operation_id is None:
+            return False
+        with db() as connection:
+            row = connection.execute("SELECT * FROM documents WHERE upload_operation_id=?", (operation_id,)).fetchone()
+        if row is None:
+            return False
+        if row["upload_actor_email"] != original_principal.get("email") or row["upload_request_sha256"] != request_digest:
+            self.write_json({"error": "Upload operation conflicts with its original request; retain the original for review"}, status=HTTPStatus.CONFLICT)
+            return True
+        try:
+            document_storage.content_proof(row)
+            document_storage.read_document(STORAGE_ROOT, row["stored_path"], expected_bytes=row["file_size_bytes"], expected_sha256=row["file_sha256"])
+        except document_storage.DocumentReadError as error:
+            self.write_json({"error": str(error)}, status=error.status)
+            return True
+        self._principal = None
+        self._principal_checked = False
+        if self.principal() is None or self.principal() != original_principal:
+            self.write_json({"error": "Document access changed during recovery"}, status=HTTPStatus.FORBIDDEN)
+            return True
+        self.write_json({"id": row["id"], "filename": row["filename"], "createdAt": row["created_at"],
+                         "fileSizeBytes": row["file_size_bytes"], "fileSHA256": row["file_sha256"]}, status=HTTPStatus.CREATED)
+        return True
+
     def store_document(self) -> None:
         # Refuse excess work before reading its body; never queue large bodies
         # in application memory. Keep slots through storage and response cleanup.
@@ -6889,6 +6968,19 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             self.write_json({"error": "Invalid JSON"}, status=HTTPStatus.BAD_REQUEST)
             return
+
+        operation_id = None
+        if "operationID" in payload:
+            try:
+                raw_operation = payload["operationID"]
+                if not isinstance(raw_operation, str) or len(raw_operation) != 36:
+                    raise ValueError()
+                operation_id = str(uuid.UUID(raw_operation))
+                if operation_id != raw_operation.lower():
+                    raise ValueError()
+            except (ValueError, AttributeError):
+                self.write_json({"error": "operationID must be a canonical UUID"}, status=HTTPStatus.BAD_REQUEST)
+                return
 
         filename = safe_filename(str(payload.get("filename") or "upload.bin"))
         content_type = str(payload.get("contentType") or "application/octet-stream")
@@ -6960,6 +7052,19 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         # Do not create a file until every request field has been accepted.
         original_principal = self.principal()
+        if original_principal is None or not isinstance(original_principal.get("email"), str):
+            self.write_json({"error": "Document authorization is unavailable"}, status=HTTPStatus.FORBIDDEN)
+            return
+        file_digest = hashlib.sha256(data).hexdigest()
+        request_digest = hashlib.sha256(json.dumps({
+            "filename": filename, "contentType": content_type, "kind": kind,
+            "serviceCallID": service_call_id, "invoiceID": invoice_id, "estimateID": estimate_id,
+            "maintenanceContractID": maintenance_contract_id, "customerEquipmentID": customer_equipment_id,
+            "equipmentName": equipment_name, "customerName": customer_name,
+            "fileSizeBytes": len(data), "fileSHA256": file_digest,
+        }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        if self._replay_document_upload(operation_id, request_digest, original_principal):
+            return
         document_id = str(uuid.uuid4())
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         destination_dir = STORAGE_ROOT / kind / today
@@ -6978,33 +7083,43 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             self.write_json({"error": "Document access changed during upload"}, status=HTTPStatus.FORBIDDEN)
             return
         created_at = utc_now()
-        with db() as connection:
-            connection.execute(
-                """
-                INSERT INTO documents(
-                    id, filename, content_type, kind, service_call_id, invoice_id, estimate_id,
-                    maintenance_contract_id, customer_equipment_id, equipment_name, customer_name,
-                    stored_path, created_at, file_size_bytes, file_sha256
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    document_id,
-                    filename,
-                    content_type,
-                    kind,
-                    service_call_id,
-                    invoice_id,
-                    estimate_id,
-                    maintenance_contract_id,
-                    customer_equipment_id,
-                    equipment_name,
-                    customer_name,
-                    str(destination),
-                    created_at,
-                    len(data),
-                    hashlib.sha256(data).hexdigest(),
-                ),
-            )
+        try:
+            with db() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO documents(
+                        id, filename, content_type, kind, service_call_id, invoice_id, estimate_id,
+                        maintenance_contract_id, customer_equipment_id, equipment_name, customer_name,
+                        stored_path, created_at, file_size_bytes, file_sha256, upload_operation_id, upload_actor_email, upload_request_sha256
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        document_id,
+                        filename,
+                        content_type,
+                        kind,
+                        service_call_id,
+                        invoice_id,
+                        estimate_id,
+                        maintenance_contract_id,
+                        customer_equipment_id,
+                        equipment_name,
+                        customer_name,
+                        str(destination),
+                        created_at,
+                        len(data),
+                        file_digest,
+                        operation_id,
+                        original_principal["email"] if operation_id else None,
+                        request_digest if operation_id else None,
+                    ),
+                )
+        except sqlite3.IntegrityError:
+            # Another process may have committed this operation after preflight.
+            # Its verified response wins; never create a second metadata row.
+            if operation_id is not None and self._replay_document_upload(operation_id, request_digest, original_principal):
+                return
+            raise
 
         principal = self.principal() or {}
         record_audit_event(principal.get("email") if isinstance(principal.get("email"), str) else None, "upload", "document", document_id)

@@ -105,7 +105,13 @@ import Testing
         for record in original {
             for (field, disposition) in StaffWorkspaceRecordLinks.scalar[record.kind]! {
                 if case .evidence = disposition {
-                    #expect(try G.validate(replacing(original, record.kind, [field: .identifier(UUID())])).recordCount == 32)
+                    let changed = replacing(original, record.kind, [field: .identifier(UUID())])
+                    let codec = try #require(StaffWorkspaceModelCatalog.all.first { $0.kind == record.kind })
+                    if codec.excludedAttributes[field] != nil {
+                        #expect(throws: StaffWorkspaceModelError.self) { try G.validate(changed) }
+                    } else {
+                        #expect(try G.validate(changed).recordCount == 32)
+                    }
                 }
             }
         }

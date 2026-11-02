@@ -251,7 +251,9 @@ struct QuickBooksCatalogHistoryTests {
         try GunnAireCloudKitSchemaBootstrap.seedDevelopmentSchemaForTesting(in: context)
         let seeded = try #require(context.fetch(FetchDescriptor<Item>()).first { $0.quickBooksCatalogReceiptJSON != nil })
         #expect(throws: Error.self) { try QuickBooksCatalogApplicationReceipt.decode(#require(seeded.quickBooksCatalogReceiptJSON)) }
-        #expect(GunnAireCloudKitSchemaBootstrap.schemaVersion == 27)
+        #expect(GunnAireCloudKitSchemaBootstrap.schemaVersion == 29)
+        let document = try #require(context.fetch(FetchDescriptor<ServiceDocumentAttachment>()).first)
+        #expect(try document.retainedCompanyUploadOperationID() == document.id)
         #expect(seeded.quickBooksInventorySetupJSON != nil && seeded.quickBooksCatalogDetailsJSON != nil)
         let invoice = try #require(context.fetch(FetchDescriptor<Invoice>()).first { $0.quickBooksPaymentReviewJSON != nil })
         #expect(FieldPaymentReceiptReconciliation.decode(invoice.quickBooksPaymentReviewJSON) == nil)

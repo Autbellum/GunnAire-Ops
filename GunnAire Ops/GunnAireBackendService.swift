@@ -649,6 +649,7 @@ enum GunnAireBackendService {
     }
 
     nonisolated private struct DocumentUploadPayload: Codable, Sendable {
+        let operationID: String
         let filename: String
         let contentType: String
         let kind: String
@@ -2005,6 +2006,7 @@ enum GunnAireBackendService {
 
     @discardableResult
     static func uploadDocument(
+        operationID: UUID,
         data: Data,
         filename: String,
         contentType: String,
@@ -2019,10 +2021,24 @@ enum GunnAireBackendService {
         originatingOperation: WorkspaceProviderOperation? = nil
     ) async throws -> BackendDocumentUploadResponse {
         let operation = try retainingUploadOperation(originatingOperation)
+        let recoveryRequest = SharedCompanyDocumentUploadRequest(operationID: operationID, data: data,
+            filename: filename, contentType: contentType, kind: kind, serviceCallID: serviceCallID,
+            invoiceID: invoiceID, estimateID: estimateID, maintenanceContractID: maintenanceContractID,
+            customerEquipmentID: customerEquipmentID, customerName: customerName)
+        // A versioned GET must confirm support before any POST. An old server's
+        // 404 or an uncertain lookup never authorizes another write.
+        let recoveryData = try await send(path: "/api/document-uploads/" + operationID.uuidString.lowercased(), method: "GET")
+        try operation.check()
+        let recovered = try await Task.detached(priority: .utility) {
+            try verifiedDocumentUploadRecovery(recoveryData, request: recoveryRequest, equipmentName: equipmentName)
+        }.value
+        try operation.check()
+        if let recovered { return recovered }
         let responseData = try await operation.prepareAndPerformExternalMutation(prepare: {
             try await Task.detached(priority: .utility) {
                 let trimmedEquipmentName = equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let payload = DocumentUploadPayload(
+                    operationID: operationID.uuidString.lowercased(),
                     filename: filename,
                     contentType: contentType,
                     kind: kind,
@@ -2075,6 +2091,7 @@ enum GunnAireBackendService {
     /// that owns the model (see `sharedCompanyDocumentUploadRequest(for:)`),
     /// so the network call never touches a model object.
     nonisolated struct SharedCompanyDocumentUploadRequest: Sendable {
+        let operationID: UUID
         let data: Data
         let filename: String
         let contentType: String
@@ -2091,6 +2108,7 @@ enum GunnAireBackendService {
     /// that owns `attachment`.
     nonisolated static func sharedCompanyDocumentUploadRequest(for attachment: ServiceDocumentAttachment) throws -> SharedCompanyDocumentUploadRequest {
         SharedCompanyDocumentUploadRequest(
+            operationID: try attachment.retainedCompanyUploadOperationID(),
             data: try Data(contentsOf: attachment.localFileURL),
             filename: attachment.displayName,
             contentType: attachment.contentType,
@@ -2114,6 +2132,7 @@ enum GunnAireBackendService {
                                                  originatingOperation: WorkspaceProviderOperation? = nil) async throws -> BackendDocumentUploadResponse {
         let operation = try retainingUploadOperation(originatingOperation)
         return try await uploadDocument(
+            operationID: request.operationID,
             data: request.data,
             filename: request.filename,
             contentType: request.contentType,
@@ -2126,6 +2145,49 @@ enum GunnAireBackendService {
             customerName: request.customerName,
             originatingOperation: operation
         )
+    }
+
+    nonisolated struct DocumentUploadRecovery: Decodable, Sendable {
+        let schema: String
+        let operationID: String
+        let document: Document?
+        nonisolated struct Document: Decodable, Sendable {
+            let id, filename, contentType, kind, fileSHA256: String
+            let fileSizeBytes: Int
+            let createdAt: String?
+            let serviceCallID, invoiceID, estimateID, maintenanceContractID, customerEquipmentID: String?
+            let customerName, equipmentName: String?
+        }
+    }
+
+    nonisolated static func verifiedDocumentUploadRecovery(_ raw: Data,
+        request: SharedCompanyDocumentUploadRequest, equipmentName: String? = nil) throws -> BackendDocumentUploadResponse? {
+        guard raw.count <= 16 * 1024 else { throw CompanyDocumentContentError.invalid }
+        guard let envelope = try JSONSerialization.jsonObject(with: raw) as? [String: Any],
+              envelope.keys.contains("document") else { throw CompanyDocumentContentError.invalid }
+        let recovery = try JSONDecoder().decode(DocumentUploadRecovery.self, from: raw)
+        guard recovery.schema == "document-upload-recovery-v1",
+              recovery.operationID == request.operationID.uuidString.lowercased() else { throw CompanyDocumentContentError.invalid }
+        guard let document = recovery.document else { return nil }
+        func sameID(_ actual: String?, _ expected: UUID?) -> Bool {
+            if expected == nil { return actual == nil }
+            return actual.flatMap(UUID.init(uuidString:)) == expected
+        }
+        guard UUID(uuidString: document.id) != nil,
+              document.filename == request.filename, document.contentType == request.contentType,
+              document.kind == request.kind, document.customerName == request.customerName,
+              sameID(document.serviceCallID, request.serviceCallID), sameID(document.invoiceID, request.invoiceID),
+              sameID(document.estimateID, request.estimateID), sameID(document.maintenanceContractID, request.maintenanceContractID),
+              sameID(document.customerEquipmentID, request.customerEquipmentID),
+              document.fileSizeBytes == request.data.count,
+              document.fileSHA256 == QBODocumentFileInfo.hash(request.data),
+              equipmentName == nil || document.equipmentName == equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        else { throw CompanyDocumentContentError.changed }
+        // Retry snapshots lack a decorative equipment label; stable equipment
+        // identity and all available metadata/content must still match. No record
+        // is rewritten when recovering the original committed result.
+        return BackendDocumentUploadResponse(id: document.id, filename: document.filename,
+            storedPath: nil, createdAt: document.createdAt)
     }
 
     /// Validate a background caller's original authority before capturing any replacement login.

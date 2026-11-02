@@ -35,8 +35,11 @@ nonisolated extension StaffWorkspaceModelCodecs {
             .optional("googleDriveLastSyncedAt", \.googleDriveLastSyncedAt),
             .optional("googleDriveArchivedByEmail", \.googleDriveArchivedByEmail),
             .reference("customer", \.customer, id: \Customer.id, kind: "customer", required: false),
-        ], excludedAttributes: ["localFilePath": "Device-local paths are not transferable authority. The verified content-delivery service must supply a new sandbox URL before this attachment can be opened."], inverseRelationships: [], make: { record, resolver in
-            ServiceDocumentAttachment(id: record.id, customer: nil, serviceCallID: nil, kind: .other, displayName: "", localFilePath: "", contentType: "application/octet-stream", fileSizeBytes: 0)
+        ], excludedAttributes: ["localFilePath": "Device-local paths are not transferable authority. The verified content-delivery service must supply a new sandbox URL before this attachment can be opened.",
+            "sharedCompanyUploadOperationID": "The original actor's retained upload operation is not transferable staff write authority; imported records require reconciliation before any upload retry."], inverseRelationships: [], make: { record, resolver in
+            let attachment = ServiceDocumentAttachment(id: record.id, customer: nil, serviceCallID: nil, kind: .other, displayName: "", localFilePath: "", contentType: "application/octet-stream", fileSizeBytes: 0)
+            attachment.sharedCompanyUploadOperationID = nil
+            return attachment
         })
     }
     static var communication: StaffWorkspaceModelCodec<CustomerCommunication> {

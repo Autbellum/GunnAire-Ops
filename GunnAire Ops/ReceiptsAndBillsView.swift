@@ -37,6 +37,7 @@ struct ReceiptsAndBillsView: View {
     @State private var receiptImage: UIImage?
     @State private var billImage: UIImage?
     @State private var receiptURL: URL?
+    @State private var receiptUploadOperationID = UUID()
     @State private var billURL: URL?
 
     @State private var receiptImportMessage: String? = nil
@@ -3672,6 +3673,7 @@ private extension ReceiptsAndBillsView {
             let data = try Data(contentsOf: receiptURL)
             let contentType = UTType(filenameExtension: receiptURL.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
             let response = try await GunnAireBackendService.uploadDocument(
+                operationID: receiptUploadOperationID,
                 data: data,
                 filename: receiptURL.lastPathComponent,
                 contentType: contentType,
@@ -3698,6 +3700,7 @@ private extension ReceiptsAndBillsView {
         case .receipt:
             receiptImportMessage = nil
             receiptURL = url
+            receiptUploadOperationID = UUID()
             if let image {
                 receiptImage = image
                 receiptImportMessage = "Image selected: \(url.lastPathComponent)"
@@ -3817,6 +3820,7 @@ private extension ReceiptsAndBillsView {
         do {
             let url = try persistImageToTemporaryFile(image: image, prefix: "receipt-camera")
             receiptURL = url
+            receiptUploadOperationID = UUID()
             receiptImportMessage = "Camera image captured: \(url.lastPathComponent)"
         } catch {
             receiptURL = nil

@@ -295,7 +295,7 @@ struct FieldFormResponseEditor: View {
         guard GunnAireBackendService.isConfigured, let workflow else { return }
         Task { @MainActor in
             await workflow.syncNewFile(result) { bytes, attachment in
-                let stored = try await GunnAireBackendService.uploadDocument(data: bytes,
+                let stored = try await GunnAireBackendService.uploadDocument(operationID: try attachment.retainedCompanyUploadOperationID(), data: bytes,
                     filename: attachment.displayName, contentType: attachment.contentType, kind: attachment.kindRaw,
                     serviceCallID: attachment.serviceCallID, invoiceID: attachment.invoiceID,
                     estimateID: attachment.estimateID, customerName: attachment.customer?.name)

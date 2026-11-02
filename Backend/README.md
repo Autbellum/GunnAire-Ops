@@ -396,8 +396,8 @@ Regression coverage: `python -m unittest Backend.test_request_body_limits` uses
 isolated storage and real authenticated HTTP to verify >1 MiB and exact-limit
 upload/readback, limit+1 rejection, capacity rejection and slot cleanup.
 
-Current candidate `2026.10.27.2` admits at most one document-byte
-downloads per process across general document and staff workspace media routes.
+Current candidate `2026.11.02.1` admits at most one document-byte
+download per process across general document and staff workspace media routes.
 The shared slot spans verified filesystem read, post-read authority/binding checks,
 and socket write; it releases on success, rejection, timeout or disconnect. Busy
 requests return HTTP503 without reading the file. Manifests/authorization metadata
@@ -493,3 +493,26 @@ readbacks and fixture backup verification passed; maximum health latency 30 ms.
 233 uncertain upload transports were not replayed. No unbounded growth was
 observed over this interval; native allocations and longer production runs remain
 outside that conclusion. This extension stresses memory, not Render's disk quota.
+
+
+### Retained document upload operations
+
+New clients retain a UUID before sending a document and first read
+`GET /api/document-uploads/{operationID}`. Only a versioned
+`document-upload-recovery-v1` response with explicit `document: null` permits
+an initial POST. A found result must match the retained local bytes and metadata.
+A missing route, failed lookup, or uncertain transport result never authorizes a
+blind write replay. Deploy the supporting backend before distributing these clients.
+
+`POST /api/documents` accepts optional `operationID` for backward compatibility.
+The same actor, operation and normalized request recover the original ID and hash;
+changed payloads or another actor receive 409. Stored operation proof is immutable.
+Recovery verifies stored bytes and current authority. Legacy unkeyed uploads remain
+supported, but legacy uncertain native attachments cannot mint recovery identities.
+Actor-bound upload identities are excluded from staff replica transfer.
+
+One upload slot still rejects overload before reading large bodies. Some clients
+observe a broken pipe instead of the early 503. Neither is upload completion;
+clients retain their original operation and reconcile through the versioned GET.
+The quota workload and 20% headroom requirement are unchanged. Linux synthetic
+success does not establish the historical production restart cause or live headroom.

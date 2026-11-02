@@ -7600,6 +7600,7 @@ GunnAire
                 do {
                     try operation.check()
                     let response = try await GunnAireBackendService.uploadDocument(
+                        operationID: try attachment.retainedCompanyUploadOperationID(),
                         data: data,
                         filename: filename, contentType: contentType, kind: kind,
                         serviceCallID: serviceCallID, invoiceID: invoiceID, estimateID: estimateID,
