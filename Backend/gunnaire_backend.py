@@ -7071,6 +7071,10 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         destination_dir.mkdir(parents=True, exist_ok=True)
         destination = destination_dir / f"{document_id}-{filename}"
         try:
+            # Reserve a new name exclusively; cleanup may only unlink this inode.
+            with destination.open("xb"):
+                pass
+            owned_destination = destination.lstat()
             document_storage.write_document_bytes(destination, data)
             document_storage.read_document(STORAGE_ROOT, destination, expected_bytes=len(data),
                                            expected_sha256=hashlib.sha256(data).hexdigest())
@@ -7117,8 +7121,17 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         except sqlite3.IntegrityError:
             # Another process may have committed this operation after preflight.
             # Its verified response wins; never create a second metadata row.
-            if operation_id is not None and self._replay_document_upload(operation_id, request_digest, original_principal):
-                return
+            if operation_id is not None:
+                with db() as connection:
+                    winner = connection.execute("SELECT stored_path FROM documents WHERE upload_operation_id=?", (operation_id,)).fetchone()
+                    referenced = connection.execute("SELECT 1 FROM documents WHERE stored_path=?", (str(destination),)).fetchone()
+                current = destination.lstat()
+                if (winner is not None and winner["stored_path"] != str(destination) and referenced is None
+                        and not destination.is_symlink()
+                        and (current.st_dev, current.st_ino) == (owned_destination.st_dev, owned_destination.st_ino)):
+                    destination.unlink()
+                if self._replay_document_upload(operation_id, request_digest, original_principal):
+                    return
             raise
 
         principal = self.principal() or {}

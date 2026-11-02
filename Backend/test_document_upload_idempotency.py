@@ -88,3 +88,30 @@ class DocumentUploadIdempotencyTests(unittest.TestCase):
         self.assertEqual(len(set(ids)),10)
         with backend.db() as c:
             self.assertEqual(c.execute('SELECT COUNT(*) FROM documents').fetchone()[0],10)
+
+    def test_insert_race_removes_only_owned_losing_file(self):
+        operation=str(uuid.uuid4())
+        first=self.upload(operationID=operation)[1]
+        original=backend.GunnAireBackendHandler._replay_document_upload
+        calls=[]
+        def miss_then_recover(handler,*args):
+            calls.append(1)
+            return False if len(calls)==1 else original(handler,*args)
+        with mock.patch.object(backend.GunnAireBackendHandler,'_replay_document_upload',miss_then_recover):
+            status,recovered=self.upload(operationID=operation)
+        self.assertEqual((status,recovered['id']),(201,first['id']))
+        files=[p for p in backend.STORAGE_ROOT.rglob('*') if p.is_file()]
+        self.assertEqual(len(files),1)
+        self.assertEqual(files[0].read_bytes(),b'original-file')
+
+    def test_normalized_filename_recovery_keeps_exact_original_content(self):
+        for raw,canonical in [(' José.pdf ','Jos_.pdf'),('receipt(1).pdf','receipt_1_.pdf'),('\x1creport.pdf\x85','report.pdf')]:
+            operation=str(uuid.uuid4())
+            status,created=self.upload(operationID=operation,filename=raw,equipmentName='  ')
+            self.assertEqual(status,201)
+            self.assertEqual(created['filename'],canonical)
+            status,recovered=self.f.request(token=self.f.tokens['Admin'],path='/api/document-uploads/'+operation)
+            self.assertEqual(status,200)
+            self.assertEqual(recovered['document']['filename'],canonical)
+            self.assertIsNone(recovered['document']['equipmentName'])
+            self.assertEqual(recovered['document']['fileSHA256'],hashlib.sha256(b'original-file').hexdigest())

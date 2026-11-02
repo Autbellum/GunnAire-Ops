@@ -2036,7 +2036,6 @@ enum GunnAireBackendService {
         if let recovered { return recovered }
         let responseData = try await operation.prepareAndPerformExternalMutation(prepare: {
             try await Task.detached(priority: .utility) {
-                let trimmedEquipmentName = equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let payload = DocumentUploadPayload(
                     operationID: operationID.uuidString.lowercased(),
                     filename: filename,
@@ -2047,7 +2046,7 @@ enum GunnAireBackendService {
                     estimateID: estimateID?.uuidString,
                     maintenanceContractID: maintenanceContractID?.uuidString,
                     customerEquipmentID: customerEquipmentID?.uuidString,
-                    equipmentName: trimmedEquipmentName?.isEmpty == false ? trimmedEquipmentName : nil,
+                    equipmentName: normalizedUploadEquipmentName(equipmentName),
                     customerName: customerName,
                     dataBase64: data.base64EncodedString()
                 )
@@ -2160,6 +2159,25 @@ enum GunnAireBackendService {
         }
     }
 
+    /// Mirrors Python safe_filename, including Python str.strip's Unicode set.
+    nonisolated static func canonicalDocumentFilename(_ raw: String) -> String {
+        func whitespace(_ value: UInt32) -> Bool {
+            (9...13).contains(value) || (28...32).contains(value) || [0x85, 0xa0, 0x1680, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000].contains(value) || (0x2000...0x200a).contains(value)
+        }
+        var values = Array(raw.unicodeScalars)
+        while let first = values.first, whitespace(first.value) { values.removeFirst() }
+        while let last = values.last, whitespace(last.value) { values.removeLast() }
+        let cleaned = String(String.UnicodeScalarView(values.map { scalar in
+            let value = scalar.value
+            return (65...90).contains(value) || (97...122).contains(value) || (48...57).contains(value) || [46, 95, 32, 45].contains(value) ? scalar : UnicodeScalar(95)!
+        }))
+        return cleaned.isEmpty ? "upload.bin" : cleaned
+    }
+    nonisolated static func normalizedUploadEquipmentName(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed?.isEmpty == false ? trimmed : nil
+    }
+
     nonisolated static func verifiedDocumentUploadRecovery(_ raw: Data,
         request: SharedCompanyDocumentUploadRequest, equipmentName: String? = nil) throws -> BackendDocumentUploadResponse? {
         guard raw.count <= 16 * 1024 else { throw CompanyDocumentContentError.invalid }
@@ -2174,14 +2192,14 @@ enum GunnAireBackendService {
             return actual.flatMap(UUID.init(uuidString:)) == expected
         }
         guard UUID(uuidString: document.id) != nil,
-              document.filename == request.filename, document.contentType == request.contentType,
-              document.kind == request.kind, document.customerName == request.customerName,
+              document.filename == canonicalDocumentFilename(request.filename), document.contentType == request.contentType,
+              document.kind == canonicalDocumentFilename(request.kind.isEmpty ? "document" : request.kind).lowercased(), document.customerName == request.customerName,
               sameID(document.serviceCallID, request.serviceCallID), sameID(document.invoiceID, request.invoiceID),
               sameID(document.estimateID, request.estimateID), sameID(document.maintenanceContractID, request.maintenanceContractID),
               sameID(document.customerEquipmentID, request.customerEquipmentID),
               document.fileSizeBytes == request.data.count,
               document.fileSHA256 == QBODocumentFileInfo.hash(request.data),
-              equipmentName == nil || document.equipmentName == equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines)
+              equipmentName == nil || document.equipmentName == normalizedUploadEquipmentName(equipmentName)
         else { throw CompanyDocumentContentError.changed }
         // Retry snapshots lack a decorative equipment label; stable equipment
         // identity and all available metadata/content must still match. No record

@@ -75,4 +75,20 @@ struct DocumentUploadRecoveryTests {
             try GunnAireBackendService.verifiedDocumentUploadRecovery(JSONSerialization.data(withJSONObject: value), request: request)
         }
     }
+    @Test func canonicalServerNamesAndEmptyEquipmentRecoverWithoutRelaxingProof() throws {
+        for (raw, stored) in [(" José.pdf ", "Jos_.pdf"), ("receipt(1).pdf", "receipt_1_.pdf"), ("\u{001c}report.pdf\u{0085}", "report.pdf")] {
+            let base = request()
+            let request = GunnAireBackendService.SharedCompanyDocumentUploadRequest(operationID: base.operationID,
+                data: base.data, filename: raw, contentType: base.contentType, kind: base.kind,
+                serviceCallID: base.serviceCallID, invoiceID: nil, estimateID: nil, maintenanceContractID: nil,
+                customerEquipmentID: base.customerEquipmentID, customerName: base.customerName)
+            var value = envelope(request)
+            var document = value["document"] as! [String: Any]
+            document["filename"] = stored
+            document["equipmentName"] = NSNull()
+            value["document"] = document
+            #expect(try GunnAireBackendService.verifiedDocumentUploadRecovery(JSONSerialization.data(withJSONObject: value), request: request, equipmentName: "  \n")?.filename == stored)
+        }
+    }
+
 }
