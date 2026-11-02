@@ -289,6 +289,10 @@ struct ReceiptsAndBillsView: View {
                             Label(isUploadingReceiptToBackend ? "Uploading Receipt..." : "Upload Receipt to Company Storage", systemImage: "icloud.and.arrow.up")
                         }
                         .disabled(isUploadingReceiptToBackend || receiptURL == nil || !GunnAireBackendService.isConfigured)
+                        Button("Recover Pending Receipt") {
+                            Task { await uploadReceiptToBackend(recoverPending: true) }
+                        }
+                        .disabled(isUploadingReceiptToBackend || !GunnAireBackendService.isConfigured)
                         Button("Start another receipt upload") {
                             Task { @MainActor in
                                 do {
@@ -297,7 +301,7 @@ struct ReceiptsAndBillsView: View {
                                     try await ReceiptUploadIntentJournal.device.startNew(scope: ReceiptUploadIntentJournal.scope(origin: identity.backendOrigin, email: identity.email))
                                     try operation.check()
                                     receiptURL = nil; receiptImage = nil
-                                    backendUploadMessage = "Select the new receipt. Its upload will be a separate operation."
+                                    backendUploadMessage = "Select the new receipt. It will be saved as a separate receipt."
                                 } catch { backendUploadMessage = error.localizedDescription }
                             }
                         }
@@ -3661,70 +3665,51 @@ private extension ReceiptsAndBillsView {
     }
 
     @MainActor
-    func uploadReceiptToBackend() async {
-        guard let receiptURL else {
-            backendUploadMessage = "Select a receipt first."
-            return
-        }
+    func uploadReceiptToBackend(recoverPending: Bool = false) async {
         guard GunnAireBackendService.isConfigured else {
             backendUploadMessage = "Shared company storage is not configured."
             return
         }
-
         isUploadingReceiptToBackend = true
         defer { isUploadingReceiptToBackend = false }
-
         var retainedScope: String?
         do {
             let operation = try GunnAireBackendService.retainingUploadOperation(nil)
             guard let identity = CompanyWorkspaceSession.current else { throw WorkspaceProviderAccessError.unavailable }
             let scope = ReceiptUploadIntentJournal.scope(origin: identity.backendOrigin, email: identity.email)
-            let didStartAccessing = receiptURL.startAccessingSecurityScopedResource()
-            defer {
-                if didStartAccessing {
-                    receiptURL.stopAccessingSecurityScopedResource()
-                }
+            let pending: ReceiptUploadIntentJournal.Pending
+            if recoverPending {
+                pending = try await ReceiptUploadIntentJournal.device.recover(scope: scope)
+            } else {
+                guard let receiptURL else { throw ReceiptUploadIntentJournal.Failure.absent }
+                let access = receiptURL.startAccessingSecurityScopedResource()
+                defer { if access { receiptURL.stopAccessingSecurityScopedResource() } }
+                let request = ReceiptUploadIntentJournal.Request(filename: receiptURL.lastPathComponent,
+                    contentType: UTType(filenameExtension: receiptURL.pathExtension)?.preferredMIMEType ?? "application/octet-stream",
+                    serviceCallID: selectedServiceCallID, equipmentID: selectedServiceCall?.customerEquipmentID,
+                    equipmentName: selectedServiceCall?.equipmentSummary, customerName: selectedServiceCall?.customer?.name)
+                let payload = try ReceiptUploadIntentJournal.Payload.capture(url: receiptURL, request: request)
+                pending = try await ReceiptUploadIntentJournal.device.prepare(scope: scope, payload: payload)
             }
-
-            let data = try Data(contentsOf: receiptURL)
-            let contentType = UTType(filenameExtension: receiptURL.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-            let serviceCallID = selectedServiceCallID
-            let equipmentID = selectedServiceCall?.customerEquipmentID
-            let equipmentName = selectedServiceCall?.equipmentSummary
-            let customerName = selectedServiceCall?.customer?.name
-            let fingerprintData = try JSONSerialization.data(withJSONObject: [
-                "bytes": QBODocumentFileInfo.hash(data), "filename": receiptURL.lastPathComponent,
-                "contentType": contentType, "serviceCall": serviceCallID?.uuidString ?? "",
-                "equipment": equipmentID?.uuidString ?? "",
-                "equipmentName": equipmentName ?? "",
-                "customerName": customerName ?? ""
-            ], options: [.sortedKeys])
-            let fingerprint = QBODocumentFileInfo.hash(fingerprintData)
-            let receiptUploadOperationID = try await ReceiptUploadIntentJournal.device.begin(scope: scope, fingerprint: fingerprint)
             retainedScope = scope
             try operation.check()
+            let request = pending.payload.request
             let response = try await GunnAireBackendService.uploadDocument(
-                operationID: receiptUploadOperationID,
-                data: data,
-                filename: receiptURL.lastPathComponent,
-                contentType: contentType,
-                kind: "receipt",
-                serviceCallID: serviceCallID,
-                invoiceID: nil,
-                estimateID: nil,
-                customerEquipmentID: equipmentID,
-                equipmentName: equipmentName,
-                customerName: customerName,
-                originatingOperation: operation
-            )
+                operationID: pending.operation, data: pending.payload.data,
+                filename: request.filename, contentType: request.contentType, kind: "receipt",
+                serviceCallID: request.serviceCallID, invoiceID: nil, estimateID: nil,
+                customerEquipmentID: request.equipmentID, equipmentName: request.equipmentName,
+                customerName: request.customerName, originatingOperation: operation)
             try operation.check()
-            try await ReceiptUploadIntentJournal.device.confirm(scope: scope, operation: receiptUploadOperationID)
+            let cleaned = try await ReceiptUploadIntentJournal.device.confirm(scope: scope, operation: pending.operation)
             await ReceiptUploadIntentJournal.device.release(scope: scope)
             retainedScope = nil
-            backendUploadMessage = "Receipt uploaded to company storage: \(response.filename)."
+            try operation.check()
+            backendUploadMessage = "Receipt confirmed in company storage: \(response.filename)." +
+                (cleaned ? "" : " A protected local recovery copy was retained because cleanup could not finish.")
         } catch {
             if let retainedScope { await ReceiptUploadIntentJournal.device.release(scope: retainedScope) }
-            backendUploadMessage = "Receipt upload failed: \(error.localizedDescription)"
+            backendUploadMessage = "Receipt upload was not confirmed: \(error.localizedDescription)"
         }
     }
 
