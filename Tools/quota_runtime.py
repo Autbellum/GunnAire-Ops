@@ -28,10 +28,13 @@ def read_cgroup(path):
     current = int((path / 'memory.current').read_text())
     peak = int((path / 'memory.peak').read_text())
     events = parse_pairs((path / 'memory.events').read_text())
+    statistics = parse_pairs((path / 'memory.stat').read_text())
+    if not {'anon', 'file', 'kernel'}.issubset(statistics) or any(value < 0 for value in statistics.values()):
+        raise RuntimeError('Incomplete kernel memory breakdown')
     if (current < 0 or peak < current or not {'oom', 'oom_kill'}.issubset(events)
             or any(value < 0 for value in events.values())):
         raise RuntimeError('Invalid or incomplete kernel memory telemetry')
-    return dict(limits, current=current, peak=peak, events=events)
+    return dict(limits, current=current, peak=peak, events=events, statistics=statistics)
 
 
 

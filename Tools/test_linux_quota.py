@@ -15,9 +15,14 @@ class QuotaRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             valid = {'memory.max':'512000000', 'memory.swap.max':'0', 'cpu.max':'50000 100000',
-                     'memory.current':'1000', 'memory.peak':'2000', 'memory.events':'low 0\nmax 0\noom 0\noom_kill 0\n'}
+                     'memory.stat':'anon 600\nfile 300\nkernel 100\n', 'memory.current':'1000', 'memory.peak':'2000', 'memory.events':'low 0\nmax 0\noom 0\noom_kill 0\n'}
             for name, value in valid.items(): (root/name).write_text(value)
             self.assertEqual(read_cgroup(root)['peak'], 2000)
+            self.assertEqual(read_cgroup(root)['statistics'], {'anon':600,'file':300,'kernel':100})
+            for invalid in ['anon 600\nfile 300\n', 'anon -1\nfile 300\nkernel 100\n']:
+                (root/'memory.stat').write_text(invalid)
+                with self.assertRaises(RuntimeError): read_cgroup(root)
+            (root/'memory.stat').write_text(valid['memory.stat'])
             for name, wrong in [('memory.max','536870912'), ('memory.swap.max','1'),
                                 ('cpu.max','100000 100000'), ('cpu.max','max 100000')]:
                 with self.subTest(name=name,wrong=wrong):
@@ -31,7 +36,7 @@ class QuotaRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for name, value in {'memory.max':'512000000','memory.swap.max':'0',
-                                'cpu.max':'50000 100000','memory.current':'1000',
+                                'cpu.max':'50000 100000','memory.stat':'anon 600\nfile 300\nkernel 100\n', 'memory.current':'1000',
                                 'memory.peak':'2000','memory.events':'low 0\n'}.items():
                 (root/name).write_text(value)
             with self.assertRaises(RuntimeError): read_cgroup(root)
