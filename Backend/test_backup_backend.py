@@ -24,6 +24,32 @@ class BackupBackendTests(unittest.TestCase):
         (storage / "receipt.jpg").write_bytes(b"fictional receipt bytes")
         return database, storage
 
+    def test_backup_copy_syncs_before_releasing_cache_and_preserves_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, target = root / "source", root / "target"
+            source.write_bytes(b"original" * 1000)
+            events = []
+            with mock.patch.object(backup_backend.os, "fsync", side_effect=lambda fd: events.append("sync")), mock.patch.object(backup_backend.os, "posix_fadvise", side_effect=lambda *args: events.append("release"), create=True), mock.patch.object(backup_backend.os, "POSIX_FADV_DONTNEED", 4, create=True):
+                backup_backend.copy_document(source, target)
+            self.assertEqual(events, ["sync", "release", "release"])
+            self.assertEqual(source.read_bytes(), target.read_bytes())
+            self.assertEqual(source.stat().st_mtime_ns, target.stat().st_mtime_ns)
+            with mock.patch.object(backup_backend.os, "fsync", side_effect=OSError("sync failed")):
+                with self.assertRaises(OSError): backup_backend.copy_document(source, root / "failed")
+            self.assertEqual(source.read_bytes(), b"original" * 1000)
+
+    def test_hash_releases_cache_but_advice_failure_preserves_digest(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "file"
+            path.write_bytes(b"immutable")
+            for failure in [None, OSError("unsupported")]:
+                with mock.patch.object(backup_backend.os, "posix_fadvise", side_effect=failure, create=True) as advice, mock.patch.object(backup_backend.os, "POSIX_FADV_DONTNEED", 4, create=True):
+                    self.assertEqual(backup_backend.sha256_file(path), hashlib.sha256(b"immutable").hexdigest())
+                    advice.assert_called_once()
+            self.assertEqual(path.read_bytes(), b"immutable")
+
     def test_backup_closes_source_when_destination_cannot_open(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

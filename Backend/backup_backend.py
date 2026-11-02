@@ -29,11 +29,33 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def release_file_cache(fd: int) -> None:
+    advise, option = getattr(os, "posix_fadvise", None), getattr(os, "POSIX_FADV_DONTNEED", None)
+    if advise is not None and option is not None:
+        try:
+            advise(fd, 0, 0, option)
+        except OSError:
+            pass  # Optional cache hint; never replaces integrity verification.
+
+
+def copy_document(source: Path, target: Path) -> None:
+    # Bound copy memory and make destination pages clean before releasing only
+    # these files' cache. No global cache manipulation or source-data writes.
+    with source.open("rb") as incoming, target.open("wb") as outgoing:
+        shutil.copyfileobj(incoming, outgoing, 1024 * 1024)
+        outgoing.flush()
+        os.fsync(outgoing.fileno())
+        release_file_cache(outgoing.fileno())
+        release_file_cache(incoming.fileno())
+    shutil.copystat(source, target)
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
+        release_file_cache(handle.fileno())
     return digest.hexdigest()
 
 
@@ -128,7 +150,7 @@ def create_backup(
                 target.mkdir(parents=True, exist_ok=True)
             elif source.is_file():
                 target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source, target)
+                copy_document(source, target)
 
         document_records = [
             file_record(path, artifact)
