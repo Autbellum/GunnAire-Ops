@@ -214,6 +214,8 @@ class GunnAireLocalAIBackendHandler(backend.GunnAireBackendHandler):
     server_version = f"{backend.GunnAireBackendHandler.server_version} LocalAI/1.0"
 
     def do_GET(self) -> None:
+        if self.maintenance_admission("GET"):
+            return
         if urlparse(self.path).path in WORKER_PATHS:
             self.write_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND, require_auth=False)
             return
@@ -233,6 +235,8 @@ class GunnAireLocalAIBackendHandler(backend.GunnAireBackendHandler):
         self.write_json(payload)
 
     def do_POST(self) -> None:
+        if self.maintenance_admission("POST"):
+            return
         worker_method = WORKER_PATHS.get(urlparse(self.path).path)
         if worker_method is not None:
             self._worker_post(worker_method)

@@ -6,6 +6,12 @@ collection limit is an observation, never a reservation or cross-app send permit
 """
 from __future__ import annotations
 
+try:
+    from Backend import maintenance
+except ModuleNotFoundError:
+    import maintenance
+
+
 import re
 import time
 import unicodedata
@@ -152,6 +158,7 @@ class FieldPaymentReview:
         return scope
 
     @staticmethod
+    @maintenance.operational
     def query(value):
         required = {"companyID", "realmID", "environment", "invoiceID", "localCustomerID",
                     "invoiceQuickBooksID", "customerQuickBooksID", "connectionRevision"}
@@ -169,6 +176,7 @@ class FieldPaymentReview:
                 "service_call_id": payments.canonical_uuid(value["serviceCallID"]) if "serviceCallID" in value else None,
                 "kind": "charge", "amount_cents": 0}
 
+    @maintenance.operational
     def inspect(self, session, intent):
         with self.database() as connection:
             # One consistent SQLite read snapshot; no network work holds it.
@@ -215,6 +223,7 @@ class FieldPaymentReview:
                         dict(binding) if binding else None, assignment, allowance, attempts)
             return snapshot, grant
 
+    @maintenance.operational
     def review(self, session, query):
         intent = self.query(query)
         initial, grant = self.inspect(session, intent)

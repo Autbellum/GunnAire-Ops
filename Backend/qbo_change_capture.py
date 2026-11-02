@@ -6,6 +6,12 @@ Every observed version (including tombstones) remains encrypted and immutable.
 """
 from __future__ import annotations
 
+try:
+    from Backend import maintenance
+except ModuleNotFoundError:
+    import maintenance
+
+
 import hashlib
 import json
 import re
@@ -129,6 +135,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+@maintenance.operational
 def transport(request):
     """GET-only fixed accounting origin; never a general proxy or mutation API."""
     try:
@@ -221,6 +228,7 @@ class ChangeCaptureQBOProvider:
         self.send, self.bearer = send or transport, None
         self.census_started_at = None
 
+    @maintenance.operational
     def request(self, resource, query):
         if resource not in ("cdc", "query"):
             raise failure("invalid_resource", "Unsupported change capture resource.", 400)
@@ -369,6 +377,7 @@ class ChangeCapture:
             return bool(event["deleted_entity_id"]) and exists(event["deleted_entity_id"], True)
         return True
 
+    @maintenance.operational
     def capture(self, session_id, payload):
         intent = validated_scope(payload)
         started = self.now()

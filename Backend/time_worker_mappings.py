@@ -6,6 +6,12 @@ Local technician references are never silently imported into a different realm.
 """
 from __future__ import annotations
 
+try:
+    from Backend import maintenance
+except ModuleNotFoundError:
+    import maintenance
+
+
 import hashlib
 import json
 import re
@@ -181,6 +187,7 @@ class TimeWorkerMappings:
                 "realmID": intent["realm_id"], "environment": intent["environment"], "protocolVersion": 1,
                 "connectionRevision": intent["connection_revision"], "mapping": mapping, "candidate": selected}
 
+    @maintenance.operational
     def save(self, session_id, payload):
         required = {"companyID", "realmID", "environment", "workerEmail", "connectionRevision", "operationID",
                     "expectedRevision", "kind", "providerID", "referenceRevision", "enabled"}

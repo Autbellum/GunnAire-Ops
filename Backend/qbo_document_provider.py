@@ -5,6 +5,12 @@ attachment metadata updates, deletions, or customer-send routes are accepted.
 """
 from __future__ import annotations
 
+try:
+    from Backend import maintenance
+except ModuleNotFoundError:
+    import maintenance
+
+
 import hashlib
 import re
 import urllib.error
@@ -33,6 +39,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+@maintenance.operational
 def transport(request):
     try:
         parsed = urllib.parse.urlsplit(request.full_url)
@@ -82,6 +89,7 @@ class DocumentQBOProvider:
         self.context, self.authorize, self.bearer_loader = dict(context), authorize, bearer_loader
         self.send, self.bearer = send or transport, None
 
+    @maintenance.operational
     def request(self, resource, query=None, body=None, before_send=None):
         if body is None:
             valid = (resource == "query" and set(query or {}) == {"query"}
@@ -141,6 +149,7 @@ class DocumentQBOProvider:
             raise failure("upload_unconfirmed", "QuickBooks returned an incomplete or different file lookup.")
         return values
 
+    @maintenance.operational
     def upload(self, metadata, data, request_id, before_send):
         if (not isinstance(request_id, str) or not re.fullmatch("ga-file-" + UUID, request_id)
                 or not isinstance(data, bytes) or not 1 <= len(data) <= MAX_FILE_BYTES

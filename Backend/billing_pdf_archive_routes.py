@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+try:
+    from Backend import maintenance
+except ModuleNotFoundError:
+    import maintenance
+
+
 from dataclasses import asdict
 from datetime import datetime, timezone
 import hashlib
@@ -93,6 +99,7 @@ class BillingPDFArchiveRoutes:
         except ArtifactError as error:
             raise RouteFailure("artifact_unavailable", 503, str(error)) from error
 
+    @maintenance.operational
     def dispatch(self, method: str, path: str, payload: dict,
                  session_id: str) -> dict:
         if not isinstance(payload, dict):
@@ -161,6 +168,7 @@ class BillingPDFArchiveRoutes:
         except ProviderUploadError as error:
             raise RouteFailure("provider_unconfirmed", 502, str(error)) from error
 
+    @maintenance.operational
     def _deliver(self, key: BillingPDFKey, payload: dict, session_id: str) -> dict:
         """Session-bound delivery; the reserved ID survives an uncertain POST."""
         if self.artifacts is None:

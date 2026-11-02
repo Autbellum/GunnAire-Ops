@@ -8,6 +8,12 @@ Only opaque references, amounts and safe provider evidence are persisted.
 
 from __future__ import annotations
 
+try:
+    from Backend import maintenance
+except ModuleNotFoundError:
+    import maintenance
+
+
 import hashlib
 import json
 import re
@@ -265,6 +271,7 @@ class PaymentAttemptJournal:
             raise AttemptError("not_found", "The payment attempt was not found.", 404)
         return row
 
+    @maintenance.operational
     def reserve(self, session_id, payload):
         intent = self.intent(payload)
         # Preauthorize before provider reads; then recheck inside the write
@@ -291,6 +298,7 @@ class PaymentAttemptJournal:
             raise AttemptError("currency_mismatch", "Only verified USD invoices can use this collection workflow.")
         return money_cents(invoice.get("Balance"))
 
+    @maintenance.operational
     def commit_reservation(self, session_id, intent, context, balance, source_amount):
         with self.database() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -390,6 +398,7 @@ class PaymentAttemptJournal:
         if prior + intent["amount_cents"] > source_amount:
             raise AttemptError("refund_limit", "Prior or unfinished refunds leave insufficient refundable funds.")
 
+    @maintenance.operational
     def begin(self, session_id, attempt_id):
         with self.database() as connection:
             initial = dict(self.row(connection, attempt_id))
@@ -420,6 +429,7 @@ class PaymentAttemptJournal:
             self.event(connection, actor, "begin-dispatch", row["id"])
             return self.public(self.row(connection, row["id"]))
 
+    @maintenance.operational
     def cancel(self, session_id, attempt_id):
         with self.database() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -483,6 +493,7 @@ class PaymentAttemptJournal:
             raise AttemptError("provider_unconfirmed", "The provider transaction requires accounting review.")
         return provider_id, status
 
+    @maintenance.operational
     def confirm(self, session_id, attempt_id, provider_id):
         provider_id = reference(provider_id)
         with self.database() as connection:
@@ -536,6 +547,7 @@ class PaymentAttemptJournal:
             self.event(connection, actor, "confirm-provider", current["id"])
             return self.public(self.row(connection, current["id"]))
 
+    @maintenance.operational
     def unknown(self, session_id, attempt_id):
         with self.database() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -576,6 +588,7 @@ class PaymentAttemptJournal:
             if total != row["amount_cents"]:
                 raise AttemptError("accounting_mismatch", "The accounting allocation amount differs from the collection.")
 
+    @maintenance.operational
     def complete(self, session_id, attempt_id, accounting_id):
         accounting_id = reference(accounting_id)
         with self.database() as connection:

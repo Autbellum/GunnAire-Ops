@@ -6,6 +6,12 @@ Business-triggered automation requires a separate server-authorized domain inten
 """
 from __future__ import annotations
 
+try:
+    from Backend import maintenance
+except ModuleNotFoundError:
+    import maintenance
+
+
 import base64
 import hashlib
 import hmac
@@ -123,6 +129,7 @@ def message_id(value):
     return value
 
 
+@maintenance.operational
 def transport(method, resource, token, *, query=None, body=None, maximum=MAX_RESPONSE_BYTES):
     """Fixed own-mailbox routes, bounded responses, no redirects and no retries."""
     if (method not in {"GET", "POST"} or not re.fullmatch(
@@ -244,6 +251,7 @@ class MailContext:
         self.owner, self.role = actor["email"], actor["role"]
         return actor
 
+    @maintenance.operational
     def request(self, method, resource, **kwargs):
         self.check()
         token = self.service.google.access(self.session, self.company, self.grant, google.FEATURE_SCOPES["mail"])
@@ -361,6 +369,7 @@ class GoogleMail:
         payload = self.google.open("mail-operation", row)
         return {**self.outcome(context, identifier), "message": payload}
 
+    @maintenance.operational
     def prepare(self, context, identifier, kind, payload):
         identifier = google.identifier(identifier)
         clear = google.canonical(payload)
@@ -391,6 +400,7 @@ class GoogleMail:
                 self.google.audit(context.owner, "prepare", "google-mail-" + kind, identifier, connection=connection)
         return self.outcome(context, identifier)
 
+    @maintenance.operational
     def claim(self, context, identifier):
         with self.google.database() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -402,6 +412,7 @@ class GoogleMail:
             self.google.audit(context.owner, "dispatch", "google-mail-" + row["kind"], row["id"], connection=connection)
         return payload
 
+    @maintenance.operational
     def transition(self, context, identifier, state, *, message=None, thread=None, previous=("dispatching", "accepted", "review")):
         with self.google.database() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -412,10 +423,12 @@ class GoogleMail:
                 (state, message, thread, self.google.now().isoformat(), row["id"]))
             self.google.audit(context.owner, state, "google-mail-" + row["kind"], row["id"], connection=connection)
 
+    @maintenance.operational
     def cancel(self, context, identifier):
         self.transition(context, identifier, "cancelled", previous=("prepared",))
         return self.outcome(context, identifier)
 
+    @maintenance.operational
     def action(self, context, identifier, *, message, thread, action):
         if action not in ACTIONS:
             raise failure()
@@ -435,6 +448,7 @@ class GoogleMail:
                 raise
         return self.recover_action(context, identifier)
 
+    @maintenance.operational
     def recover_action(self, context, identifier):
         row = self.original(context, identifier)
         if row["kind"] != "action":
@@ -451,6 +465,7 @@ class GoogleMail:
         self.transition(context, identifier, "confirmed", message=detail["id"], thread=detail["threadId"])
         return {**self.outcome(context, identifier), "message": detail}
 
+    @maintenance.operational
     def prepare_send(self, context, identifier, message):
         """Explicit office composition, not a bypass for automated business sends."""
         if isinstance(message, dict) and set(message).intersection({"business", "workflow", "consent", "customerID", "invoiceID", "jobID"}):
@@ -531,6 +546,7 @@ class GoogleMail:
         if len(original_refs) > 1 or (original_refs[0].split() if original_refs else []) != reply["references"]:
             raise failure("mail_changed", 409)
 
+    @maintenance.operational
     def send(self, context, identifier):
         row = self.original(context, identifier)
         if row["kind"] != "send":
@@ -562,6 +578,7 @@ class GoogleMail:
             self.transition(context, identifier, "rejected" if rejected else "review", previous=("dispatching", "accepted"))
             raise
 
+    @maintenance.operational
     def recover_send(self, context, identifier):
         row = self.original(context, identifier)
         if row["kind"] != "send":

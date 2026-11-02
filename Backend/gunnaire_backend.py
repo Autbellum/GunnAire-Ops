@@ -37,6 +37,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 
 try:
+    from Backend import maintenance
     from Backend.bounded_http_server import BoundedBusinessServer
     from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications, billing_estimate_jobs, billing_native, qbo_link_adoption, field_payment_review
     from Backend import customer_accounts, transactional_email
@@ -54,6 +55,7 @@ try:
     from Backend.time_worker_provider import TimeWorkerQBOProvider
     from Backend.time_publication_provider import TimeQBOProvider
 except ModuleNotFoundError:
+    import maintenance
     from bounded_http_server import BoundedBusinessServer
     import payment_attempts  # Direct launch from the Backend directory.
     import field_payment_review
@@ -485,6 +487,7 @@ def decode_jwt_json_segment(value: str, *, maximum_bytes: int) -> dict[str, obje
     return payload
 
 
+@maintenance.operational
 def apple_public_key(kid: str, *, force_refresh: bool = False) -> rsa.RSAPublicKey:
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", kid):
         raise ValueError("Invalid Apple key identifier")
@@ -676,6 +679,7 @@ def verify_apple_account_notification(
     }
 
 
+@maintenance.operational
 def verify_google_identity_token(identity_token: str) -> dict[str, object]:
     """Verify one Google OIDC token before exchanging it for an app session."""
     if AUTH_MODE != "google-id-token" or not 100 <= len(identity_token) <= 16 * 1024:
@@ -1037,6 +1041,7 @@ def apns_provider_dependency_is_available() -> bool:
     return True
 
 
+@maintenance.operational
 def send_apns_request(
     *,
     device_token: str,
@@ -1094,6 +1099,7 @@ def send_apns_request(
     return status_code, reason, apns_id
 
 
+@maintenance.operational
 def qbo_request(form: dict[str, str], endpoint: str) -> tuple[int, dict[str, object]]:
     """Confidential QBO call. Never log the body because it can contain OAuth tokens."""
     if not qbo_is_configured():
@@ -1128,6 +1134,7 @@ class QBOReadNoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+@maintenance.operational
 def qbo_payment_read_transport(request):
     if request.get_method() != "GET":
         raise payment_attempts.AttemptError("read_only", "Only provider verification reads are supported.", 400)
@@ -1155,6 +1162,7 @@ def qbo_payment_read_transport(request):
         ) from None
 
 
+@maintenance.operational
 def qbo_authorized_bearer(context, audit_actor="system:payment-verification"):
     environment = context["environment"]
     expected_grant = context["grant_fingerprint"]
@@ -1246,6 +1254,7 @@ def read_payment_provider_record(context, category, record_id, *, kind="charge",
     return value
 
 
+@maintenance.operational
 def qbo_catalog_transport(request):
     """Bounded fixed-resource transport, no redirect or arbitrary accounting proxy."""
     try:
@@ -1359,6 +1368,7 @@ def encrypt_catalog_payload(raw):
     return encryptor.encrypt(raw.encode()).decode()
 
 
+@maintenance.operational
 def qbo_customer_transport(request):
     """Customer-only fixed-origin transport. No send-email, update or delete route."""
     try:
@@ -1956,9 +1966,14 @@ def validate_supplier_order_acceptance(
 @contextmanager
 def db() -> Iterator[sqlite3.Connection]:
     """Commit or roll back each database scope, then release its connection."""
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(DB_PATH)
+    if maintenance.database_read_only():
+        connection = sqlite3.connect(DB_PATH.resolve().as_uri() + "?mode=ro", uri=True)
+    else:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(DB_PATH)
     try:
+        if maintenance.database_read_only():
+            connection.execute("PRAGMA query_only=ON")
         connection.row_factory = sqlite3.Row
         with connection:
             yield connection
@@ -2469,6 +2484,12 @@ def backup_readiness_component(now: datetime | None = None) -> dict[str, str]:
 
 
 def backend_readiness_snapshot(now: datetime | None = None) -> dict[str, object]:
+    if maintenance.enabled():
+        with db() as connection:
+            connection.execute("SELECT 1 FROM users LIMIT 1").fetchone()
+        return {"maintenance": True, "status": "maintenance", "serviceVersion": SERVICE_VERSION,
+                "localDatabaseRead": "ok", "writeChecks": "not_run",
+                "providerChecks": "not_run", "releaseReady": False}
     components = [
         persistent_data_readiness_component(),
         database_readiness_component(),
@@ -2498,6 +2519,7 @@ def ensure_column(connection: sqlite3.Connection, table: str, column: str, defin
         connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
+@maintenance.initialize
 def initialize_database() -> None:
     with db() as connection:
         # A company is the durable backend database, not an email domain, QBO
@@ -2971,15 +2993,17 @@ def initialize_database() -> None:
         connection.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS supplier_order_attempts_one_active ON supplier_order_attempts(purchase_order_id) WHERE status IN ('submitting', 'unknown', 'accepted')"
         )
-        now = utc_now()
-        connection.execute(
-            """
-            INSERT INTO users(email, role, is_active, created_at, updated_at)
-            VALUES (?, 'Admin', 1, ?, ?)
-            ON CONFLICT(email) DO UPDATE SET role = 'Admin', is_active = 1, updated_at = excluded.updated_at
-            """,
-            (PRIMARY_ADMIN_EMAIL, now, now),
-        )
+        # Maintenance migrations must not reactivate or promote an existing user.
+        if not maintenance.enabled():
+            now = utc_now()
+            connection.execute(
+                """
+                INSERT INTO users(email, role, is_active, created_at, updated_at)
+                VALUES (?, 'Admin', 1, ?, ?)
+                ON CONFLICT(email) DO UPDATE SET role = 'Admin', is_active = 1, updated_at = excluded.updated_at
+                """,
+                (PRIMARY_ADMIN_EMAIL, now, now),
+            )
 
 
 def user_record(row: sqlite3.Row) -> dict[str, object]:
@@ -3353,6 +3377,8 @@ def deliver_pending_pushes(
     limit: int | None = None,
 ) -> int:
     """Attempt due deliveries once; retries remain durable and assignment creation never waits."""
+    if maintenance.enabled():
+        return 0
     if not apns_configuration_is_present() or push_token_store() is None:
         return 0
     checked_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
@@ -3471,6 +3497,8 @@ def deliver_pending_pushes(
 
 
 def push_delivery_worker() -> None:
+    if maintenance.enabled():
+        return None
     while True:
         PUSH_DELIVERY_WAKE_EVENT.wait(timeout=APNS_WORKER_INTERVAL_SECONDS)
         PUSH_DELIVERY_WAKE_EVENT.clear()
@@ -3482,7 +3510,9 @@ def push_delivery_worker() -> None:
             continue
 
 
-def start_push_delivery_worker() -> threading.Thread:
+def start_push_delivery_worker() -> threading.Thread | None:
+    if maintenance.enabled():
+        return None
     worker = threading.Thread(target=push_delivery_worker, name="gunnaire-apns-worker", daemon=True)
     worker.start()
     return worker
@@ -3501,6 +3531,8 @@ def billing_estimate_queue() -> billing_estimate_jobs.EstimateJobs:
 
 
 def billing_estimate_worker() -> None:
+    if maintenance.enabled():
+        return None
     while True:
         BILLING_ESTIMATE_WAKE_EVENT.wait(timeout=60)
         BILLING_ESTIMATE_WAKE_EVENT.clear()
@@ -3516,7 +3548,9 @@ def billing_estimate_worker() -> None:
             continue
 
 
-def start_billing_estimate_worker() -> threading.Thread:
+def start_billing_estimate_worker() -> threading.Thread | None:
+    if maintenance.enabled():
+        return None
     worker = threading.Thread(target=billing_estimate_worker, name="gunnaire-qbo-estimate-worker", daemon=True)
     worker.start()
     return worker
@@ -3588,6 +3622,7 @@ def partial_scheduled_backup_artifacts(directory: Path, *, now: datetime) -> lis
     return stale
 
 
+@maintenance.operational
 def sweep_partial_scheduled_backups(directory: Path, *, now: datetime) -> int:
     removed = 0
     for path in partial_scheduled_backup_artifacts(directory, now=now):
@@ -3596,6 +3631,7 @@ def sweep_partial_scheduled_backups(directory: Path, *, now: datetime) -> int:
     return removed
 
 
+@maintenance.operational
 def prune_scheduled_backups(directory: Path, *, keep: int, protect: set[str]) -> int:
     """Delete worker-created artifacts beyond the newest `keep`, never a protected one.
 
@@ -3622,6 +3658,7 @@ def backup_automation_error(error: BaseException) -> str:
     return f"{type(error).__name__}: {str(error).split(':', 1)[0].strip()}"[:300]
 
 
+@maintenance.operational
 def record_backup_automation(payload: dict[str, object]) -> None:
     try:
         backup_backend.write_json_atomic(BACKUP_AUTOMATION_STATUS_PATH, payload)
@@ -3640,6 +3677,8 @@ def run_scheduled_backup_if_due(now: datetime | None = None, *, force: bool = Fa
     The artifact shares the disk with the live data, so readiness keeps asking
     for an off-host copy.
     """
+    if maintenance.enabled():
+        return {"outcome": "maintenance"}
     checked_at = now or datetime.now(timezone.utc)
     directory = BACKUP_DIRECTORY
     if not BACKUP_AUTOMATION_ENABLED or directory is None:
@@ -3696,6 +3735,8 @@ def run_scheduled_backup_if_due(now: datetime | None = None, *, force: bool = Fa
 
 
 def backup_worker() -> None:
+    if maintenance.enabled():
+        return None
     BACKUP_WAKE_EVENT.wait(timeout=BACKUP_WORKER_STARTUP_DELAY_SECONDS)
     consecutive_failures = 0
     while not BACKUP_WORKER_STOP_EVENT.is_set():
@@ -3716,6 +3757,8 @@ def backup_worker() -> None:
 
 
 def start_backup_worker() -> threading.Thread | None:
+    if maintenance.enabled():
+        return None
     if not BACKUP_AUTOMATION_ENABLED or BACKUP_DIRECTORY is None:
         return None
     BACKUP_WORKER_STOP_EVENT.clear()
@@ -4044,12 +4087,28 @@ def record_audit_event(
 class GunnAireBackendHandler(BaseHTTPRequestHandler):
     server_version = f"GunnAireBackend/{SERVICE_VERSION}"
 
+    def maintenance_admission(self, method: str) -> bool:
+        if not maintenance.enabled():
+            return False
+        parsed = urlparse(self.path)
+        if method == "GET" and not parsed.query and parsed.path in {"/health", "/api/session", "/api/readiness"}:
+            return False
+        # Close rather than consume an untrusted/large mutation body. Webhooks
+        # receive an honest retryable failure, never an acknowledgment.
+        self.close_connection = True
+        self.write_json({"error": "Maintenance: operation temporarily unavailable",
+                         "code": "maintenance_unavailable"},
+                        status=HTTPStatus.SERVICE_UNAVAILABLE, require_auth=False)
+        return True
+
     def do_OPTIONS(self) -> None:
         self.send_response(HTTPStatus.NO_CONTENT)
         self.send_cors_headers()
         self.end_headers()
 
     def do_GET(self) -> None:
+        if self.maintenance_admission("GET"):
+            return
         parsed = urlparse(self.path)
         if parsed.path == google_connections.CALLBACK_PATH:
             self.handle_google_callback(parsed)
@@ -4322,6 +4381,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         self.write_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:
+        if self.maintenance_admission("POST"):
+            return
         parsed = urlparse(self.path)
         if parsed.path.startswith("/portal/") and parsed.path.endswith("/estimate-response"):
             token = unquote(
@@ -4508,6 +4569,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         self.write_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
 
     def do_DELETE(self) -> None:
+        if self.maintenance_admission("DELETE"):
+            return
         parsed = urlparse(self.path)
         if self.principal() is None:
             self.write_json({"error": "Unauthorized"}, status=HTTPStatus.UNAUTHORIZED, require_auth=False)
@@ -4594,6 +4657,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 self._principal = session_principal
                 return self._principal
 
+        if maintenance.enabled():
+            return None
         identity_token = self.headers.get("X-GunnAire-Google-ID-Token", "").strip()
         if not identity_token:
             return None
@@ -4625,23 +4690,26 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             except ValueError:
                 return None
             if expiration.tzinfo is None or expiration.astimezone(timezone.utc) <= now:
-                connection.execute(
-                    "UPDATE auth_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
-                    (now.isoformat(), session["id"]),
-                )
-                deactivate_push_devices(connection, session_id=str(session["id"]))
+                if not maintenance.enabled():
+                    connection.execute(
+                        "UPDATE auth_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+                        (now.isoformat(), session["id"]),
+                    )
+                    deactivate_push_devices(connection, session_id=str(session["id"]))
                 return None
             user = connection.execute(
                 "SELECT * FROM users WHERE email = ?",
                 (normalize_email(session["email"]),),
             ).fetchone()
             if user is None or not bool(user["is_active"]):
-                deactivate_push_devices(connection, session_id=str(session["id"]))
+                if not maintenance.enabled():
+                    deactivate_push_devices(connection, session_id=str(session["id"]))
                 return None
-            connection.execute(
-                "UPDATE auth_sessions SET last_used_at = ? WHERE id = ?",
-                (now.isoformat(), session["id"]),
-            )
+            if not maintenance.enabled():
+                connection.execute(
+                    "UPDATE auth_sessions SET last_used_at = ? WHERE id = ?",
+                    (now.isoformat(), session["id"]),
+                )
         self._application_session_id = str(session["id"])
         return user_record(user)
 
@@ -5478,6 +5546,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             raise ValueError("Request body is incomplete")
         return data
 
+    @maintenance.operational
     def receive_qbo_webhook(self) -> None:
         if not QBO_WEBHOOK_VERIFIER_TOKEN:
             self.write_json(
@@ -6483,6 +6552,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             }
         )
 
+    @maintenance.operational
     def submit_supplier_connector_order(self) -> None:
         idempotency_key = self.headers.get("Idempotency-Key", "").strip()
         if SUPPLIER_CONNECTOR_IDEMPOTENCY_PATTERN.fullmatch(idempotency_key) is None:

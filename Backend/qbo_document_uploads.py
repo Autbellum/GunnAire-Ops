@@ -7,6 +7,12 @@ silently adopted by this service.
 """
 from __future__ import annotations
 
+try:
+    from Backend import maintenance
+except ModuleNotFoundError:
+    import maintenance
+
+
 import base64
 import binascii
 import hashlib
@@ -308,6 +314,7 @@ class DocumentUploads:
                     "connectionRevision": billing_assignments.connection_revision(grant["grant_fingerprint"]) if grant else None,
                     "uploads": [self.public(row, grant) for row in rows[:50]], "nextCursor": rows[49]["id"] if len(rows) > 50 else None}
 
+    @maintenance.operational
     def reserve(self, session_id, payload):
         intent, data = validated_request(payload)
         request_hash = digest(intent)
@@ -373,6 +380,7 @@ class DocumentUploads:
                 raise failure("upload_cancelled", "This never-sent upload was cancelled; its original file is retained.")
             return dict(row), grant
 
+    @maintenance.operational
     def transition(self, connection, row, state, actor, provider_id=None):
         updated = {**dict(row), "state": state, "provider_id": provider_id, "updated_at": self.now().isoformat()}
         sealed = self.encrypt(canonical(self.state_value(updated)))
@@ -380,6 +388,7 @@ class DocumentUploads:
                            (state, provider_id, updated["updated_at"], sealed, row["id"]))
         self.audit(actor, state, "qbo-document-upload", row["id"], connection=connection)
 
+    @maintenance.operational
     def claim(self, session_id, identifier, revision):
         with self.database() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -409,6 +418,7 @@ class DocumentUploads:
             _, grant = self.recovery_context(connection, session_id, row, expected_grant)
             return dict(row), grant
 
+    @maintenance.operational
     def confirm(self, session_id, identifier, remote, *, recovery_grant=None):
         with self.database() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -425,6 +435,7 @@ class DocumentUploads:
             self.transition(connection, row, "confirmed", actor["email"], provider_id)
             return self.public(self.record(connection, identifier), grant)
 
+    @maintenance.operational
     def retain_uncertain(self, identifier):
         # Internal post-dispatch bookkeeping may run after access is revoked.
         # It never exposes data, adopts another grant, or sends another request.
@@ -446,6 +457,7 @@ class DocumentUploads:
             if source is not None and (not isinstance(customer, dict) or customer.get("value") != source["customerQuickBooksID"]):
                 raise failure("job_document_review", "QuickBooks did not confirm this job file's original customer. Review its saved upload status.")
 
+    @maintenance.operational
     def send(self, session_id, identifier, revision):
         row, grant = self.check(session_id, identifier)
         if not isinstance(revision, str) or revision != row["revision"]:
@@ -458,6 +470,7 @@ class DocumentUploads:
         provider = self.provider_factory(grant, lambda: self.check(session_id, identifier))
         self.verify_targets(provider, intent)
         claimed = False
+        @maintenance.operational
         def claim():
             nonlocal claimed
             self.claim(session_id, identifier, revision)
@@ -471,6 +484,7 @@ class DocumentUploads:
                 self.retain_uncertain(identifier)
             raise
 
+    @maintenance.operational
     def recover(self, session_id, identifier):
         row, grant = self.check_recovery(session_id, identifier)
         if row["state"] in ("reserved", "confirmed"):
@@ -489,6 +503,7 @@ class DocumentUploads:
             return self.read(session_id, identifier)
         return self.confirm(session_id, identifier, matches[0], recovery_grant=fingerprint)
 
+    @maintenance.operational
     def cancel(self, session_id, identifier, revision):
         with self.database() as connection:
             connection.execute("BEGIN IMMEDIATE")

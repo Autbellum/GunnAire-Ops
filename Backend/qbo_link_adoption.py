@@ -5,6 +5,12 @@ revision. This creates shared links, never replacement accounting entities.
 """
 from __future__ import annotations
 
+try:
+    from Backend import maintenance
+except ModuleNotFoundError:
+    import maintenance
+
+
 import hashlib
 import json
 import re
@@ -230,6 +236,7 @@ class LinkAdopter:
             return {"companyID": company_id, "realmID": current["realm_id"], "environment": current["environment"],
                     "connectionRevision": billing_assignments.connection_revision(current["grant_fingerprint"]), "protocolVersion": 1}
 
+    @maintenance.operational
     def preview(self, session_id, payload):
         intent = validated_request(payload)
         request_hash = digest(intent)
@@ -263,12 +270,14 @@ class LinkAdopter:
             self.audit(actor["email"], "review", "qbo-link-adoption", identifier, connection=connection)
             return self.public(self.record(connection, identifier))
 
+    @maintenance.operational
     def read(self, session_id, identifier):
         with self.database() as connection:
             row = self.record(connection, identifier)
             self.authorize(connection, session_id, row, historical=True)
             return self.public(row)
 
+    @maintenance.operational
     def decide(self, session_id, identifier, revision, *, confirm):
         with self.database() as connection:
             row = dict(self.record(connection, identifier))

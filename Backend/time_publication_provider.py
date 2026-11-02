@@ -1,6 +1,12 @@
 """Fixed QBO TimeActivity create/read surface; no updates, payroll or deletes."""
 from __future__ import annotations
 
+try:
+    from Backend import maintenance
+except ModuleNotFoundError:
+    import maintenance
+
+
 import re
 import urllib.error
 import urllib.parse
@@ -53,6 +59,7 @@ def validate_create(document, request_id):
         raise failure("invalid_time", "Review the approved duration, note and original publication identity.", 400)
 
 
+@maintenance.operational
 def transport(request):
     try:
         parsed = urllib.parse.urlsplit(request.full_url)
@@ -99,6 +106,7 @@ class TimeQBOProvider:
         origin = "https://sandbox-quickbooks.api.intuit.com" if context["environment"] == "sandbox" else "https://quickbooks.api.intuit.com"
         self.base = origin + "/v3/company/" + urllib.parse.quote(context["realm_id"], safe="") + "/"
 
+    @maintenance.operational
     def request(self, path, *, query=None, payload=None):
         self.authorize()
         bearer = self.bearer_loader(self.context, "system:time-publication")
@@ -157,6 +165,7 @@ class TimeQBOProvider:
                 return values
         raise failure("time_history_review", "The QuickBooks time history exceeds this review limit. No new time was sent.")
 
+    @maintenance.operational
     def create(self, document, request_id):
         validate_create(document, request_id)
         result = self.request("timeactivity", query={"requestid": request_id}, payload=document)

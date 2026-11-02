@@ -1,6 +1,12 @@
 """Read-only, fixed-origin worker verification. Never a payroll/accounting proxy."""
 from __future__ import annotations
 
+try:
+    from Backend import maintenance
+except ModuleNotFoundError:
+    import maintenance
+
+
 import re
 import urllib.error
 import urllib.parse
@@ -19,6 +25,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+@maintenance.operational
 def transport(request):
     try:
         parsed = urllib.parse.urlsplit(request.full_url)
@@ -49,6 +56,7 @@ class TimeWorkerQBOProvider:
             raise failure("provider_changed", "Choose the original QuickBooks environment.")
         self.context, self.authorize, self.bearer_loader, self.send = dict(context), authorize, bearer_loader, send or transport
 
+    @maintenance.operational
     def read(self, kind, identifier):
         if kind not in ("Employee", "Vendor"):
             raise failure("invalid_resource", "Only an existing Employee or Vendor can be reviewed here.", 400)

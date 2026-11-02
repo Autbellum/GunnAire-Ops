@@ -6,6 +6,12 @@ can only reconcile that original attempt through BillingPublisher.run.
 """
 from __future__ import annotations
 
+try:
+    from Backend import maintenance
+except ModuleNotFoundError:
+    import maintenance
+
+
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -52,6 +58,7 @@ class EstimateJobs:
                 "attempts": row["attempts"], "lastErrorCode": row["last_error_code"],
                 "updatedAt": row["updated_at"]}
 
+    @maintenance.operational
     def enqueue(self, session_id, payload):
         """Reserve and queue in the same transaction; return before QBO work."""
         intent = validated_request(payload)
@@ -98,6 +105,7 @@ class EstimateJobs:
                 raise failure("not_found", "The original estimate job was not found.", 404)
             return {"publication": self.publisher.public(publication), "background": self.public(row)}
 
+    @maintenance.operational
     def claim_one(self):
         now = self.now()
         stamp = now.isoformat()
@@ -115,6 +123,7 @@ class EstimateJobs:
             return {"publication_id": row["publication_id"], "session_id": row["session_id"],
                     "lease_id": lease_id, "attempts": row["attempts"] + 1}
 
+    @maintenance.operational
     def finish(self, job, *, confirmed=False, error_code=None):
         now = self.now()
         if confirmed:
@@ -131,6 +140,7 @@ class EstimateJobs:
                 (state, next_run.isoformat(), error_code, now.isoformat(),
                  job["publication_id"], job["lease_id"])).rowcount == 1
 
+    @maintenance.operational
     def run_one(self):
         job = self.claim_one()
         if job is None:

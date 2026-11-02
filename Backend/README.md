@@ -516,3 +516,58 @@ observe a broken pipe instead of the early 503. Neither is upload completion;
 clients retain their original operation and reconcile through the versioned GET.
 The quota workload and 20% headroom requirement are unchanged. Linux synthetic
 success does not establish the historical production restart cause or live headroom.
+
+### Offline maintenance admission (opt-in)
+
+`GUNNAIRE_MAINTENANCE_MODE=1` (or `true`) enables maintenance on the next
+process start. Unset, `0`, or `false` retains existing behavior. Other values
+fail closed with a configuration error. There is no HTTP toggle. Enabling or
+removing this setting in production requires separate deployment/configuration
+approval; this feature does not itself change any deployed setting.
+
+Startup still performs the explicit, existing schema initialization and migration
+transaction, including required identity/schema backfills. That transaction is
+**not** a frozen-business validation phase. In maintenance it skips the ordinary
+primary-administrator upsert: an inactive or non-admin account is not reactivated
+or promoted. On an empty database no administrator is provisioned in this mode.
+After initialization, backend database scopes open the existing database with
+SQLite `mode=ro` and `query_only=ON`. Missing databases are not created by reads.
+Application logging and storage-directory setup are not business-record writes.
+
+Only exact query-free `GET /health`, `GET /api/session`, and `GET /api/readiness`
+are admitted (plus existing nonmutating CORS OPTIONS). Existing authentication
+and administrator requirements remain. A valid local application session is
+checked without updating last-used timestamps; expired/revoked/inactive sessions
+are denied without revocation/deactivation writes. Remote Google identity-token
+fallback is disabled. Existing explicitly configured development API-token mode
+retains its original semantics; maintenance never enables it. Readiness reports
+`status: maintenance`, `releaseReady: false`, and write/provider checks as
+`not_run`; it does not execute disk fsync or SQLite write probes.
+
+All other supported GET, POST and DELETE routes return HTTP 503 before auth,
+body handling, claims or callbacks. This includes provider-backed reads, portal
+open tracking, mail recovery, uploads, supplier orders, OAuth callbacks, webhook
+ingress and webhook acknowledgments. Webhook events remain pending; 503 is not
+an acknowledgment. Clients must retain pending work. Maintenance is intentionally
+not a full functioning customer/office app mode.
+
+APNs, estimate publication and scheduled-backup workers do not start. Their
+execution/claim boundaries and automatic backup sweep/prune paths are suppressed
+before work. Known QBO/Google/Drive/mail/APNs/transactional-email gateways and
+provider job mutation boundaries also reject direct calls, including token
+exchange/refresh/revoke paths. The local-AI HTTP entrypoint uses the same admission
+policy. This is application-level suppression, not an OS network sandbox for
+arbitrary code or operator scripts. Explicit standalone backup/migration tools
+remain separate operator actions and are not invoked by maintenance startup.
+
+Synthetic maintenance tests compare complete logical database snapshots around
+session reads, queued work and token operations, including 134 unacknowledged
+synthetic webhook events. Existing normal-mode suites and unchanged Linux quota
+workloads remain required. A production maintenance start still requires a fresh
+verified backup and reconciled working encryption/provider configuration; it is
+not permission to deploy or evidence of production secret continuity.
+
+The older production revision `c6d4077` does not implement this flag. A rollback
+to that revision must not be assumed to retain provider/worker suppression.
+Any release plan must separately approve its downtime, startup migrations,
+configuration continuity, fresh backup and post-deployment rollback policy.

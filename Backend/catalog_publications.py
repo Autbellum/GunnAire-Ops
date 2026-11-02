@@ -5,6 +5,12 @@ reads, never automatically resent. This is not a general accounting proxy.
 """
 from __future__ import annotations
 
+try:
+    from Backend import maintenance
+except ModuleNotFoundError:
+    import maintenance
+
+
 import hashlib
 import json
 import math
@@ -278,6 +284,7 @@ class CatalogPublisher:
             ("localItemID", "local_item_id"), ("operation", "operation"), ("state", "state"),
             ("providerID", "provider_id"), ("updatedAt", "updated_at"))}
 
+    @maintenance.operational
     def reserve(self, session_id, payload):
         intent = validated_request(payload)
         # Authorization evidence is checked atomically below, then persisted
@@ -358,6 +365,7 @@ class CatalogPublisher:
         connection.execute("INSERT OR IGNORE INTO catalog_entity_mappings VALUES (?,?,?,?,?)",
                            (*scope(row), row["local_item_id"], provider_id))
 
+    @maintenance.operational
     def claim(self, session_id, identifier):
         with self.database() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -381,6 +389,7 @@ class CatalogPublisher:
                                (self.now().isoformat(), identifier))
             self.audit(actor["email"], "dispatch", "catalog-publication", identifier, connection=connection)
 
+    @maintenance.operational
     def confirm(self, session_id, identifier, remote):
         remote = validated_remote(remote)
         with self.database() as connection:
@@ -398,6 +407,7 @@ class CatalogPublisher:
             self.audit(actor["email"], "confirm", "catalog-publication", identifier, connection=connection)
             return {"publication": self.public(self.record(connection, identifier)), "item": remote}
 
+    @maintenance.operational
     def run(self, session_id, identifier, *, allow_send=False):
         row, context = self.check(session_id, identifier)
         item = self.item_payload(row)
@@ -456,6 +466,7 @@ class CatalogPublisher:
                 raise failure("vendor_changed", "Review the item's active preferred vendor before publishing.")
         self.check(session_id, identifier)
         claimed = False
+        @maintenance.operational
         def claim():
             nonlocal claimed
             self.claim(session_id, identifier)
@@ -481,10 +492,12 @@ class CatalogPublisher:
                                        (self.now().isoformat(), identifier))
             raise
 
+    @maintenance.operational
     def publish(self, session_id, payload):
         row = self.reserve(session_id, payload)
         return self.run(session_id, row["id"], allow_send=True)
 
+    @maintenance.operational
     def context(self, session_id, payload):
         """Business-session discovery and mapped-item read, never link adoption.
 
@@ -568,6 +581,7 @@ class CatalogPublisher:
             ).fetchall()
             return [self.public(row) for row in rows]
 
+    @maintenance.operational
     def cancel(self, session_id, identifier):
         with self.database() as connection:
             connection.execute("BEGIN IMMEDIATE")

@@ -6,6 +6,12 @@ searches for, or deletes a Drive file; an uncertain read cannot confirm one.
 
 from __future__ import annotations
 
+try:
+    from Backend import maintenance
+except ModuleNotFoundError:
+    import maintenance
+
+
 import hashlib
 import http.client
 import json
@@ -29,6 +35,7 @@ class ProviderReadbackError(RuntimeError):
     pass
 
 
+@maintenance.operational
 def transport(request: urllib.request.Request, *, media: bool):
     """No redirect, no retry, bounded metadata and streaming byte hash."""
     parsed = urllib.parse.urlsplit(request.full_url)
@@ -82,6 +89,7 @@ class BillingPDFDriveReadback:
     def __init__(self, send=transport):
         self.send = send
 
+    @maintenance.operational
     def verify(self, key, reservation, access_token: str) -> str:
         file_id = reservation.drive_file_id
         if (not isinstance(file_id, str) or _ID.fullmatch(file_id) is None or

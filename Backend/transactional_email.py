@@ -12,6 +12,12 @@ style of the rest of this backend.
 """
 from __future__ import annotations
 
+try:
+    from Backend import maintenance
+except ModuleNotFoundError:
+    import maintenance
+
+
 import json
 import urllib.error
 import urllib.request
@@ -19,6 +25,7 @@ import urllib.request
 POSTMARK_ENDPOINT = "https://api.postmarkapp.com/email"
 
 
+@maintenance.operational
 def send_transactional_email(
     *,
     api_key: str,

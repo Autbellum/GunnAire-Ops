@@ -6,6 +6,12 @@ metadata is retained as source evidence, not mistaken for server approval.
 """
 from __future__ import annotations
 
+try:
+    from Backend import maintenance
+except ModuleNotFoundError:
+    import maintenance
+
+
 import json
 import math
 import re
@@ -268,6 +274,7 @@ class TimePublisher:
                         or (kind == "Item" and remote.get("Type") != "Service")):
                     raise failure("reference_changed", "Review the active QuickBooks customer and service item before sending time.")
 
+    @maintenance.operational
     def prepare(self, session_id, payload):
         request, posting_date = validated_request(payload, self.now())
         intent = {"company_id": request["companyID"], "realm_id": request["realmID"], "environment": request["environment"],
@@ -323,6 +330,7 @@ class TimePublisher:
             rows = connection.execute("SELECT * FROM time_publications WHERE company_id=? AND local_entry_id=? ORDER BY created_at,id", (company, entry)).fetchall()
             return {"publications": [self.public(row) for row in rows]}
 
+    @maintenance.operational
     def decision(self, session_id, identifier, payload, *, adoption=False):
         fields = {"companyID", "entryRevision", "reviewHash"} | ({"providerID", "candidateRevision"} if adoption else set())
         if not isinstance(payload, dict) or set(payload) != fields:
@@ -435,6 +443,7 @@ class TimePublisher:
             self.audit(actor["email"], "adopt-legacy" if legacy else "confirm", "time-publication", identifier, connection=connection)
             return {"publication": self.public(self.record(connection, identifier))}
 
+    @maintenance.operational
     def recover(self, session_id, identifier):
         row, grant = self.check(session_id, identifier)
         if row["state"] == "confirmed":
@@ -450,6 +459,7 @@ class TimePublisher:
             result.update(legacyCandidate=remote_evidence(candidate), needsLegacyReview=True)
         return result  # No candidate never authorizes another POST, even after reconnection.
 
+    @maintenance.operational
     def cancel(self, session_id, identifier, payload):
         if not isinstance(payload, dict) or set(payload) != {"companyID", "reviewHash"}:
             raise failure("invalid_request", "Cancel the exact unsent proposal.", 400)

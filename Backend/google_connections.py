@@ -6,6 +6,12 @@ contact. Uncertain outcomes require explicit reconnect, not blind replay.
 """
 from __future__ import annotations
 
+try:
+    from Backend import maintenance
+except ModuleNotFoundError:
+    import maintenance
+
+
 import base64
 import hashlib
 import hmac
@@ -109,6 +115,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+@maintenance.operational
 def token_transport(form):
     """Fixed HTTPS destination, bounded response, no redirects or provider-body errors."""
     request = urllib.request.Request(TOKEN_URL, data=urllib.parse.urlencode(form).encode(), method="POST",
@@ -131,6 +138,7 @@ def token_transport(form):
         raise ConnectionError("provider_unconfirmed", "Google did not confirm the connection. Reconnect from the app.", 502) from None
 
 
+@maintenance.operational
 def verified_claims(token, audience):
     # Lazy import keeps disabled integrations optional in API-token development.
     from google.auth.transport.requests import Request
@@ -228,6 +236,7 @@ class GoogleConnections:
             self.authorize(connection, session_id, row["company_id"], owner=row["actor_email"])
             return self.public_attempt(row)
 
+    @maintenance.operational
     def start(self, session_id, payload):
         self.configured()
         if not isinstance(payload, dict) or set(payload) != {"id", "companyID", "features"}:
@@ -304,6 +313,7 @@ class GoogleConnections:
         except (KeyError, ValueError, TypeError, AttributeError, OverflowError):
             raise ConnectionError("provider_unconfirmed", "Google returned an incomplete offline connection. Reconnect from the app.", 502) from None
 
+    @maintenance.operational
     def callback(self, query):
         self.configured()
         if not isinstance(query, str) or len(query) > 24000:
@@ -387,6 +397,7 @@ class GoogleConnections:
                 (grant["id"] if grant else None) != row["baseline_grant_id"]):
             raise ConnectionError("request_changed", "The original Google connection changed. Reconnect from the app.")
 
+    @maintenance.operational
     def cancel(self, session_id, attempt_id, payload=None):
         attempt_id = identifier(attempt_id)
         if payload is not None:
@@ -422,6 +433,7 @@ class GoogleConnections:
                 self.audit(row["actor_email"], "cancel", "google-connection", row["id"], connection=connection)
         return self.attempt_status(session_id, attempt_id)
 
+    @maintenance.operational
     def disconnect(self, session_id, company, grant_id):
         company, grant_id = identifier(company), identifier(grant_id)
         with self.database() as connection:
@@ -438,6 +450,7 @@ class GoogleConnections:
         # existing native clients. Do not perform that materially broader action.
         return self.status(session_id, company)
 
+    @maintenance.operational
     def access(self, session_id, company, grant_id, required_scopes):
         """Internal service use only. Every caller must also authorize its domain action."""
         self.configured()

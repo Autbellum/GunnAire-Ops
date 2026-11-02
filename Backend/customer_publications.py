@@ -6,6 +6,12 @@ Uncertain writes retain the original intent and can only be recovered by reads.
 """
 from __future__ import annotations
 
+try:
+    from Backend import maintenance
+except ModuleNotFoundError:
+    import maintenance
+
+
 import hashlib
 import json
 import re
@@ -176,6 +182,7 @@ class CustomerPublisher:
             ("environment", "environment"), ("localCustomerID", "local_customer_id"), ("state", "state"),
             ("providerID", "provider_id"), ("updatedAt", "updated_at"))}
 
+    @maintenance.operational
     def reserve(self, session_id, payload):
         intent = validated_request(payload)
         # Preserve the existing encrypted-proposal integrity format. The pin
@@ -233,6 +240,7 @@ class CustomerPublisher:
             raise failure("identity_conflict", "This customer or QuickBooks ID already belongs to a different saved link.")
         connection.execute("INSERT OR IGNORE INTO customer_entity_mappings VALUES (?,?,?,?,?)", (*scope(row), row["local_customer_id"], provider_id))
 
+    @maintenance.operational
     def claim(self, session_id, identifier):
         with self.database() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -248,6 +256,7 @@ class CustomerPublisher:
             connection.execute("UPDATE customer_publications SET state='sending',updated_at=? WHERE id=?", (self.now().isoformat(), identifier))
             self.audit(actor["email"], "dispatch", "customer-publication", identifier, connection=connection)
 
+    @maintenance.operational
     def confirm(self, session_id, identifier, remote):
         remote = validated_remote(remote)
         with self.database() as connection:
@@ -271,6 +280,7 @@ class CustomerPublisher:
             self.audit(actor["email"], "confirm", "customer-publication", identifier, connection=connection)
             return {"publication": self.public(self.record(connection, identifier)), "customer": public_customer(remote)}
 
+    @maintenance.operational
     def run(self, session_id, identifier, *, allow_send=False):
         row, context = self.check(session_id, identifier)
         customer = self.customer_payload(row)
@@ -305,6 +315,7 @@ class CustomerPublisher:
         if not allow_send or row["state"] != "reserved":
             raise failure("outcome_unknown", "Keep the original customer attempt for review. An absent result does not make it safe to resend.")
         claimed = False
+        @maintenance.operational
         def claim():
             nonlocal claimed
             self.claim(session_id, identifier)
@@ -319,6 +330,7 @@ class CustomerPublisher:
                                        (self.now().isoformat(), identifier))
             raise
 
+    @maintenance.operational
     def publish(self, session_id, payload):
         return self.run(session_id, self.reserve(session_id, payload)["id"], allow_send=True)
 
@@ -334,6 +346,7 @@ class CustomerPublisher:
                 WHERE company_id=? AND realm_id=? AND environment=? AND local_customer_id=? ORDER BY created_at DESC LIMIT 100""",
                 (*scope(intent), customer_id)).fetchall()]
 
+    @maintenance.operational
     def cancel(self, session_id, identifier):
         with self.database() as connection:
             connection.execute("BEGIN IMMEDIATE")

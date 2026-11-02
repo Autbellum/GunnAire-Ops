@@ -7,6 +7,12 @@ Unknown outcomes never authorize another send. No payment, email, void or delete
 """
 from __future__ import annotations
 
+try:
+    from Backend import maintenance
+except ModuleNotFoundError:
+    import maintenance
+
+
 import hashlib
 import json
 import re
@@ -444,6 +450,7 @@ class BillingPublisher:
                 raise failure("review_required", "Ask accounting to approve this exact project milestone invoice. Job assignment alone does not approve progress billing.", 403)
         return actor, {**dict(grant), "grant_fingerprint": fingerprint, "billing_authority": authority}
 
+    @maintenance.operational
     def approve_draft(self, session_id, payload, technician_email, *, original_attempt=None):
         intent = validated_request(payload)
         if not isinstance(technician_email, str) or technician_email != technician_email.strip().lower():
@@ -472,6 +479,7 @@ class BillingPublisher:
             self.audit(actor["email"], "approve", "billing-draft", identifier, connection=connection)
             return identifier
 
+    @maintenance.operational
     def revoke_draft(self, session_id, identifier):
         identifier = canonical_uuid(identifier)
         with self.database() as connection:
@@ -533,6 +541,7 @@ class BillingPublisher:
         if intent["operation"] == "update" and (linked is None or linked["provider_id"] != intent["document"]["Id"] or linked["local_customer_id"] != intent["local_customer_id"]):
             raise failure("identity_conflict", "Review the original server-owned invoice mapping before updating.")
 
+    @maintenance.operational
     def reserve(self, session_id, payload, *, on_reserved=None):
         intent = validated_request(payload)
         hash_value, ciphertext = digest(intent), self.encrypt(canonical(intent))
@@ -577,6 +586,7 @@ class BillingPublisher:
             self.intent(row)
             return dict(row), context
 
+    @maintenance.operational
     def claim(self, session_id, identifier, *, catalog_evidence=None, checked_at=None):
         identifier = canonical_uuid(identifier)
         with self.database() as connection:
@@ -616,6 +626,7 @@ class BillingPublisher:
                     document[flag] = False
         return document
 
+    @maintenance.operational
     def confirm(self, session_id, identifier, remote, *, original_attempt):
         identifier = canonical_uuid(identifier)
         with self.database() as connection:
@@ -641,6 +652,7 @@ class BillingPublisher:
                 self.audit(actor["email"], "confirm", "billing-publication", identifier, connection=connection)
             return {"publication": self.public(self.record(connection, identifier)), "document": public_document(remote)}
 
+    @maintenance.operational
     def run(self, session_id, identifier, *, allow_send=False):
         identifier = canonical_uuid(identifier)
         row, context = self.check(session_id, identifier)
@@ -685,9 +697,11 @@ class BillingPublisher:
                 connection.execute("UPDATE billing_publications SET state='unknown',updated_at=? WHERE id=? AND state='sending'", (self.now().isoformat(), identifier))
             raise
 
+    @maintenance.operational
     def publish(self, session_id, payload):
         return self.run(session_id, self.reserve(session_id, payload)["id"], allow_send=True)
 
+    @maintenance.operational
     def cancel(self, session_id, identifier):
         identifier = canonical_uuid(identifier)
         with self.database() as connection:

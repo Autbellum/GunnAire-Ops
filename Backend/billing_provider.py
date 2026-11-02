@@ -5,6 +5,12 @@ by an application payload. Current catalog evidence authorizes field prices.
 """
 from __future__ import annotations
 
+try:
+    from Backend import maintenance
+except ModuleNotFoundError:
+    import maintenance
+
+
 import json
 import re
 import urllib.error
@@ -24,6 +30,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+@maintenance.operational
 def transport(request):
     try:
         parsed = urllib.parse.urlsplit(request.full_url)
@@ -65,6 +72,7 @@ class BillingQBOProvider:
         self.send, self.bearer = send or transport, None
         self.maximum_documents = maximum_documents
 
+    @maintenance.operational
     def request(self, resource, query=None, document=None, before_send=None):
         read_allowed = re.fullmatch(r"(?:query|preferences|(?:invoice|estimate|customer|item|companyinfo)/[A-Za-z0-9._:-]+)", resource)
         if (document is None and not read_allowed) or (document is not None and (resource not in ("invoice", "estimate") or before_send is None)):
@@ -173,6 +181,7 @@ class BillingQBOProvider:
                 evidence[identifier] = {key: item[key] for key in ("Id", "Active", "Type", "UnitPrice", "Taxable") if key in item}
         return evidence
 
+    @maintenance.operational
     def write(self, kind, document, request_id, before_send):
         if kind not in ("Invoice", "Estimate") or not isinstance(document, dict) or not callable(before_send):
             raise failure("invalid_resource", "Unsupported billing publication.", 400)

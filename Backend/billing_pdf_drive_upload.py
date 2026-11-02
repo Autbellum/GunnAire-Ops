@@ -6,6 +6,12 @@ calling create. A lost response can then be reconciled against that ID.
 
 from __future__ import annotations
 
+try:
+    from Backend import maintenance
+except ModuleNotFoundError:
+    import maintenance
+
+
 import hashlib
 import http.client
 import json
@@ -32,6 +38,7 @@ class ProviderUploadError(RuntimeError):
     pass
 
 
+@maintenance.operational
 def transport(request: urllib.request.Request, *, maximum: int = 16_384) -> tuple[int, dict | None]:
     """Send only the two fixed Drive endpoints, without redirects or retries."""
     parsed = urllib.parse.urlsplit(request.full_url)
@@ -68,6 +75,7 @@ class BillingPDFDriveUpload:
     def __init__(self, send=transport):
         self.send = send
 
+    @maintenance.operational
     def generate_id(self, access_token: str) -> str:
         token = self._token(access_token)
         request = urllib.request.Request(_GENERATE, headers={
@@ -80,6 +88,7 @@ class BillingPDFDriveUpload:
             raise ProviderUploadError("Drive did not reserve one usable file ID")
         return ids[0]
 
+    @maintenance.operational
     def create(self, key, reservation, data: bytes, access_token: str) -> str:
         token = self._token(access_token)
         file_id = reservation.drive_file_id
