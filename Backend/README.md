@@ -356,3 +356,27 @@ leftovers of an interrupted copy, backs off after repeated failures, and
 records the outcome of its last attempt in the readiness detail. A
 `backup_status.json` record proves local verification only; retain the
 artifact outside Render and its persistent disk.
+
+### Narrow resource-lifetime hotfix (2026-11-08)
+
+This production-based hotfix changes database connection lifetime and HTTP
+connection admission, not business handlers, authorization, schema initialization,
+provider workers or key-loading semantics. Database scopes retain their existing
+commit/rollback behavior and close in `finally`. Both entrypoints use the tested
+64-handler bound and 10-second socket I/O timeout. Excess connections are closed
+before a handler is created; partial headers cannot retain a handler indefinitely.
+Certifi is explicitly required at 2026.10.19 or later for the existing Render
+advisory. The service version is 2026.11.08.1.
+
+Synthetic normal-GC empty-APNs polling demonstrates deterministic closure; it
+is not proof of the recurring production memory incidents or their timing. The
+larger completion candidate retains separate document/upload/cache and maintenance
+features. Those are not included here. In particular this hotfix does not implement
+GUNNAIRE_MAINTENANCE_MODE and must not be described as suppressing provider writes.
+Existing startup APNs and scheduled-backup behavior is unchanged.
+
+The unchanged Linux 15/45-wave quota harness is prepared for an isolated validation
+branch. Its previous pass on a different candidate does not validate this source.
+The 512000000-byte cap and 409600000-byte headroom gate must not be reduced or
+reinterpreted if this narrower correction fails a workload. No production release
+is authorized by preparing or testing this code.

@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import threading
 from http import HTTPStatus
-from http.server import ThreadingHTTPServer
+from Backend.bounded_http_server import BoundedBusinessServer
 from typing import Any, Mapping
 from urllib.parse import urlparse
 
@@ -171,7 +171,7 @@ def main() -> None:
     backend.STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
     backend.start_push_delivery_worker()
     backend.start_backup_worker()
-    server = ThreadingHTTPServer((backend.HOST, backend.PORT), GunnAireLocalAIBackendHandler)
+    server = BoundedBusinessServer((backend.HOST, backend.PORT), GunnAireLocalAIBackendHandler)
     print(f"GunnAire backend with local-first AI listening on http://{backend.HOST}:{backend.PORT}")
     print(f"Service version: {backend.SERVICE_VERSION}")
     print("AI provider: loopback Ollama; hosted fallback disabled; Stable Diffusion image-only")

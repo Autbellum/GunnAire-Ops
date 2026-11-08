@@ -22,6 +22,8 @@ import urllib.parse
 import urllib.request
 import uuid
 import threading
+from contextlib import contextmanager
+from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -34,6 +36,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 
 try:
+    from Backend.bounded_http_server import BoundedBusinessServer
     from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications, billing_native, qbo_link_adoption, field_payment_review
     from Backend.billing_provider import BillingQBOProvider
     from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads
@@ -48,6 +51,7 @@ try:
     from Backend.time_worker_provider import TimeWorkerQBOProvider
     from Backend.time_publication_provider import TimeQBOProvider
 except ModuleNotFoundError:
+    from bounded_http_server import BoundedBusinessServer
     import payment_attempts  # Direct launch from the Backend directory.
     import field_payment_review
     import catalog_publications
@@ -83,7 +87,7 @@ except ModuleNotFoundError:
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.18.69"
+SERVICE_VERSION = "2026.11.08.1"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -1850,11 +1854,17 @@ def validate_supplier_order_acceptance(
     }
 
 
-def db() -> sqlite3.Connection:
+@contextmanager
+def db() -> Iterator[sqlite3.Connection]:
+    """Preserve commit/rollback semantics and deterministically close the handle."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DB_PATH)
-    connection.row_factory = sqlite3.Row
-    return connection
+    try:
+        connection.row_factory = sqlite3.Row
+        with connection:
+            yield connection
+    finally:
+        connection.close()
 
 
 def path_is_within(path: Path, root: Path) -> bool:
@@ -7590,7 +7600,7 @@ def main() -> None:
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
     start_push_delivery_worker()
     start_backup_worker()
-    server = ThreadingHTTPServer((HOST, PORT), GunnAireBackendHandler)
+    server = BoundedBusinessServer((HOST, PORT), GunnAireBackendHandler)
     print(f"GunnAire backend listening on http://{HOST}:{PORT}")
     print(f"Service version: {SERVICE_VERSION}")
     print(f"Database: {DB_PATH}")
