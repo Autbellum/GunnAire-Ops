@@ -375,6 +375,9 @@ CUSTOMER_FINANCING_APPLICATION_URL = os.environ.get("GUNNAIRE_CUSTOMER_FINANCING
 CUSTOMER_FINANCING_MIN_AMOUNT = os.environ.get("GUNNAIRE_CUSTOMER_FINANCING_MIN_AMOUNT", "").strip()
 CUSTOMER_FINANCING_MAX_AMOUNT = os.environ.get("GUNNAIRE_CUSTOMER_FINANCING_MAX_AMOUNT", "").strip()
 MAX_DOCUMENT_BYTES = min(max(int(os.environ.get("GUNNAIRE_MAX_DOCUMENT_BYTES", str(12 * 1024 * 1024))), 1024), 25 * 1024 * 1024)
+# Bound large verified buffers through response completion.
+DOCUMENT_UPLOAD_SLOTS = threading.BoundedSemaphore(1)
+DOCUMENT_DOWNLOAD_SLOTS = threading.BoundedSemaphore(1)
 ALLOWED_CORS_ORIGINS = {
     origin.strip().rstrip("/")
     for origin in os.environ.get("GUNNAIRE_ALLOWED_CORS_ORIGINS", "").split(",")
@@ -4705,10 +4708,13 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                     query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
                     if any(len(value) != 1 for value in query.values()):
                         raise cloudkit_staff_shares.fail("invalid_query", "Use one value per media-bytes query field.", 400)
-                    payload = media.download(self._application_session_id, parts[0], parts[2],
-                                             {key: value[0] for key, value in query.items()},
-                                             storage_root=STORAGE_ROOT)
-                    self.write_media_bytes(payload["data"], payload["contentType"], payload["filename"])
+                    with self.document_download_capacity() as admitted:
+                        if not admitted:
+                            return
+                        payload = media.download(self._application_session_id, parts[0], parts[2],
+                                                 {key: value[0] for key, value in query.items()},
+                                                 storage_root=STORAGE_ROOT)
+                        self.write_media_bytes(payload["data"], payload["contentType"], payload["filename"])
                     return
                 elif method == "GET" and (len(parts) == 4 or len(parts) == 5 and parts[4] == "chunks"):
                     query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
@@ -5239,11 +5245,26 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         self.write_json({"error": "Field collection assignment management access required"}, status=HTTPStatus.FORBIDDEN, require_auth=False)
         return False
 
-    def read_json(self) -> dict[str, object]:
-        length = int(self.headers.get("Content-Length", "0"))
-        if length <= 0:
+    def read_json(self, *, maximum_bytes: int = 1024 * 1024) -> dict[str, object]:
+        # Most JSON routes carry metadata, not documents. Bound allocations
+        # before reading; document uploads opt into their existing larger cap.
+        # JSONDecodeError preserves the error contract of all existing callers.
+        lengths = self.headers.get_all("Content-Length", [])
+        if len(lengths) > 1 or self.headers.get("Transfer-Encoding") is not None:
+            raise json.JSONDecodeError("Unsupported request framing", "", 0)
+        if lengths and re.fullmatch(r"[0-9]+", lengths[0]) is None:
+            raise json.JSONDecodeError("Invalid content length", "", 0)
+        try:
+            length = int(lengths[0]) if lengths else 0
+        except ValueError:
+            raise json.JSONDecodeError("Invalid content length", "", 0) from None
+        if not 0 <= length <= maximum_bytes:
+            raise json.JSONDecodeError("Request body size is invalid", "", 0)
+        if length == 0:
             return {}
         data = self.rfile.read(length)
+        if len(data) != length:
+            raise json.JSONDecodeError("Request body is incomplete", "", 0)
         return json.loads(data.decode("utf-8"))
 
     def read_limited_body(self, maximum_bytes: int) -> bytes:
@@ -6317,6 +6338,18 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         self.write_json({"revoked": True})
 
     def store_document(self) -> None:
+        # Refuse excess work before reading its body; never queue large bodies
+        # in application memory. Keep slots through storage and response cleanup.
+        if not DOCUMENT_UPLOAD_SLOTS.acquire(blocking=False):
+            self.write_json({"error": "Document upload capacity is busy; retry later"},
+                            status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        try:
+            self._store_document()
+        finally:
+            DOCUMENT_UPLOAD_SLOTS.release()
+
+    def _store_document(self) -> None:
         # Base64 adds roughly one third overhead. Reject oversized declared
         # requests before reading them into memory, then verify the decoded size.
         declared_length = self.headers.get("Content-Length", "0")
@@ -6328,7 +6361,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             self.write_json({"error": "Invalid Content-Length"}, status=HTTPStatus.BAD_REQUEST)
             return
         try:
-            payload = self.read_json()
+            payload = self.read_json(maximum_bytes=((MAX_DOCUMENT_BYTES + 2) // 3) * 4 + 8192)
         except json.JSONDecodeError:
             self.write_json({"error": "Invalid JSON"}, status=HTTPStatus.BAD_REQUEST)
             return
@@ -6409,7 +6442,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         destination_dir.mkdir(parents=True, exist_ok=True)
         destination = destination_dir / f"{document_id}-{filename}"
         try:
-            destination.write_bytes(data)
+            document_storage.write_document_bytes(destination, data)
             document_storage.read_document(STORAGE_ROOT, destination, expected_bytes=len(data),
                                            expected_sha256=hashlib.sha256(data).hexdigest())
         except (OSError, document_storage.DocumentReadError):
@@ -6462,6 +6495,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             },
             status=HTTPStatus.CREATED,
         )
+
 
     def create_field_payment_assignment(self) -> None:
         try:
@@ -7482,6 +7516,23 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         record_audit_event(actor_email, "create", "customer-communication", record_id)
         self.write_json(communication_record(row), status=HTTPStatus.CREATED)
 
+
+
+    @contextmanager
+    def document_download_capacity(self):
+        # Keep verified bytes admitted until the socket write finishes or fails.
+        # Streaming before proof/revocation checks would expose unverified bytes.
+        if not DOCUMENT_DOWNLOAD_SLOTS.acquire(blocking=False):
+            self.write_json({"error": "Document download capacity is busy; retry later"},
+                            status=HTTPStatus.SERVICE_UNAVAILABLE)
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            DOCUMENT_DOWNLOAD_SLOTS.release()
+
+
     def write_media_bytes(self, data: bytes, content_type: str, filename: str) -> None:
         safe_name = safe_filename(filename)
         self.send_response(HTTPStatus.OK)
@@ -7510,31 +7561,37 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             self.write_json({"error": "Financial access required"}, status=HTTPStatus.FORBIDDEN)
             return
 
-        principal = self.principal()
-        try:
-            proof = document_storage.content_proof(row)
-            if manifest_only:
-                self.write_json(proof)
+        if manifest_only:
+            try:
+                self.write_json(document_storage.content_proof(row))
+            except document_storage.DocumentReadError as error:
+                self.write_json({"error": str(error)}, status=error.status)
+            return
+        with self.document_download_capacity() as admitted:
+            if not admitted:
                 return
-            data = document_storage.read_document(STORAGE_ROOT, row["stored_path"],
-                expected_bytes=proof["fileSizeBytes"], expected_sha256=proof["fileSHA256"])
-        except document_storage.DocumentReadError as error:
-            self.write_json({"error": str(error)}, status=error.status)
-            return
-        # The first principal is request-cached. A slow disk read must not
-        # outlive logout, revocation, role change, or a changed document binding.
-        self._principal = None
-        self._principal_checked = False
-        current_principal = self.principal()
-        if current_principal is None or current_principal != principal:
-            self.write_json({"error": "Document access changed during download"}, status=HTTPStatus.FORBIDDEN)
-            return
-        with db() as connection:
-            current = connection.execute("SELECT * FROM documents WHERE id=?", (document_id,)).fetchone()
-        if current is None or dict(current) != dict(row):
-            self.write_json({"error": "Document binding changed during download"}, status=HTTPStatus.CONFLICT)
-            return
-        self.write_media_bytes(data, row["content_type"], row["filename"])
+            principal = self.principal()
+            try:
+                proof = document_storage.content_proof(row)
+                data = document_storage.read_document(STORAGE_ROOT, row["stored_path"],
+                    expected_bytes=proof["fileSizeBytes"], expected_sha256=proof["fileSHA256"])
+            except document_storage.DocumentReadError as error:
+                self.write_json({"error": str(error)}, status=error.status)
+                return
+            # The first principal is request-cached. A slow disk read must not
+            # outlive logout, revocation, role change, or a changed document binding.
+            self._principal = None
+            self._principal_checked = False
+            current_principal = self.principal()
+            if current_principal is None or current_principal != principal:
+                self.write_json({"error": "Document access changed during download"}, status=HTTPStatus.FORBIDDEN)
+                return
+            with db() as connection:
+                current = connection.execute("SELECT * FROM documents WHERE id=?", (document_id,)).fetchone()
+            if current is None or dict(current) != dict(row):
+                self.write_json({"error": "Document binding changed during download"}, status=HTTPStatus.CONFLICT)
+                return
+            self.write_media_bytes(data, row["content_type"], row["filename"])
 
     def write_json(self, payload: dict[str, object], status: HTTPStatus = HTTPStatus.OK, require_auth: bool = True) -> None:
         data = json.dumps(payload, separators=(",", ":")).encode("utf-8")

@@ -23,3 +23,16 @@ configuration or production data changes are authorized here.
   no 36-hour cause claim. Handler/initializer/key-loader ASTs unchanged. New-source
   Linux quota validation remains pending; old candidate results are not reused as
   its pass. Claims released for review; no publication, dispatch or deployment.
+- 2026-11-08 Linux run42489308854 on b350657 hit the unchanged512000000 cap and
+  OOM-killed in2.36s. Claim selective existing ec8f285 document upload/download
+  admission, verified-buffer/cache handling, and bounded backup copy/cache/handle
+  closure, plus their regressions. Exclude unrelated schemas, billing/customer
+  handlers, idempotency and maintenance mode. Preserve failed artifact13620692747.
+- 2026-11-08 Selective resource correction complete locally: 73 focused tests and
+  1301 full backend tests pass. Existing 97 tooling/14 quota harness passes remain
+  applicable (those files unchanged). Upload body AST matches deployed code except
+  bounded input read and durable writer; initializer/key loaders unchanged. Six
+  runtime files now cover lifetime, request admission, verified document buffers,
+  bounded backup/cache and Certifi. No business/schema/idempotency/maintenance
+  features imported. First Linux OOM retained; successor strict Linux gate pending.
+  Claims released for reviewed same-branch validation under deployment authority.

@@ -359,9 +359,10 @@ artifact outside Render and its persistent disk.
 
 ### Narrow resource-lifetime hotfix (2026-11-08)
 
-This production-based hotfix changes database connection lifetime and HTTP
-connection admission, not business handlers, authorization, schema initialization,
-provider workers or key-loading semantics. Database scopes retain their existing
+This production-based hotfix changes database connection lifetime, HTTP
+connection admission and document/backup resource bounds. It preserves business
+data schemas, authorization, provider workers and key-loading semantics.
+Database scopes retain their existing
 commit/rollback behavior and close in `finally`. Both entrypoints use the tested
 64-handler bound and 10-second socket I/O timeout. Excess connections are closed
 before a handler is created; partial headers cannot retain a handler indefinitely.
@@ -369,9 +370,12 @@ Certifi is explicitly required at 2026.10.19 or later for the existing Render
 advisory. The service version is 2026.11.08.1.
 
 Synthetic normal-GC empty-APNs polling demonstrates deterministic closure; it
-is not proof of the recurring production memory incidents or their timing. The
-larger completion candidate retains separate document/upload/cache and maintenance
-features. Those are not included here. In particular this hotfix does not implement
+is not proof of the recurring production memory incidents or their timing.
+The first narrow candidate was OOM-killed by the unchanged Linux workload.
+The correction selectively includes the previously tested document upload/download
+slots, bounded JSON reads, pre-sized verified buffers, durable file writes and
+per-file backup/document cache release. No idempotency schema or billing/customer
+feature is imported. In particular this hotfix does not implement
 GUNNAIRE_MAINTENANCE_MODE and must not be described as suppressing provider writes.
 Existing startup APNs and scheduled-backup behavior is unchanged.
 
