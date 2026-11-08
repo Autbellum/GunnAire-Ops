@@ -7,6 +7,8 @@ import json
 import re
 import secrets
 import threading
+from concurrent.futures import ThreadPoolExecutor
+from functools import wraps
 from cryptography.fernet import Fernet, InvalidToken
 
 PREFIX = b'\x00gunnaire-keyring-v1\x00'
@@ -15,6 +17,22 @@ BINARY_PREFIX = b'\x00gunnaire-keyring-v2\x00'
 # all independently constructed keyrings and domains, without rejecting writes.
 # No database/provider work is performed while holding this slot.
 ALLOCATION_SLOT = threading.BoundedSemaphore(1)
+_ALLOCATION_WORKER = ThreadPoolExecutor(max_workers=1, thread_name_prefix='storage-crypto')
+
+
+def allocated(operation):
+    """Use one allocator thread as well as one operation at a time.
+
+    A semaphore alone permits every caller thread to retain its own allocator
+    arena after a large temporary allocation. Admission precedes submission, so
+    there is at most one queued/running crypto operation, not an unbounded queue.
+    Caller-owned inputs/results and their original lifetime remain unchanged.
+    """
+    @wraps(operation)
+    def bounded(*args, **kwargs):
+        with ALLOCATION_SLOT:
+            return _ALLOCATION_WORKER.submit(operation, *args, **kwargs).result()
+    return bounded
 
 def unique_object(pairs):
     result = {}
@@ -90,38 +108,38 @@ class StorageKeyring:
                 raise InvalidToken() from None
         raise InvalidToken()
 
+    @allocated
     def decrypt(self, token: bytes) -> bytes:
-        with ALLOCATION_SLOT:
-            return self._open(token)[0]
+        return self._open(token)[0]
 
+    @allocated
     def encrypt_text(self, text: str, encoding: str = 'utf-8') -> str:
-        with ALLOCATION_SLOT:
-            raw = text.encode(encoding)
-            token = (self._seal(raw, secrets.token_hex(32)) if self.versioned_writes
-                     else self.keys[self.active].encrypt(raw))
-            return token.decode('ascii')
+        raw = text.encode(encoding)
+        token = (self._seal(raw, secrets.token_hex(32)) if self.versioned_writes
+                 else self.keys[self.active].encrypt(raw))
+        return token.decode('ascii')
 
+    @allocated
     def decrypt_text(self, text: str, encoding: str = 'utf-8') -> str:
-        with ALLOCATION_SLOT:
-            return self._open(text.encode('ascii'))[0].decode(encoding)
+        return self._open(text.encode('ascii'))[0].decode(encoding)
 
+    @allocated
     def revision_text(self, text: str) -> str:
-        with ALLOCATION_SLOT:
-            return self._open(text.encode('ascii'))[1]
+        return self._open(text.encode('ascii'))[1]
 
+    @allocated
     def rotate_text(self, text: str) -> str:
         if not self.versioned_writes:
             raise KeyringError()
-        with ALLOCATION_SLOT:
-            token = text.encode('ascii')
-            raw, revision, identifier, versioned = self._open(token)
-            if versioned and identifier == self.active:
-                return text
-            return self._seal(raw, revision).decode('ascii')
+        token = text.encode('ascii')
+        raw, revision, identifier, versioned = self._open(token)
+        if versioned and identifier == self.active:
+            return text
+        return self._seal(raw, revision).decode('ascii')
 
+    @allocated
     def revision(self, token: bytes) -> str:
-        with ALLOCATION_SLOT:
-            return self._open(token)[1]
+        return self._open(token)[1]
 
     def _seal(self, raw: bytes, revision: str) -> bytes:
         # Authenticate the small metadata header and raw payload together.
@@ -132,27 +150,27 @@ class StorageKeyring:
             raise KeyringError()
         return self.keys[self.active].encrypt(BINARY_PREFIX + len(header).to_bytes(4, 'big') + header + raw)
 
+    @allocated
     def encrypt(self, raw: bytes) -> bytes:
         if not isinstance(raw, bytes):
             raise TypeError('Storage plaintext must be bytes')
-        with ALLOCATION_SLOT:
-            if not self.versioned_writes:
-                return self.keys[self.active].encrypt(raw)
-            return self._seal(raw, secrets.token_hex(32))
+        if not self.versioned_writes:
+            return self.keys[self.active].encrypt(raw)
+        return self._seal(raw, secrets.token_hex(32))
 
+    @allocated
     def rotate(self, token: bytes) -> bytes:
         if not self.versioned_writes:
             raise KeyringError()  # No migration before writer activation.
-        with ALLOCATION_SLOT:
-            raw, revision, identifier, versioned = self._open(token)
-            if versioned and identifier == self.active:
-                return token
-            return self._seal(raw, revision)
+        raw, revision, identifier, versioned = self._open(token)
+        if versioned and identifier == self.active:
+            return token
+        return self._seal(raw, revision)
 
+    @allocated
     def uses_active_envelope(self, token: bytes) -> bool:
-        with ALLOCATION_SLOT:
-            _, _, identifier, versioned = self._open(token)
-            return versioned and identifier == self.active
+        _, _, identifier, versioned = self._open(token)
+        return versioned and identifier == self.active
 
     def fingerprint(self, data: bytes) -> str:
         return hmac.new(self.material[self.active], data, hashlib.sha256).hexdigest()

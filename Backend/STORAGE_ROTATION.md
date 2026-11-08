@@ -166,3 +166,10 @@ holds through response; a bounded 250 ms wait preserves ordinary small concurren
 replays, followed by honest 503 on sustained overload. Clients retain the pending
 operation. Ordinary migration rotates once; separate plaintext is read only for
 the Google-mail fingerprint dependency.
+
+Crypto admission now submits to one reusable allocation worker while retaining the
+caller-side semaphore. Only one operation can be queued/running. This prevents
+crypto temporaries being allocated independently on every caller thread; it does
+not shorten caller payload/result lifetimes or alter their concurrency barrier.
+No database or provider operation runs on that worker. Exact Linux validation is
+required; source reasoning alone does not establish memory headroom.

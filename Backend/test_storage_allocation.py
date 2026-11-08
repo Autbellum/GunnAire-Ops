@@ -14,6 +14,29 @@ class StorageAllocationTests(unittest.TestCase):
         return StorageKeyring('qbo', old, json.dumps({'version': 1, 'active': 'new',
             'write_format': 'versioned', 'keys': {'old': old, 'new': new}}))
 
+    def test_concurrent_callers_use_one_crypto_worker_without_changing_results(self):
+        import concurrent.futures
+        import threading
+        barrier = threading.Barrier(16)
+        seen = set()
+        callers = set()
+        ring = self.ring()
+        seal = ring._seal
+        def tracked(*args):
+            seen.add(threading.get_ident())
+            return seal(*args)
+        def operation(number):
+            callers.add(threading.get_ident())
+            barrier.wait(timeout=5)
+            clear = 'synthetic-' + str(number)
+            return ring.decrypt_text(ring.encrypt_text(clear)) == clear
+        with mock.patch.object(ring, '_seal', side_effect=tracked), \
+                concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
+            self.assertTrue(all(pool.map(operation, range(16))))
+        self.assertEqual(len(callers), 16)
+        self.assertEqual(len(seen), 1)
+        self.assertFalse(seen & callers)
+
     def test_text_encoding_and_decoding_are_inside_admission(self):
         test = self
         def assert_held():
