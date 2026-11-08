@@ -53,10 +53,10 @@ class DocumentUploadIdempotencyTests(unittest.TestCase):
             self.assertEqual(c.execute("SELECT COUNT(*) FROM documents").fetchone()[0],0)
 
     def test_dot_directory_kind_rejected_before_creating_file(self):
-        for kind in ('.', '..'):
+        for kind in ('.', '..', 'x' * 256):
             with self.subTest(kind=kind):
                 status, _ = self.upload(operationID=str(uuid.uuid4()), kind=kind, filename='KindGuard.pdf')
-                created = list(Path(self.f.directory.name).rglob('*-KindGuard.pdf'))
+                created = list(Path(self.f.directory.name).rglob('*-KindGuard.pdf')) + list(backend.STORAGE_ROOT.rglob('*.payload'))
                 self.assertEqual((status, len(created)), (400, 0))
         with backend.db() as connection:
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM documents').fetchone()[0], 0)
@@ -101,7 +101,7 @@ class DocumentUploadIdempotencyTests(unittest.TestCase):
         with backend.db() as c:
             self.assertEqual(c.execute('SELECT COUNT(*) FROM documents').fetchone()[0],10)
 
-    def test_insert_race_removes_only_owned_losing_file(self):
+    def test_stale_preflight_replays_under_admission_without_creating_loser(self):
         operation=str(uuid.uuid4())
         first=self.upload(operationID=operation)[1]
         original=backend.GunnAireBackendHandler._replay_document_upload
@@ -112,7 +112,7 @@ class DocumentUploadIdempotencyTests(unittest.TestCase):
         with mock.patch.object(backend.GunnAireBackendHandler,'_replay_document_upload',miss_then_recover):
             status,recovered=self.upload(operationID=operation)
         self.assertEqual((status,recovered['id']),(201,first['id']))
-        files=[p for p in backend.STORAGE_ROOT.rglob('*') if p.is_file()]
+        files=[p for p in backend.STORAGE_ROOT.rglob('*.payload') if p.is_file()]
         self.assertEqual(len(files),1)
         self.assertEqual(files[0].read_bytes(),b'original-file')
 
@@ -257,11 +257,11 @@ if sys.argv[4]=='after-commit':
         return original(self,payload,status=status,**kwargs)
     b.GunnAireBackendHandler.write_json=crash
 else:
-    original=b.document_storage.write_document_bytes
+    original=b.document_upload_storage.Admission.prepare
     def crash(*args,**kwargs):
         original(*args,**kwargs)
         os._exit(23)
-    b.document_storage.write_document_bytes=crash
+    b.document_upload_storage.Admission.prepare=crash
 server=ThreadingHTTPServer(('127.0.0.1',0),b.GunnAireBackendHandler)
 print(server.server_port,flush=True)
 server.serve_forever()
@@ -295,17 +295,91 @@ server.serve_forever()
         self.assertEqual(self.upload(operationID=operation)[1]['id'], original_id)
         with backend.db() as connection:
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM documents').fetchone()[0], 1)
-        self.assertEqual(len([p for p in backend.STORAGE_ROOT.rglob('*') if p.is_file()]), 1)
+        self.assertEqual(len([p for p in backend.STORAGE_ROOT.rglob('*.payload') if p.is_file()]), 1)
 
     def test_process_exit_before_commit_is_absent_and_safe_to_retry(self):
         operation = str(uuid.uuid4())
         self.crashed_upload('before-commit', operation)
-        files = [p for p in backend.STORAGE_ROOT.rglob('*') if p.is_file()]
+        files = [p for p in backend.STORAGE_ROOT.rglob('*.payload') if p.is_file()]
         self.assertEqual(len(files), 1)
         status, recovered = self.f.request(token=self.f.tokens['Admin'], path='/api/document-uploads/' + operation)
         self.assertEqual((status, recovered['document']), (200, None))
         self.assertEqual(self.upload(operationID=operation)[0], 201)
         with backend.db() as connection:
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM documents').fetchone()[0], 1)
-        # A pre-commit crash leaves unreferenced bytes; never delete unknown files.
+        # The same inode is reused; committed metadata and reservation removal are atomic.
+        self.assertEqual(files[0].read_bytes(), b'original-file')
+        self.assertEqual(len(list(backend.STORAGE_ROOT.rglob("*.payload"))), 1)
+        with backend.db() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM document_upload_reservations_v1").fetchone()[0], 0)
+
+    def test_repeated_precommit_process_crashes_do_not_grow_payload_storage(self):
+        operation = str(uuid.uuid4())
+        before = None
+        for _ in range(4):
+            self.crashed_upload('before-commit', operation)
+            files = list(backend.STORAGE_ROOT.rglob('*.payload'))
+            self.assertEqual(len(files), 1)
+            identity = (files[0].stat().st_dev, files[0].stat().st_ino)
+            if before is not None: self.assertEqual(identity, before)
+            before = identity
+            self.assertEqual(files[0].read_bytes(), b'original-file')
+            with backend.db() as connection:
+                self.assertEqual(connection.execute('SELECT COUNT(*) FROM documents').fetchone()[0], 0)
+                self.assertEqual(connection.execute('SELECT COUNT(*) FROM document_upload_reservations_v1').fetchone()[0], 1)
+        status, created = self.upload(operationID=operation)
+        self.assertEqual(status, 201)
+        with backend.db() as connection:
+            path = connection.execute('SELECT stored_path FROM documents WHERE id=?', (created['id'],)).fetchone()[0]
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM document_upload_reservations_v1').fetchone()[0], 0)
+        self.assertEqual((Path(path).stat().st_dev, Path(path).stat().st_ino), before)
+
+    def test_low_disk_blocks_new_files_but_committed_replay_still_works(self):
+        from types import SimpleNamespace
+        operation = str(uuid.uuid4())
+        created = self.upload(operationID=operation)[1]
+        with mock.patch.object(backend.document_upload_storage.os, 'fstatvfs', return_value=SimpleNamespace(f_bavail=0, f_frsize=4096)):
+            self.assertEqual(self.upload(operationID=str(uuid.uuid4()))[0], 503)
+            self.assertEqual(self.upload(operationID=operation)[1], created)
+        with backend.db() as connection:
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM documents').fetchone()[0], 1)
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM document_upload_reservations_v1').fetchone()[0], 0)
+
+    def test_pending_collision_and_revoked_actor_preserve_file_and_reservation(self):
+        operation = str(uuid.uuid4())
+        self.crashed_upload('before-commit', operation)
+        self.assertEqual(self.upload(operationID=operation, payload=b'changed')[0], 409)
+        with backend.db() as connection:
+            connection.execute("UPDATE users SET is_active=0 WHERE role='Admin'")
+        self.assertIn(self.upload(operationID=operation)[0], (401, 403))
+        files = list(backend.STORAGE_ROOT.rglob('*.payload'))
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0].read_bytes(), b'original-file')
+        with backend.db() as connection:
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM documents').fetchone()[0], 0)
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM document_upload_reservations_v1').fetchone()[0], 1)
+
+    def test_metadata_commit_failure_retains_owned_payload_for_exact_retry(self):
+        from contextlib import contextmanager
+        operation = str(uuid.uuid4())
+        original = backend.db
+        class FailingInsert:
+            def __init__(self, connection): self.connection = connection
+            def execute(self, statement, *args):
+                if statement.lstrip().startswith('INSERT INTO documents('):
+                    raise sqlite3.OperationalError('synthetic disk full')
+                return self.connection.execute(statement, *args)
+        @contextmanager
+        def failed():
+            with original() as connection: yield FailingInsert(connection)
+        with mock.patch.object(backend, 'db', failed):
+            self.assertEqual(self.upload(operationID=operation)[0], 503)
+        files = list(backend.STORAGE_ROOT.rglob('*.payload'))
+        self.assertEqual(len(files), 1)
+        inode = files[0].stat().st_ino
+        with backend.db() as connection:
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM documents').fetchone()[0], 0)
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM document_upload_reservations_v1').fetchone()[0], 1)
+        self.assertEqual(self.upload(operationID=operation)[0], 201)
+        self.assertEqual(files[0].stat().st_ino, inode)
         self.assertEqual(files[0].read_bytes(), b'original-file')

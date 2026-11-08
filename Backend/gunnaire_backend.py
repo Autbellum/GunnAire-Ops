@@ -40,7 +40,7 @@ try:
     from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications, billing_native, qbo_link_adoption, field_payment_review
     from Backend.billing_provider import BillingQBOProvider
     from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads
-    from Backend import document_storage
+    from Backend import document_storage, document_upload_storage
     from Backend import backup_backend, storage_keyring, rotation_gate, storage_keyring_file
     from Backend import staff_owner_field_edits
     from Backend import staff_workspace_field_updates
@@ -62,6 +62,7 @@ except ModuleNotFoundError:
     from billing_provider import BillingQBOProvider
     import google_connections
     import document_storage
+    import document_upload_storage
     import backup_backend
     import storage_keyring
     import rotation_gate
@@ -2638,6 +2639,7 @@ def initialize_database() -> None:
         # to invent historical upload evidence during a migration or download.
         ensure_column(connection, "documents", "file_size_bytes", "INTEGER")
         ensure_column(connection, "documents", "file_sha256", "TEXT")
+        document_upload_storage.initialize(connection)
         ensure_column(connection, "documents", "upload_operation_id", "TEXT")
         ensure_column(connection, "documents", "upload_actor_email", "TEXT")
         ensure_column(connection, "documents", "upload_request_sha256", "TEXT")
@@ -6545,7 +6547,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             self.write_json({"error": "Use a safe filename and content type"}, status=HTTPStatus.BAD_REQUEST)
             return
         kind = safe_filename(str(payload.get("kind") or "document")).lower()
-        if kind in {".", ".."}:
+        if kind in {".", ".."} or not document_storage.header_text(kind, 255):
             self.write_json({"error": "Use a document kind that names a storage directory"}, status=HTTPStatus.BAD_REQUEST)
             return
         data_base64 = payload.get("dataBase64")
@@ -6625,74 +6627,65 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         if self._replay_document_upload(operation_id, request_digest, original_principal):
             return
-        document_id = str(uuid.uuid4())
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        destination_dir = STORAGE_ROOT / kind / today
-        destination_dir.mkdir(parents=True, exist_ok=True)
-        destination = destination_dir / f"{document_id}-{filename}"
         try:
-            # Reserve a new name exclusively; cleanup may only unlink this inode.
-            with destination.open("xb"):
-                pass
-            owned_destination = destination.lstat()
-            document_storage.write_document_bytes(destination, data)
-            document_storage.read_document(STORAGE_ROOT, destination, expected_bytes=len(data),
-                                           expected_sha256=hashlib.sha256(data).hexdigest())
-        except (OSError, document_storage.DocumentReadError):
-            self.write_json({"error": "Company document storage is unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
-            return
-        self._principal = None
-        self._principal_checked = False
-        if self.principal() is None or self.principal() != original_principal:
-            self.write_json({"error": "Document access changed during upload"}, status=HTTPStatus.FORBIDDEN)
-            return
-        created_at = utc_now()
-        try:
-            with db() as connection:
-                connection.execute(
-                    """
-                    INSERT INTO documents(
-                        id, filename, content_type, kind, service_call_id, invoice_id, estimate_id,
-                        maintenance_contract_id, customer_equipment_id, equipment_name, customer_name,
-                        stored_path, created_at, file_size_bytes, file_sha256, upload_operation_id, upload_actor_email, upload_request_sha256
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        document_id,
-                        filename,
-                        content_type,
-                        kind,
-                        service_call_id,
-                        invoice_id,
-                        estimate_id,
-                        maintenance_contract_id,
-                        customer_equipment_id,
-                        equipment_name,
-                        customer_name,
-                        str(destination),
-                        created_at,
-                        len(data),
-                        file_digest,
-                        operation_id,
-                        original_principal["email"] if operation_id else None,
-                        request_digest if operation_id else None,
-                    ),
-                )
-        except sqlite3.IntegrityError:
-            # Another process may have committed this operation after preflight.
-            # Its verified response wins; never create a second metadata row.
-            if operation_id is not None:
-                with db() as connection:
-                    winner = connection.execute("SELECT stored_path FROM documents WHERE upload_operation_id=?", (operation_id,)).fetchone()
-                    referenced = connection.execute("SELECT 1 FROM documents WHERE stored_path=?", (str(destination),)).fetchone()
-                current = destination.lstat()
-                if (winner is not None and winner["stored_path"] != str(destination) and referenced is None
-                        and not destination.is_symlink()
-                        and (current.st_dev, current.st_ino) == (owned_destination.st_dev, owned_destination.st_ino)):
-                    destination.unlink()
+            with document_upload_storage.Admission(db, STORAGE_ROOT, DB_PATH) as admission:
+                # Another process may have committed while this request was
+                # waiting for storage admission. Replay before reserving bytes.
                 if self._replay_document_upload(operation_id, request_digest, original_principal):
                     return
-            raise
+                reservation = admission.reserve(operation_id, original_principal['email'], request_digest, len(data), file_digest)
+                document_id = reservation['id']
+                destination = admission.prepare(reservation, data)
+                document_storage.read_document(STORAGE_ROOT, destination, expected_bytes=len(data), expected_sha256=file_digest)
+                self._principal = None
+                self._principal_checked = False
+                if self.principal() is None or self.principal() != original_principal:
+                    self.write_json({"error": "Document access changed during upload"}, status=HTTPStatus.FORBIDDEN)
+                    return
+                created_at = utc_now()
+                try:
+                    with db() as connection:
+                        admission.validate(reservation)
+                        connection.execute(
+                            """
+                            INSERT INTO documents(
+                                id, filename, content_type, kind, service_call_id, invoice_id, estimate_id,
+                                maintenance_contract_id, customer_equipment_id, equipment_name, customer_name,
+                                stored_path, created_at, file_size_bytes, file_sha256, upload_operation_id, upload_actor_email, upload_request_sha256
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                document_id,
+                                filename,
+                                content_type,
+                                kind,
+                                service_call_id,
+                                invoice_id,
+                                estimate_id,
+                                maintenance_contract_id,
+                                customer_equipment_id,
+                                equipment_name,
+                                customer_name,
+                                str(destination),
+                                created_at,
+                                len(data),
+                                file_digest,
+                                operation_id,
+                                original_principal["email"] if operation_id else None,
+                                request_digest if operation_id else None,
+                            ),
+                        )
+                        admission.complete(reservation, connection)
+                except sqlite3.IntegrityError:
+                    # Preserve ledger-owned bytes if a non-cooperating older
+                    # writer won. Never sweep uncertain files during rollout.
+                    if self._replay_document_upload(operation_id, request_digest, original_principal):
+                        return
+                    raise
+        except (document_upload_storage.StorageAdmissionError, document_storage.DocumentReadError, OSError, sqlite3.Error) as error:
+            status = error.status if isinstance(error, document_upload_storage.StorageAdmissionError) else HTTPStatus.SERVICE_UNAVAILABLE
+            self.write_json({"error": str(error) if isinstance(error, document_upload_storage.StorageAdmissionError) else "Company document storage is unavailable"}, status=status)
+            return
 
         principal = self.principal() or {}
         record_audit_event(principal.get("email") if isinstance(principal.get("email"), str) else None, "upload", "document", document_id)
@@ -7902,6 +7895,7 @@ def initialize_runtime() -> None:
     configure_live_logging()
     load_protected_storage_keyrings()
     validate_storage_keyrings()
+    document_upload_storage.Policy.from_environment()
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with storage_rotation_gate().operation():
         initialize_database()

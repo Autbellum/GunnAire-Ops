@@ -139,20 +139,24 @@ class DocumentContentProofHTTPTests(unittest.TestCase):
             self.assertEqual(self.upload(contentType=content_type)[0], 400)
 
     def test_failed_upload_readback_never_commits_a_false_proof(self):
-        original = backend.document_storage.write_document_bytes
+        original = backend.document_upload_storage.write_payload
         def replaced(path, value):
             return original(path, b"X" * len(value))
-        with mock.patch.object(backend.document_storage, "write_document_bytes", replaced):
+        with mock.patch.object(backend.document_upload_storage, "write_payload", replaced):
             self.assertEqual(self.upload()[0], 503)
         with backend.db() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0], 0)
 
     def test_failed_upload_sync_never_acknowledges_or_commits_metadata(self):
-        with mock.patch.object(backend.document_storage.os, "fsync", side_effect=OSError("synthetic sync failure")):
+        original = backend.document_upload_storage.write_payload
+        def failed_payload_sync(fd, data):
+            with mock.patch.object(backend.document_upload_storage.os, "fsync", side_effect=OSError("synthetic sync failure")):
+                return original(fd, data)
+        with mock.patch.object(backend.document_upload_storage, "write_payload", failed_payload_sync):
             self.assertEqual(self.upload()[0], 503)
         with backend.db() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0], 0)
-        self.assertTrue(any(backend.STORAGE_ROOT.rglob("*.pdf")))
+        self.assertTrue(any(backend.STORAGE_ROOT.rglob("*.payload")))
 
     def test_revocation_during_upload_readback_cannot_commit_document_metadata(self):
         original = backend.document_storage.read_document

@@ -136,6 +136,7 @@ def create_backup(
 
         storage_copy = artifact / "storage"
         storage_copy.mkdir()
+        directories = []
         for source in sorted(source_storage.rglob("*")):
             if is_transient_storage_entry(source):
                 continue
@@ -145,9 +146,15 @@ def create_backup(
             target = storage_copy / relative
             if source.is_dir():
                 target.mkdir(parents=True, exist_ok=True)
+                directories.append((source, target))
             elif source.is_file():
                 target.parent.mkdir(parents=True, exist_ok=True)
                 copy_document(source, target)
+
+        # Preserve private upload namespace permissions after children are copied;
+        # applying a read-only source mode earlier could prevent copying them.
+        for source, target in reversed(directories):
+            shutil.copystat(source, target, follow_symlinks=False)
 
         document_records = [
             file_record(path, artifact)

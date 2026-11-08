@@ -1,0 +1,122 @@
+Upload disk admission and owned pending-file recovery
+
+Scope: local successor to aa62adf. No real data or credentials are used in tests.
+The current v2 storage-key implementation and outer rotation gate are unchanged.
+This policy governs document uploads, not all database/provider/backup writers.
+
+Policy
+------
+GUNNAIRE_UPLOAD_FREE_RESERVE_BYTES defaults to268435456 (256MiB). Minimum64MiB;
+maximum1TiB. This is the free-space floor for storage and, if on a separate
+filesystem, the database directory. An additional1MiB metadata margin is required.
+GUNNAIRE_UPLOAD_PENDING_BYTES defaults to268435456; valid range1..1073741824.
+GUNNAIRE_UPLOAD_PENDING_COUNT defaults to128; valid range1..1024.
+Invalid settings fail startup before database initialization and workers.
+No setting silently disables the free-space guard. Operators must choose values
+using actual volume, backup staging and other-writer needs; defaults are not a
+claim that256MiB is sufficient for every deployment.
+
+Under a nonblocking cross-process filesystem lock, admission requires:
+  available storage bytes >= floor +1MiB + all promised-but-unwritten bytes
+                             + bytes promised by this new request
+  pending expected-byte total <= configured pending-byte cap
+  pending reservation count <= configured count cap
+A matching existing reservation can recover at an exactly-full pending cap.
+Already-committed replay occurs before disk admission. The existing one-upload
+and one-download per-process slots, HTTP/body/file limits and download proof/cache
+behavior remain. This lock additionally serializes managed writers across server
+processes using the same storage namespace; competing writers receive503.
+
+Reservations are logical accounting, not fallocate or a filesystem quota.
+Other applications, database/provider writes, backups and older app versions can
+consume the reserve after measurement. Actual write/commit errors still fail
+closed and preserve pending evidence. This does not promise global disk capacity,
+inode availability, or uninterrupted authentication when a disk is already full.
+
+Durable ownership and crash states
+----------------------------------
+New table document_upload_reservations_v1 binds an internal UUID, optional client
+operation, original actor, request digest, expected size/hash and owned device/
+inode. An identity trigger prohibits changing ID/operation/actor/request/size/hash.
+Only device/inode ownership can be recorded during exclusive creation/recreation.
+There is no backfill, historic proof inference or ciphertext rewrite.
+
+New payloads live in STORAGE_ROOT/.document-upload-v1/<UUID>.payload. Directory
+mode0700, payload/lock mode0600, correct service UID and a single file link are
+required. Child paths are opened by pinned directory descriptors with NOFOLLOW;
+UUID filenames, lock identity and directory identity are checked. The human
+filename/kind remain metadata. Kind is bounded to255 safe characters and cannot
+be '.' or '..'. Namespace and file ownership failures preserve the bytes and deny
+new writes; permissions are never widened automatically.
+
+1. Commit reservation before creating the file. A crash here resumes the same ID.
+2. Exclusively create the file, sync its directory and commit inode ownership
+   before writing payload. A crash leaving an empty file without persisted inode
+   proof is uncertain: retain it and fail closed. Never guess it safe to overwrite.
+3. Write through the pinned descriptor in bounded chunks and fsync. On retry,
+   the actor/request/expected bytes must match. Existing bytes must be the exact
+   original prefix; complete files are reused, partial files are rewritten with
+   the same original bytes on the same inode. Differing content, symlinks,
+   hardlinks, replaced inodes, changed locks or namespace paths are refused.
+4. Verify original bytes using the existing file-proof reader and refresh auth.
+5. Insert committed document and delete its reservation in one SQLite transaction.
+   Rollback retains the reservation/file; crash after commit is recovered through
+   the existing operation GET/replay. A committed id/path reference prevents any
+   pending-file preparation, even if a stale reservation was injected.
+
+No payload file is automatically deleted, renamed, expired or swept by this
+module. In particular, it never adopts historical untracked files. It preserves
+pending requests from revoked actors, corrupt/uncertain evidence and unknown
+files. Matching retries avoid the previously measured per-attempt orphan growth.
+Different abandoned operations and legacy requests without operationID can still
+retain files, but their managed pending count/expected bytes are capped; actual
+space consumed by old unknown files is included in filesystem free-space checks.
+At capacity, recovery of existing valid operations can free reservations;
+unprovable/legacy leftovers require a separately authorized reconciliation.
+
+Recovery is not a claim of universal exactly-once delivery, power-loss immunity,
+automatic repair of corrupted bytes, or automatic garbage collection. Files
+created before inode proof may need review even though no payload was written.
+
+Backup and restore implications
+-------------------------------
+Synthetic backup tests cover payload bytes and private directory modes. Backup
+copying now preserves directory metadata after copying children, including0700.
+Committed files remain readable through their stored paths by v2-capable older
+code. Reservation schema and files are additive; existing files are not moved.
+
+Restored files have new inodes. Pending ownership proof must NOT be silently
+rebound after restore. Retain files and reservations, verify backup manifest and
+original request/content evidence in an authorized isolated rehearsal, and obtain
+an explicit reviewed ownership reconciliation before resuming affected intents.
+An active backup may include pending bytes from a different moment than its DB
+snapshot; no such pending file is assumed committed. This implementation does
+not add a real-backup restore or automatic orphan-reclamation command.
+
+Local validation and release plan
+--------------------------------
+Run focused module/HTTP/content-proof/backup/keyring/rotation tests; full Backend
+and Tools suites; actual native decoder check; unchanged15/45-wave hosted quota
+gates and maximum-size recovery contention. Repeat the measured four-crash12MiB
+case and require one pending file/inode, then one committed file and zero pending
+reservations. Exercise low disk, pending cap, lock contention, commit failure,
+auth changes, historical files and all partial-write/ownership attack states.
+
+Before any deployment: review exact diff/commit, choose disk policy for the actual
+volumes, verify backup continuity and rehearse the additive table/trigger against
+an authorized isolated backup. Inventory historical untracked data separately;
+this feature does not retroactively prove or delete it. Establish low-space and
+pending-capacity alerts and an operator response; no provider writes are included.
+
+Rollout must drain old writers before enabling the successor. Mixed old/new
+writers do not share reservation admission and cannot be claimed disk-bounded.
+Backend first, then controlled actor-bound upload/recovery and crash acceptance,
+then native rollout under its separate signing/CloudKit/device gates.
+
+Rollback must retain v2/new-only-key support and ideally this admission protocol.
+If reverting to aa62adf/040027c, pause new uploads and native rollout: older code
+ignores pending reservations and can recreate the old disk-growth behavior.
+Keep the table, identity trigger, private directory, files and client intents.
+Do not drop columns, remove ownership rows, delete files or restore a database
+over newer writes to make rollback appear clean. Any data/ownership restoration
+requires writer quiescence, manifest/proof review and separate authorization.

@@ -29,8 +29,9 @@ request digest covering filename, MIME type, kind, all supported references,
 labels, file length and SHA256. Matching replay returns the original 201 result
 after verifying persisted bytes and rechecking authority. Changed content,
 metadata or actor returns 409, without creating another committed document.
-The unique index settles competing process inserts; a loser can remove only its
-exclusively reserved, still-owned, unreferenced file and then read back the winner.
+The unique index settles competing process inserts. Disk admission now rechecks
+replay under a shared writer lock; any unexpected loser retains its owned pending
+file for reconciliation rather than deleting bytes.
 Calls without operationID retain the legacy distinct-document behavior; no
 operation ID is retroactively invented. Explicit new operation IDs can create
 distinct records containing identical bytes. This is per-operation idempotency,
@@ -39,7 +40,7 @@ not content deduplication or proof every network request completes exactly once.
 Preserved constraints
 ---------------------
 Existing maximum upload/body sizes, one-upload slot, one-download slot, bounded
-server/socket policy, durable file writer, proof reads and cache advice remain.
+server/socket policy, durable descriptor writes, proof reads and cache advice remain.
 GET recovery consumes the existing download slot; POST replay holds its upload
 slot. Both release on errors. Existing role policy is retained, including Field
 Technician billing access; Dispatcher remains denied billing-document access.
@@ -57,12 +58,10 @@ NULL. Repeat initialization is supported. Current 040027c code can initialize
 and read the additive schema, but lacks recovery semantics; that compatibility
 alone does not make it an acceptable backend for already-upgraded clients.
 
-Process-exit coverage checks interruption before metadata commit and after
-commit/before response. After commit, another server process recovers the original
-ID and retry does not duplicate it. Before commit, recovery is absent and retry
-creates one committed record. An unreferenced file left by abrupt pre-commit exit
-is intentionally preserved; crash orphan cleanup and disk-growth monitoring are
-separate operational work. This does not claim power-loss/volume-failure proof.
+Managed upload files now use durable reservations and disk admission. Same-request
+pre-commit retries reuse their proven file; historical/unproven files are retained.
+See UPLOAD_DISK_ADMISSION.txt for the additive reservation table/trigger, defaults,
+crash states, ownership checks, backup implications and release/rollback limits.
 
 Validation commands (synthetic/local only)
 -----------------------------------------

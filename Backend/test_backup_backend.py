@@ -13,6 +13,21 @@ from Backend import backup_backend
 
 
 class BackupBackendTests(unittest.TestCase):
+    def test_private_upload_namespace_mode_survives_synthetic_backup(self):
+        import stat
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database, storage = self.create_source(root)
+            private = storage / '.document-upload-v1'
+            private.mkdir(mode=0o700)
+            (private / 'synthetic.payload').write_bytes(b'synthetic pending bytes')
+            (private / 'synthetic.payload').chmod(0o600)
+            artifact = root / 'backups'
+            backup_backend.create_backup(database, storage, artifact)
+            copied = artifact / 'storage' / private.name
+            self.assertEqual(stat.S_IMODE(copied.stat().st_mode), 0o700)
+            self.assertEqual((copied / 'synthetic.payload').read_bytes(), b'synthetic pending bytes')
+
     def create_source(self, root: Path) -> tuple[Path, Path]:
         database = root / "source.sqlite3"
         with closing(sqlite3.connect(database)) as connection, connection:
