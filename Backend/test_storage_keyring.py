@@ -10,6 +10,31 @@ class StorageKeyringTests(unittest.TestCase):
     def ring(self,active='old',write_format='legacy',domain='qbo',retire=False):
         keys={'new':self.new} if retire else {'old':self.old,'new':self.new}
         return StorageKeyring(domain,self.old,json.dumps({'version':1,'active':active,'write_format':write_format,'keys':keys}))
+    def test_binary_envelope_preserves_arbitrary_bytes_without_nested_base64(self):
+        from Backend.storage_keyring import BINARY_PREFIX
+        ring = self.ring('new', 'versioned')
+        raw = bytes(range(256)) * 4096
+        token = ring.encrypt(raw)
+        inner = Fernet(self.new).decrypt(token)
+        self.assertTrue(inner.startswith(BINARY_PREFIX))
+        self.assertLess(len(inner) - len(raw), 1024)
+        self.assertEqual(ring.decrypt(token), raw)
+        for malformed in (BINARY_PREFIX, BINARY_PREFIX + (1025).to_bytes(4, 'big'),
+                          BINARY_PREFIX + (50).to_bytes(4, 'big') + b'{}'):
+            with self.assertRaises(InvalidToken):
+                ring.decrypt(Fernet(self.new).encrypt(malformed))
+
+    def test_prior_json_envelope_remains_readable_with_stable_revision(self):
+        from Backend.storage_keyring import PREFIX
+        value = {'v': 1, 'domain': 'qbo', 'key_id': 'old',
+                 'revision': 'a' * 64, 'data': base64.b64encode(b'prior payload').decode()}
+        token = Fernet(self.old).encrypt(PREFIX + json.dumps(value).encode())
+        ring = self.ring('new', 'versioned')
+        self.assertEqual(ring.decrypt(token), b'prior payload')
+        migrated = ring.rotate(token)
+        self.assertEqual(ring.revision(migrated), 'a' * 64)
+        self.assertEqual(self.ring('new', 'versioned', retire=True).decrypt(migrated), b'prior payload')
+
     def test_reader_rollout_keeps_old_writes_and_reads_both_keys(self):
         ring=self.ring()
         self.assertEqual(Fernet(self.old).decrypt(ring.encrypt(b'value')),b'value')

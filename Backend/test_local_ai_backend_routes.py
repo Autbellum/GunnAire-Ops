@@ -104,6 +104,61 @@ class LocalAIBackendRouteTests(unittest.TestCase):
         request = urllib.request.Request(self.base + path, data=data, method=method, headers=headers)
         return urllib.request.urlopen(request, timeout=5)
 
+    def test_frozen_local_routes_and_startup_leave_database_unchanged(self):
+        from Backend.rotation_gate import Paused
+        with backend.db() as connection:
+            before = '\n'.join(connection.iterdump())
+        with backend.storage_rotation_gate().exclusive():
+            with mock.patch.object(local_backend, 'get_gateway') as model, \
+                    mock.patch.object(local_backend.GunnAireLocalAIBackendHandler, 'principal') as principal:
+                for path, method, body in [(local_backend.STATUS_PATH, 'GET', None),
+                                          (local_backend.ASSIST_PATH, 'POST', {'task': 'operations_narrative'})]:
+                    with self.assertRaises(urllib.error.HTTPError) as caught:
+                        self.request(path, method=method, body=body)
+                    self.assertEqual(caught.exception.code, 503)
+                model.assert_not_called()
+                principal.assert_not_called()
+            with mock.patch.object(backend, 'initialize_database') as initialize, \
+                    mock.patch.object(backend, 'start_push_delivery_worker') as push, \
+                    mock.patch.object(backend, 'start_backup_worker') as backup:
+                with self.assertRaises(Paused):
+                    local_backend.main()
+                initialize.assert_not_called()
+                push.assert_not_called()
+                backup.assert_not_called()
+        with backend.db() as connection:
+            self.assertEqual('\n'.join(connection.iterdump()), before)
+
+    def test_local_startup_rejects_invalid_keyring_before_database_or_workers(self):
+        with mock.patch.object(backend, 'QBO_STORAGE_KEYRING', 'invalid'), \
+                mock.patch.object(backend, 'initialize_database') as initialize, \
+                mock.patch.object(backend, 'start_push_delivery_worker') as push, \
+                mock.patch.object(backend, 'start_backup_worker') as backup:
+            with self.assertRaises(SystemExit):
+                local_backend.main()
+            initialize.assert_not_called()
+            push.assert_not_called()
+            backup.assert_not_called()
+
+    def test_model_and_audit_remain_inside_complete_operation(self):
+        from Backend.rotation_gate import Paused
+        original = self.fake.assist
+        def assist(*args, **kwargs):
+            with self.assertRaises(Paused):
+                with backend.storage_rotation_gate().exclusive(timeout=0):
+                    self.fail('Migration overlapped model operation')
+            return original(*args, **kwargs)
+        def audit(*args, **kwargs):
+            with self.assertRaises(Paused):
+                with backend.storage_rotation_gate().exclusive(timeout=0):
+                    self.fail('Migration overlapped audit persistence')
+        self.fake.assist = assist
+        with mock.patch.object(backend, 'record_audit_event', side_effect=audit) as record:
+            with self.request(local_backend.ASSIST_PATH, method='POST',
+                              body={'task': 'operations_narrative', 'input': 'Synthetic'}) as response:
+                self.assertEqual(response.status, 200)
+            record.assert_called_once()
+
     def test_status_requires_authentication(self):
         with self.assertRaises(urllib.error.HTTPError) as caught:
             self.request(local_backend.STATUS_PATH, authorized=False)

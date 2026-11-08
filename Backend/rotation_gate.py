@@ -31,6 +31,11 @@ class RotationGate:
             os.close(fd);raise Paused()
         return fd
 
+    def _sync_directory(self):
+        fd=os.open(self.directory,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+        try:os.fsync(fd)
+        finally:os.close(fd)
+
     @contextmanager
     def operation(self):
         fd=None
@@ -61,6 +66,7 @@ class RotationGate:
             info=os.fstat(marker_fd);identity=(info.st_dev,info.st_ino)
             os.write(marker_fd,uuid.uuid4().hex.encode())
             os.fsync(marker_fd)
+            self._sync_directory()
             fd=self._open()
             deadline=time.monotonic()+timeout
             while True:
@@ -75,10 +81,14 @@ class RotationGate:
         finally:
             # Keep exclusion until the owned marker is gone. Never remove a
             # replacement marker belonging to another recovery operation.
-            if identity is not None and (not entered or completed):
-                try:
-                    current=self.marker.lstat()
-                    if (current.st_dev,current.st_ino)==identity:self.marker.unlink()
-                except FileNotFoundError:pass
-            if marker_fd is not None:os.close(marker_fd)
-            if fd is not None:os.close(fd)
+            try:
+                if identity is not None and (not entered or completed):
+                    try:
+                        current=self.marker.lstat()
+                        if (current.st_dev,current.st_ino)==identity:
+                            self.marker.unlink()
+                            self._sync_directory()
+                    except FileNotFoundError:pass
+            finally:
+                if marker_fd is not None:os.close(marker_fd)
+                if fd is not None:os.close(fd)

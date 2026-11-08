@@ -120,3 +120,11 @@ its new pair is wholly absent. A partial pair fails closed. Signing and token
 caches are environment-specific; team/topic restrictions remain unchanged.
 Both environments must remain configured. Existing multi-capability key consumers
 still need reconciliation before that old provider key can be revoked.
+
+The v2 inner envelope stores a bounded JSON metadata header followed by raw
+plaintext, all authenticated by one Fernet token. It avoids encoding the payload
+in base64 twice. Readers retain v1 JSON-envelope support and stable revisions.
+This does not change public cursor encoding, workload size or memory gates.
+Both supported server entrypoints share keyring validation and startup exclusion;
+local-AI model execution and subsequent audit persistence hold one operation lock.
+Freeze-marker creation and removal fsync the parent directory.

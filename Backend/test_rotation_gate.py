@@ -13,6 +13,22 @@ from Backend import gunnaire_backend as backend
 
 
 class RotationGateTests(unittest.TestCase):
+    def test_marker_directory_is_synced_before_entry_and_after_removal(self):
+        import os
+        import stat
+        with tempfile.TemporaryDirectory() as directory:
+            gate = RotationGate(directory)
+            observed = []
+            real_fsync = os.fsync
+            def sync(fd):
+                if stat.S_ISDIR(os.fstat(fd).st_mode):
+                    observed.append(gate.marker.exists())
+                return real_fsync(fd)
+            with mock.patch('Backend.rotation_gate.os.fsync', side_effect=sync):
+                with gate.exclusive():
+                    self.assertEqual(observed, [True])
+            self.assertEqual(observed, [True, False])
+
     def test_cross_process_drain_waits_for_refresh_persistence(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);gate=RotationGate(root)

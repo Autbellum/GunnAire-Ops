@@ -10,6 +10,7 @@ import threading
 from cryptography.fernet import Fernet, InvalidToken
 
 PREFIX = b'\x00gunnaire-keyring-v1\x00'
+BINARY_PREFIX = b'\x00gunnaire-keyring-v2\x00'
 # JSON/base64/Fernet temporarily hold several copies. Bound allocation across
 # all independently constructed keyrings and domains, without rejecting writes.
 # No database/provider work is performed while holding this slot.
@@ -63,16 +64,27 @@ class StorageKeyring:
                 clear = key.decrypt(token)
             except InvalidToken:
                 continue
-            if not clear.startswith(PREFIX):
+            binary = clear.startswith(BINARY_PREFIX)
+            if not binary and not clear.startswith(PREFIX):
                 return clear, hashlib.sha256(token).hexdigest(), identifier, False
             try:
-                value = json.loads(clear[len(PREFIX):], object_pairs_hook=unique_object)
-                if (set(value) != {'v', 'domain', 'key_id', 'revision', 'data'} or type(value['v']) is not int or value['v'] != 1
+                if binary:
+                    offset = len(BINARY_PREFIX)
+                    size = int.from_bytes(clear[offset:offset + 4], 'big')
+                    if not 1 <= size <= 1024 or len(clear) < offset + 4 + size:
+                        raise ValueError()
+                    end = offset + 4 + size
+                    value = json.loads(clear[offset + 4:end], object_pairs_hook=unique_object)
+                    expected = {'v', 'domain', 'key_id', 'revision'}
+                else:
+                    value = json.loads(clear[len(PREFIX):], object_pairs_hook=unique_object)
+                    expected = {'v', 'domain', 'key_id', 'revision', 'data'}
+                if (set(value) != expected or type(value['v']) is not int or value['v'] != (2 if binary else 1)
                         or value['domain'] != self.domain or value['key_id'] != identifier
                         or not isinstance(value['revision'], str)
                         or not re.fullmatch('[0-9a-f]{64}', value['revision'])):
                     raise ValueError()
-                raw = base64.b64decode(value['data'], validate=True)
+                raw = clear[end:] if binary else base64.b64decode(value['data'], validate=True)
                 return raw, value['revision'], identifier, True
             except Exception:
                 raise InvalidToken() from None
@@ -87,9 +99,13 @@ class StorageKeyring:
             return self._open(token)[1]
 
     def _seal(self, raw: bytes, revision: str) -> bytes:
-        value = {'v': 1, 'domain': self.domain, 'key_id': self.active,
-                 'revision': revision, 'data': base64.b64encode(raw).decode('ascii')}
-        return self.keys[self.active].encrypt(PREFIX + json.dumps(value, separators=(',', ':'), sort_keys=True).encode())
+        # Authenticate the small metadata header and raw payload together.
+        # Avoid nested base64: Fernet already supplies the transport encoding.
+        value = {'v': 2, 'domain': self.domain, 'key_id': self.active, 'revision': revision}
+        header = json.dumps(value, separators=(',', ':'), sort_keys=True).encode()
+        if len(header) > 1024:
+            raise KeyringError()
+        return self.keys[self.active].encrypt(BINARY_PREFIX + len(header).to_bytes(4, 'big') + header + raw)
 
     def encrypt(self, raw: bytes) -> bytes:
         if not isinstance(raw, bytes):

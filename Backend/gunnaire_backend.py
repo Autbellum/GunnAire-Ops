@@ -7730,7 +7730,7 @@ def validate_storage_keyrings() -> None:
                 raise SystemExit("Invalid staged storage keyring configuration") from None
 
 
-def main() -> None:
+def initialize_runtime() -> None:
     if AUTH_MODE == "api-token" and not API_TOKEN:
         raise SystemExit("Set GUNNAIRE_BACKEND_API_TOKEN before starting api-token mode.")
     configure_live_logging()
@@ -7741,6 +7741,10 @@ def main() -> None:
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
     start_push_delivery_worker()
     start_backup_worker()
+
+
+def main() -> None:
+    initialize_runtime()
     server = BoundedBusinessServer((HOST, PORT), GunnAireBackendHandler)
     print(f"GunnAire backend listening on http://{HOST}:{PORT}")
     print(f"Service version: {SERVICE_VERSION}")

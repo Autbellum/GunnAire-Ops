@@ -78,9 +78,9 @@ def unavailable_status(code: str = "local_ai_configuration_error") -> dict[str, 
 class GunnAireLocalAIBackendHandler(backend.GunnAireBackendHandler):
     server_version = f"{backend.GunnAireBackendHandler.server_version} LocalAI/1.0"
 
-    def do_GET(self) -> None:
+    def _do_GET(self) -> None:
         if urlparse(self.path).path != STATUS_PATH:
-            super().do_GET()
+            super()._do_GET()
             return
         if self.principal() is None:
             self.write_json({"error": "Unauthorized"}, status=HTTPStatus.UNAUTHORIZED, require_auth=False)
@@ -92,9 +92,9 @@ class GunnAireLocalAIBackendHandler(backend.GunnAireBackendHandler):
             payload = unavailable_status(error.code)
         self.write_json(payload)
 
-    def do_POST(self) -> None:
+    def _do_POST(self) -> None:
         if urlparse(self.path).path != ASSIST_PATH:
-            super().do_POST()
+            super()._do_POST()
             return
         principal = self.principal()
         if principal is None:
@@ -164,13 +164,7 @@ class GunnAireLocalAIBackendHandler(backend.GunnAireBackendHandler):
 
 
 def main() -> None:
-    if backend.AUTH_MODE == "api-token" and not backend.API_TOKEN:
-        raise SystemExit("Set GUNNAIRE_BACKEND_API_TOKEN before starting api-token mode.")
-    backend.configure_live_logging()
-    backend.initialize_database()
-    backend.STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
-    backend.start_push_delivery_worker()
-    backend.start_backup_worker()
+    backend.initialize_runtime()
     server = BoundedBusinessServer((backend.HOST, backend.PORT), GunnAireLocalAIBackendHandler)
     print(f"GunnAire backend with local-first AI listening on http://{backend.HOST}:{backend.PORT}")
     print(f"Service version: {backend.SERVICE_VERSION}")
