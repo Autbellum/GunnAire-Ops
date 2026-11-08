@@ -41,7 +41,7 @@ try:
     from Backend.billing_provider import BillingQBOProvider
     from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads
     from Backend import document_storage
-    from Backend import backup_backend, storage_keyring
+    from Backend import backup_backend, storage_keyring, rotation_gate
     from Backend import staff_owner_field_edits
     from Backend import staff_workspace_field_updates
     from Backend import staff_invoice_lines
@@ -64,6 +64,7 @@ except ModuleNotFoundError:
     import document_storage
     import backup_backend
     import storage_keyring
+    import rotation_gate
     import staff_owner_field_edits
     import staff_workspace_field_updates
     import staff_invoice_lines
@@ -122,6 +123,10 @@ PUSH_STORAGE_KEYRING = os.environ.get("GUNNAIRE_PUSH_STORAGE_KEYRING", "").strip
 APNS_TEAM_ID = os.environ.get("GUNNAIRE_APNS_TEAM_ID", "").strip()
 APNS_KEY_ID = os.environ.get("GUNNAIRE_APNS_KEY_ID", "").strip()
 APNS_PRIVATE_KEY_BASE64 = os.environ.get("GUNNAIRE_APNS_PRIVATE_KEY_BASE64", "").strip()
+APNS_PRODUCTION_KEY_ID = os.environ.get("GUNNAIRE_APNS_PRODUCTION_KEY_ID", "").strip()
+APNS_PRODUCTION_PRIVATE_KEY_BASE64 = os.environ.get("GUNNAIRE_APNS_PRODUCTION_PRIVATE_KEY_BASE64", "").strip()
+APNS_SANDBOX_KEY_ID = os.environ.get("GUNNAIRE_APNS_SANDBOX_KEY_ID", "").strip()
+APNS_SANDBOX_PRIVATE_KEY_BASE64 = os.environ.get("GUNNAIRE_APNS_SANDBOX_PRIVATE_KEY_BASE64", "").strip()
 APNS_TOPIC = os.environ.get("GUNNAIRE_APNS_TOPIC", "com.gunnaire.businesssuite").strip()
 APNS_DELIVERY_BATCH_SIZE = min(max(int(os.environ.get("GUNNAIRE_APNS_DELIVERY_BATCH_SIZE", "50")), 1), 200)
 APNS_WORKER_INTERVAL_SECONDS = min(max(int(os.environ.get("GUNNAIRE_APNS_WORKER_INTERVAL_SECONDS", "15")), 5), 300)
@@ -881,27 +886,41 @@ def decrypt_push_device_token(ciphertext: str) -> str | None:
     return token if re.fullmatch(r"[0-9a-f]{32,512}", token) and len(token) % 2 == 0 else None
 
 
+def apns_signing_configuration(environment: str) -> tuple[str, str]:
+    if environment == "production":
+        key_id, private_key = APNS_PRODUCTION_KEY_ID, APNS_PRODUCTION_PRIVATE_KEY_BASE64
+    elif environment == "development":
+        key_id, private_key = APNS_SANDBOX_KEY_ID, APNS_SANDBOX_PRIVATE_KEY_BASE64
+    else:
+        raise ValueError("Invalid APNs environment")
+    if key_id or private_key:
+        if not key_id or not private_key:
+            raise ValueError("Incomplete environment-specific APNs configuration")
+        return key_id, private_key
+    return APNS_KEY_ID, APNS_PRIVATE_KEY_BASE64
+
+
 def apns_configuration_is_present() -> bool:
-    return bool(
-        push_token_store() is not None
-        and APNS_TEAM_ID
-        and APNS_KEY_ID
-        and APNS_PRIVATE_KEY_BASE64
-        and APNS_TOPIC
-    )
+    try:
+        signing_present = all(all(apns_signing_configuration(environment))
+                              for environment in ("production", "development"))
+    except ValueError:
+        return False
+    return bool(push_token_store() is not None and APNS_TEAM_ID and APNS_TOPIC and signing_present)
 
 
-def apns_private_key() -> ec.EllipticCurvePrivateKey:
+def apns_private_key(environment: str = "production") -> ec.EllipticCurvePrivateKey:
+    key_id, configured_private_key = apns_signing_configuration(environment)
     if not re.fullmatch(r"[A-Za-z0-9]{10}", APNS_TEAM_ID):
         raise ValueError("Invalid APNs team identifier")
-    if not re.fullmatch(r"[A-Za-z0-9]{10}", APNS_KEY_ID):
+    if not re.fullmatch(r"[A-Za-z0-9]{10}", key_id):
         raise ValueError("Invalid APNs key identifier")
     if not re.fullmatch(r"[A-Za-z0-9.-]{3,255}", APNS_TOPIC):
         raise ValueError("Invalid APNs topic")
     if APNS_TOPIC != APPLE_CLIENT_ID:
         raise ValueError("APNs topic does not match the Apple app identifier")
     try:
-        encoded = APNS_PRIVATE_KEY_BASE64.encode("ascii")
+        encoded = configured_private_key.encode("ascii")
         if len(encoded) > 32 * 1024:
             raise ValueError("APNs private key is too large")
         raw_key = base64.b64decode(encoded, validate=True)
@@ -916,15 +935,17 @@ def apns_private_key() -> ec.EllipticCurvePrivateKey:
     return private_key
 
 
-def apns_authentication_token(now: datetime | None = None) -> str:
+def apns_authentication_token(now: datetime | None = None, *, environment: str = "production") -> str:
+    key_id, configured_private_key = apns_signing_configuration(environment)
     issued_at = int((now or datetime.now(timezone.utc)).timestamp())
     configuration_fingerprint = hashlib.sha256(
-        f"{APNS_TEAM_ID}:{APNS_KEY_ID}:{APNS_TOPIC}:{APNS_PRIVATE_KEY_BASE64}".encode("utf-8")
+        f"{environment}:{APNS_TEAM_ID}:{key_id}:{APNS_TOPIC}:{configured_private_key}".encode("utf-8")
     ).hexdigest()
     with APNS_AUTH_TOKEN_LOCK:
-        cached_token = APNS_AUTH_TOKEN_CACHE.get("token")
-        cached_issued_at = APNS_AUTH_TOKEN_CACHE.get("issued_at")
-        cached_fingerprint = APNS_AUTH_TOKEN_CACHE.get("configuration_fingerprint")
+        cache = APNS_AUTH_TOKEN_CACHE.setdefault(environment, {})
+        cached_token = cache.get("token")
+        cached_issued_at = cache.get("issued_at")
+        cached_fingerprint = cache.get("configuration_fingerprint")
         if (
             isinstance(cached_token, str)
             and cached_token
@@ -936,7 +957,7 @@ def apns_authentication_token(now: datetime | None = None) -> str:
 
         header = base64url_encode(
             json.dumps(
-                {"alg": "ES256", "kid": APNS_KEY_ID},
+                {"alg": "ES256", "kid": key_id},
                 separators=(",", ":"),
                 sort_keys=True,
             ).encode("utf-8")
@@ -949,11 +970,11 @@ def apns_authentication_token(now: datetime | None = None) -> str:
             ).encode("utf-8")
         )
         signing_input = f"{header}.{claims}".encode("ascii")
-        signature_der = apns_private_key().sign(signing_input, ec.ECDSA(hashes.SHA256()))
+        signature_der = apns_private_key(environment).sign(signing_input, ec.ECDSA(hashes.SHA256()))
         signature_r, signature_s = utils.decode_dss_signature(signature_der)
         signature = signature_r.to_bytes(32, "big") + signature_s.to_bytes(32, "big")
         token = f"{header}.{claims}.{base64url_encode(signature)}"
-        APNS_AUTH_TOKEN_CACHE.update(
+        cache.update(
             {
                 "configuration_fingerprint": configuration_fingerprint,
                 "issued_at": issued_at,
@@ -986,7 +1007,7 @@ def send_apns_request(
         return HTTPStatus.SERVICE_UNAVAILABLE, "ProviderDependencyUnavailable", None
     host = "api.push.apple.com" if environment == "production" else "api.sandbox.push.apple.com"
     headers = {
-        "authorization": f"bearer {apns_authentication_token()}",
+        "authorization": f"bearer {apns_authentication_token(environment=environment)}",
         "apns-topic": APNS_TOPIC,
         "apns-push-type": "alert",
         "apns-priority": "10",
@@ -2198,7 +2219,8 @@ def push_notification_readiness_component(now: datetime | None = None) -> dict[s
             "The configured push-device encryption key is invalid.",
         )
     try:
-        apns_private_key()
+        for environment in ("production", "development"):
+            apns_private_key(environment)
     except ValueError:
         return readiness_component(
             "push-notifications",
@@ -3244,6 +3266,25 @@ NONRETRYABLE_APNS_ERROR_REASONS = {
 }
 
 
+def storage_rotation_gate():
+    return rotation_gate.RotationGate(DB_PATH.parent)
+
+
+def rotation_guarded(fallback):
+    def decorate(operation):
+        from functools import wraps
+        @wraps(operation)
+        def guarded(*args, **kwargs):
+            try:
+                with storage_rotation_gate().operation():
+                    return operation(*args, **kwargs)
+            except rotation_gate.Paused:
+                return dict(fallback) if isinstance(fallback, dict) else fallback
+        return guarded
+    return decorate
+
+
+@rotation_guarded(0)
 def deliver_pending_pushes(
     *,
     sender=send_apns_request,
@@ -3484,6 +3525,7 @@ def record_backup_automation(payload: dict[str, object]) -> None:
         pass
 
 
+@rotation_guarded({"outcome": "rotation-paused"})
 def run_scheduled_backup_if_due(now: datetime | None = None, *, force: bool = False) -> dict[str, object]:
     """Create, verify, and retain an in-service backup once the last verified one reaches the interval.
 
@@ -3903,7 +3945,21 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         self.send_cors_headers()
         self.end_headers()
 
+    def rotation_request(self, operation, *, health=False):
+        if health and urlparse(self.path).path == "/health":
+            return operation()
+        try:
+            with storage_rotation_gate().operation():
+                return operation()
+        except rotation_gate.Paused:
+            self.close_connection = True
+            self.write_json({"error": "Temporarily unavailable during storage maintenance", "code": "storage_rotation_paused"},
+                            status=HTTPStatus.SERVICE_UNAVAILABLE)
+
     def do_GET(self) -> None:
+        self.rotation_request(self._do_GET, health=True)
+
+    def _do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == google_connections.CALLBACK_PATH:
             self.handle_google_callback(parsed)
@@ -4144,6 +4200,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         self.write_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:
+        self.rotation_request(self._do_POST)
+
+    def _do_POST(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path.startswith("/portal/") and parsed.path.endswith("/estimate-response"):
             token = unquote(
@@ -4312,6 +4371,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         self.write_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
 
     def do_DELETE(self) -> None:
+        self.rotation_request(self._do_DELETE)
+
+    def _do_DELETE(self) -> None:
         parsed = urlparse(self.path)
         if self.principal() is None:
             self.write_json({"error": "Unauthorized"}, status=HTTPStatus.UNAUTHORIZED, require_auth=False)
@@ -7654,11 +7716,28 @@ def configure_live_logging() -> None:
                 pass
 
 
+def validate_storage_keyrings() -> None:
+    """Reject malformed staged settings before schema writes or worker startup."""
+    for domain, legacy, configuration in (
+        ("qbo", QBO_TOKEN_ENCRYPTION_KEY, QBO_STORAGE_KEYRING),
+        ("google", GOOGLE_TOKEN_ENCRYPTION_KEY, GOOGLE_STORAGE_KEYRING),
+        ("push", PUSH_TOKEN_ENCRYPTION_KEY, PUSH_STORAGE_KEYRING),
+    ):
+        if configuration:
+            try:
+                storage_keyring.StorageKeyring(domain, legacy, configuration)
+            except ValueError:
+                raise SystemExit("Invalid staged storage keyring configuration") from None
+
+
 def main() -> None:
     if AUTH_MODE == "api-token" and not API_TOKEN:
         raise SystemExit("Set GUNNAIRE_BACKEND_API_TOKEN before starting api-token mode.")
     configure_live_logging()
-    initialize_database()
+    validate_storage_keyrings()
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with storage_rotation_gate().operation():
+        initialize_database()
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
     start_push_delivery_worker()
     start_backup_worker()

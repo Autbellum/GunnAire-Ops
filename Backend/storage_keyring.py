@@ -6,9 +6,14 @@ import hmac
 import json
 import re
 import secrets
+import threading
 from cryptography.fernet import Fernet, InvalidToken
 
 PREFIX = b'\x00gunnaire-keyring-v1\x00'
+# JSON/base64/Fernet temporarily hold several copies. Bound allocation across
+# all independently constructed keyrings and domains, without rejecting writes.
+# No database/provider work is performed while holding this slot.
+ALLOCATION_SLOT = threading.BoundedSemaphore(1)
 
 def unique_object(pairs):
     result = {}
@@ -74,10 +79,12 @@ class StorageKeyring:
         raise InvalidToken()
 
     def decrypt(self, token: bytes) -> bytes:
-        return self._open(token)[0]
+        with ALLOCATION_SLOT:
+            return self._open(token)[0]
 
     def revision(self, token: bytes) -> str:
-        return self._open(token)[1]
+        with ALLOCATION_SLOT:
+            return self._open(token)[1]
 
     def _seal(self, raw: bytes, revision: str) -> bytes:
         value = {'v': 1, 'domain': self.domain, 'key_id': self.active,
@@ -87,21 +94,24 @@ class StorageKeyring:
     def encrypt(self, raw: bytes) -> bytes:
         if not isinstance(raw, bytes):
             raise TypeError('Storage plaintext must be bytes')
-        if not self.versioned_writes:
-            return self.keys[self.active].encrypt(raw)
-        return self._seal(raw, secrets.token_hex(32))
+        with ALLOCATION_SLOT:
+            if not self.versioned_writes:
+                return self.keys[self.active].encrypt(raw)
+            return self._seal(raw, secrets.token_hex(32))
 
     def rotate(self, token: bytes) -> bytes:
         if not self.versioned_writes:
             raise KeyringError()  # No migration before writer activation.
-        raw, revision, identifier, versioned = self._open(token)
-        if versioned and identifier == self.active:
-            return token
-        return self._seal(raw, revision)
+        with ALLOCATION_SLOT:
+            raw, revision, identifier, versioned = self._open(token)
+            if versioned and identifier == self.active:
+                return token
+            return self._seal(raw, revision)
 
     def uses_active_envelope(self, token: bytes) -> bool:
-        _, _, identifier, versioned = self._open(token)
-        return versioned and identifier == self.active
+        with ALLOCATION_SLOT:
+            _, _, identifier, versioned = self._open(token)
+            return versioned and identifier == self.active
 
     def fingerprint(self, data: bytes) -> str:
         return hmac.new(self.material[self.active], data, hashlib.sha256).hexdigest()

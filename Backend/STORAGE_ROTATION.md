@@ -58,7 +58,8 @@ of its offline database. Oversized or corrupt cells fail closed.
 file, rejects symlink traversal/overwrite, retains original recovery keys and
 produces old-write reader configurations. Its caller must first verify that the
 parent is private and not synchronized/shared, including applicable ACLs.
-It is tested with synthetic keys only. No real bundle has been generated.
+Synthetic tests verify the helper; actual protected custody status is recorded
+only in the private release packet, outside this repository.
 
 This helper does not transfer credentials to Render or provider consoles.
 No authenticated first-class API credential is currently established for that
@@ -91,3 +92,31 @@ storage-envelope workload: 45 waves of 64 concurrent 1 MiB writes/readbacks,
 followed by bounded migration and new-key-only verification. It uses the same
 512000000-byte kernel cap, zero swap, half CPU and 409600000-byte headroom gate.
 It is crypto allocation evidence, not a claim of combined server E2E coverage.
+
+## Live exclusion support
+
+`rotation_gate.RotationGate` holds a shared file lock around complete GET/POST/
+DELETE handler operations and both runtime background workers, not merely their
+SQLite transactions or HTTP provider calls. An authorized local operator creates
+an exclusive freeze marker, stops new business requests before authentication
+writes/claims, and waits for existing operations (including refresh persistence)
+to finish. Health remains available; webhook ingress gets 503, never a fake ACK.
+Startup database initialization also respects exclusion. Do not restart/deploy
+while the operator holds a freeze: startup fails closed in that state.
+
+A failed drain removes only its owned marker. A migration failure after entry or
+operator crash leaves the marker for explicit recovery; do not blindly remove it.
+All deployed writers must first be verified to run gate-aware code with the
+intended new-write configuration. File locking cannot fence an older application
+or unrelated external database writer. No production freeze/migration is automatic.
+
+## APNs replacement compatibility
+
+The backend accepts optional `GUNNAIRE_APNS_PRODUCTION_KEY_ID` and
+`GUNNAIRE_APNS_PRODUCTION_PRIVATE_KEY_BASE64`, plus corresponding
+`GUNNAIRE_APNS_SANDBOX_KEY_ID` and `GUNNAIRE_APNS_SANDBOX_PRIVATE_KEY_BASE64`.
+Each environment falls back to the existing combined-environment key only when
+its new pair is wholly absent. A partial pair fails closed. Signing and token
+caches are environment-specific; team/topic restrictions remain unchanged.
+Both environments must remain configured. Existing multi-capability key consumers
+still need reconciliation before that old provider key can be revoked.

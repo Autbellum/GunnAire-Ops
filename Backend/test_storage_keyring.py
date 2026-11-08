@@ -68,5 +68,26 @@ class StorageKeyringTests(unittest.TestCase):
             self.assertTrue(backend.apns_configuration_is_present())
             with mock.patch.object(backend,'PUSH_STORAGE_KEYRING','invalid'):
                 self.assertFalse(backend.apns_configuration_is_present())
+    def test_bad_staged_configuration_stops_before_database_or_workers(self):
+        from unittest import mock
+        from Backend import gunnaire_backend as backend
+        for variable in ('QBO_STORAGE_KEYRING','GOOGLE_STORAGE_KEYRING','PUSH_STORAGE_KEYRING'):
+            with mock.patch.object(backend,variable,'invalid'), mock.patch.object(backend,'AUTH_MODE','google-id-token'), \
+                    mock.patch.object(backend,'initialize_database') as initialize, \
+                    mock.patch.object(backend,'start_push_delivery_worker') as push, \
+                    mock.patch.object(backend,'start_backup_worker') as backup:
+                with self.assertRaises(SystemExit) as error:backend.main()
+                self.assertEqual(str(error.exception),'Invalid staged storage keyring configuration')
+                initialize.assert_not_called();push.assert_not_called();backup.assert_not_called()
+    def test_allocation_slot_released_after_corruption_and_seal_failure(self):
+        from unittest import mock
+        from Backend.storage_keyring import ALLOCATION_SLOT
+        ring=self.ring('new','versioned')
+        with self.assertRaises(InvalidToken):ring.decrypt(b'corrupt')
+        with mock.patch.object(ring,'_seal',side_effect=RuntimeError('synthetic failure')):
+            with self.assertRaises(RuntimeError):ring.encrypt(b'value')
+        self.assertTrue(ALLOCATION_SLOT.acquire(blocking=False))
+        ALLOCATION_SLOT.release()
+        self.assertEqual(ring.decrypt(ring.encrypt(b'recovered')),b'recovered')
 
 if __name__=='__main__':unittest.main()
