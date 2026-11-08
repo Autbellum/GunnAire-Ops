@@ -42,6 +42,8 @@ jobs:
         run: python Tools/validate_linux_quota.py --waves 15 --output quota-evidence/waves-15
       - name: Run forty-five-wave plateau check
         run: python Tools/validate_linux_quota.py --waves 45 --output quota-evidence/waves-45
+      - name: Run activated storage envelope allocation check
+        run: python Tools/validate_storage_rotation_quota.py --output quota-evidence/activated-storage
       - name: Retain synthetic evidence even on failure
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

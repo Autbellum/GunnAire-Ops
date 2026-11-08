@@ -88,7 +88,7 @@ except ModuleNotFoundError:
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.11.08.1"
+SERVICE_VERSION = "2026.11.08.2"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -883,7 +883,7 @@ def decrypt_push_device_token(ciphertext: str) -> str | None:
 
 def apns_configuration_is_present() -> bool:
     return bool(
-        PUSH_TOKEN_ENCRYPTION_KEY
+        push_token_store() is not None
         and APNS_TEAM_ID
         and APNS_KEY_ID
         and APNS_PRIVATE_KEY_BASE64

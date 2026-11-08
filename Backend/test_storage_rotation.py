@@ -64,6 +64,19 @@ class StorageRotationTests(unittest.TestCase):
         self.assertEqual(row['roster_hash'],digest(row['roster_ciphertext']))
         self.assertEqual(row['revision'],17)
 
+    def test_only_verified_replaced_push_tombstones_are_preserved(self):
+        self.db.execute('CREATE TABLE push_devices(id TEXT,token_ciphertext TEXT,token_fingerprint TEXT,deactivated_at TEXT)')
+        self.db.execute("INSERT INTO push_devices VALUES ('device','',?,'2026-11-08T00:00:00Z')",('replaced:device:'+('a'*64),))
+        self.db.commit()
+        ring=StorageKeyring('push',self.old,json.dumps(self.config))
+        before=tuple(self.db.execute('SELECT * FROM push_devices').fetchone())
+        self.assertEqual(migrate_batch(self.db,ring,'push_devices','token_ciphertext')['changed'],0)
+        self.assertEqual(tuple(self.db.execute('SELECT * FROM push_devices').fetchone()),before)
+        for fingerprint,deactivated in [('replaced:device:'+('a'*64),None),
+                                        ('replaced:other:'+('a'*64),'now'),('bad','now')]:
+            self.db.execute('UPDATE push_devices SET token_fingerprint=?,deactivated_at=?',(fingerprint,deactivated));self.db.commit()
+            with self.assertRaises(RotationError):migrate_batch(self.db,ring,'push_devices','token_ciphertext')
+
     def test_upload_original_revision_survives_rotation_and_no_duplicate_send(self):
         from Backend.test_qbo_document_uploads import DocumentUploadTests
         fixture=DocumentUploadTests();fixture.setUp();self.addCleanup(fixture.tearDown)

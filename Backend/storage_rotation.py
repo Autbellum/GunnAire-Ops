@@ -7,6 +7,7 @@ No plaintext, ciphertext or key material is included in diagnostics or results.
 """
 import hashlib
 import json
+import re
 
 INVENTORY = {'billing_assignment_mutations': ['payload_ciphertext'], 'billing_job_assignments': ['roster_ciphertext'], 'billing_publications': ['payload_ciphertext'], 'catalog_publications': ['payload_ciphertext'], 'cloudkit_staff_shares': ['participant_identity_ciphertext'], 'customer_publications': ['payload_ciphertext'], 'google_connections': ['secrets_ciphertext'], 'google_mail_operations': ['secrets_ciphertext', 'summary_ciphertext'], 'google_oauth_attempts': ['secrets_ciphertext'], 'push_devices': ['token_ciphertext'], 'qbo_capture_versions': ['payload_ciphertext'], 'qbo_connections': ['refresh_token_ciphertext'], 'qbo_document_upload_operations': ['payload_ciphertext'], 'qbo_document_uploads': ['payload_ciphertext', 'file_ciphertext', 'state_ciphertext'], 'qbo_link_reviews': ['payload_ciphertext'], 'staff_billing_projections': ['ciphertext'], 'staff_invoice_application_publications': ['ciphertext'], 'staff_invoice_line_requests': ['ciphertext'], 'staff_owner_field_edit_applications': ['ciphertext'], 'staff_owner_field_handoffs': ['ciphertext'], 'staff_owner_field_observations': ['ciphertext'], 'staff_owner_field_resolutions': ['ciphertext'], 'staff_owner_invoice_applications': ['ciphertext'], 'staff_replica_projections': ['ciphertext'], 'staff_replica_records': ['ciphertext'], 'staff_replica_transport_keys': ['ciphertext'], 'staff_workspace_cloud_seals': ['ciphertext'], 'staff_workspace_projections': ['ciphertext'], 'staff_workspace_selections': ['ciphertext'], 'staff_workspace_source_operations': ['ciphertext'], 'staff_workspace_source_records': ['ciphertext'], 'time_publications': ['payload_ciphertext', 'receipt_ciphertext'], 'time_worker_mapping_mutations': ['result_ciphertext'], 'time_worker_mappings': ['payload_ciphertext']}
 
@@ -50,6 +51,17 @@ def migrate_batch(connection, ring, table, column, *, after=0, max_rows=50, max_
             token = source[column]
             if not isinstance(token,str):
                 raise RotationError()
+            if table == 'push_devices' and column == 'token_ciphertext' and token == '':
+                # Only the explicit replaced-device tombstone is non-ciphertext.
+                # An empty active/corrupt token must still stop retirement.
+                prefix = 'replaced:' + source['id'] + ':'
+                fingerprint = source['token_fingerprint']
+                if (not source['deactivated_at'] or not isinstance(fingerprint,str)
+                        or not fingerprint.startswith(prefix)
+                        or not re.fullmatch('[0-9a-f]{64}',fingerprint[len(prefix):])):
+                    raise RotationError()
+                cursor, scanned = rowid, scanned+1
+                continue
             original = token.encode('ascii')
             clear = ring.decrypt(original)
             rotated = ring.rotate(original).decode('ascii')

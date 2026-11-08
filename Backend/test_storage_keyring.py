@@ -59,5 +59,14 @@ class StorageKeyringTests(unittest.TestCase):
                        json.dumps({**base,'version':True}),
                        json.dumps({**base,'keys':{'old':self.old,'new':self.old}})):
             with self.assertRaises(KeyringError):StorageKeyring('qbo',self.old,config)
+    def test_apns_accepts_valid_new_only_keyring_without_legacy_variable(self):
+        from unittest import mock
+        from Backend import gunnaire_backend as backend
+        config=json.dumps({'version':1,'active':'new','write_format':'versioned','keys':{'new':self.new}})
+        with mock.patch.multiple(backend,PUSH_TOKEN_ENCRYPTION_KEY='',PUSH_STORAGE_KEYRING=config,
+                                 APNS_TEAM_ID='fixture',APNS_KEY_ID='fixture',APNS_PRIVATE_KEY_BASE64='fixture',APNS_TOPIC='fixture'):
+            self.assertTrue(backend.apns_configuration_is_present())
+            with mock.patch.object(backend,'PUSH_STORAGE_KEYRING','invalid'):
+                self.assertFalse(backend.apns_configuration_is_present())
 
 if __name__=='__main__':unittest.main()

@@ -78,3 +78,16 @@ forms, extract browser credentials, or put values in tool arguments or logs.
   an authoritative Intuit secret/verifier rotation procedure preserving events.
 
 No provider key has been generated, revoked, replaced or submitted by this change.
+
+## Review corrections
+
+Verified replaced-device tombstones retain their empty token only when inactive
+and their replacement fingerprint binds the same device ID. Empty active or
+malformed tokens still fail migration. APNs accepts a validated new-only keyring
+without retaining the exposed legacy key variable.
+
+The unchanged baseline server workload is supplemented by a separate activated
+storage-envelope workload: 45 waves of 64 concurrent 1 MiB writes/readbacks,
+followed by bounded migration and new-key-only verification. It uses the same
+512000000-byte kernel cap, zero swap, half CPU and 409600000-byte headroom gate.
+It is crypto allocation evidence, not a claim of combined server E2E coverage.
