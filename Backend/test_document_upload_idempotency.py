@@ -52,6 +52,15 @@ class DocumentUploadIdempotencyTests(unittest.TestCase):
         with backend.db() as c:
             self.assertEqual(c.execute("SELECT COUNT(*) FROM documents").fetchone()[0],0)
 
+    def test_dot_directory_kind_rejected_before_creating_file(self):
+        for kind in ('.', '..'):
+            with self.subTest(kind=kind):
+                status, _ = self.upload(operationID=str(uuid.uuid4()), kind=kind, filename='KindGuard.pdf')
+                created = list(Path(self.f.directory.name).rglob('*-KindGuard.pdf'))
+                self.assertEqual((status, len(created)), (400, 0))
+        with backend.db() as connection:
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM documents').fetchone()[0], 0)
+
     def test_recovery_is_versioned_read_only_and_actor_scoped(self):
         operation=str(uuid.uuid4())
         path='/api/document-uploads/'+operation

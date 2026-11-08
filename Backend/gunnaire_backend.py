@@ -6545,6 +6545,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             self.write_json({"error": "Use a safe filename and content type"}, status=HTTPStatus.BAD_REQUEST)
             return
         kind = safe_filename(str(payload.get("kind") or "document")).lower()
+        if kind in {".", ".."}:
+            self.write_json({"error": "Use a document kind that names a storage directory"}, status=HTTPStatus.BAD_REQUEST)
+            return
         data_base64 = payload.get("dataBase64")
         if not isinstance(data_base64, str) or not data_base64:
             self.write_json({"error": "Missing dataBase64"}, status=HTTPStatus.BAD_REQUEST)

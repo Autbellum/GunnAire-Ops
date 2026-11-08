@@ -19,6 +19,10 @@ Other failures never grant permission to POST. Access logs redact operation/quer
 This GET does not change document records or create files. Existing session-use
 accounting may still update through the normal authentication layer.
 
+Document kind cannot be '.' or '..': reject these directory components before
+creating any file. Sanitizing filename characters alone does not prevent them
+from resolving outside the intended kind directory.
+
 POST /api/documents accepts optional operationID. A supplied canonical UUID is
 normalized to lowercase and retained with the authenticated actor and a canonical
 request digest covering filename, MIME type, kind, all supported references,
