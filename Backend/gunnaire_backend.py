@@ -41,7 +41,7 @@ try:
     from Backend.billing_provider import BillingQBOProvider
     from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads
     from Backend import document_storage
-    from Backend import backup_backend, storage_keyring, rotation_gate
+    from Backend import backup_backend, storage_keyring, rotation_gate, storage_keyring_file
     from Backend import staff_owner_field_edits
     from Backend import staff_workspace_field_updates
     from Backend import staff_invoice_lines
@@ -65,6 +65,7 @@ except ModuleNotFoundError:
     import backup_backend
     import storage_keyring
     import rotation_gate
+    import storage_keyring_file
     import staff_owner_field_edits
     import staff_workspace_field_updates
     import staff_invoice_lines
@@ -386,6 +387,7 @@ CUSTOMER_FINANCING_MAX_AMOUNT = os.environ.get("GUNNAIRE_CUSTOMER_FINANCING_MAX_
 MAX_DOCUMENT_BYTES = min(max(int(os.environ.get("GUNNAIRE_MAX_DOCUMENT_BYTES", str(12 * 1024 * 1024))), 1024), 25 * 1024 * 1024)
 # Bound large verified buffers through response completion.
 DOCUMENT_UPLOAD_SLOTS = threading.BoundedSemaphore(1)
+WORKSPACE_SOURCE_SLOTS = threading.BoundedSemaphore(1)
 DOCUMENT_DOWNLOAD_SLOTS = threading.BoundedSemaphore(1)
 ALLOWED_CORS_ORIGINS = {
     origin.strip().rstrip("/")
@@ -832,7 +834,7 @@ def qbo_ciphertext_revision(ciphertext: str) -> str:
     if store is None:
         raise ValueError("Storage revision unavailable")
     try:
-        return store.revision(ciphertext.encode("utf-8"))
+        return store.revision_text(ciphertext)
     except Exception:
         raise ValueError("Storage revision unavailable") from None
 
@@ -845,7 +847,7 @@ def encrypt_qbo_refresh_token(token: str) -> str:
     encryptor = qbo_token_store()
     if encryptor is None:
         raise RuntimeError("QuickBooks token encryption is not configured")
-    return encryptor.encrypt(token.encode("utf-8")).decode("utf-8")
+    return encryptor.encrypt_text(token)
 
 
 def decrypt_qbo_refresh_token(ciphertext: str) -> str | None:
@@ -853,7 +855,7 @@ def decrypt_qbo_refresh_token(ciphertext: str) -> str | None:
     if encryptor is None:
         return None
     try:
-        return encryptor.decrypt(ciphertext.encode("utf-8")).decode("utf-8")
+        return encryptor.decrypt_text(ciphertext)
     except Exception:
         return None
 
@@ -872,7 +874,7 @@ def encrypt_push_device_token(token: str) -> str:
     encryptor = push_token_store()
     if encryptor is None:
         raise RuntimeError("Push token encryption is not configured")
-    return encryptor.encrypt(token.encode("ascii")).decode("ascii")
+    return encryptor.encrypt_text(token, "ascii")
 
 
 def decrypt_push_device_token(ciphertext: str) -> str | None:
@@ -880,7 +882,7 @@ def decrypt_push_device_token(ciphertext: str) -> str | None:
     if encryptor is None:
         return None
     try:
-        token = encryptor.decrypt(ciphertext.encode("ascii")).decode("ascii")
+        token = encryptor.decrypt_text(ciphertext, "ascii")
     except Exception:
         return None
     return token if re.fullmatch(r"[0-9a-f]{32,512}", token) and len(token) % 2 == 0 else None
@@ -1295,7 +1297,7 @@ def encrypt_catalog_payload(raw):
     encryptor = qbo_token_store()
     if encryptor is None:
         raise RuntimeError("Catalog encryption is not configured")
-    return encryptor.encrypt(raw.encode()).decode()
+    return encryptor.encrypt_text(raw)
 
 
 def qbo_customer_transport(request):
@@ -1401,7 +1403,7 @@ def decrypt_catalog_payload(ciphertext):
     if encryptor is None:
         return None
     try:
-        return encryptor.decrypt(ciphertext.encode()).decode()
+        return encryptor.decrypt_text(ciphertext)
     except Exception:
         return None
 
@@ -4907,6 +4909,20 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                              "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
 
     def handle_staff_workspace_source(self, parsed, *, method):
+        # Bound body parsing, encrypted results, and response buffers together.
+        # GETs do not consume the mutation slot.
+        if method != "POST":
+            return self._handle_staff_workspace_source(parsed, method=method)
+        if not WORKSPACE_SOURCE_SLOTS.acquire(timeout=0.25):
+            self.write_json({"error": "Workspace source capacity is busy; retain the pending request and retry later",
+                             "code": "capacity_busy"}, status=HTTPStatus.SERVICE_UNAVAILABLE, require_auth=False)
+            return
+        try:
+            return self._handle_staff_workspace_source(parsed, method=method)
+        finally:
+            WORKSPACE_SOURCE_SLOTS.release()
+
+    def _handle_staff_workspace_source(self, parsed, *, method):
         if not self.require_application_session():
             return
         shares = cloudkit_staff_shares.StaffShares(db, record_audit_event,
@@ -7730,10 +7746,30 @@ def validate_storage_keyrings() -> None:
                 raise SystemExit("Invalid staged storage keyring configuration") from None
 
 
+def load_protected_storage_keyrings() -> None:
+    global QBO_STORAGE_KEYRING, GOOGLE_STORAGE_KEYRING, PUSH_STORAGE_KEYRING
+    path = os.environ.get('GUNNAIRE_STORAGE_KEYRING_FILE', '').strip()
+    if not path:
+        return
+    # An explicit file is authoritative; reject ambiguous environment overrides.
+    if any(os.environ.get(name, '').strip() for name in (
+            'GUNNAIRE_QBO_STORAGE_KEYRING', 'GUNNAIRE_GOOGLE_STORAGE_KEYRING', 'GUNNAIRE_PUSH_STORAGE_KEYRING')):
+        raise SystemExit('Conflicting storage keyring sources')
+    try:
+        settings = storage_keyring_file.load(path, {
+            'qbo': QBO_TOKEN_ENCRYPTION_KEY, 'google': GOOGLE_TOKEN_ENCRYPTION_KEY,
+            'push': PUSH_TOKEN_ENCRYPTION_KEY})
+    except ValueError:
+        raise SystemExit('Protected storage keyring file is invalid or unavailable') from None
+    QBO_STORAGE_KEYRING, GOOGLE_STORAGE_KEYRING, PUSH_STORAGE_KEYRING = (
+        settings['qbo'], settings['google'], settings['push'])
+
+
 def initialize_runtime() -> None:
     if AUTH_MODE == "api-token" and not API_TOKEN:
         raise SystemExit("Set GUNNAIRE_BACKEND_API_TOKEN before starting api-token mode.")
     configure_live_logging()
+    load_protected_storage_keyrings()
     validate_storage_keyrings()
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with storage_rotation_gate().operation():

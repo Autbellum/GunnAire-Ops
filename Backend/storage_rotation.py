@@ -62,9 +62,7 @@ def migrate_batch(connection, ring, table, column, *, after=0, max_rows=50, max_
                     raise RotationError()
                 cursor, scanned = rowid, scanned+1
                 continue
-            original = token.encode('ascii')
-            clear = ring.decrypt(original)
-            rotated = ring.rotate(original).decode('ascii')
+            rotated = ring.rotate_text(token)
             updates = {column:rotated}
             if table == 'billing_job_assignments' and column == 'roster_ciphertext':
                 before_hash = hashlib.sha256(canonical(token).encode()).hexdigest()
@@ -72,7 +70,7 @@ def migrate_batch(connection, ring, table, column, *, after=0, max_rows=50, max_
                     raise RotationError()
                 updates['roster_hash'] = hashlib.sha256(canonical(rotated).encode()).hexdigest()
             if table == 'google_mail_operations' and column == 'secrets_ciphertext':
-                payload = json.loads(clear)
+                payload = json.loads(ring.decrypt_text(token))
                 expected = {'v':1,'kind':'mail-operation','company':source['company_id'],
                             'owner':source['actor_email'],'id':source['id']}
                 if (set(payload) != set(expected)|{'value'}

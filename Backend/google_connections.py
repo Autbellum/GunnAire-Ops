@@ -172,13 +172,13 @@ class GoogleConnections:
 
     def seal(self, kind, company, owner, record_id, value):
         self.configured()
-        return self.keyring().encrypt(canonical({"v": 1, "kind": kind, "company": company,
-            "owner": owner, "id": record_id, "value": value}).encode()).decode()
+        return self.keyring().encrypt_text(canonical({"v": 1, "kind": kind, "company": company,
+            "owner": owner, "id": record_id, "value": value}))
 
     def open(self, kind, row):
         self.configured()
         try:
-            payload = json.loads(self.keyring().decrypt(row["secrets_ciphertext"].encode()))
+            payload = json.loads(self.keyring().decrypt_text(row["secrets_ciphertext"]))
             expected = {"v": 1, "kind": kind, "company": row["company_id"], "owner": row["actor_email"], "id": row["id"]}
             if not isinstance(payload, dict) or set(payload) != set(expected) | {"value"} or any(payload[k] != v for k, v in expected.items()):
                 raise ValueError()

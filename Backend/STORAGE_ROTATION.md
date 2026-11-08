@@ -128,3 +128,41 @@ This does not change public cursor encoding, workload size or memory gates.
 Both supported server entrypoints share keyring validation and startup exclusion;
 local-AI model execution and subsequent audit persistence hold one operation lock.
 Freeze-marker creation and removal fsync the parent directory.
+
+## Protected file transport
+
+For an operator with existing authorized SSH access, `GUNNAIRE_STORAGE_KEYRING_FILE`
+can name an absolute private file containing the custody bundle shape
+`{"version":1,"readers":{"qbo":{...},"google":{...},"push":{...}}}`.
+This transports storage encryption settings only, never provider authentication.
+The immediate parent must be owner-only 0700; the regular file must be owned by
+this process user and mode 0600, at most 16 KiB. Every path component rejects
+symlinks. All three keyrings validate before any global setting changes, database
+initialization or worker startup. Explicit environment keyring overrides conflict
+and stop startup rather than silently taking precedence. With no file path,
+existing environment configuration is unchanged.
+
+Transfer through the already-authorized SSH connection with stdin, never command
+arguments or terminal output, to an atomically replaced private file outside the
+application's database/storage backup roots. Keep old/new recovery custody on the
+approved private Mac destination. Set only the non-secret absolute path in Render
+with Save only; then deploy the exact tested reader-capable SHA. Reader staging
+keeps `active=old,write_format=legacy` and the existing three legacy variables.
+Verify the running process uses the prepared settings before writer activation.
+File changes require a process replacement; never assume a running process reloads
+keys. A missing/insecure/invalid explicit file intentionally prevents startup.
+No file or setting is installed by this module; no credential is generated.
+
+V2 writes require every serving process and the selected rollback build to read
+v2. Earlier dual-reader commits 78ba9c0, d8901f8 and ed1d6d8 do not understand this
+inner format and are not rollback candidates after activation. When using file
+transport, the rollback build must also load the protected file. Keep current
+DB/storage and both keys; never restore an old database over post-cutover writes.
+
+Text-facing keyring APIs hold admission across UTF-8/ASCII encode, authenticated
+crypto and decode. The 64-caller workload still retains all caller results until
+its original barrier. Workspace source POST admission precedes body parsing and
+holds through response; a bounded 250 ms wait preserves ordinary small concurrent
+replays, followed by honest 503 on sustained overload. Clients retain the pending
+operation. Ordinary migration rotates once; separate plaintext is read only for
+the Google-mail fingerprint dependency.

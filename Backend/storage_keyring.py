@@ -94,6 +94,31 @@ class StorageKeyring:
         with ALLOCATION_SLOT:
             return self._open(token)[0]
 
+    def encrypt_text(self, text: str, encoding: str = 'utf-8') -> str:
+        with ALLOCATION_SLOT:
+            raw = text.encode(encoding)
+            token = (self._seal(raw, secrets.token_hex(32)) if self.versioned_writes
+                     else self.keys[self.active].encrypt(raw))
+            return token.decode('ascii')
+
+    def decrypt_text(self, text: str, encoding: str = 'utf-8') -> str:
+        with ALLOCATION_SLOT:
+            return self._open(text.encode('ascii'))[0].decode(encoding)
+
+    def revision_text(self, text: str) -> str:
+        with ALLOCATION_SLOT:
+            return self._open(text.encode('ascii'))[1]
+
+    def rotate_text(self, text: str) -> str:
+        if not self.versioned_writes:
+            raise KeyringError()
+        with ALLOCATION_SLOT:
+            token = text.encode('ascii')
+            raw, revision, identifier, versioned = self._open(token)
+            if versioned and identifier == self.active:
+                return text
+            return self._seal(raw, revision).decode('ascii')
+
     def revision(self, token: bytes) -> str:
         with ALLOCATION_SLOT:
             return self._open(token)[1]
