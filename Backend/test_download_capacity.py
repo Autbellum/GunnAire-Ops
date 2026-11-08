@@ -156,13 +156,20 @@ class RealDownloadSocketTests(unittest.TestCase):
         for route, role in ((self.general, "Admin"), (self.staff, "Field Technician")):
             with self.subTest(route=route, abort=abort):
                 finished = threading.Event()
+                unrelated_finished = threading.Event()
+                target_client_address = None
                 errors = []
                 original_finish = backend.GunnAireBackendHandler.finish
                 def finish(handler):
                     try:
                         return original_finish(handler)
                     finally:
-                        finished.set()  # Handler exit is after the capacity context's finally.
+                        # Only the tested connection proves its capacity finally
+                        # has run. Fixture seeding/other requests can finish later.
+                        if handler.client_address == target_client_address:
+                            finished.set()
+                        else:
+                            unrelated_finished.set()
                 def small_send_buffer(handler, *args):
                     handler.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
                     try:
@@ -175,11 +182,15 @@ class RealDownloadSocketTests(unittest.TestCase):
                      mock.patch.object(self.f.server, "handle_error"), \
                      mock.patch.object(backend.GunnAireBackendHandler, "finish", finish):
                     with mock.patch.object(backend.GunnAireBackendHandler, "write_media_bytes", small_send_buffer):
+                        self.assertEqual(self.f.request(path="/health")[0], 200)
+                        self.assertTrue(unrelated_finished.wait(3))
+                        self.assertFalse(finished.is_set(), "Unrelated request satisfied the failure wait")
                         client = socket.socket()
                         client.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
                         client.settimeout(3)
                         try:
                             client.connect(self.f.server.server_address)
+                            target_client_address = client.getsockname()
                             client.sendall((f"GET {route} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer "
                                 + self.f.tokens[role] + "\r\nConnection: close\r\n\r\n").encode())
                             headers = b""
