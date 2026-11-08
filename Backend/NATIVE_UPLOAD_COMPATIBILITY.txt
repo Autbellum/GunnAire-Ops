@@ -1,0 +1,100 @@
+Native document-upload compatibility (local candidate)
+
+Base: 040027cfb25cbcef3487b0a2e0f29a00763928b0. No deployment, build/version
+advance, provider configuration, credentials, native app or storage-key change.
+Consumer reference: native candidate 3d405828cfe86a120f6ff8456a82da25872e0ae0.
+This backport closes only its shared-document recovery contract. It does not
+certify the remaining native/backend API surface or a distributable app.
+
+Contract and behavior
+---------------------
+GET /api/document-uploads/{lowercase-canonical-UUID}, with an active app session,
+returns {schema: "document-upload-recovery-v1", operationID, document: null}
+when no committed document has that operation. A known operation returns the
+existing native document metadata only after actor/role checks, original-byte
+size/hash verification and a fresh session check. Query strings and extra path
+segments are rejected. 401/403 indicate unavailable authorization; 409 indicates
+actor conflict or changed content; 503 indicates capacity/storage unavailability.
+Other failures never grant permission to POST. Access logs redact operation/query.
+This GET does not change document records or create files. Existing session-use
+accounting may still update through the normal authentication layer.
+
+POST /api/documents accepts optional operationID. A supplied canonical UUID is
+normalized to lowercase and retained with the authenticated actor and a canonical
+request digest covering filename, MIME type, kind, all supported references,
+labels, file length and SHA256. Matching replay returns the original 201 result
+after verifying persisted bytes and rechecking authority. Changed content,
+metadata or actor returns 409, without creating another committed document.
+The unique index settles competing process inserts; a loser can remove only its
+exclusively reserved, still-owned, unreferenced file and then read back the winner.
+Calls without operationID retain the legacy distinct-document behavior; no
+operation ID is retroactively invented. Explicit new operation IDs can create
+distinct records containing identical bytes. This is per-operation idempotency,
+not content deduplication or proof every network request completes exactly once.
+
+Preserved constraints
+---------------------
+Existing maximum upload/body sizes, one-upload slot, one-download slot, bounded
+server/socket policy, durable file writer, proof reads and cache advice remain.
+GET recovery consumes the existing download slot; POST replay holds its upload
+slot. Both release on errors. Existing role policy is retained, including Field
+Technician billing access; Dispatcher remains denied billing-document access.
+Existing outer rotation gate also blocks the new route during key migration.
+Storage v2 envelope/keyring, new-only key loading, crypto revisions, provider
+workers, default routes and service version are unchanged.
+
+Schema and continuity
+---------------------
+Only three nullable TEXT columns are added to documents: upload_operation_id,
+upload_actor_email, upload_request_sha256. A partial unique index covers non-null
+operation IDs; a trigger refuses changes to any of the three identity fields.
+No table, ciphertext, key or historic document is rewritten. Legacy values stay
+NULL. Repeat initialization is supported. Current 040027c code can initialize
+and read the additive schema, but lacks recovery semantics; that compatibility
+alone does not make it an acceptable backend for already-upgraded clients.
+
+Process-exit coverage checks interruption before metadata commit and after
+commit/before response. After commit, another server process recovers the original
+ID and retry does not duplicate it. Before commit, recovery is absent and retry
+creates one committed record. An unreferenced file left by abrupt pre-commit exit
+is intentionally preserved; crash orphan cleanup and disk-growth monitoring are
+separate operational work. This does not claim power-loss/volume-failure proof.
+
+Validation commands (synthetic/local only)
+-----------------------------------------
+python -m unittest Backend.test_document_upload_idempotency
+python -m unittest discover -s Backend -p 'test_*.py'
+python -m unittest discover -s Tools -p 'test_*.py'
+python Tools/check_document_upload_native_contract.py --native-source PATH
+
+PATH must identify the tested candidate's GunnAireBackendService.swift. The
+explicit tool compiles its verbatim DocumentUploadRecovery decoder, filename
+normalization and verification functions with lightweight dependent model/hash
+types. Synthetic responses come from the actual HTTP handler. It checks absent,
+found, invalid schema, missing document, wrong operation, changed digest and changed
+filename. Source/extraction SHA256 are reported. This is not an app/device run.
+
+Bounded release plan (not performed by this change)
+-------------------------------------------------
+1. Review exact patch and synthesize the successor from live 040027c, preserving
+   all v2/new-only key support. Run full hosted Python matrix and unchanged Linux
+   15/45-wave quota/integrity checks; add maximum-size concurrent recovery load.
+   Repeat consumer-contract check against the exact native release source.
+2. Rehearse migration on an authorized isolated backup, including original rows,
+   file hashes, ciphertext/revisions, foreign keys and repeat initialization.
+   Review disk headroom for preserved crash orphans. Retain a verified backup;
+   this local synthetic rehearsal is not a production backup verification.
+3. Obtain approval for this exact backend successor and additive schema only.
+   Deploy backend first under the existing coordinated release process, with
+   provider resume/queues, health/auth, file integrity and keyring checks. No
+   customer/provider operation is authorized by this document.
+4. Run controlled contract acceptance before native rollout: GET absent, retained
+   operation creation, lost-response recovery, actor/revocation refusal and exact
+   ID/hash readback. Native signing/CloudKit/device gates remain separate.
+5. Rollback must remain v2-capable with current new-only keys. Never deploy old
+   single-key code or the entire historical 3d405828 backend. Prefer a v2-capable
+   revision retaining this recovery contract for upgraded clients. If forced to
+   040027c, pause native rollout; upgraded clients fail closed and retain intents.
+   Keep added columns/index/trigger, files and committed operation IDs. Do not
+   restore a database over new writes or remove columns to make rollback simpler;
+   any data restore needs writer quiescence and explicit reconciliation approval.
