@@ -144,9 +144,10 @@ def evidence(entry, remote):
 
 
 class LinkAdopter:
-    def __init__(self, database, provider_factory, encrypt, decrypt, audit, now=None):
+    def __init__(self, database, provider_factory, encrypt, decrypt, audit, now=None, *, ciphertext_revision=None):
         self.database, self.provider_factory, self.encrypt, self.decrypt, self.audit = database, provider_factory, encrypt, decrypt, audit
         self.now = now or (lambda: datetime.now(timezone.utc))
+        self.ciphertext_revision = ciphertext_revision or (lambda value: hashlib.sha256(value.encode()).hexdigest())
         self.billing = billing_publications.BillingPublisher(database, provider_factory, encrypt, decrypt, audit, self.now)
 
     def authorize(self, connection, session_id, intent, *, historical=False):
@@ -180,7 +181,7 @@ class LinkAdopter:
 
     def envelope(self, row):
         try:
-            if hashlib.sha256(row["payload_ciphertext"].encode()).hexdigest() != row["revision"]:
+            if self.ciphertext_revision(row["payload_ciphertext"]) != row["revision"]:
                 raise ValueError()
             value = json.loads(self.decrypt(row["payload_ciphertext"]) or "")
             binding = [row["id"], *scope(row), row["operation_id"], row["grant_fingerprint"], row["request_hash"]]
@@ -256,7 +257,7 @@ class LinkAdopter:
             identifier, now = str(uuid.uuid4()), self.now()
             envelope = {"binding": [identifier, *scope(intent), intent["operation_id"], grant["grant_fingerprint"], request_hash], "links": values}
             ciphertext = self.encrypt(canonical(envelope))
-            revision = hashlib.sha256(ciphertext.encode()).hexdigest()
+            revision = self.ciphertext_revision(ciphertext)
             connection.execute("INSERT INTO qbo_link_reviews VALUES (?,?,?,?,?,?,?,?,?,'review',?,?,?,?)",
                 (identifier, *scope(intent), intent["operation_id"], grant["grant_fingerprint"], request_hash, ciphertext, revision,
                  actor["email"], now.isoformat(), (now + timedelta(minutes=15)).isoformat(), now.isoformat()))

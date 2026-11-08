@@ -41,7 +41,7 @@ try:
     from Backend.billing_provider import BillingQBOProvider
     from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads
     from Backend import document_storage
-    from Backend import backup_backend
+    from Backend import backup_backend, storage_keyring
     from Backend import staff_owner_field_edits
     from Backend import staff_workspace_field_updates
     from Backend import staff_invoice_lines
@@ -63,6 +63,7 @@ except ModuleNotFoundError:
     import google_connections
     import document_storage
     import backup_backend
+    import storage_keyring
     import staff_owner_field_edits
     import staff_workspace_field_updates
     import staff_invoice_lines
@@ -100,6 +101,7 @@ GOOGLE_WEB_CLIENT_ID = os.environ.get("GUNNAIRE_GOOGLE_WEB_CLIENT_ID", "").strip
 GOOGLE_WEB_CLIENT_SECRET = os.environ.get("GUNNAIRE_GOOGLE_WEB_CLIENT_SECRET", "").strip()
 GOOGLE_WEB_REDIRECT_URI = os.environ.get("GUNNAIRE_GOOGLE_WEB_REDIRECT_URI", "").strip()
 GOOGLE_TOKEN_ENCRYPTION_KEY = os.environ.get("GUNNAIRE_GOOGLE_TOKEN_ENCRYPTION_KEY", "").strip()
+GOOGLE_STORAGE_KEYRING = os.environ.get("GUNNAIRE_GOOGLE_STORAGE_KEYRING", "").strip()
 APPLE_CLIENT_ID = os.environ.get("GUNNAIRE_APPLE_CLIENT_ID", "com.gunnaire.businesssuite").strip()
 APPLE_ISSUER = "https://appleid.apple.com"
 APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys"
@@ -116,6 +118,7 @@ APPLE_ACCOUNT_EVENT_TYPES = {
     "account-deleted",
 }
 PUSH_TOKEN_ENCRYPTION_KEY = os.environ.get("GUNNAIRE_PUSH_TOKEN_ENCRYPTION_KEY", "").strip()
+PUSH_STORAGE_KEYRING = os.environ.get("GUNNAIRE_PUSH_STORAGE_KEYRING", "").strip()
 APNS_TEAM_ID = os.environ.get("GUNNAIRE_APNS_TEAM_ID", "").strip()
 APNS_KEY_ID = os.environ.get("GUNNAIRE_APNS_KEY_ID", "").strip()
 APNS_PRIVATE_KEY_BASE64 = os.environ.get("GUNNAIRE_APNS_PRIVATE_KEY_BASE64", "").strip()
@@ -189,6 +192,7 @@ QBO_ENVIRONMENT = os.environ.get("GUNNAIRE_QBO_ENVIRONMENT", "sandbox").strip().
 # rotating QBO refresh token. This deliberately fails closed instead of
 # downgrading production credentials to plaintext SQLite storage.
 QBO_TOKEN_ENCRYPTION_KEY = os.environ.get("GUNNAIRE_QBO_TOKEN_ENCRYPTION_KEY", "").strip()
+QBO_STORAGE_KEYRING = os.environ.get("GUNNAIRE_QBO_STORAGE_KEYRING", "").strip()
 QBO_WEBHOOK_VERIFIER_TOKEN = os.environ.get("GUNNAIRE_QBO_WEBHOOK_VERIFIER_TOKEN", "").strip()
 QBO_WEBHOOK_MAX_BYTES = min(max(int(os.environ.get("GUNNAIRE_QBO_WEBHOOK_MAX_BYTES", str(1024 * 1024))), 1024), 5 * 1024 * 1024)
 CUSTOMER_PORTAL_RESPONSE_MAX_BYTES = min(
@@ -810,13 +814,22 @@ def qbo_is_configured() -> bool:
 
 def qbo_token_store() -> object | None:
     """Return the configured encryptor without ever logging its key or plaintext."""
-    if not QBO_TOKEN_ENCRYPTION_KEY:
+    if not QBO_TOKEN_ENCRYPTION_KEY and not QBO_STORAGE_KEYRING:
         return None
     try:
-        from cryptography.fernet import Fernet
-        return Fernet(QBO_TOKEN_ENCRYPTION_KEY.encode("utf-8"))
+        return storage_keyring.StorageKeyring("qbo", QBO_TOKEN_ENCRYPTION_KEY, QBO_STORAGE_KEYRING)
     except (ImportError, ValueError):
         return None
+
+
+def qbo_ciphertext_revision(ciphertext: str) -> str:
+    store = qbo_token_store()
+    if store is None:
+        raise ValueError("Storage revision unavailable")
+    try:
+        return store.revision(ciphertext.encode("utf-8"))
+    except Exception:
+        raise ValueError("Storage revision unavailable") from None
 
 
 def qbo_token_storage_is_configured() -> bool:
@@ -842,11 +855,10 @@ def decrypt_qbo_refresh_token(ciphertext: str) -> str | None:
 
 def push_token_store() -> object | None:
     """Return the dedicated APNs-device-token encryptor without exposing its key."""
-    if not PUSH_TOKEN_ENCRYPTION_KEY:
+    if not PUSH_TOKEN_ENCRYPTION_KEY and not PUSH_STORAGE_KEYRING:
         return None
     try:
-        from cryptography.fernet import Fernet
-        return Fernet(PUSH_TOKEN_ENCRYPTION_KEY.encode("utf-8"))
+        return storage_keyring.StorageKeyring("push", PUSH_TOKEN_ENCRYPTION_KEY, PUSH_STORAGE_KEYRING)
     except (ImportError, ValueError):
         return None
 
@@ -3265,17 +3277,8 @@ def deliver_pending_pushes(
         for row in rows:
             token = decrypt_push_device_token(str(row["token_ciphertext"]))
             if token is None:
-                with db() as connection:
-                    connection.execute(
-                        """
-                        UPDATE push_deliveries
-                        SET status = 'failed', attempts = attempts + 1,
-                            last_attempt_at = ?, last_error_code = 'TokenDecryptFailed', updated_at = ?
-                        WHERE id = ? AND status = 'pending'
-                        """,
-                        (checked_at.isoformat(), checked_at.isoformat(), row["id"]),
-                    )
-                    deactivate_push_devices(connection, device_id=str(row["device_id"]))
+                # A storage/key mismatch is not an APNs rejection. Preserve the
+                # pending delivery, attempt budget and device for safe recovery.
                 continue
             collapse_id = hashlib.sha256(str(row["event_key"]).encode("utf-8")).hexdigest()[:32]
             try:
@@ -6650,6 +6653,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         service = qbo_document_uploads.DocumentUploads(
             db, lambda context, authorize: DocumentQBOProvider(context, authorize, qbo_authorized_bearer),
             encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
+            ciphertext_revision=qbo_ciphertext_revision,
         )
         suffix = parsed.path.removeprefix("/api/qbo-document-uploads")
         parts = suffix[1:].split("/") if suffix.startswith("/") else []
@@ -6728,6 +6732,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         adopter = qbo_link_adoption.LinkAdopter(
             db, lambda context, authorize: BillingQBOProvider(context, authorize, qbo_authorized_bearer),
             encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
+            ciphertext_revision=qbo_ciphertext_revision,
         )
         session_id = self._application_session_id
         suffix = parsed.path.removeprefix("/api/qbo-link-reviews")
@@ -6843,7 +6848,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         return google_connections.GoogleConnections(db, record_audit_event,
             client_id=GOOGLE_WEB_CLIENT_ID, client_secret=GOOGLE_WEB_CLIENT_SECRET,
             redirect_uri=GOOGLE_WEB_REDIRECT_URI, encryption_key=GOOGLE_TOKEN_ENCRYPTION_KEY,
-            allowed_domain=GOOGLE_ALLOWED_DOMAIN)
+            allowed_domain=GOOGLE_ALLOWED_DOMAIN, keyring_configuration=GOOGLE_STORAGE_KEYRING)
 
     def google_mail_service(self):
         return google_mail.GoogleMail(self.google_connection_service())

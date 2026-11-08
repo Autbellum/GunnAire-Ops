@@ -195,9 +195,10 @@ def confirmed_attachment(row, intent, remote):
 
 
 class DocumentUploads:
-    def __init__(self, database, provider_factory, encrypt, decrypt, audit, now=None):
+    def __init__(self, database, provider_factory, encrypt, decrypt, audit, now=None, *, ciphertext_revision=None):
         self.database, self.provider_factory, self.encrypt, self.decrypt, self.audit = database, provider_factory, encrypt, decrypt, audit
         self.now = now or (lambda: datetime.now(timezone.utc))
+        self.ciphertext_revision = ciphertext_revision or (lambda value: hashlib.sha256(value.encode()).hexdigest())
         self.identity = billing_publications.BillingPublisher(database, provider_factory, encrypt, decrypt, audit, self.now)
 
     def authorize(self, connection, session_id, intent, *, historical=False):
@@ -250,7 +251,7 @@ class DocumentUploads:
     def intent(self, row):
         try:
             value = json.loads(self.decrypt(row["payload_ciphertext"]) or "")
-            if (hashlib.sha256(row["payload_ciphertext"].encode()).hexdigest() != row["revision"]
+            if (self.ciphertext_revision(row["payload_ciphertext"]) != row["revision"]
                     or value["binding"] != self.binding(row) or digest(value["intent"]) != row["request_hash"]
                     or row["state"] not in STATES
                     or (row["state"] == "confirmed") != (row["provider_id"] is not None)
@@ -339,7 +340,7 @@ class DocumentUploads:
                    "actor_email": actor["email"], "created_at": now, "updated_at": now, "state": "reserved", "provider_id": None}
             row["payload_ciphertext"] = self.encrypt(canonical({"binding": self.binding(row), "intent": intent}))
             row["file_ciphertext"] = self.encrypt(canonical({"binding": self.binding(row), "data": base64.b64encode(data).decode()}))
-            row["revision"] = hashlib.sha256(row["payload_ciphertext"].encode()).hexdigest()
+            row["revision"] = self.ciphertext_revision(row["payload_ciphertext"])
             row["state_ciphertext"] = self.encrypt(canonical(self.state_value(row)))
             columns = list(row)
             connection.execute("INSERT INTO qbo_document_uploads (" + ",".join(columns) + ") VALUES (" + ",".join("?" for _ in columns) + ")", [row[key] for key in columns])

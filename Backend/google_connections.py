@@ -20,6 +20,10 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from cryptography.fernet import Fernet, InvalidToken
+try:
+    from Backend.storage_keyring import StorageKeyring
+except ModuleNotFoundError:
+    from storage_keyring import StorageKeyring
 
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -143,12 +147,16 @@ def verified_claims(token, audience):
 
 class GoogleConnections:
     def __init__(self, database, audit, *, client_id, client_secret, redirect_uri, encryption_key,
-                 allowed_domain, transport=None, claims=None, now=None):
+                 allowed_domain, transport=None, claims=None, now=None, keyring_configuration=""):
         self.database, self.audit = database, audit
         self.client_id, self.client_secret, self.redirect_uri = client_id, client_secret, redirect_uri
         self.encryption_key, self.allowed_domain = encryption_key, allowed_domain
+        self.keyring_configuration = keyring_configuration
         self.transport, self.claims = transport or token_transport, claims or verified_claims
         self.now = now or (lambda: datetime.now(timezone.utc))
+
+    def keyring(self):
+        return StorageKeyring("google", self.encryption_key, self.keyring_configuration)
 
     def configured(self):
         try:
@@ -156,7 +164,7 @@ class GoogleConnections:
             valid = (uri.scheme == "https" and uri.hostname and uri.path == CALLBACK_PATH and
                 not uri.username and not uri.password and not uri.query and not uri.fragment and
                 uri.port in (None, 443) and not any(c.isspace() for c in self.redirect_uri))
-            Fernet(self.encryption_key.encode())
+            self.keyring()
         except (ValueError, AttributeError):
             valid = False
         if not valid or not self.client_id or not self.client_secret or not self.allowed_domain:
@@ -164,13 +172,13 @@ class GoogleConnections:
 
     def seal(self, kind, company, owner, record_id, value):
         self.configured()
-        return Fernet(self.encryption_key.encode()).encrypt(canonical({"v": 1, "kind": kind, "company": company,
+        return self.keyring().encrypt(canonical({"v": 1, "kind": kind, "company": company,
             "owner": owner, "id": record_id, "value": value}).encode()).decode()
 
     def open(self, kind, row):
         self.configured()
         try:
-            payload = json.loads(Fernet(self.encryption_key.encode()).decrypt(row["secrets_ciphertext"].encode()))
+            payload = json.loads(self.keyring().decrypt(row["secrets_ciphertext"].encode()))
             expected = {"v": 1, "kind": kind, "company": row["company_id"], "owner": row["actor_email"], "id": row["id"]}
             if not isinstance(payload, dict) or set(payload) != set(expected) | {"value"} or any(payload[k] != v for k, v in expected.items()):
                 raise ValueError()

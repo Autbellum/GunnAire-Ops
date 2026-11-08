@@ -364,14 +364,15 @@ class GoogleMail:
     def prepare(self, context, identifier, kind, payload):
         identifier = google.identifier(identifier)
         clear = google.canonical(payload)
-        fingerprint = hmac.new(base64.urlsafe_b64decode(self.google.encryption_key), ("mail\n" + kind + "\n" + clear).encode(), hashlib.sha256).hexdigest()
+        fingerprint_input = ("mail\n" + kind + "\n" + clear).encode()
+        fingerprint = self.google.keyring().fingerprint(fingerprint_input)
         with self.google.database() as connection:
             connection.execute("BEGIN IMMEDIATE")
             context.check(connection)
             existing = connection.execute("SELECT * FROM google_mail_operations WHERE id=?", (identifier,)).fetchone()
             if existing is not None:
                 row = self.original(context, identifier, connection)
-                if row["kind"] != kind or not hmac.compare_digest(row["fingerprint"], fingerprint):
+                if row["kind"] != kind or not self.google.keyring().accepts_fingerprint(fingerprint_input, row["fingerprint"]):
                     raise failure("mail_changed", 409)
                 # Also verify encrypted original data before claiming idempotency.
                 if self.google.open("mail-operation", row) != payload:

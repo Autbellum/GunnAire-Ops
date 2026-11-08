@@ -199,6 +199,16 @@ class StaffPushNotificationTests(unittest.TestCase):
                         captured.append(kwargs)
                         return HTTPStatus.OK, None, str(uuid.uuid4())
 
+                    # Storage-key failure must not consume an attempt or deactivate a device.
+                    with backend.db() as connection:
+                        before_delivery = tuple(connection.execute("SELECT * FROM push_deliveries").fetchone())
+                        before_device = tuple(connection.execute("SELECT * FROM push_devices").fetchone())
+                    with mock.patch.object(backend, "decrypt_push_device_token", return_value=None):
+                        self.assertEqual(backend.deliver_pending_pushes(sender=successful_sender), 0)
+                    self.assertEqual(captured, [])
+                    with backend.db() as connection:
+                        self.assertEqual(tuple(connection.execute("SELECT * FROM push_deliveries").fetchone()), before_delivery)
+                        self.assertEqual(tuple(connection.execute("SELECT * FROM push_devices").fetchone()), before_device)
                     self.assertEqual(backend.deliver_pending_pushes(sender=successful_sender), 1)
                     self.assertEqual(captured[0]["device_token"], device_token)
                     payload = captured[0]["payload"]

@@ -36,3 +36,11 @@ configuration or production data changes are authorized here.
   bounded backup/cache and Certifi. No business/schema/idempotency/maintenance
   features imported. First Linux OOM retained; successor strict Linux gate pending.
   Claims released for reviewed same-branch validation under deployment authority.
+
+## November 8 credential-rotation assignment
+Explicit user authorization supersedes earlier read-only/no-deploy limits for
+rotation and necessary safe migration. Claim storage keyring, ciphertext inventory,
+revision-preserving migration, APNs storage-failure handling and synthetic tests.
+No live keys changed until staged reader compatibility, protected recovery custody,
+secure transfer and validation are ready. Do not use Computer Use shells or capture
+secret-bearing UI snapshots. Browser owner coordinates all provider/UI changes.
