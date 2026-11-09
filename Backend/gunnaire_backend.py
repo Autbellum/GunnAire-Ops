@@ -40,7 +40,7 @@ try:
     from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications, billing_native, qbo_link_adoption, field_payment_review
     from Backend.billing_provider import BillingQBOProvider
     from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads
-    from Backend import document_storage, document_upload_storage, document_upload_encoding
+    from Backend import document_storage, document_upload_storage, document_upload_encoding, document_allocation
     from Backend import backup_backend, storage_keyring, rotation_gate, storage_keyring_file
     from Backend import staff_owner_field_edits
     from Backend import staff_workspace_field_updates
@@ -64,6 +64,7 @@ except ModuleNotFoundError:
     import document_storage
     import document_upload_storage
     import document_upload_encoding
+    import document_allocation
     import backup_backend
     import storage_keyring
     import rotation_gate
@@ -389,6 +390,7 @@ CUSTOMER_FINANCING_MAX_AMOUNT = os.environ.get("GUNNAIRE_CUSTOMER_FINANCING_MAX_
 MAX_DOCUMENT_BYTES = min(max(int(os.environ.get("GUNNAIRE_MAX_DOCUMENT_BYTES", str(12 * 1024 * 1024))), 1024), 25 * 1024 * 1024)
 # Bound large verified buffers through response completion.
 DOCUMENT_UPLOAD_SLOTS = threading.BoundedSemaphore(1)
+DOCUMENT_UPLOAD_ALLOCATOR = document_allocation.AllocationLane("document-upload")
 WORKSPACE_SOURCE_SLOTS = threading.BoundedSemaphore(1)
 DOCUMENT_DOWNLOAD_SLOTS = threading.BoundedSemaphore(1)
 ALLOWED_CORS_ORIGINS = {
@@ -6512,7 +6514,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                             status=HTTPStatus.SERVICE_UNAVAILABLE)
             return
         try:
-            self._store_document()
+            DOCUMENT_UPLOAD_ALLOCATOR.run(self._store_document)
         finally:
             DOCUMENT_UPLOAD_SLOTS.release()
 

@@ -86,3 +86,20 @@ full hash/stat proof still precedes response, no deletion or changed admission.
 Advice is optional and errors ignored; no portable hard cache bound is claimed.
 Workflow continues all workload stages after failure, with original failing exit;
 all four repeats execute even if an earlier repeat fails. No threshold relaxation.
+
+Retained17f2005 run42545283274: all stages executed;45wave310394880 passed;
+maximum peaks369217536,369381376,422395904,422191104,316796928 (two headroom
+failures); crash189980672 passed. Artifact13643636758 digest verified locally.
+Failure samples show anonymous growth with4096file bytes, and final residency
+~246/299/352MB in ~53MB steps. Allocation-owner regression proved distinct HTTP
+threads allocated retained document buffers despite semaphore serialization.
+Separate bounded reusable upload and retained-read allocation lanes now own these
+large allocations, matching the existing storage-crypto approach. Admission occurs
+before submission (one running/queued per lane); original upload/download slots
+remain held through storage/response. Upload main request retains RotationGate lock
+while awaiting completion; DB connections open/close inside worker operation.
+Proof-only bounded reads stay synchronous; download authorization/revocation checks
+remain in caller before any response. No provider, key, schema, cap or queue growth.
+Residual malloc-arena explanation is strongly supported by thread ownership and
+anonymous step sizes, not a captured complete malloc trace. Exact-head repeated
+Linux evidence is required; prior passes never override retained failures.

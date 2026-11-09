@@ -13,6 +13,12 @@ import os
 from pathlib import Path
 import re
 import stat
+try:
+    from Backend.document_allocation import AllocationLane
+except ModuleNotFoundError:
+    from document_allocation import AllocationLane
+
+_READ_ALLOCATOR = AllocationLane("document-read")
 
 MAX_BYTES = 64 * 1024 * 1024
 _MIME = re.compile(r"[A-Za-z0-9!#$%&'*+.^_`|~-]+/[A-Za-z0-9!#$%&'*+.^_`|~-]+", re.ASCII)
@@ -81,6 +87,15 @@ def release_verified_file_cache(fd):
 
 
 def read_document(storage_root: Path, stored_path, *, expected_bytes=None, expected_sha256=None, maximum=MAX_BYTES, retain_bytes=True):
+    if retain_bytes is True:
+        return _READ_ALLOCATOR.run(_read_document, storage_root, stored_path,
+            expected_bytes=expected_bytes, expected_sha256=expected_sha256,
+            maximum=maximum, retain_bytes=retain_bytes)
+    return _read_document(storage_root, stored_path, expected_bytes=expected_bytes,
+        expected_sha256=expected_sha256, maximum=maximum, retain_bytes=retain_bytes)
+
+
+def _read_document(storage_root: Path, stored_path, *, expected_bytes, expected_sha256, maximum, retain_bytes):
     if (type(maximum) is not int or not 1 <= maximum <= MAX_BYTES
             or expected_bytes is not None and (type(expected_bytes) is not int or not 1 <= expected_bytes <= maximum)):
         raise DocumentReadError(409, "Document size is outside the supported limit.")
