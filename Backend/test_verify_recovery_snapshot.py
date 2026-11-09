@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -14,6 +15,7 @@ from unittest import mock
 
 from Backend import backup_backend as backup
 from Backend import verify_recovery_snapshot as verifier
+from Backend import document_upload_storage
 
 
 class RecoverySnapshotTests(unittest.TestCase):
@@ -27,7 +29,12 @@ class RecoverySnapshotTests(unittest.TestCase):
         self.database = self.root / 'source.sqlite3'
         self.artifact = self.root / 'artifact'
         self.sql('CREATE TABLE documents(id TEXT PRIMARY KEY,stored_path TEXT,file_size_bytes INTEGER,file_sha256 TEXT)')
-        self.sql('CREATE TABLE document_upload_reservations_v1(id TEXT PRIMARY KEY,device INTEGER,inode INTEGER)')
+        for name in ('filename', 'content_type', 'kind', 'service_call_id', 'invoice_id',
+                     'estimate_id', 'maintenance_contract_id', 'customer_equipment_id',
+                     'equipment_name', 'customer_name', 'created_at'):
+            self.sql(f'ALTER TABLE documents ADD COLUMN {name} TEXT')
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            document_upload_storage.initialize(connection)
         self.sql('CREATE TABLE protected_records(ciphertext BLOB, revision INTEGER)')
         self.ciphertext = b'v2:synthetic-opaque-ciphertext\x00\xff'
         self.sql('INSERT INTO protected_records VALUES(?,7)', (self.ciphertext,))
@@ -40,9 +47,13 @@ class RecoverySnapshotTests(unittest.TestCase):
     def document(self, name, data, proof=True):
         path = self.storage / name
         path.write_bytes(data)
-        self.sql('INSERT INTO documents VALUES(?,?,?,?)', (name, str(path), len(data) if proof else None,
+        self.sql('INSERT INTO documents(id,stored_path,file_size_bytes,file_sha256) VALUES(?,?,?,?)', (name, str(path), len(data) if proof else None,
                  hashlib.sha256(data).hexdigest() if proof else None))
         return path
+
+    def pending(self, device=None, inode=None):
+        self.sql('INSERT INTO document_upload_reservations_v1 VALUES(?,?,?,?,?,?,?,?)',
+                 ('pending', 'synthetic-operation', 'synthetic-actor', '0'*64, 9, '0'*64, device, inode))
 
     def make(self):
         backup.create_backup(self.database, self.storage, self.artifact)
@@ -118,13 +129,13 @@ class RecoverySnapshotTests(unittest.TestCase):
         pending = self.storage/'pending'
         pending.write_bytes(b'partial')
         info = pending.stat()
-        self.sql('INSERT INTO document_upload_reservations_v1 VALUES(?,?,?)', ('pending', info.st_dev, info.st_ino))
+        self.pending(info.st_dev, info.st_ino)
         original = backup.sqlite_integrity
         def after_snapshot(path):
             original(path)
             if self.sql('SELECT COUNT(*) FROM document_upload_reservations_v1')[0][0]:
                 pending.write_bytes(b'completed')
-                self.sql('INSERT INTO documents VALUES(?,?,?,?)', ('pending', str(pending), 9, hashlib.sha256(b'completed').hexdigest()))
+                self.sql('INSERT INTO documents(id,stored_path,file_size_bytes,file_sha256) VALUES(?,?,?,?)', ('pending', str(pending), 9, hashlib.sha256(b'completed').hexdigest()))
                 self.sql('DELETE FROM document_upload_reservations_v1')
         with mock.patch.object(backup, 'sqlite_integrity', side_effect=after_snapshot):
             self.make()
@@ -134,7 +145,7 @@ class RecoverySnapshotTests(unittest.TestCase):
         self.assertEqual(report['unreferencedFiles'], 1)
 
     def test_pending_without_file_is_not_ready(self):
-        self.sql('INSERT INTO document_upload_reservations_v1 VALUES(?,?,?)', ('pending', None, None))
+        self.pending()
         self.make()
         self.assertEqual(self.check(2)['pendingReservations'], 1)
 
@@ -225,6 +236,49 @@ b.create_backup(*map(Path,sys.argv[1:]))
             self.assertEqual(code, 1)
             self.assertFalse(report['recoveryReady'])
 
+    def test_incomplete_document_schema_cannot_be_certified(self):
+        self.make()
+        database = self.artifact/backup.DATABASE_FILENAME
+        self.sql('ALTER TABLE documents RENAME TO saved_documents', database=database)
+        self.sql('CREATE TABLE documents AS SELECT stored_path,file_size_bytes,file_sha256 FROM saved_documents', database=database)
+        self.refresh_manifest()
+        self.check(1)
+
+    def test_incomplete_empty_reservation_schema_cannot_be_certified(self):
+        self.make()
+        database = self.artifact/backup.DATABASE_FILENAME
+        self.sql('DROP TABLE document_upload_reservations_v1', database=database)
+        self.sql('CREATE TABLE document_upload_reservations_v1(id TEXT)', database=database)
+        self.refresh_manifest()
+        self.check(1)
+
+    def test_wal_header_without_sidecar_cannot_be_certified(self):
+        self.make()
+        database = self.artifact/backup.DATABASE_FILENAME
+        self.sql('PRAGMA journal_mode=WAL', database=database)
+        self.assertEqual(database.read_bytes()[18:20], b'\x02\x02')
+        self.assertFalse(Path(str(database)+'-wal').exists())
+        self.refresh_manifest()
+        self.check(1)
+        # Demonstrate the actual omitted-commit risk, not merely a header policy:
+        # a main-only copy is structurally valid but misses a committed opaque row.
+        with closing(sqlite3.connect(database)) as writer:
+            writer.execute('PRAGMA wal_autocheckpoint=0')
+            writer.execute('UPDATE protected_records SET revision=8')
+            writer.commit()
+            self.assertTrue(Path(str(database)+'-wal').exists())
+            main_only = self.root/'main-only'
+            main_only.mkdir()
+            shutil.copytree(self.artifact/'storage', main_only/'storage')
+            copied_db = main_only/backup.DATABASE_FILENAME
+            copied_db.write_bytes(database.read_bytes())
+            with closing(sqlite3.connect(copied_db.as_uri()+'?mode=ro&immutable=1', uri=True)) as reader:
+                self.assertEqual(reader.execute('SELECT revision FROM protected_records').fetchone(), (7,))
+            self.assertEqual(writer.execute('SELECT revision FROM protected_records').fetchone(), (8,))
+            self.artifact = main_only
+            self.refresh_manifest()
+            self.check(1)
+
     def test_deep_malformed_manifest_fails_with_value_free_report(self):
         self.make()
         (self.artifact/'manifest.json').write_text('[' * 2000 + '0' + ']' * 2000)
@@ -252,7 +306,7 @@ b.create_backup(*map(Path,sys.argv[1:]))
         self.refresh_manifest()
         self.check(1)
         self.sql('UPDATE documents SET file_sha256=?', (hashlib.sha256(b'original').hexdigest(),), copied_db)
-        self.sql("INSERT INTO documents SELECT 'duplicate',stored_path,file_size_bytes,file_sha256 FROM documents", database=copied_db)
+        self.sql("INSERT INTO documents(id,stored_path,file_size_bytes,file_sha256) SELECT 'duplicate',stored_path,file_size_bytes,file_sha256 FROM documents", database=copied_db)
         self.refresh_manifest()
         self.check(1)
 
@@ -260,7 +314,7 @@ b.create_backup(*map(Path,sys.argv[1:]))
         from Backend import gunnaire_backend as backend
         # Minimal pre-contract schema becomes the actual candidate schema locally.
         self.sql('DROP TABLE document_upload_reservations_v1')
-        before = self.sql('SELECT * FROM documents')
+        before = self.sql('SELECT id,stored_path,file_size_bytes,file_sha256 FROM documents')
         with mock.patch.object(backend, 'DB_PATH', self.database):
             backend.initialize_database()
             backend.initialize_database()

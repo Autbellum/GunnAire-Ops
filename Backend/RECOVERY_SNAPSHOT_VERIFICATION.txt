@@ -12,6 +12,14 @@ remap rows by filename. Artifact ancestors must be real directories, not symlink
 The captured artifact must contain only manifest.json, gunnaire_backend.sqlite3
 and storage. WAL/journal sidecars or partial/restore-drill output are not accepted
 as a completed backup artifact. The backup creator must have finished first.
+The SQLite header must use standalone rollback-journal format (read/write versions
+1/1). WAL headers (2/2) are rejected even when no sidecar exists: an omitted WAL
+can hide committed frames while the main file still passes integrity_check.
+This is deliberately conservative: SQLite online backup from a WAL source can
+also retain a WAL header, so such an otherwise legitimate artifact is not currently
+certified. The tool never changes journal mode or normalizes the input. A separate
+reviewed standalone-checkpoint generation procedure is needed for WAL sources;
+the absence of a WAL sidecar alone must never be used to claim that prerequisite.
 
 Exit codes (do not treat any nonzero exit as a ready checkpoint):
   0 verified: all committed references match stored size/SHA256 evidence, no
@@ -28,6 +36,11 @@ committed file matches the proof recorded in the captured database. It is NOT
 independent provenance/authenticity of that database or manifest. Historical rows
 with both proof fields NULL are byte-copy-consistent only; current hashes never
 become invented historical evidence. A partially present proof is invalid.
+The verifier requires the baseline document metadata/proof columns, document
+primary identity, complete operation columns if present and a matching reservation
+table. Existing reservation tables must have the complete ownership/identity
+schema, even if empty. Missing/duplicate document identities are invalid. This is
+not validation of every application table, constraint or business invariant.
 
 All pending reservations block certification, including missing, partial, complete
 or concurrently committed payloads. Copying changes device/inode identity. The
@@ -41,6 +54,8 @@ copied unchanged and opened read-only; any SQLite coordination occurs in scratch
 Bounds: 1 GiB total input file bytes, 10,000 entries, directory depth 64,
 10 MiB manifest, 1 MiB copy/hash chunks. Scratch requires space for the artifact;
 insufficient space fails closed. There is no wall-clock deadline for stalled I/O.
+These are input/copy bounds, not a fixed total RAM cap for SQLite schema parsing
+or JSON decoding; no service cgroup quota certification is claimed for this tool.
 Capture pins directory/file descriptors, rejects symlinks/hardlinks/special files,
 checks identities and changes while copying, then verifies the private copy.
 This is an offline verifier, not a synchronization primitive for hostile writers.

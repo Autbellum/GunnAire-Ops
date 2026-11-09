@@ -133,6 +133,12 @@ def reconcile(root, source_root, report):
         if (not isinstance(value, str) or not value.startswith('storage/')
                 or '..' in PurePosixPath(value).parts or str(PurePosixPath(value)) != value):
             raise Invalid()
+    # A copied WAL-mode main file can omit committed frames while still passing
+    # integrity_check. Only standalone rollback-journal backup outputs qualify.
+    with (root / 'gunnaire_backend.sqlite3').open('rb') as database_file:
+        header = database_file.read(100)
+    if header[:16] != b'SQLite format 3\x00' or header[18:20] != b'\x01\x01':
+        raise Invalid()
     backup_backend.verify_backup(root)
     report['byteCopyConsistent'] = True
     files = {p.relative_to(root).as_posix(): p for p in (root / 'storage').rglob('*') if p.is_file()}
@@ -148,7 +154,31 @@ def reconcile(root, source_root, report):
         tables = {row[0]: row[1] for row in definitions}
         if tables.get('documents') != 'table':
             raise Invalid()
-        for stored, size, digest in connection.execute('SELECT stored_path,file_size_bytes,file_sha256 FROM documents'):
+        columns = {row[1]: row for row in connection.execute('PRAGMA table_info(documents)')}
+        required = {'id', 'filename', 'content_type', 'kind', 'service_call_id',
+                    'invoice_id', 'estimate_id', 'maintenance_contract_id',
+                    'customer_equipment_id', 'equipment_name', 'customer_name',
+                    'stored_path', 'created_at', 'file_size_bytes', 'file_sha256'}
+        if not required <= columns.keys() or columns['id'][5] != 1:
+            raise Invalid()
+        operation_columns = {'upload_operation_id', 'upload_actor_email', 'upload_request_sha256'}
+        present = operation_columns & columns.keys()
+        pending = 'document_upload_reservations_v1'
+        if present and (present != operation_columns or tables.get(pending) != 'table'):
+            raise Invalid()
+        if pending in tables:
+            if tables[pending] != 'table':
+                raise Invalid()
+            reservation_columns = {row[1]: row for row in connection.execute('PRAGMA table_info(document_upload_reservations_v1)')}
+            if not {'id', 'operation_id', 'actor', 'request_sha256', 'expected_bytes',
+                    'file_sha256', 'device', 'inode'} <= reservation_columns.keys() or reservation_columns['id'][5] != 1:
+                raise Invalid()
+            report['pendingReservations'] = connection.execute('SELECT COUNT(*) FROM document_upload_reservations_v1').fetchone()[0]
+        identities = set()
+        for identifier, stored, size, digest in connection.execute('SELECT id,stored_path,file_size_bytes,file_sha256 FROM documents'):
+            if not isinstance(identifier, str) or not identifier or identifier in identities:
+                raise Invalid()
+            identities.add(identifier)
             relative = relative_document(stored, source_root)
             if relative in referenced or relative not in files:
                 raise Invalid()
@@ -164,11 +194,6 @@ def reconcile(root, source_root, report):
             if file.stat().st_size != size or backup_backend.sha256_file(file) != digest:
                 raise Invalid()
             report['provenDocuments'] += 1
-        pending = 'document_upload_reservations_v1'
-        if pending in tables:
-            if tables[pending] != 'table':
-                raise Invalid()
-            report['pendingReservations'] = connection.execute('SELECT COUNT(*) FROM document_upload_reservations_v1').fetchone()[0]
         extras = set(files) - referenced
         # Only the known empty lock is infrastructure; payloads are never adopted.
         lock = 'storage/.document-upload-v1/.lock'
