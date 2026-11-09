@@ -20,6 +20,8 @@ also retain a WAL header, so such an otherwise legitimate artifact is not curren
 certified. The tool never changes journal mode or normalizes the input. A separate
 reviewed standalone-checkpoint generation procedure is needed for WAL sources;
 the absence of a WAL sidecar alone must never be used to claim that prerequisite.
+The separately reviewed synthetic procedure below now supplies that standalone
+output when an authoritative, stable main database AND complete WAL are available.
 
 Exit codes (do not treat any nonzero exit as a ready checkpoint):
   0 verified: all committed references match stored size/SHA256 evidence, no
@@ -93,3 +95,52 @@ No service runtime, schema, crypto, settings or workload limits are changed by
 this standalone verifier. A hosted exact-head source validation remains necessary
 before including this successor in a release; publication is not authorized by
 this assignment. Native app signing/distribution remains a separate release.
+
+Standalone checkpoint generation for an authoritative WAL source bundle:
+
+  python3 Backend/checkpoint_wal_snapshot.py --source-bundle CANONICAL_BUNDLE --source-storage ORIGINAL_ABSOLUTE_STORAGE_PATH --destination NEW_PRIVATE_DESTINATION
+
+The source bundle must contain gunnaire_backend.sqlite3, its nonempty -wal,
+storage/, and optionally -shm; unknown entries are rejected. It must come from
+the authoritative source, not an arbitrary main-only copy or an unknown-provenance
+backup. The parent of the new destination must be owned by the current user and
+not group/other writable. Existing or source-nested destinations are rejected.
+Only the new destination is written; source SQLite is NEVER opened by SQLite,
+because even a read-only live connection can coordinate through source SHM.
+
+The procedure inventories the source, captures pinned regular files under the
+verifier's bounds, and requires the entire metadata inventory to remain unchanged
+through capture. This catches changes to files copied earlier in the traversal.
+Writers may remain connected, but commits/checkpoints during capture fail closed;
+there is no retry-until-green loop and no freeze/stop of source writers. Changes
+AFTER the captured cut are outside this checkpoint and must survive cutover.
+
+Only in destination/capture does it discard copied SHM, let SQLite rebuild it,
+and checkpoint WAL. WAL length/page size must describe whole frames ending at a
+commit boundary. SQLite must report ALL captured frames valid/checkpointed; an
+invalid checksum/salt, missing WAL, partial frame or uncommitted tail fails closed.
+SQLite's backup API then copies the recovered private database into artifact/.
+Only the NEW output is switched to DELETE journal mode, fsynced, checked for a
+standalone header/no sidecars, and reconciled with copied file proofs. Source
+bytes, opaque v2 values and original journal mode are never rewritten.
+
+Completion requires checkpoint-result.json written last, the process's exit code,
+and the contained verification result. Exit 0 is a proven no-pending snapshot;
+exit 2 retains historical/pending/extras review requirements; exit 1 is invalid.
+Interrupted output and private capture evidence are retained, never reused or
+automatically adopted/deleted. Input up to 1 GiB can require roughly three times
+that space across retained capture, artifact and verifier scratch. No total RAM
+or stalled-I/O wall-clock guarantee is claimed. Everything remains owner-private.
+
+This cannot detect historical removal of an entire valid WAL commit suffix before
+the supplied authoritative cut, or authenticate a forged self-consistent source.
+Source provenance and completeness are prerequisites, not inferred from hashes.
+It does not recover missing frames, certify freshness or authorize production use.
+Main-only WAL backups continue to fail the independent verifier unchanged.
+
+Synthetic command:
+  python3 -m unittest Backend.test_checkpoint_wal_snapshot Backend.test_verify_recovery_snapshot -v
+
+SQLite format/engine references used for the narrow WAL boundary check:
+https://www.sqlite.org/fileformat2.html#walformat
+https://www.sqlite.org/pragma.html#pragma_wal_checkpoint
