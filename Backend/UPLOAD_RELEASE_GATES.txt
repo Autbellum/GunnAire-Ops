@@ -1,0 +1,72 @@
+Backend-only upload contract release gates (2026-11-09)
+
+Hosted successor changes only synthetic validation tooling and workflow. Runtime
+remains the reviewed97819d3 upload contract/reservation implementation. Existing
+512000000-byte cap,409600000-byte headroom, zero swap and50%CPU are unchanged.
+New canonical-server workload:25MiB accepted upload;3 waves of24 simultaneous
+recovery GET/replay POST/download requests; final exact ID/hash/byte readbacks,
+actor denial, one committed row and zero pending. Clients stay outside cgroup.
+New injected-crash workload:four12MiB precommit process exits must reuse one inode,
+then commit once with no reservation. A separate24MiB pending budget must reject
+a third intent and permit original recovery. Its worker, HTTP clients and children
+share one cgroup, so this is conservative aggregate pressure, not canonical server
+RSS. Injection uses the actual upload handler/Admission.prepare from regression
+fixtures, not a production crash switch. Tests reject missing/wrong evidence,
+corruption, duplicate wave counts, OOM, incomplete measurements and headroom loss.
+Reports/logs always retained under quota-evidence; no production inputs or keys.
+
+Production disk recommendation — no change applied
+Existing verified source:backup-20261108-storage-context.txt,2026-11-08T14:47:21Z:
+/var/data filesystem1020702720 bytes, used107880448, available896045056;
+DB21393408 bytes, storage102439 bytes. This is dated evidence, NOT current free
+space. The post-rotation private checkpoint reports the same DB size and3 docs.
+A1GB volume is small for25MiB documents and retained backups; do not extrapolate
+current free space or document growth from this one snapshot.
+
+Initial conservative proposed configuration for this volume, after fresh release
+capacity verification: free reserve268435456 bytes (256MiB), pending bytes67108864
+(64MiB), pending count32. Keep the implementation's additional1MiB metadata margin.
+This permits two25MiB abandoned intents (50MiB) but refuses a third; an existing
+matching retry can free the slot.32 bounds numerous tiny intents independently.
+At historical available896045056, less256MiB free floor,1MiB metadata and64MiB
+promised pending leaves559452160 bytes (~533.5MiB) BEFORE backup staging, DB/WAL
+and other growth allowances. This is arithmetic planning headroom, not safely
+allocatable document capacity. Reserve at least two full measured backup sets
+(database+document bytes+manifest overhead), plus observed WAL/DB growth and an
+operator-response growth allowance. Recompute using actual staging retention;
+if insufficient, expand volume before admitting more committed uploads. Pending
+caps do not limit accumulated committed documents, other writers or backups.
+
+Monitoring proposal: inspect filesystem free bytes/inodes and pending COUNT plus
+SUM(expected_bytes) every minute using read-only local metadata; export counts
+only, no actors/operation IDs/filenames. Warn at free<384MiB, pending bytes>=48MiB
+or count>=24, or sustained upload503 responses. Page/pause new uploads at
+free<320MiB, pending bytes>=64MiB or count>=32, or reserve refusal persisting5min.
+Monitor backup-success age and database/WAL growth against retention budget.
+Free reserve still enforces256MiB+1MiB+promised unwritten bytes; alerting is not a
+replacement for that check. A copied/corrupt pending inode can block all new
+admission before caps are hit; treat repeated ownership503 as operator review,
+never automated cleanup/rebinding. No automatic expiry or sweeping is proposed.
+No per-reservation age exists in this schema; do not invent an oldest-age metric.
+A concrete operator upload-pause mechanism and alert wiring remain release gates;
+no new maintenance endpoint or monitoring service has been deployed here.
+
+Backend-only versus native release
+Physical-device testing is NOT intrinsically required to deploy this additive
+backend contract separately: legacy POST remains supported, native source/build
+is unchanged, and the actual native recovery decoder has synthetic wire evidence.
+That conclusion is scoped to backend release, not a claim that installed native
+apps or device offline/relaunch flows were exercised. Require backend migration,
+resource/contract/security evidence, approved release configuration, writer drain,
+backup continuity and a controlled backend acceptance/rollback plan before release.
+A new native distribution or claim of end-to-end device recovery still requires
+signed iPad/Mac/device acceptance, CloudKit/APNs configuration and relevant network
+loss/relaunch/file-retention checks under the separate native release plan.
+
+Remaining release actions: review exact successor CI artifact; fresh volume and
+backup-staging sizing; choose/apply approved policy; configure alerts/upload pause;
+drain old writers; approve backend-only deployment and perform controlled actor,
+collision/replay/hash/low-space acceptance. No deployment authority is conveyed by
+synthetic branch/Actions approval. Keep v2/new-only keys. Any rollback to040/aa
+requires uploads paused and additive tables/files/client intents retained. Never
+restore an older DB over new writes or revert to single-key code.

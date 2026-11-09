@@ -57,3 +57,9 @@ Dot-directory guard focused validation complete: 32 upload/content-proof tests p
 2026-11-08 local disk-admission assignment: claim new document_upload_storage reservation module, additive reservation table/init, upload integration and focused synthetic tests. Preserve v2 keys, rotation lock order, current memory/body/concurrency limits and all historical evidence. No production, private backup, credentials, push or deploy. Pending/unknown files are never automatically deleted.
 
 Disk admission local implementation: durable pre-file reservations with immutable actor/request/content identity; persisted inode proof before payload writes; matching retries reuse exact owned prefix/inode; atomic document commit/reservation removal. Defaults256MiB free floor plus1MiB metadata,256MiB pending bytes and128pending records, cross-process nonblocking lock; no automatic file deletion or legacy adoption. Preserve current body/memory/keyring/rotation policy. Backup-code change only preserves directory modes after child copy so private namespace permissions survive synthetic backup. 88 focused integration tests and21 reservation unit tests pass; first five stale writer-hook/file-count failures retained. Full exact-head suites/workloads are recorded in task-2 disk-admission evidence. No real backup or credentials accessed. Claims released for local validation/review only.
+
+2026-11-09 approved synthetic CI extension: claim Tools upload recovery/crash
+harnesses, fail-closed verdict tests and linux-quota-validation workflow steps.
+Publish only reviewed successor to validation/linux-quota-upload-disk-97819d3;
+no deployment, private data upload, new backup access or credential changes.
+Preserve exact97819d3 and initial failed verdict evidence; cap/headroom unchanged.

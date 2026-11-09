@@ -37,13 +37,17 @@ jobs:
           test -r /sys/fs/cgroup/cgroup.controllers
           sudo -n true
       - name: Verify harness failure gates
-        run: python -m unittest Tools.test_linux_quota -v
+        run: python -m unittest Tools.test_linux_quota Tools.test_upload_recovery_quota -v
       - name: Run unchanged fifteen-wave workload
         run: python Tools/validate_linux_quota.py --waves 15 --output quota-evidence/waves-15
       - name: Run forty-five-wave plateau check
         run: python Tools/validate_linux_quota.py --waves 45 --output quota-evidence/waves-45
       - name: Run activated storage envelope allocation check
         run: python Tools/validate_storage_rotation_quota.py --output quota-evidence/activated-storage
+      - name: Run maximum-size upload recovery contention
+        run: python Tools/validate_upload_recovery_quota.py --output quota-evidence/upload-recovery
+      - name: Run bounded pending-upload crash recovery
+        run: python Tools/validate_upload_crash_quota.py --output quota-evidence/upload-crash
       - name: Retain synthetic evidence even on failure
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
