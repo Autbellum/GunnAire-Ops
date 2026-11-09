@@ -1,0 +1,116 @@
+Upload monitoring and global cutover freeze — NOT EXECUTED IN PRODUCTION
+
+Capability decision
+Existing RotationGate supplies persistent global freeze, cross-process drain,
+fail-closed startup and owned-marker cleanup on successful completion. Reuse it;
+no new upload pause protocol, service config, HTTP endpoint or schema is added.
+All API operations (including upload replay/recovery/downloads), callbacks and
+workers pause; /health remains200. This is a full maintenance window, not an
+online upload-only toggle. New backend startup is blocked while frozen.
+
+Added local observer
+Tools/upload_storage_health.py opens the explicit SQLite DB read-only/query-only,
+reads COUNT/SUM only, opens an existing upload lock read-only and never creates
+missing files/directories. It reports free bytes/inodes, aggregate pending count/
+expected bytes, configured limits, conservative free margin, writer activity and
+global marker presence. No paths, IDs, actors, filenames, tokens, file contents or
+raw errors are returned. No payload files are read, adopted, removed or changed.
+Missing DB/schema, unsafe paths/permissions/lock, query budget or I/O error returns
+unavailable. Supply canonical paths without symlink ancestors (on macOS /private/
+var, not /var). Run as the service OS user. Do not point this tool at custody files.
+Standard SQLite mode=ro may use existing WAL coordination files; it does not issue
+DML/schema operations. This is not an immutable/offline SQLite snapshot.
+
+An existing shared upload lock makes the metric snapshot stable against managed
+upload writers; if the writer owns it, report busy immediately rather than drain.
+Other DB writers can change data after the snapshot. Aggregate pending bytes
+conservatively include already-written bytes, so free margin is NOT exact admission
+capacity. status=ok is not proof that unknown/corrupt file ownership will pass an
+upload. No per-reservation age or ownership-repair metric is invented.
+Exit0=ok; exit2=busy/paused/pressure; exit3=unavailable. Alerting must inspect flags,
+not interpret intentional maintenance/busy as corruption. A long observer query
+is bounded to100000 SQLite VM steps and0.2s lock wait; it may briefly cause an
+upload503 while holding the shared admission lock. Query on a modest cadence.
+
+Exact read-only operator command template (NOT RUN; after deploying this tooling)
+From the reviewed release checkout, as the existing service account, with the
+existing service environment loaded by its supervisor (do not print that env):
+  python3 Tools/upload_storage_health.py --database /var/data/gunnaire_backend.sqlite3 --storage /var/data/storage
+Confirm the DB path against approved service metadata before using this template;
+/var/data storage is evidenced, but this task has not newly verified runtime DB
+basename, current mount capacity or supervisor paths. Substitute only that verified
+non-secret path. No command below authorizes a deployment or broad process kill.
+
+Recommended policy variables for the previously measured1GB volume:
+  GUNNAIRE_UPLOAD_FREE_RESERVE_BYTES=268435456
+  GUNNAIRE_UPLOAD_PENDING_BYTES=67108864
+  GUNNAIRE_UPLOAD_PENDING_COUNT=32
+The observer must inherit the exact chosen service values or its limits will differ.
+Do not silently apply defaults to monitoring if service config differs.
+Collector template, every minute (NOT INSTALLED): run the command above and ingest
+only its JSON/exit code. Warn free<384MiB, pending>=48MiB or24; page/pause free<320MiB,
+pending>=64MiB or32, sustained reserve/ownership503 or metrics unavailable. Account
+for planned maintenance/busy separately. Monitor free inodes, DB/WAL growth and
+backup age through existing approved instrumentation. No unattended file deletion.
+Actual collector destination, alert routing and supervisor stop/start integration
+remain deployment-coordinator inputs; not invented or installed by this local task.
+
+Synthetic acceptance, safe to run locally (executed only on generated fixtures)
+  python3 Tools/check_upload_operator_acceptance.py --output /tmp/upload-operator-acceptance-UNIQUE
+Use a new empty output path. Requires loopback permission; no provider/network
+connection beyond temporary localhost fixtures. Tests cover low disk, inode and
+pending caps, live writer observation, actual active HTTP upload drain, global503
+while frozen, health200, byte/row preservation and same-ID replay/recovery after
+resume. Existing tests cover crash-persistent freeze, uncertain marker refusal,
+failed-drain cleanup, namespace/symlink/inode attacks and pending retention.
+
+Cutover operator sequence (ALL PRODUCTION STEPS UNEXECUTED)
+1. Verify approved source SHA, clean checkout, exact-head hosted artifacts, v2/new-
+   only config continuity, latest verified backup/restore evidence and actual free
+   bytes/backup staging allowances. Choose disk policy explicitly. Inventory all
+   writer processes/replicas and the shared canonical DB directory. A freeze only
+   controls gate-aware processes using that SAME directory. No mixed old writers.
+2. Obtain the platform coordinator's exact service ID and supported stop/start
+   procedure. Those have not been verified here; do not substitute kill-by-name,
+   blind deploy or assume rolling restarts drain. Pre-stage approved release code.
+3. In a persistent operator terminal, from the gate-aware checkout and as service
+   OS user, run this exact freeze wrapper with VERIFIED_DB_PARENT substituted:
+
+  python3 -u -c 'from pathlib import Path; from Backend.rotation_gate import RotationGate; gate=RotationGate(Path("VERIFIED_DB_PARENT")); exec("with gate.exclusive(timeout=30):\n print(\"DRAINED: all API work and startup frozen; health remains available\", flush=True)\n if input(\"Type RESUME only after approved stop/stage checks: \") != \"RESUME\": raise RuntimeError(\"Freeze retained for explicit recovery\")")'
+
+   Do not continue until DRAINED. Verify marker/paused metrics and HTTP503 for
+   authenticated recovery/replay; /health200 alone is NOT release readiness.
+   A timeout before entry removes only this wrapper's marker; do not claim drained.
+4. While wrapper owns freeze, stop all old processes through the VERIFIED platform
+   supervisor procedure. Stage approved code/config/schema using the approved
+   migration procedure. The synthetic initializer/private rehearsal proves schema
+   compatibility; no production initializer invocation is authorized in this task.
+   Record process counts and verify no old writer can restart. Do not start the new
+   canonical server while frozen: initialize_runtime refuses by design.
+5. Only after verified stop/stage checks, type RESUME. Successful context exit
+   removes only its owned marker. Start the approved canonical entrypoint through
+   the verified supervisor, then require actor-bound HTTP recovery/replay/hash,
+   same document ID, no duplicate row/pending after success and metrics readback.
+   Retain original client files until proof. A process failure is not acceptance.
+6. If acceptance fails, re-freeze/drain (if running), stop through supervisor and
+   preserve files/schema/keys/intents. Investigate; do not auto-delete or repair.
+
+Rollback (UNEXECUTED)
+Prefer a v2/new-only-compatible version that retains upload admission. Old040/aa
+read additive tables but ignore reservations, so a fallback to them must remain
+fully stopped/frozen; this gate cannot keep an old server online for reads while
+pausing only uploads. Do not remove the marker merely to make old startup pass.
+Rehearsed offline040 initialization/readback is compatibility evidence, NOT an
+approved online rollback with disk bounds. Resume only a separately approved safe
+version after drain/config/data continuity checks. No key changes or DB restore
+over newer writes. Preserve additive tables, ownership records, files and intents.
+If the operator dies/EOF/Ctrl-C/exception occurs after drain, freeze persists. Do
+not unlink an uncertain marker. Preserve its ownership evidence and obtain an
+explicit recovery procedure after confirming no active migration or writer.
+
+Release status
+Local additions require review and a new exact-head hosted run before release/
+using green CI as evidence. Publication/Actions are NOT authorized for this
+follow-up, so none were performed. Runtime/backend handlers/keyring/resource
+limits are unchanged. Physical-device acceptance remains separate from backend-
+only contract release, but native/device completion is not established here.

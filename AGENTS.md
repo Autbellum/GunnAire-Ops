@@ -63,3 +63,9 @@ harnesses, fail-closed verdict tests and linux-quota-validation workflow steps.
 Publish only reviewed successor to validation/linux-quota-upload-disk-97819d3;
 no deployment, private data upload, new backup access or credential changes.
 Preserve exact97819d3 and initial failed verdict evidence; cap/headroom unchanged.
+
+2026-11-09 local operator-readiness claim: reuse existing RotationGate full-service
+freeze rather than add a second pause protocol. Add value-free local read-only
+upload metrics, synthetic actual HTTP drain/replay acceptance, dry-run launcher
+and explicit unexecuted operator runbook. No runtime handler/keyring changes,
+publication/Actions, production, credentials or new private-backup access.
