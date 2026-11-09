@@ -75,3 +75,5 @@ Claim proof-only streaming verification and encoded upload-body lifetime, regres
 and four additional unchanged max-workload repeats. Preserve download-before-send
 proof, v2/rotation/auth/disk/slot limits and512000000/409600000 gates. Approved
 synthetic successor publication/Actions only; no production or private-data access.
+
+Upload memory follow-up: preserve failed754ddd6 hosted run42542383815. Bounded strict base64 decoding and upload-only raw JSON lifetime fix; full synthetic validation and five unchanged hosted maximum workloads required. No deployment/credentials/private backup access.

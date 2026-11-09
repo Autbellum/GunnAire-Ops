@@ -40,7 +40,7 @@ try:
     from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications, billing_native, qbo_link_adoption, field_payment_review
     from Backend.billing_provider import BillingQBOProvider
     from Backend import google_connections, google_mail, qbo_change_capture, qbo_document_uploads
-    from Backend import document_storage, document_upload_storage
+    from Backend import document_storage, document_upload_storage, document_upload_encoding
     from Backend import backup_backend, storage_keyring, rotation_gate, storage_keyring_file
     from Backend import staff_owner_field_edits
     from Backend import staff_workspace_field_updates
@@ -63,6 +63,7 @@ except ModuleNotFoundError:
     import google_connections
     import document_storage
     import document_upload_storage
+    import document_upload_encoding
     import backup_backend
     import storage_keyring
     import rotation_gate
@@ -5343,7 +5344,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         self.write_json({"error": "Field collection assignment management access required"}, status=HTTPStatus.FORBIDDEN, require_auth=False)
         return False
 
-    def read_json(self, *, maximum_bytes: int = 1024 * 1024) -> dict[str, object]:
+    def read_json(self, *, maximum_bytes: int = 1024 * 1024, release_raw_before_parse=False) -> dict[str, object]:
         # Most JSON routes carry metadata, not documents. Bound allocations
         # before reading; document uploads opt into their existing larger cap.
         # JSONDecodeError preserves the error contract of all existing callers.
@@ -5363,6 +5364,10 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         data = self.rfile.read(length)
         if len(data) != length:
             raise json.JSONDecodeError("Request body is incomplete", "", 0)
+        if release_raw_before_parse:
+            text = data.decode("utf-8")
+            del data
+            return json.loads(text)
         return json.loads(data.decode("utf-8"))
 
     def read_limited_body(self, maximum_bytes: int) -> bytes:
@@ -6523,7 +6528,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             self.write_json({"error": "Invalid Content-Length"}, status=HTTPStatus.BAD_REQUEST)
             return
         try:
-            payload = self.read_json(maximum_bytes=((MAX_DOCUMENT_BYTES + 2) // 3) * 4 + 8192)
+            payload = self.read_json(maximum_bytes=((MAX_DOCUMENT_BYTES + 2) // 3) * 4 + 8192, release_raw_before_parse=True)
         except json.JSONDecodeError:
             self.write_json({"error": "Invalid JSON"}, status=HTTPStatus.BAD_REQUEST)
             return
@@ -6556,7 +6561,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            data = base64.b64decode(data_base64, validate=True)
+            data = document_upload_encoding.decode_base64(data_base64)
         except ValueError:
             self.write_json({"error": "Invalid base64 document data"}, status=HTTPStatus.BAD_REQUEST)
             return

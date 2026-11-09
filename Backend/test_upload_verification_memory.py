@@ -70,3 +70,38 @@ print(json.dumps({'peak':tracemalloc.get_traced_memory()[1]}))
                 return result
             with mock.patch.object(os,'read',side_effect=mutate),self.assertRaises(s.DocumentReadError) as error:verify()
             self.assertEqual(error.exception.status,409)
+
+    def test_maximum_base64_decode_avoids_full_ascii_intermediate(self):
+        code='''import base64,json,tracemalloc
+try:
+ from Backend.document_upload_encoding import decode_base64
+except ImportError:
+ decode_base64=lambda value:base64.b64decode(value,validate=True)
+value=base64.b64encode(b'm'*(25*1024**2)).decode()
+tracemalloc.start();data=decode_base64(value)
+print(json.dumps({'size':len(data),'peak':tracemalloc.get_traced_memory()[1]}))
+'''
+        r=subprocess.run([sys.executable,'-c',code],capture_output=True,text=True,check=True)
+        measured=json.loads(r.stdout)
+        self.assertEqual(measured['size'],25*1024**2)
+        self.assertLess(measured['peak'],30*1024**2,measured)
+
+    def test_upload_json_releases_raw_bytes_before_parsing(self):
+        import inspect, io
+        from email.message import Message
+        from types import SimpleNamespace
+        from unittest import mock
+        from Backend import gunnaire_backend as b
+        raw=b'{"dataBase64":"bQ=="}'
+        headers=Message();headers['Content-Length']=str(len(raw))
+        handler=SimpleNamespace(headers=headers,rfile=io.BytesIO(raw))
+        original=json.loads;observations=[]
+        def parse(text):
+            frame=inspect.currentframe().f_back
+            observations.append('data' in frame.f_locals)
+            del frame
+            return original(text)
+        with mock.patch.object(b.json,'loads',side_effect=parse):
+            result=b.GunnAireBackendHandler.read_json(handler,release_raw_before_parse=True)
+        self.assertEqual(result,{'dataBase64':'bQ=='})
+        self.assertEqual(observations,[False])

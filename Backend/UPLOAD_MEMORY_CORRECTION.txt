@@ -46,3 +46,17 @@ under512000000cap/409600000headroom, swap0/50%CPU. Existing15/45waves/activated/
 crash stages unchanged. Retain every report, including failures. Local RSS and
 tracemalloc quantify mechanism, not Linux cgroup equivalence or production incident
 root cause. No production, provider, credential or private backup action permitted.
+
+Second correction, after retained exact754ddd6 run42542383815 failure:
+Maximum-size peak430948352 still exceeded unchanged409600000headroom; all other
+maximum-size assertions passed. Later repeats/crash were skipped, not claimed.
+A new deterministic decoder regression measured61167004traced bytes for25MiB
+output: stdlib decoding a str creates a34952536byte ASCII intermediate alongside
+output. Chunked strict decoding into one pre-sized BytesIO removes that full copy;
+64KiB encoded chunks bound temporary allocations. Padding validation preserves
+running-Python strict semantics (3.14 rejects surplus padding accepted by3.13),
+tested against stdlib at chunk boundaries and3000 seeded malformed inputs.
+The upload-only JSON read path now releases raw HTTP bytes before parsing the
+UTF8 string into another encoded string; a frame-ownership regression verifies
+this lifetime. HTTP framing/body caps and other JSON routes remain unchanged.
+Neither change weakens input validation, content proof, admission, crypto or caps.
