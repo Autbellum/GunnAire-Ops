@@ -1,0 +1,80 @@
+Cross-resource checkpoint verification (local-only tooling)
+
+Run only against an authorized, completed OFFLINE backup artifact. This command
+reads inputs, makes a bounded private temporary working copy, verifies it, emits
+one value-free JSON report, and deletes only its own temporary working copy:
+
+  python3 Backend/verify_recovery_snapshot.py --backup CANONICAL_ARTIFACT_PATH --source-storage ORIGINAL_ABSOLUTE_STORAGE_PATH
+
+The original storage path is a lexical mapping from snapshot rows, not a path
+the tool opens. Obtain it from the approved configuration; do not guess it or
+remap rows by filename. Artifact ancestors must be real directories, not symlinks.
+The captured artifact must contain only manifest.json, gunnaire_backend.sqlite3
+and storage. WAL/journal sidecars or partial/restore-drill output are not accepted
+as a completed backup artifact. The backup creator must have finished first.
+
+Exit codes (do not treat any nonzero exit as a ready checkpoint):
+  0 verified: all committed references match stored size/SHA256 evidence, no
+    pending reservations, no unexplained files, and manifest copy checks pass.
+  2 review_required: manifest copy checks pass, but historical proof is missing,
+    pending ownership is not portable, and/or unreferenced files require review.
+  1 invalid: missing/altered/duplicate reference, partial proof, unsafe/changing
+    input, malformed schema/manifest, incomplete artifact or resource budget hit.
+
+The report contains counts and fixed reason codes, never filenames, paths, IDs,
+actors, SQL, ciphertext or exception details. Invalid reports may contain partial
+counts; recoveryReady=false is authoritative. originalIntegrityProven means every
+committed file matches the proof recorded in the captured database. It is NOT
+independent provenance/authenticity of that database or manifest. Historical rows
+with both proof fields NULL are byte-copy-consistent only; current hashes never
+become invented historical evidence. A partially present proof is invalid.
+
+All pending reservations block certification, including missing, partial, complete
+or concurrently committed payloads. Copying changes device/inode identity. The
+tool never rebinds ownership, adopts or deletes payloads, nor issues a quarantine
+move. Review is a logical quarantine of the entire artifact for recovery use.
+Only the known empty .document-upload-v1/.lock is treated as infrastructure.
+Unreferenced payloads (including uploads committed after the DB snapshot) require
+review. No opaque v2 ciphertext is decrypted or rewritten. The database bytes are
+copied unchanged and opened read-only; any SQLite coordination occurs in scratch.
+
+Bounds: 1 GiB total input file bytes, 10,000 entries, directory depth 64,
+10 MiB manifest, 1 MiB copy/hash chunks. Scratch requires space for the artifact;
+insufficient space fails closed. There is no wall-clock deadline for stalled I/O.
+Capture pins directory/file descriptors, rejects symlinks/hardlinks/special files,
+checks identities and changes while copying, then verifies the private copy.
+This is an offline verifier, not a synchronization primitive for hostile writers.
+The result describes the captured snapshot, never a guarantee about subsequent
+changes to the original artifact or service. Preserve/recertify the exact artifact
+under an approved custody procedure before recovery.
+
+Synthetic rehearsal:
+  python3 -m unittest Backend.test_verify_recovery_snapshot -v
+
+This runs real SQLite online backup, a deterministic concurrent post-snapshot
+writer, pending-to-committed transitions, missing/tampered data, inode-copy changes,
+partial artifacts, malicious paths/links, limits, CLI exits and input preservation.
+The actual candidate initializer is rerun against synthetic source/restored DBs;
+document references/content and opaque v2 sentinel/revision are compared. It does
+not start the production service, load protected keyrings or contact providers.
+
+Freeze-free additive cutover assessment:
+A verified snapshot can close the cross-resource consistency check for its own
+committed snapshot. A concurrent upload may make it fail conservatively with
+extras/pending; do not retry indefinitely or weaken rejection to obtain green.
+Historical unverified rows remain an explicit review gate. Successful verification
+does not establish zero-data-loss recovery for writes accepted AFTER the snapshot.
+Render stop-old/start-new must independently guarantee exclusive access to the
+single persistent disk, including background/external writers. New startup must
+use the current disk, complete additive initialization before serving, retain v2
+configuration and preserve every post-snapshot row/file/reservation on rollback.
+Pending operations on the original disk retain inode ownership; copied recovery
+requires a separately reviewed reconciliation plan and is not certified here.
+Independent operator recovery/access, actual platform interruption semantics,
+maintenance/traffic controls and deployment/canary authorization remain required.
+This tool does not add a freeze, deploy, restore production or approve cutover.
+
+No service runtime, schema, crypto, settings or workload limits are changed by
+this standalone verifier. A hosted exact-head source validation remains necessary
+before including this successor in a release; publication is not authorized by
+this assignment. Native app signing/distribution remains a separate release.
