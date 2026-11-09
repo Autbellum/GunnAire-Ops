@@ -46,6 +46,13 @@ jobs:
         run: python Tools/validate_storage_rotation_quota.py --output quota-evidence/activated-storage
       - name: Run maximum-size upload recovery contention
         run: python Tools/validate_upload_recovery_quota.py --output quota-evidence/upload-recovery
+      - name: Repeat unchanged maximum-size workload for allocation margin
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 2 3 4 5; do
+            python Tools/validate_upload_recovery_quota.py --output "quota-evidence/upload-recovery-$attempt"
+          done
       - name: Run bounded pending-upload crash recovery
         run: python Tools/validate_upload_crash_quota.py --output quota-evidence/upload-crash
       - name: Retain synthetic evidence even on failure

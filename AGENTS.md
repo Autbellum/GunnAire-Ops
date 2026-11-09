@@ -69,3 +69,9 @@ freeze rather than add a second pause protocol. Add value-free local read-only
 upload metrics, synthetic actual HTTP drain/replay acceptance, dry-run launcher
 and explicit unexecuted operator runbook. No runtime handler/keyring changes,
 publication/Actions, production, credentials or new private-backup access.
+
+2026-11-09 bounded memory correction: preserve7b8747c failed hosted headroom465707008.
+Claim proof-only streaming verification and encoded upload-body lifetime, regressions
+and four additional unchanged max-workload repeats. Preserve download-before-send
+proof, v2/rotation/auth/disk/slot limits and512000000/409600000 gates. Approved
+synthetic successor publication/Actions only; no production or private-data access.

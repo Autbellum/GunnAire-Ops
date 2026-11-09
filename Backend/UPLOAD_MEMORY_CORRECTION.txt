@@ -1,0 +1,48 @@
+Upload verification allocation correction
+
+Retained failure: exact7b8747c run42540791534, artifact13640968332, maximum-size
+peak465707008 exceeded409600000 headroom by56107008bytes;512000000hard cap not
+hit, zero sampled OOM. Prior same-runtimeed176c0 run passed at378093568. No retry
+until green, threshold relaxation, workload reduction or evidence replacement.
+
+Deterministic mechanisms established
+- Upload/replay/recovery used read_document for proof-only validation, allocating
+  an entire file buffer whose return bytes were discarded. An isolated25MiB test
+  measured26348643peak Python-traced bytes. Regression now requires<2MiB.
+- _store_document retained both payload['dataBase64'] and data_base64 references
+  to the encoded string through file verification, although neither was needed
+  after decoding. Synthetic HTTP replay observed1398104encoded bytes retained
+  for1MiB input. At25MiB this scales to34952536encoded bytes alongside26214400
+  decoded bytes and another26214400proof buffer. A permitted concurrent download
+  can hold its own26214400bytes as well. Slot bounds did not bound these redundant
+  copies away; allocator retention/timing and file cache amplify observed peaks.
+- Failed highest-current sample anon437735424/file26218496, previous successful
+  anon376229888/file4096. Both categories increased; not solely page cache.
+Exact scheduling/allocator history behind the prior two host peaks is not proven.
+The above live allocation ownership/size defects ARE deterministically reproduced;
+new repeated unchanged hosted gates are required to establish correction margin.
+
+Fix scope
+read_document retains its shared descriptor-relative NOFOLLOW traversal, size/
+mtime/ctime/inode checks, short-read/growth rejection, digest proof, cache advice
+and complete-before-send download behavior. Added verify_document selects bounded
+streaming SHA256 mode, keeping only64KiB chunks and no full-file BytesIO buffer.
+Only proof-only initial-upload/replay/recovery calls use it. Actual downloads still
+return fully verified immutable bytes before any response. Finally closes any
+buffer on failure as well as every descriptor. No file streaming to clients before
+proof, no digest cache/trust shortcut, no authorization or revocation weakening.
+After decoding, remove the base64 value from payload and release its local alias.
+Decoded original bytes remain until writing/fingerprinting as required.
+No schema/API/keyring/reservation/file-deletion/resource-slot/cap changes.
+
+Validation
+Preserve red allocation and HTTP retention logs. Regression tests cover allocation,
+encoded-body release, bounded short reads, bad digest, symlink and midread mutation;
+existing full file-proof, collision, revocation, recovery, crash/disk/pause suites
+remain required. Full Backend/Tools plus actual native decoder and hosted pipeline
+must pass exact successor. Workflow adds FOUR repeats of unchanged25MiB/24request/
+3wave maximum workload (five fresh canonical-server runs total), each independently
+under512000000cap/409600000headroom, swap0/50%CPU. Existing15/45waves/activated/
+crash stages unchanged. Retain every report, including failures. Local RSS and
+tracemalloc quantify mechanism, not Linux cgroup equivalence or production incident
+root cause. No production, provider, credential or private backup action permitted.

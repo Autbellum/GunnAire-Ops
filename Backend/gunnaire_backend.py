@@ -6460,7 +6460,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         try:
             try:
                 document_storage.content_proof(row)
-                document_storage.read_document(STORAGE_ROOT, row["stored_path"], expected_bytes=row["file_size_bytes"], expected_sha256=row["file_sha256"])
+                document_storage.verify_document(STORAGE_ROOT, row["stored_path"], expected_bytes=row["file_size_bytes"], expected_sha256=row["file_sha256"])
             except document_storage.DocumentReadError as error:
                 self.write_json({"error": str(error)}, status=error.status)
                 return
@@ -6486,7 +6486,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return True
         try:
             document_storage.content_proof(row)
-            document_storage.read_document(STORAGE_ROOT, row["stored_path"], expected_bytes=row["file_size_bytes"], expected_sha256=row["file_sha256"])
+            document_storage.verify_document(STORAGE_ROOT, row["stored_path"], expected_bytes=row["file_size_bytes"], expected_sha256=row["file_sha256"])
         except document_storage.DocumentReadError as error:
             self.write_json({"error": str(error)}, status=error.status)
             return True
@@ -6550,7 +6550,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if kind in {".", ".."} or not document_storage.header_text(kind, 255):
             self.write_json({"error": "Use a document kind that names a storage directory"}, status=HTTPStatus.BAD_REQUEST)
             return
-        data_base64 = payload.get("dataBase64")
+        data_base64 = payload.pop("dataBase64", None)
         if not isinstance(data_base64, str) or not data_base64:
             self.write_json({"error": "Missing dataBase64"}, status=HTTPStatus.BAD_REQUEST)
             return
@@ -6560,6 +6560,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         except ValueError:
             self.write_json({"error": "Invalid base64 document data"}, status=HTTPStatus.BAD_REQUEST)
             return
+        # The encoded body is not needed by metadata, proof or storage. Keeping
+        # it here overlaps a 4/3-size string with decoded bytes and file readers.
+        del data_base64
         if len(data) > MAX_DOCUMENT_BYTES:
             self.write_json({"error": "Document exceeds the configured upload limit"}, status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
             return
@@ -6636,7 +6639,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 reservation = admission.reserve(operation_id, original_principal['email'], request_digest, len(data), file_digest)
                 document_id = reservation['id']
                 destination = admission.prepare(reservation, data)
-                document_storage.read_document(STORAGE_ROOT, destination, expected_bytes=len(data), expected_sha256=file_digest)
+                document_storage.verify_document(STORAGE_ROOT, destination, expected_bytes=len(data), expected_sha256=file_digest)
                 self._principal = None
                 self._principal_checked = False
                 if self.principal() is None or self.principal() != original_principal:

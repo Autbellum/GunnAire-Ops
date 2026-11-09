@@ -77,13 +77,16 @@ def release_verified_file_cache(fd):
             pass  # Cache advice is not a storage-integrity requirement.
 
 
-def read_document(storage_root: Path, stored_path, *, expected_bytes=None, expected_sha256=None, maximum=MAX_BYTES):
+def read_document(storage_root: Path, stored_path, *, expected_bytes=None, expected_sha256=None, maximum=MAX_BYTES, retain_bytes=True):
     if (type(maximum) is not int or not 1 <= maximum <= MAX_BYTES
             or expected_bytes is not None and (type(expected_bytes) is not int or not 1 <= expected_bytes <= maximum)):
         raise DocumentReadError(409, "Document size is outside the supported limit.")
     if expected_sha256 is not None and (type(expected_sha256) is not str or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None):
         raise DocumentReadError(503, "Original document proof is invalid.")
+    if type(retain_bytes) is not bool:
+        raise DocumentReadError(503, "Invalid document verification mode.")
     descriptors = []
+    buffer = None
     try:
         # Resolve only the configured root; resolving the file before opening
         # would follow symlinks and leave a check/open race. Walk each component
@@ -113,8 +116,9 @@ def read_document(storage_root: Path, stored_path, *, expected_bytes=None, expec
         # retain old large allocations in the host allocator. getvalue() returns
         # immutable bytes without a second full-size chunk-list copy.
         # Never send bytes before complete file and digest verification.
-        buffer, total = io.BytesIO(), 0
-        if before.st_size:
+        buffer, total = (io.BytesIO() if retain_bytes else None), 0
+        digest = hashlib.sha256()
+        if retain_bytes and before.st_size:
             buffer.seek(before.st_size - 1)
             buffer.write(b"\0")
             buffer.seek(0)
@@ -127,14 +131,15 @@ def read_document(storage_root: Path, stored_path, *, expected_bytes=None, expec
             total += len(block)
             if total > before.st_size:
                 raise DocumentReadError(409, "Document changed during the download. Refresh and retry.")
-            buffer.write(block)
+            digest.update(block)
+            if buffer is not None:
+                buffer.write(block)
         after = os.fstat(fd)
         fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
         if total != before.st_size or any(getattr(before, name) != getattr(after, name) for name in fields):
             raise DocumentReadError(409, "Document changed during the download. Refresh and retry.")
-        data = buffer.getvalue()
-        buffer.close()
-        if expected_sha256 is not None and not hmac.compare_digest(hashlib.sha256(data).hexdigest(), expected_sha256):
+        data = buffer.getvalue() if buffer is not None else None
+        if expected_sha256 is not None and not hmac.compare_digest(digest.hexdigest(), expected_sha256):
             raise DocumentReadError(409, "Document bytes do not match the original upload. Keep the original for review.")
         release_verified_file_cache(fd)
         return data
@@ -146,5 +151,13 @@ def read_document(storage_root: Path, stored_path, *, expected_bytes=None, expec
         status = 403 if error.errno in (errno.ELOOP, errno.ENOTDIR, errno.EACCES, errno.EPERM) else 404
         raise DocumentReadError(status, "Document file is unavailable.") from None
     finally:
+        if buffer is not None:
+            buffer.close()
         for fd in reversed(descriptors):
             os.close(fd)
+
+
+def verify_document(storage_root: Path, stored_path, *, expected_bytes, expected_sha256):
+    """Prove bytes with the identical descriptor/race checks, retaining no file body."""
+    return read_document(storage_root, stored_path, expected_bytes=expected_bytes,
+                         expected_sha256=expected_sha256, retain_bytes=False)
