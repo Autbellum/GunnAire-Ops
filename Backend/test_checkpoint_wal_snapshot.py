@@ -167,6 +167,19 @@ c.generate(*sys.argv[1:])
         self.assertEqual(report['status'], 'invalid')
         self.assertFalse((self.destination/'checkpoint-result.json').exists())
 
+    def test_destination_parent_entry_is_synced_before_success(self):
+        parent_identity = (self.root.stat().st_dev, self.root.stat().st_ino)
+        synced = []
+        original = os.fsync
+        def sync(fd):
+            info = os.fstat(fd)
+            synced.append((info.st_dev, info.st_ino))
+            return original(fd)
+        with mock.patch.object(checkpoint.os, 'fsync', side_effect=sync):
+            report, code = self.generate()
+        self.assertEqual(code, 0, report)
+        self.assertIn(parent_identity, synced)
+
     def test_cli_deterministic_report(self):
         result = subprocess.run([sys.executable, str(Path(checkpoint.__file__)), '--source-bundle', str(self.bundle),
                                  '--source-storage', str(self.fixture.storage), '--destination', str(self.destination)], capture_output=True, text=True)

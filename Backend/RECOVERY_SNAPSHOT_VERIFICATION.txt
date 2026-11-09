@@ -93,8 +93,9 @@ This tool does not add a freeze, deploy, restore production or approve cutover.
 
 No service runtime, schema, crypto, settings or workload limits are changed by
 this standalone verifier. A hosted exact-head source validation remains necessary
-before including this successor in a release; publication is not authorized by
-this assignment. Native app signing/distribution remains a separate release.
+before including this successor in a release. This runbook grants no publication
+or deployment authority; use the user's separately approved scope. Native app
+signing/distribution remains a separate release.
 
 Standalone checkpoint generation for an authoritative WAL source bundle:
 

@@ -132,6 +132,7 @@ def generate(source_bundle, source_storage, destination):
         if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o022:
             raise verifier.Invalid()
         os.mkdir(destination.name, 0o700, dir_fd=parent)  # Never overwrite/reuse.
+        os.fsync(parent)  # Persist the new destination entry, not only its children.
         if verifier.identity(os.stat(destination.parent)) != verifier.identity(os.fstat(parent)):
             raise verifier.Invalid()
         captured = destination / 'capture'
