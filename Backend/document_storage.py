@@ -63,18 +63,21 @@ def write_document_bytes(destination: Path, data: bytes):
         os.fsync(output.fileno())
 
 
-def release_verified_file_cache(fd):
-    # Linux charges page cache to this service's memory cgroup. After full
-    # verification the response owns its immutable bytes; retaining another
-    # copy in cache grows with stored uploads. This advisory affects only this
-    # open file, never deletes data, and is optional on other platforms.
+def release_read_file_cache(fd, offset=0, length=0):
+    # Advisory eviction of clean pages from this pinned regular file only.
+    # This is neither an integrity verdict nor deletion. Copied bytes remain
+    # private until the complete digest, inode and mutation checks succeed.
     advise = getattr(os, "posix_fadvise", None)
     option = getattr(os, "POSIX_FADV_DONTNEED", None)
     if advise is not None and option is not None:
         try:
-            advise(fd, 0, 0, option)
+            advise(fd, offset, length, option)
         except OSError:
             pass  # Cache advice is not a storage-integrity requirement.
+
+
+def release_verified_file_cache(fd):
+    release_read_file_cache(fd)
 
 
 def read_document(storage_root: Path, stored_path, *, expected_bytes=None, expected_sha256=None, maximum=MAX_BYTES, retain_bytes=True):
@@ -118,6 +121,7 @@ def read_document(storage_root: Path, stored_path, *, expected_bytes=None, expec
         # Never send bytes before complete file and digest verification.
         buffer, total = (io.BytesIO() if retain_bytes else None), 0
         digest = hashlib.sha256()
+        advised_through = 0
         if retain_bytes and before.st_size:
             buffer.seek(before.st_size - 1)
             buffer.write(b"\0")
@@ -134,6 +138,11 @@ def read_document(storage_root: Path, stored_path, *, expected_bytes=None, expec
             digest.update(block)
             if buffer is not None:
                 buffer.write(block)
+            # Bound duplicate page-cache residency during a large read, not
+            # merely after it. No bytes are sent and no proof is trusted here.
+            if total - advised_through >= 1024 * 1024:
+                release_read_file_cache(fd, advised_through, total - advised_through)
+                advised_through = total
         after = os.fstat(fd)
         fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
         if total != before.st_size or any(getattr(before, name) != getattr(after, name) for name in fields):

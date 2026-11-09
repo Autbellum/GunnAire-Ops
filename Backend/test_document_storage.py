@@ -37,6 +37,20 @@ class DocumentStorageTests(unittest.TestCase):
             advise.assert_not_called()
         self.assertEqual(self.path.read_bytes(), b"original-file")
 
+    def test_large_read_releases_copied_cache_windows_before_final_proof(self):
+        data=b'm'*(3*1024*1024+17);self.path.write_bytes(data)
+        calls=[]
+        def advise(fd, offset, length, option):
+            calls.append((offset,length,os.lseek(fd,0,os.SEEK_CUR)))
+        with mock.patch.object(os,'posix_fadvise',side_effect=advise,create=True), mock.patch.object(os,'POSIX_FADV_DONTNEED',4,create=True):
+            self.assertEqual(self.read(expected_sha256=hashlib.sha256(data).hexdigest()),data)
+        windows=[call for call in calls if call[1]]
+        self.assertEqual(windows,[(i*1024*1024,1024*1024,(i+1)*1024*1024) for i in range(3)])
+        self.assertEqual(calls[-1],(0,0,len(data)))
+        self.assertEqual(self.path.read_bytes(),data)
+        with mock.patch.object(os,'posix_fadvise',create=True), mock.patch.object(os,'POSIX_FADV_DONTNEED',4,create=True):
+            self.rejected(409,lambda:self.read(expected_sha256='0'*64))
+
     def test_cache_advice_failure_does_not_change_verified_content(self):
         with mock.patch.object(os, "posix_fadvise", side_effect=OSError("unsupported"), create=True), mock.patch.object(os, "POSIX_FADV_DONTNEED", 4, create=True):
             self.assertEqual(self.read(), b"original-file")

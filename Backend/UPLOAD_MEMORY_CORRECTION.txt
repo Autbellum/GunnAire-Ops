@@ -60,3 +60,12 @@ The upload-only JSON read path now releases raw HTTP bytes before parsing the
 UTF8 string into another encoded string; a frame-ownership regression verifies
 this lifetime. HTTP framing/body caps and other JSON routes remain unchanged.
 Neither change weakens input validation, content proof, admission, crypto or caps.
+
+Retained3c8948a run42544089840 failed45-wave headroom at411987968bytes; maximum
+and crash stages did not execute. Artifact13643081397 digest verified locally.
+Near peak, sampled file cache78897152bytes overlapped325894144anonymous bytes.
+Reader now advises eviction of each copied1MiB range from its pinned regular fd;
+full hash/stat proof still precedes response, no deletion or changed admission.
+Advice is optional and errors ignored; no portable hard cache bound is claimed.
+Workflow continues all workload stages after failure, with original failing exit;
+all four repeats execute even if an earlier repeat fails. No threshold relaxation.

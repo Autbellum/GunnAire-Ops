@@ -39,21 +39,29 @@ jobs:
       - name: Verify harness failure gates
         run: python -m unittest Tools.test_linux_quota Tools.test_upload_recovery_quota -v
       - name: Run unchanged fifteen-wave workload
+        if: ${{ !cancelled() }}
         run: python Tools/validate_linux_quota.py --waves 15 --output quota-evidence/waves-15
       - name: Run forty-five-wave plateau check
+        if: ${{ !cancelled() }}
         run: python Tools/validate_linux_quota.py --waves 45 --output quota-evidence/waves-45
       - name: Run activated storage envelope allocation check
+        if: ${{ !cancelled() }}
         run: python Tools/validate_storage_rotation_quota.py --output quota-evidence/activated-storage
       - name: Run maximum-size upload recovery contention
+        if: ${{ !cancelled() }}
         run: python Tools/validate_upload_recovery_quota.py --output quota-evidence/upload-recovery
       - name: Repeat unchanged maximum-size workload for allocation margin
+        if: ${{ !cancelled() }}
         shell: bash
         run: |
           set -euo pipefail
+          result=0
           for attempt in 2 3 4 5; do
-            python Tools/validate_upload_recovery_quota.py --output "quota-evidence/upload-recovery-$attempt"
+            python Tools/validate_upload_recovery_quota.py --output "quota-evidence/upload-recovery-$attempt" || result=1
           done
+          exit "$result"
       - name: Run bounded pending-upload crash recovery
+        if: ${{ !cancelled() }}
         run: python Tools/validate_upload_crash_quota.py --output quota-evidence/upload-crash
       - name: Retain synthetic evidence even on failure
         if: always()

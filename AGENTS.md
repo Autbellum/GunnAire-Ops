@@ -77,3 +77,12 @@ proof, v2/rotation/auth/disk/slot limits and512000000/409600000 gates. Approved
 synthetic successor publication/Actions only; no production or private-data access.
 
 Upload memory follow-up: preserve failed754ddd6 hosted run42542383815. Bounded strict base64 decoding and upload-only raw JSON lifetime fix; full synthetic validation and five unchanged hosted maximum workloads required. No deployment/credentials/private backup access.
+
+Retained3c8948a run42544089840 failed45-wave headroom at411987968bytes; maximum
+and crash stages did not execute. Artifact13643081397 digest verified locally.
+Near peak, sampled file cache78897152bytes overlapped325894144anonymous bytes.
+Reader now advises eviction of each copied1MiB range from its pinned regular fd;
+full hash/stat proof still precedes response, no deletion or changed admission.
+Advice is optional and errors ignored; no portable hard cache bound is claimed.
+Workflow continues all workload stages after failure, with original failing exit;
+all four repeats execute even if an earlier repeat fails. No threshold relaxation.
