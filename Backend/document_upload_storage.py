@@ -17,6 +17,9 @@ MIB = 1024 * 1024
 NAMESPACE = '.document-upload-v1'
 TABLE = 'document_upload_reservations_v1'
 METADATA_BYTES = MIB
+# SGID inherits a group for new children; it grants no access when group/other
+# permission bits are zero. Accept only these two exact private directory modes.
+PRIVATE_DIRECTORY_MODES = frozenset((0o700, 0o2700))
 
 
 class StorageAdmissionError(Exception):
@@ -111,9 +114,9 @@ class Admission:
 
     @staticmethod
     def _private(info, directory=False):
-        expected = 0o700 if directory else 0o600
+        allowed_modes = PRIVATE_DIRECTORY_MODES if directory else (0o600,)
         valid_type = stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)
-        if (not valid_type or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != expected
+        if (not valid_type or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) not in allowed_modes
                 or not directory and info.st_nlink != 1):
             raise StorageAdmissionError('Upload ownership proof is unavailable; retain pending files')
 

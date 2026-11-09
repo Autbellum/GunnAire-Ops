@@ -62,3 +62,14 @@ class UploadHealthTests(unittest.TestCase):
     def test_corrupt_database_error_contains_no_path_or_data(self):
         self.root.mkdir();self.database.write_bytes(b'private synthetic invalid database')
         result=self.health();self.assertEqual(result,{'schema':'upload-storage-health-v1','readOnly':True,'status':'unavailable','errorCode':'upload_metrics_unavailable'})
+
+    def test_private_setgid_namespace_reports_without_permission_changes(self):
+        import stat
+        with self.admission():pass
+        namespace=self.root/storage.NAMESPACE
+        namespace.chmod(0o2700)
+        self.assertEqual(self.health()['status'],'ok')
+        self.assertEqual(stat.S_IMODE(namespace.stat().st_mode),0o2700)
+        namespace.chmod(0o2750)
+        self.assertEqual(self.health()['status'],'unavailable')
+        self.assertEqual(stat.S_IMODE(namespace.stat().st_mode),0o2750)

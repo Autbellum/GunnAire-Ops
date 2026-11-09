@@ -111,3 +111,10 @@ Interruptions after admission defer propagation until completion, retaining oute
 rotation ownership. New synthetic SIGINT/submit/cancel/shutdown/disconnect/backpressure
 regressions pass. No production, backup/custody/UI access. Successor exact-head
 hosted validation required;40fe memory evidence alone does not close lifecycle gate.
+
+Inherited-SGID claim: live metadata showed2755 storage root and absent namespace.
+Revieweda49c365 rejects Linux-inherited2700. Accept directory modes700/2700 only,
+keep files600 and all ownership/path/lock proofs; no chmod/repair. Observer shares
+same allowed-mode constant. Synthetic Linux inheritance, unsafe modes/owners/paths,
+fresh-process prefix recovery and backup-mode tests added. Publish only approved
+synthetic validation branch; no production, backup creation/custody or credentials.

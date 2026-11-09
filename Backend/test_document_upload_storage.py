@@ -1,4 +1,6 @@
 import hashlib
+import json
+import stat
 import os
 from pathlib import Path
 import sqlite3
@@ -268,6 +270,103 @@ sys.exit(1)
             self.assertIn('Database disk reserve', str(error.exception))
         with self.db() as connection:
             self.assertEqual(connection.execute(f'SELECT COUNT(*) FROM {storage.TABLE}').fetchone()[0], 0)
+
+
+    def test_owner_only_namespace_modes_remain_unchanged_without_chmod(self):
+        self.root.mkdir();namespace=self.root/storage.NAMESPACE;namespace.mkdir(mode=0o700)
+        identity=None
+        for mode in (0o700,0o2700):
+            namespace.chmod(mode)
+            with mock.patch.object(storage.os,'chmod',side_effect=AssertionError('Changed permissions')),mock.patch.object(storage.os,'fchmod',side_effect=AssertionError('Changed permissions')):
+                with self.admission() as admission:
+                    row=self.reserve(admission);path=admission.prepare(row,self.data)
+                    if identity is None:identity=(row['id'],path.stat().st_ino)
+                    self.assertEqual((row['id'],path.stat().st_ino),identity)
+            self.assertEqual(stat.S_IMODE(namespace.stat().st_mode),mode)
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode),0o600)
+
+    @unittest.skipUnless(sys.platform.startswith('linux'),'Actual Linux mkdir inheritance')
+    def test_linux_setgid_parent_creates_private_2700_namespace(self):
+        self.root.mkdir();self.root.chmod(0o2755)
+        with self.admission() as admission:
+            row=self.reserve(admission);path=admission.prepare(row,self.data)
+        namespace=self.root/storage.NAMESPACE
+        self.assertEqual(stat.S_IMODE(namespace.stat().st_mode),0o2700)
+        self.assertEqual(namespace.stat().st_gid,self.root.stat().st_gid)
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode),0o600)
+        self.assertEqual(path.read_bytes(),self.data)
+        print('Linux inherited namespace: parent=2755 namespace=2700 payload=0600')
+
+    def test_setgid_pending_prefix_recovers_in_fresh_process_with_same_identity(self):
+        self.root.mkdir();self.root.chmod(0o2755)
+        namespace=self.root/storage.NAMESPACE;namespace.mkdir();namespace.chmod(0o2700)
+        def interrupted(fd,data):os.write(fd,data[:5]);os.fsync(fd);raise OSError('Synthetic crash')
+        with self.admission() as admission:
+            row=self.reserve(admission)
+            with mock.patch.object(storage,'write_payload',side_effect=interrupted),self.assertRaises(storage.StorageAdmissionError):admission.prepare(row,self.data)
+            path=admission.path(row);inode=path.stat().st_ino
+        code="""import hashlib,json,sqlite3,sys
+from contextlib import contextmanager
+from pathlib import Path
+from Backend.document_upload_storage import Admission,Policy
+@contextmanager
+def db():
+ c=sqlite3.connect(sys.argv[1]);c.row_factory=sqlite3.Row
+ try:
+  with c:yield c
+ finally:c.close()
+data=b'original-payload'
+with Admission(db,Path(sys.argv[2]),Path(sys.argv[1]),Policy(1000,100,3)) as a:
+ row=a.reserve(sys.argv[3],'actor','request',len(data),hashlib.sha256(data).hexdigest());p=a.prepare(row,data)
+ print(json.dumps({'id':row['id'],'inode':p.stat().st_ino,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()}))
+"""
+        result=subprocess.run([sys.executable,'-c',code,str(self.database),str(self.root),self.operation],capture_output=True,text=True,check=True,timeout=15)
+        self.assertEqual(json.loads(result.stdout),{'id':row['id'],'inode':inode,'sha256':self.digest})
+        with self.admission() as admission,self.db() as c:
+            c.execute('INSERT INTO documents VALUES(?,?,?,?)',(row['id'],str(path),len(self.data),self.digest));admission.complete(row,c)
+        with self.db() as c:self.assertEqual(c.execute(f'SELECT COUNT(*) FROM {storage.TABLE}').fetchone()[0],0)
+        self.assertEqual(path.stat().st_ino,inode)
+
+    def test_group_other_and_other_special_directory_bits_are_rejected_unchanged(self):
+        self.root.mkdir();namespace=self.root/storage.NAMESPACE;namespace.mkdir(mode=0o700)
+        for mode in (0o750,0o770,0o701,0o2701,0o2750,0o2770,0o1700,0o4700,0o6700):
+            namespace.chmod(mode)
+            with self.subTest(mode=oct(mode)),self.assertRaises(storage.StorageAdmissionError):
+                with self.admission():pass
+            self.assertEqual(stat.S_IMODE(namespace.stat().st_mode),mode)
+            self.assertFalse((namespace/'.lock').exists())
+
+    def test_setgid_namespace_still_rejects_wrong_owner(self):
+        self.root.mkdir();namespace=self.root/storage.NAMESPACE;namespace.mkdir();namespace.chmod(0o2700)
+        info=namespace.stat()
+        wrong=SimpleNamespace(st_mode=info.st_mode,st_uid=os.getuid()+1,st_nlink=info.st_nlink)
+        with self.assertRaises(storage.StorageAdmissionError):storage.Admission._private(wrong,directory=True)
+        self.assertEqual(list(namespace.iterdir()),[])
+
+    def test_setgid_namespace_symlink_and_directory_replacement_remain_rejected(self):
+        self.root.mkdir();namespace=self.root/storage.NAMESPACE;namespace.mkdir();namespace.chmod(0o2700)
+        outside=Path(self.temp.name)/'outside';outside.mkdir()
+        with self.admission() as admission:
+            row=self.reserve(admission);namespace.rename(self.root/'held')
+            namespace.symlink_to(outside,target_is_directory=True)
+            with self.assertRaises(storage.StorageAdmissionError):admission.prepare(row,self.data)
+            with self.assertRaises(storage.StorageAdmissionError):
+                with self.admission():pass
+            namespace.unlink();namespace.mkdir();namespace.chmod(0o2700)
+            with self.assertRaises(storage.StorageAdmissionError):admission.prepare(row,self.data)
+        self.assertEqual(list(outside.iterdir()),[])
+
+    def test_setgid_is_not_allowed_on_payload_or_lock_files(self):
+        self.root.mkdir();namespace=self.root/storage.NAMESPACE;namespace.mkdir();namespace.chmod(0o2700)
+        with self.admission() as admission:
+            row=self.reserve(admission);path=admission.prepare(row,self.data)
+            path.chmod(0o2600)
+            with self.assertRaises(storage.StorageAdmissionError):admission.prepare(row,self.data)
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode),0o2600)
+        path.chmod(0o600);lock=namespace/'.lock';lock.chmod(0o2600)
+        with self.assertRaises(storage.StorageAdmissionError):
+            with self.admission():pass
+        self.assertEqual(path.read_bytes(),self.data)
 
 
 if __name__ == '__main__': unittest.main()

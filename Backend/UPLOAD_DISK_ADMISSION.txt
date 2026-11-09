@@ -42,7 +42,8 @@ Only device/inode ownership can be recorded during exclusive creation/recreation
 There is no backfill, historic proof inference or ciphertext rewrite.
 
 New payloads live in STORAGE_ROOT/.document-upload-v1/<UUID>.payload. Directory
-mode0700, payload/lock mode0600, correct service UID and a single file link are
+mode0700 or02700 (inherited setgid with no group/other access), payload/lock
+mode0600, correct service UID and a single file link are
 required. Child paths are opened by pinned directory descriptors with NOFOLLOW;
 UUID filenames, lock identity and directory identity are checked. The human
 filename/kind remain metadata. Kind is bounded to255 safe characters and cannot
@@ -81,7 +82,7 @@ created before inode proof may need review even though no payload was written.
 Backup and restore implications
 -------------------------------
 Synthetic backup tests cover payload bytes and private directory modes. Backup
-copying now preserves directory metadata after copying children, including0700.
+copying now preserves directory metadata after copying children, including0700 and02700.
 Committed files remain readable through their stored paths by v2-capable older
 code. Reservation schema and files are additive; existing files are not moved.
 
@@ -120,3 +121,27 @@ Keep the table, identity trigger, private directory, files and client intents.
 Do not drop columns, remove ownership rows, delete files or restore a database
 over newer writes to make rollback appear clean. Any data/ownership restoration
 requires writer quiescence, manifest/proof review and separate authorization.
+
+Inherited setgid compatibility (successor to a49c365)
+---------------------------------------------------
+Linux inherits the setgid bit from a2755 storage parent when mkdir requests0700,
+creating a2700 namespace. Both0700 and2700 are exactly owner-only access modes.
+SGID chooses the group inherited by children; it does not grant access when all
+group/other permission bits are zero. Only that optional bit is accepted for
+DIRECTORIES. Sticky, setuid, any group/other permission and missing owner access
+remain invalid. Payload/lock files must be exactly0600 with the original UID,
+regular-file and single-link checks. No file SGID exception is introduced.
+Creation still requests0700 via pinned directory fd. The resulting directory is
+validated as700/2700; an existing directory receives the identical validation.
+No chmod, permission widening, ownership change or unsafe-directory repair occurs.
+All NOFOLLOW, identity/race/lock and reservation/content proofs remain unchanged.
+Read-only health uses the same allowed-mode constant; backup preserves actual
+private directory mode. Backup copies do not preserve pending inode identity and
+must never be silently adopted as recovered pending files. Process restart using
+the original file/inode is independently tested, including partial-prefix recovery.
+Linux hosted tests MUST execute2755parent ->2700child ->0600payload creation;
+macOS skips only that platform-specific inheritance test. Portable explicit-mode,
+unsafe permissions/ownership/path, restart and synthetic backup tests also apply.
+Initial sandbox runs stripped special bits and failed; those logs plus the real
+reviewed-base700/2700 rejection evidence are retained, not presented as Linux runs.
+No schema, crypto, resource cap, workload, deployment or real filesystem changes.

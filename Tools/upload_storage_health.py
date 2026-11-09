@@ -14,7 +14,7 @@ import sys
 
 TREE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TREE))
-from Backend.document_upload_storage import Policy, NAMESPACE, TABLE, METADATA_BYTES
+from Backend.document_upload_storage import Policy, NAMESPACE, TABLE, METADATA_BYTES, PRIVATE_DIRECTORY_MODES
 
 
 def _regular(path):
@@ -43,7 +43,7 @@ def report(database, storage, policy=None):
         namespace_identity = None
         if namespace.exists() or namespace.is_symlink():
             info = namespace.lstat()
-            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) not in PRIVATE_DIRECTORY_MODES:
                 raise ValueError('Unsafe namespace')
             namespace_identity = (info.st_dev, info.st_ino)
             lock = namespace / '.lock'

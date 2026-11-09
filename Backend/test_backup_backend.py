@@ -28,6 +28,18 @@ class BackupBackendTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(copied.stat().st_mode), 0o700)
             self.assertEqual((copied / 'synthetic.payload').read_bytes(), b'synthetic pending bytes')
 
+    def test_private_setgid_namespace_survives_synthetic_backup(self):
+        import stat
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);database,storage=self.create_source(root)
+            private=storage/'.document-upload-v1';private.mkdir();private.chmod(0o2700)
+            payload=private/'synthetic.payload';payload.write_bytes(b'synthetic pending');payload.chmod(0o600)
+            artifact=root/'backup';backup_backend.create_backup(database,storage,artifact)
+            copied=artifact/'storage'/private.name
+            self.assertEqual(stat.S_IMODE(copied.stat().st_mode),0o2700)
+            self.assertEqual(stat.S_IMODE((copied/payload.name).stat().st_mode),0o600)
+            self.assertEqual((copied/payload.name).read_bytes(),payload.read_bytes())
+
     def create_source(self, root: Path) -> tuple[Path, Path]:
         database = root / "source.sqlite3"
         with closing(sqlite3.connect(database)) as connection, connection:
