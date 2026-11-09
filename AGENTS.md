@@ -103,3 +103,11 @@ remain in caller before any response. No provider, key, schema, cap or queue gro
 Residual malloc-arena explanation is strongly supported by thread ownership and
 anonymous step sizes, not a captured complete malloc trace. Exact-head repeated
 Linux evidence is required; prior passes never override retained failures.
+
+Lifecycle review of40fe046 reproduced interrupted caller releasing allocator slot
+while worker remained active. A guarded submission handshake now prevents unowned
+work from starting; uncertain submission cancels/drains and closes the lane.
+Interruptions after admission defer propagation until completion, retaining outer
+rotation ownership. New synthetic SIGINT/submit/cancel/shutdown/disconnect/backpressure
+regressions pass. No production, backup/custody/UI access. Successor exact-head
+hosted validation required;40fe memory evidence alone does not close lifecycle gate.
